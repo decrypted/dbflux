@@ -4108,6 +4108,9 @@ settings:
     grid_fk_labels:
       label: "Mostrar o valor do registro referenciado em células de chave estrangeira"
       hint: "Células que contêm uma chave estrangeira resolvem e mostram o valor do registro referenciado ao lado do seu id. Aplica-se às páginas carregadas após salvar; o inspetor de linhas sempre resolve referências."
+    grid_pk_sort_desc:
+      label: "Ordenar tabelas pela chave primária, mais recentes primeiro"
+      hint: "As tabelas abrem ordenadas pela chave primária em ordem decrescente, então as linhas mais recentes de uma chave autoincremental aparecem primeiro. Aplica-se às tabelas abertas após salvar; clicar em um cabeçalho de coluna continua ordenando como antes."
     vim_mode:
       label: "Modo Vim nos editores"
       hint: "Modos Normal e Insert: h, j, k, l e Enter movem, i insere, Esc volta ao Normal, x exclui um caractere, u desfaz. Aplicado aos editores abertos ao salvar."

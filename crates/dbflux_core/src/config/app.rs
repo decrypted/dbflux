@@ -415,6 +415,10 @@ pub struct GeneralSettings {
     /// grid. Off by default; the row inspector always resolves references.
     #[serde(default)]
     pub grid_fk_labels: bool,
+    /// Open tables ordered by primary key descending, so the newest rows of
+    /// an auto-increment key come first. Off by default (ascending).
+    #[serde(default)]
+    pub grid_pk_sort_desc: bool,
 
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
@@ -545,6 +549,7 @@ impl Default for GeneralSettings {
             table_alias_use_as: false,
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
+            grid_pk_sort_desc: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,

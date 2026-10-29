@@ -288,6 +288,7 @@ impl DataGridPanel {
         cx: &Context<Self>,
     ) -> Vec<OrderByColumn> {
         let state = app_state.read(cx);
+        let descending = state.general_settings().grid_pk_sort_desc;
         let Some(connected) = state.connections().get(&profile_id) else {
             return Vec::new();
         };
@@ -299,12 +300,7 @@ impl DataGridPanel {
             table.name.clone(),
         );
         if let Some(table_info) = connected.table_details.get(&cache_key) {
-            let columns = table_info.columns.as_deref().unwrap_or(&[]);
-            return columns
-                .iter()
-                .filter(|c| c.is_primary_key)
-                .map(|c| OrderByColumn::asc(&c.name))
-                .collect();
+            return primary_key_order(table_info.columns.as_deref().unwrap_or(&[]), descending);
         }
 
         // Check database_schemas (MySQL/MariaDB lazy loading)
@@ -313,12 +309,7 @@ impl DataGridPanel {
         {
             for t in &db_schema.tables {
                 if t.name == table.name {
-                    let columns = t.columns.as_deref().unwrap_or(&[]);
-                    return columns
-                        .iter()
-                        .filter(|c| c.is_primary_key)
-                        .map(|c| OrderByColumn::asc(&c.name))
-                        .collect();
+                    return primary_key_order(t.columns.as_deref().unwrap_or(&[]), descending);
                 }
             }
         }
@@ -332,12 +323,7 @@ impl DataGridPanel {
             if table.schema.as_deref() == Some(&db_schema.name) || table.schema.is_none() {
                 for t in &db_schema.tables {
                     if t.name == table.name {
-                        let columns = t.columns.as_deref().unwrap_or(&[]);
-                        return columns
-                            .iter()
-                            .filter(|c| c.is_primary_key)
-                            .map(|c| OrderByColumn::asc(&c.name))
-                            .collect();
+                        return primary_key_order(t.columns.as_deref().unwrap_or(&[]), descending);
                     }
                 }
             }
@@ -359,5 +345,59 @@ impl DataGridPanel {
         }
 
         !self.pk_columns.is_empty()
+    }
+}
+
+/// The default order of a table: its primary key columns, in key order,
+/// ascending or, with the `grid_pk_sort_desc` setting, descending.
+fn primary_key_order(columns: &[dbflux_core::ColumnInfo], descending: bool) -> Vec<OrderByColumn> {
+    columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| {
+            if descending {
+                OrderByColumn::desc(&c.name)
+            } else {
+                OrderByColumn::asc(&c.name)
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod primary_key_order_tests {
+    use super::primary_key_order;
+    use dbflux_core::{ColumnInfo, SortDirection};
+
+    fn column(name: &str, is_primary_key: bool) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            type_name: "int4".to_string(),
+            nullable: false,
+            is_primary_key,
+            default_value: None,
+            enum_values: None,
+        }
+    }
+
+    #[test]
+    fn orders_by_the_key_columns_in_the_chosen_direction() {
+        let columns = [
+            column("tenant", true),
+            column("name", false),
+            column("id", true),
+        ];
+
+        for (descending, direction) in [
+            (false, SortDirection::Ascending),
+            (true, SortDirection::Descending),
+        ] {
+            let order = primary_key_order(&columns, descending);
+            let got: Vec<(&str, SortDirection)> = order
+                .iter()
+                .map(|o| (o.column.name.as_str(), o.direction))
+                .collect();
+            assert_eq!(got, vec![("tenant", direction), ("id", direction)]);
+        }
     }
 }

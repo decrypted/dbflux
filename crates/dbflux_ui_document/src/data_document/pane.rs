@@ -429,8 +429,9 @@ mod tests {
         init_test_runtime(cx);
 
         let app_state = isolated_test_app_state(cx);
-        let holder: Rc<RefCell<Option<(PaneHandle, Entity<DataDocument>)>>> =
-            Rc::new(RefCell::new(None));
+        type Built = (PaneHandle, Entity<DataDocument>);
+
+        let holder: Rc<RefCell<Option<Built>>> = Rc::new(RefCell::new(None));
         let handle = holder.clone();
 
         let (_, window) = cx.add_window_view(|window, cx| {

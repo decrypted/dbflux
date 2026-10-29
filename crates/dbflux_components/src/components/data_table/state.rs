@@ -101,6 +101,10 @@ pub struct DataTableState {
     /// Updated when scroll handle offset changes to trigger re-renders.
     horizontal_offset: Pixels,
 
+    /// Set while the left button, pressed on a cell, is held: moving over
+    /// other cells extends the selection to them.
+    drag_selecting: bool,
+
     // --- Edit Mode ---
     /// Cell currently being edited (inline editor is open).
     editing_cell: Option<CellCoord>,
@@ -200,6 +204,7 @@ impl DataTableState {
             record_mode: false,
             horizontal_scroll_handle: ScrollHandle::new(),
             horizontal_offset: px(0.0),
+            drag_selecting: false,
             editing_cell: None,
             cell_input: None,
             enum_dropdown: None,
@@ -532,6 +537,8 @@ impl DataTableState {
         };
         self.selection.active = self.selection.active.map(clamp);
         self.selection.anchor = self.selection.anchor.map(clamp);
+        // Ctrl+click ranges name rows of the previous model.
+        self.selection.clear_extra();
     }
 
     /// Return to the first row without touching the column scroll: a row set
@@ -665,7 +672,9 @@ impl DataTableState {
     /// Selection change for a primary click on a cell.
     ///
     /// Shift extends the range from the anchor, as Shift with the arrow keys
-    /// does; a plain click starts a new selection there. The grid and the
+    /// does; Ctrl (Cmd on macOS) adds the cell to the selection, or takes it
+    /// out when it is selected on its own; a plain click starts a new
+    /// selection there. The grid and the
     /// record view both route their clicks here so the modifier means the same
     /// thing in either layout.
     pub fn click_cell(
@@ -676,9 +685,73 @@ impl DataTableState {
     ) {
         if modifiers.shift {
             self.extend_selection(coord, cx);
+        } else if modifiers.secondary() {
+            self.commit_edit_in_progress(cx);
+            self.selection.toggle_cell(coord);
+            cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+            cx.notify();
         } else {
             self.select_cell(coord, cx);
         }
+    }
+
+    /// Left button pressed on a cell: select it, or extend to it with Shift,
+    /// and start a drag selection from there.
+    pub fn begin_drag_select(
+        &mut self,
+        coord: CellCoord,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        self.click_cell(coord, modifiers, cx);
+        self.drag_selecting = true;
+    }
+
+    /// The pointer moved onto `coord` with the left button held: extend the
+    /// selection to it while a drag selection is running.
+    pub fn drag_select_to(&mut self, coord: CellCoord, cx: &mut Context<Self>) {
+        if self.drag_selecting && self.selection.active != Some(coord) {
+            self.extend_selection(coord, cx);
+        }
+    }
+
+    pub fn end_drag_select(&mut self) {
+        self.drag_selecting = false;
+    }
+
+    /// Selection change for a primary click on a row number: the whole row,
+    /// with Shift every row from the anchor's row to this one, and with
+    /// Ctrl (Cmd on macOS) the row added to, or taken out of, the selection.
+    pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        self.commit_edit_in_progress(cx);
+        let col_count = self.col_count();
+        if modifiers.shift {
+            self.selection.extend_to_row(row, col_count);
+        } else if modifiers.secondary() {
+            self.selection.toggle_row(row, col_count);
+        } else {
+            self.selection.select_row(row, col_count);
+        }
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
+    /// Selection change for a primary click on a column header: the whole
+    /// column, with Shift every column from the anchor's column to this one,
+    /// and with Ctrl (Cmd on macOS) the column added to, or taken out of, the
+    /// selection.
+    pub fn click_column(&mut self, col: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        self.commit_edit_in_progress(cx);
+        let row_count = self.row_count();
+        if modifiers.shift {
+            self.selection.extend_to_column(col, row_count);
+        } else if modifiers.secondary() {
+            self.selection.toggle_column(col, row_count);
+        } else {
+            self.selection.select_column(col, row_count);
+        }
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
     }
 
     /// Commit an open inline editor, the way Enter does.
@@ -2598,6 +2671,52 @@ mod tests {
             Some(CellCoord::new(0, 0)),
             "Home must jump to the first field of the current row"
         );
+    }
+
+    #[gpui::test]
+    fn row_number_click_selects_whole_rows_and_shift_extends_them(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| super::DataTableState::new(two_row_model(), cx));
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        // A cell in the second column, then Shift on the next row's number:
+        // full rows, not a range that starts in the clicked cell's column.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 1), gpui::Modifiers::default(), cx);
+                s.click_row(1, shift, cx);
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert!(selection.is_full_row_selected(0, 2), "anchor row whole");
+            assert!(
+                selection.is_full_row_selected(1, 2),
+                "shift-clicked row whole"
+            );
+        });
+
+        // A plain click on a row number starts over with that row alone.
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_row(1, gpui::Modifiers::default(), cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert!(selection.is_full_row_selected(1, 2));
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+            assert!(!selection.is_selected(CellCoord::new(0, 1)));
+        });
     }
 
     #[gpui::test]

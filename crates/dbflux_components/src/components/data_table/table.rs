@@ -10,9 +10,9 @@ use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
-    IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px,
-    uniform_list,
+    IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement, Pixels, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
+    Window, canvas, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
@@ -474,6 +474,7 @@ impl gpui::Render for DataTable {
         let resize_drag_for_move = self.resize_drag.clone();
         let state_for_resize_move = self.state.clone();
         let resize_drag_for_up = self.resize_drag.clone();
+        let state_for_drag_up = self.state.clone();
 
         // Forward horizontal wheel/trackpad deltas to the horizontal scroll
         // handle. The handle is owned by a 1px phantom scroller at the bottom
@@ -635,10 +636,11 @@ impl gpui::Render for DataTable {
                     });
                 }
             })
-            .on_mouse_up(MouseButton::Left, move |_event, _window, _cx| {
+            .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
                 if let Ok(mut drag) = resize_drag_for_up.lock() {
                     drag.col = None;
                 }
+                state_for_drag_up.update(cx, |state, _| state.end_drag_select());
             })
             .child(inner_table)
             // Measure viewport size and sync horizontal scroll offset using canvas
@@ -812,15 +814,16 @@ impl DataTable {
                     .border_color(theme.border)
                     .hover(|s| s.bg(theme.table_hover))
                     .cursor_pointer()
-                    .on_click(move |_event: &ClickEvent, _window, cx| {
+                    .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
-                            state.cycle_sort(col_ix, cx);
+                            state.focus(window, cx);
+                            state.click_column(col_ix, event.modifiers(), cx);
                         });
                     })
                     // Right-click opens the menu scoped to this column: its
-                    // ordering and filtering in one flat list. Left click keeps
-                    // cycling the sort — the fastest interaction in the grid,
-                    // not to be spent on opening a menu for the rare case.
+                    // ordering and filtering in one flat list. Left click
+                    // selects the column, as in a database IDE's grid; the
+                    // sort control at the right edge sorts.
                     .on_mouse_down(MouseButton::Right, {
                         let state_for_menu = state_entity.clone();
                         move |event: &MouseDownEvent, window, cx| {
@@ -872,20 +875,13 @@ impl DataTable {
                             )
                         },
                     )
-                    .when_some(sort_direction, |d, direction| {
-                        let arrow = match direction {
-                            SortDirection::Ascending => AppIcon::ArrowUp,
-                            SortDirection::Descending => AppIcon::ArrowDown,
-                        };
-
-                        d.child(
-                            div().flex_shrink_0().ml_auto().child(
-                                Icon::new(arrow)
-                                    .size(GridMetrics::HEADER_ICON)
-                                    .color(ChromeColors::tint(theme)),
-                            ),
-                        )
-                    })
+                    .child(header_sort_control(
+                        state_entity.clone(),
+                        col_ix,
+                        sort_direction,
+                        ChromeColors::tint(theme),
+                        theme.muted_foreground,
+                    ))
                     // An annotated header pins the name line to the top and
                     // draws the facts along the bottom, so columns with and
                     // without facts keep their names on the same line.
@@ -1059,6 +1055,7 @@ impl DataTable {
                     .map(|sort| sort.direction);
                 let state_for_click = self.state.clone();
                 let state_for_menu = self.state.clone();
+                let state_for_sort = self.state.clone();
                 let resize_drag_for_down = self.resize_drag.clone();
 
                 let name_line = div()
@@ -1084,18 +1081,13 @@ impl DataTable {
                             .text_color(muted)
                             .child(SharedString::from(col_spec.type_name.to_string())),
                     )
-                    .when_some(sort_direction, |line, direction| {
-                        let arrow = match direction {
-                            SortDirection::Ascending => AppIcon::ArrowUp,
-                            SortDirection::Descending => AppIcon::ArrowDown,
-                        };
-                        line.child(
-                            div()
-                                .flex_shrink_0()
-                                .ml_auto()
-                                .child(Icon::new(arrow).size(GridMetrics::HEADER_ICON).color(tint)),
-                        )
-                    });
+                    .child(header_sort_control(
+                        state_for_sort.clone(),
+                        col_ix,
+                        sort_direction,
+                        tint,
+                        muted,
+                    ));
 
                 let presence_line = presence.map(|ratio| {
                     let clamped = ratio.clamp(0.0, 1.0);
@@ -1150,8 +1142,11 @@ impl DataTable {
                     })
                     .hover(|cell| cell.bg(theme.table_hover))
                     .cursor_pointer()
-                    .on_click(move |_event: &ClickEvent, _window, cx| {
-                        state_for_click.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
+                    .on_click(move |event: &ClickEvent, window, cx| {
+                        state_for_click.update(cx, |state, cx| {
+                            state.focus(window, cx);
+                            state.click_column(col_ix, event.modifiers(), cx);
+                        });
                     })
                     .on_mouse_down(
                         MouseButton::Right,
@@ -1515,6 +1510,23 @@ fn render_rows(
                             |d| d.italic(),
                         )
                         .when(is_pending_delete, |d| d.line_through())
+                        .on_mouse_down(MouseButton::Left, {
+                            let state = state_entity.clone();
+                            move |event: &MouseDownEvent, window, cx| {
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.begin_drag_select(coord, event.modifiers, cx);
+                                });
+                            }
+                        })
+                        .on_mouse_move({
+                            let state = state_entity.clone();
+                            move |event: &MouseMoveEvent, _window, cx| {
+                                if event.pressed_button == Some(MouseButton::Left) {
+                                    state.update(cx, |state, cx| state.drag_select_to(coord, cx));
+                                }
+                            }
+                        })
                         .on_click(move |event: &ClickEvent, window, cx| {
                             state_for_click.update(cx, |state, cx| {
                                 state.focus(window, cx);
@@ -1527,10 +1539,16 @@ fn render_rows(
                                 return;
                             }
 
-                            let modifiers = event.modifiers();
-                            state_for_click.update(cx, |state, cx| {
-                                state.click_cell(coord, modifiers, cx);
-                            });
+                            // A mouse press already selected the cell (see
+                            // `begin_drag_select`); selecting again on release
+                            // would undo a Ctrl+click toggle. Keyboard and touch
+                            // activation have no press, so they select here.
+                            if !matches!(event, ClickEvent::Mouse(_)) {
+                                let modifiers = event.modifiers();
+                                state_for_click.update(cx, |state, cx| {
+                                    state.click_cell(coord, modifiers, cx);
+                                });
+                            }
                         })
                         .on_mouse_down(
                             MouseButton::Right,
@@ -1628,6 +1646,16 @@ fn render_rows(
                         .items_center()
                         .justify_end()
                         .w(ROW_NUMBER_WIDTH)
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, {
+                            let state = state_entity.clone();
+                            move |event: &MouseDownEvent, window, cx| {
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.click_row(row_ix, event.modifiers, cx);
+                                });
+                            }
+                        })
                         .h_full()
                         .pr(CELL_PADDING_X)
                         .text_size(font_size)
@@ -1650,6 +1678,38 @@ fn render_rows(
                 .into_any_element()
         })
         .collect()
+}
+
+/// The sort control at the right edge of a column header: the current
+/// direction, or a faint up/down arrow while the column is not sorted. A press
+/// cycles the sort and stops there, so it does not reach the header, whose
+/// click selects the column.
+fn header_sort_control(
+    state: Entity<DataTableState>,
+    col_ix: usize,
+    sort_direction: Option<SortDirection>,
+    tint: Hsla,
+    muted: Hsla,
+) -> impl IntoElement {
+    let (icon, color) = match sort_direction {
+        Some(SortDirection::Ascending) => (AppIcon::ArrowUp, tint),
+        Some(SortDirection::Descending) => (AppIcon::ArrowDown, tint),
+        None => (AppIcon::ArrowUpDown, muted.opacity(0.6)),
+    };
+    div()
+        .id(("header-sort", col_ix))
+        .debug_selector(move || format!("header-sort-{col_ix}"))
+        .flex_shrink_0()
+        .ml_auto()
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            move |_event: &MouseDownEvent, _window, cx| {
+                cx.stop_propagation();
+                state.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
+            },
+        )
+        .child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
 }
 
 #[cfg(test)]
@@ -1709,6 +1769,258 @@ mod tests {
             let horizontal = state.read(cx).horizontal_scroll_handle().offset().x;
             (vertical, horizontal)
         })
+    }
+
+    /// A click on a column header selects the whole column, and Shift+click
+    /// on another header every column in between; the sort control at the
+    /// header's right edge sorts without changing the selection.
+    #[gpui::test]
+    fn header_click_selects_columns_and_the_sort_control_sorts(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("header-select-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+        let row_count = visual.update(|_, cx| state.read(cx).row_count());
+
+        let header = visual
+            .debug_bounds("table-header")
+            .expect("the header is drawn");
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        let header_y = header.origin.y + header.size.height / 2.0;
+        // Left part of each header cell: the name, away from the sort control.
+        let name = |col: usize| {
+            let left = if col == 0 { 0.0 } else { first_col_width };
+            gpui::point(
+                header.origin.x + ROW_NUMBER_WIDTH + px(left + 12.0),
+                header_y,
+            )
+        };
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        visual.simulate_click(name(0), gpui::Modifiers::default());
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(selection.is_full_column_selected(0, row_count));
+            assert!(!selection.is_full_column_selected(1, row_count));
+        });
+
+        visual.simulate_click(name(1), shift);
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(selection.is_full_column_selected(0, row_count));
+            assert!(selection.is_full_column_selected(1, row_count));
+        });
+
+        let sort = visual
+            .debug_bounds("header-sort-0")
+            .expect("the sort control is drawn on an unsorted column");
+        visual.simulate_click(sort.center(), gpui::Modifiers::default());
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(
+                state.sort().map(|sort| sort.column_ix),
+                Some(0),
+                "the control sorts its column"
+            );
+            assert!(
+                state.selection().is_full_column_selected(1, row_count),
+                "sorting leaves the selection alone"
+            );
+        });
+    }
+
+    /// Ctrl+click (Cmd+click on macOS) on row numbers and cells adds them to
+    /// the selection without dropping what is selected, as in a database
+    /// IDE's grid; Ctrl+click on a row selected on its own takes it out.
+    #[gpui::test]
+    fn ctrl_click_adds_rows_and_cells_to_the_selection(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("multi-select-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        let y = |row: usize| harness.origin.y + header_height + row_height * (row as f32 + 0.5);
+        let gutter = |row: usize| gpui::point(harness.origin.x + ROW_NUMBER_WIDTH / 2.0, y(row));
+        let first_cell = |row: usize| {
+            gpui::point(
+                harness.origin.x + ROW_NUMBER_WIDTH + px(first_col_width / 2.0),
+                y(row),
+            )
+        };
+        let secondary = gpui::Modifiers::secondary_key();
+
+        visual.simulate_click(gutter(1), gpui::Modifiers::default());
+        visual.simulate_click(gutter(3), secondary);
+        visual.simulate_click(first_cell(5), secondary);
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(selection.is_full_row_selected(1, 2), "first row kept");
+            assert!(
+                selection.is_full_row_selected(3, 2),
+                "ctrl-clicked row added"
+            );
+            assert!(
+                !selection.is_full_row_selected(2, 2),
+                "row in between left out"
+            );
+            assert!(
+                selection.is_selected(super::super::selection::CellCoord::new(5, 0)),
+                "ctrl-clicked cell added"
+            );
+        });
+
+        visual.simulate_click(gutter(3), secondary);
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(
+                !selection.is_full_row_selected(3, 2),
+                "ctrl-click again removes it"
+            );
+            assert!(selection.is_full_row_selected(1, 2));
+        });
+    }
+
+    /// Pressing on a cell and dragging to another selects the rectangle
+    /// between them, as in a database IDE's grid; releasing ends the drag, so
+    /// moving afterwards does not change the selection.
+    #[gpui::test]
+    fn dragging_across_cells_selects_the_range(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("drag-select-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        // Both columns sit inside the 600px harness only when the first one
+        // is narrow enough; the second column's left edge is enough to land in it.
+        let cell = |row: usize, col: usize| {
+            let x = if col == 0 {
+                ROW_NUMBER_WIDTH + px(first_col_width / 2.0)
+            } else {
+                ROW_NUMBER_WIDTH + px(first_col_width + 10.0)
+            };
+            gpui::point(
+                harness.origin.x + x,
+                harness.origin.y + header_height + row_height * (row as f32 + 0.5),
+            )
+        };
+        let none = gpui::Modifiers::default();
+
+        visual.simulate_mouse_down(cell(1, 0), MouseButton::Left, none);
+        visual.simulate_mouse_move(cell(2, 1), MouseButton::Left, none);
+        visual.simulate_mouse_move(cell(3, 1), MouseButton::Left, none);
+        visual.simulate_mouse_up(cell(3, 1), MouseButton::Left, none);
+        visual.run_until_parked();
+        // After release, hovering elsewhere must not move the selection.
+        visual.simulate_mouse_move(cell(5, 0), None, none);
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let range = state
+                .read(cx)
+                .selection()
+                .selected_range()
+                .expect("a drag selects a range");
+            assert_eq!(range.start, super::super::selection::CellCoord::new(1, 0));
+            assert_eq!(range.end, super::super::selection::CellCoord::new(3, 1));
+        });
+    }
+
+    /// Clicks land on the row-number gutter itself: a click there selects
+    /// the whole row, and Shift+click on another row number every row in
+    /// between, as in a database IDE's grid.
+    #[gpui::test]
+    fn clicking_row_numbers_selects_whole_rows(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("row-number-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let gutter = |row: usize| {
+            gpui::point(
+                harness.origin.x + ROW_NUMBER_WIDTH / 2.0,
+                harness.origin.y + header_height + row_height * (row as f32 + 0.5),
+            )
+        };
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        visual.simulate_click(gutter(1), gpui::Modifiers::default());
+        visual.run_until_parked();
+        visual.simulate_click(gutter(3), shift);
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            for row in 1..=3 {
+                assert!(selection.is_full_row_selected(row, 2), "row {row} selected");
+            }
+            assert!(!selection.is_full_row_selected(0, 2));
+            assert!(!selection.is_full_row_selected(4, 2));
+        });
     }
 
     /// Clicking the vertical scrollbar track must scroll the body vertically

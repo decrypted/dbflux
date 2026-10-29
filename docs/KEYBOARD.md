@@ -422,7 +422,7 @@ menu instead, the same one the command palette's **Open pane actions** shows.
 A dump analysis tab takes the table keys in each of its two tables: `Alt+l` and
 `Alt+h` move between Largest keys and By prefix, `Escape` cancels an analysis
 that is still reading the file, and `m` lists the other table, a sort per column
-of the table the keyboard is in (as a header click sorts it) and Cancel while
+of the table the keyboard is in (as a header's sort arrow sorts it) and Cancel while
 the file is read.
 
 A table's Columns view takes `j` / `k` to move between columns, `Space` to add

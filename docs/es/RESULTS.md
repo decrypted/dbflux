@@ -49,6 +49,8 @@ Cuando el panel de resultados tiene el foco:
 - `z` alterna el colapso del panel.
 - `m` (o `Shift+F10`) abre el menú contextual de fila/celda.
 
+Con el ratón, un clic selecciona una celda y `Shift`+clic, o pulsar y arrastrar, selecciona el rango hasta otra celda. Un clic en un número de fila selecciona la fila entera, y `Shift`+clic en otro número de fila selecciona todas las filas intermedias. `Ctrl`+clic (`Cmd`+clic en macOS) en una celda o un número de fila la añade a la selección, o la quita cuando está seleccionada sola; al copiar varios rangos se copian las filas y columnas que abarcan, con las celdas fuera de la selección vacías.
+
 ## Vista de registro
 
 Pulsa `i`, o usa el conmutador Registro en la barra de estado del
@@ -69,7 +71,7 @@ modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
 esa columna: ordenar ascendente o descendente, quitar el orden y todos los
 operadores de filtro, en una sola lista plana. El clic izquierdo en la
-cabecera sigue alternando el orden.
+cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada.
 
 ## Panel de valor
 
@@ -221,6 +223,18 @@ eliminar fila, editar celda e inspeccionar fila no están disponibles, con
 tooltips explicativos. La paginación cuenta las filas agrupadas (no las filas
 subyacentes), así que el total de páginas es correcto. Las columnas de agregado
 conservan el tipo de columna correcto, así que graficar sigue funcionando.
+
+## Copiar como CSV o JSON
+
+El menú contextual de un resultado de tabla tiene **Copiar como CSV** y
+**Copiar como JSON** debajo de **Copiar**. Copian la selección, sea un rango o
+varios elegidos con `Ctrl`+clic, con el mismo exportador que **Copiar filas
+cargadas al portapapeles**: el CSV empieza con una fila de cabecera con los
+nombres de las columnas, y el JSON es un array con un objeto por fila, con las
+columnas como claves y los números, booleanos y `null` como tales. Se incluyen
+todas las filas y columnas que abarca la selección; una celda dentro de esa área
+pero fuera de la selección queda vacía en CSV y `null` en JSON. **Copiar**
+(`Ctrl+c`) sigue copiando texto separado por tabulaciones sin cabecera.
 
 ## Copiar como query
 

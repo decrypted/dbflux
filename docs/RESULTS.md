@@ -46,6 +46,8 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
+With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty.
+
 ## Record view
 
 Press `i`, or use the Record toggle in the result status bar, to show
@@ -64,7 +66,7 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header still cycles the sort.
+list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted.
 
 ## Value panel
 
@@ -204,6 +206,18 @@ output and editing is disabled — add-row, delete-row, edit-cell, and inspect-r
 are unavailable, with explanatory tooltips. Pagination counts the grouped rows
 (not the underlying rows), so the page total is accurate. Aggregate columns keep
 the correct column kind, so charting still works.
+
+## Copy as CSV or JSON
+
+The context menu of a table result has **Copy as CSV** and **Copy as JSON**
+below **Copy**. They copy the selection, whether one range or several picked
+with `Ctrl`+click, through the same exporter as **Copy loaded rows to
+clipboard**: CSV starts with a header row of the column names, and JSON is an
+array with one object per row, keyed by column name, with numbers, booleans and
+`null` kept as such. Every row and column the selection covers is included; a
+cell inside that area but outside the selection is empty in CSV and `null` in
+JSON. Plain **Copy** (`Ctrl+c`) still copies tab-separated text without a
+header.
 
 ## Copy as Query
 

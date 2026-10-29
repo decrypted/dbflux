@@ -1464,7 +1464,93 @@ impl DataGridPanel {
 
         let mut buffer: Vec<u8> = Vec::new();
         let export_result = dbflux_export::export(&self.result, format, &mut buffer);
+        let row_count = loaded_row_count(&self.result);
+        self.finish_clipboard_copy(export_result, buffer, format, row_count, cx);
+    }
 
+    /// Context menu Copy as CSV / Copy as JSON: the selected cells through the
+    /// same exporter as Copy loaded rows, so the two agree on quoting and value
+    /// types.
+    pub(super) fn copy_selection_with_format(
+        &mut self,
+        format: ExportFormat,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selected) = self.selection_result(cx) else {
+            return;
+        };
+        let mut buffer: Vec<u8> = Vec::new();
+        let export_result = dbflux_export::export(&selected, format, &mut buffer);
+        let row_count = Some(selected.rows.len());
+        self.finish_clipboard_copy(export_result, buffer, format, row_count, cx);
+    }
+
+    /// The part of the result the grid selection covers: every row that holds
+    /// a selected cell and every column that does, in result order. A cell in
+    /// that grid but outside the selection is `Null`, where the plain copy
+    /// leaves it empty.
+    fn selection_result(&self, cx: &App) -> Option<dbflux_core::QueryResult> {
+        use dbflux_components::components::data_table::selection::CellCoord;
+        use std::collections::BTreeSet;
+
+        let table_state = self.grid_table.table_state.as_ref()?;
+        let selection = table_state.read(cx).selection();
+        let ranges = selection.ranges();
+        if ranges.is_empty() {
+            return None;
+        }
+        let rows: BTreeSet<usize> = ranges
+            .iter()
+            .flat_map(|range| range.start.row..=range.end.row)
+            .filter(|&row| row < self.result.rows.len())
+            .collect();
+        let cols: BTreeSet<usize> = ranges
+            .iter()
+            .flat_map(|range| range.start.col..=range.end.col)
+            .filter(|&col| col < self.result.columns.len())
+            .collect();
+
+        let columns = cols
+            .iter()
+            .filter_map(|&col| self.result.columns.get(col).cloned())
+            .collect();
+        let rows = rows
+            .iter()
+            .filter_map(|&row| {
+                let values = self.result.rows.get(row)?;
+                Some(
+                    cols.iter()
+                        .map(|&col| {
+                            if selection.is_selected(CellCoord::new(row, col)) {
+                                values.get(col).cloned().unwrap_or(Value::Null)
+                            } else {
+                                Value::Null
+                            }
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+
+        Some(dbflux_core::QueryResult::table(
+            columns,
+            rows,
+            None,
+            std::time::Duration::ZERO,
+        ))
+    }
+
+    /// Writes an export to the clipboard and reports it: the toast, and the
+    /// audit event for a copy that leaves the application.
+    fn finish_clipboard_copy(
+        &mut self,
+        export_result: Result<(), dbflux_export::ExportError>,
+        buffer: Vec<u8>,
+        format: ExportFormat,
+        row_count: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         let format_name = format.name();
         let audit_service = self.app_state.read(cx).audit_service().clone();
 
@@ -1474,7 +1560,7 @@ impl DataGridPanel {
                     let byte_len = text.len();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
-                    let message = match loaded_row_count(&self.result) {
+                    let message = match row_count {
                         Some(count) => crate::labels::context_menu_clipboard_copied_rows_toast(
                             count,
                             format_name,
@@ -1850,6 +1936,12 @@ impl DataGridPanel {
                 } else {
                     self.handle_copy(window, cx);
                 }
+            }
+            ContextMenuAction::CopyAsCsv => {
+                self.copy_selection_with_format(ExportFormat::Csv, window, cx)
+            }
+            ContextMenuAction::CopyAsJson => {
+                self.copy_selection_with_format(ExportFormat::JsonPretty, window, cx)
             }
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
@@ -4754,7 +4846,11 @@ mod tests {
 
         assert_eq!(
             labels(&items),
-            vec![item_label("document.data.context_menu.item.copy")]
+            vec![
+                item_label("document.data.context_menu.item.copy"),
+                item_label("document.data.context_menu.item.copy_as_csv"),
+                item_label("document.data.context_menu.item.copy_as_json"),
+            ]
         );
     }
 

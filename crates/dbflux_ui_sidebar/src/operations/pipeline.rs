@@ -11,6 +11,17 @@ use dbflux_ui_base::toast::PendingToast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use std::sync::Arc;
 
+/// Whether a connect captures a schema snapshot. A relational connection
+/// without a current database (a MySQL profile with no default database,
+/// for example) has nothing to capture, so it is skipped instead of reported
+/// as a storage error on every connect.
+fn connect_capture_applies(
+    category: dbflux_core::DatabaseCategory,
+    database: Option<&str>,
+) -> bool {
+    category == dbflux_core::DatabaseCategory::Relational && database.is_some()
+}
+
 fn discover_capture_tables(
     connection: &dyn Connection,
     database: Option<&str>,
@@ -826,7 +837,8 @@ impl Sidebar {
                 .as_ref()
                 .and_then(|s| s.current_database().map(str::to_string));
 
-            let capture_ctx = if capture_category == dbflux_core::DatabaseCategory::Relational {
+            let capture_ctx = if connect_capture_applies(capture_category, capture_database.as_deref())
+            {
                 Some(cx.update(|cx| {
                     let state = app_state.read(cx);
                     (
@@ -919,8 +931,8 @@ impl Sidebar {
 #[cfg(test)]
 mod connect_capture_tests {
     use super::{
-        ConnectSnapshotCapture, capture_connected_schema, discover_capture_tables,
-        hydrate_current_capture, run_connect_snapshot_capture,
+        ConnectSnapshotCapture, capture_connected_schema, connect_capture_applies,
+        discover_capture_tables, hydrate_current_capture, run_connect_snapshot_capture,
     };
     use dbflux_core::{
         Connection, ConnectionProfile, DbConfig, DbError, DbKind, DbSchemaInfo, DriverMetadata,
@@ -1875,6 +1887,21 @@ mod connect_capture_tests {
         let error = discover_capture_tables(&mock, Some("target"), None)
             .expect_err("missing schema is not an empty database");
         assert!(error.to_string().contains("initial schema unavailable"));
+    }
+
+    #[test]
+    fn connect_capture_skips_a_connection_without_a_current_database() {
+        use dbflux_core::DatabaseCategory;
+
+        assert!(!connect_capture_applies(DatabaseCategory::Relational, None));
+        assert!(connect_capture_applies(
+            DatabaseCategory::Relational,
+            Some("f3base")
+        ));
+        assert!(!connect_capture_applies(
+            DatabaseCategory::KeyValue,
+            Some("0")
+        ));
     }
 
     #[test]

@@ -814,15 +814,16 @@ impl DataTable {
                     .border_color(theme.border)
                     .hover(|s| s.bg(theme.table_hover))
                     .cursor_pointer()
-                    .on_click(move |_event: &ClickEvent, _window, cx| {
+                    .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
-                            state.cycle_sort(col_ix, cx);
+                            state.focus(window, cx);
+                            state.click_column(col_ix, event.modifiers(), cx);
                         });
                     })
                     // Right-click opens the menu scoped to this column: its
-                    // ordering and filtering in one flat list. Left click keeps
-                    // cycling the sort — the fastest interaction in the grid,
-                    // not to be spent on opening a menu for the rare case.
+                    // ordering and filtering in one flat list. Left click
+                    // selects the column, as in a database IDE's grid; the
+                    // sort control at the right edge sorts.
                     .on_mouse_down(MouseButton::Right, {
                         let state_for_menu = state_entity.clone();
                         move |event: &MouseDownEvent, window, cx| {
@@ -874,20 +875,13 @@ impl DataTable {
                             )
                         },
                     )
-                    .when_some(sort_direction, |d, direction| {
-                        let arrow = match direction {
-                            SortDirection::Ascending => AppIcon::ArrowUp,
-                            SortDirection::Descending => AppIcon::ArrowDown,
-                        };
-
-                        d.child(
-                            div().flex_shrink_0().ml_auto().child(
-                                Icon::new(arrow)
-                                    .size(GridMetrics::HEADER_ICON)
-                                    .color(ChromeColors::tint(theme)),
-                            ),
-                        )
-                    })
+                    .child(header_sort_control(
+                        state_entity.clone(),
+                        col_ix,
+                        sort_direction,
+                        ChromeColors::tint(theme),
+                        theme.muted_foreground,
+                    ))
                     // An annotated header pins the name line to the top and
                     // draws the facts along the bottom, so columns with and
                     // without facts keep their names on the same line.
@@ -1061,6 +1055,7 @@ impl DataTable {
                     .map(|sort| sort.direction);
                 let state_for_click = self.state.clone();
                 let state_for_menu = self.state.clone();
+                let state_for_sort = self.state.clone();
                 let resize_drag_for_down = self.resize_drag.clone();
 
                 let name_line = div()
@@ -1086,18 +1081,13 @@ impl DataTable {
                             .text_color(muted)
                             .child(SharedString::from(col_spec.type_name.to_string())),
                     )
-                    .when_some(sort_direction, |line, direction| {
-                        let arrow = match direction {
-                            SortDirection::Ascending => AppIcon::ArrowUp,
-                            SortDirection::Descending => AppIcon::ArrowDown,
-                        };
-                        line.child(
-                            div()
-                                .flex_shrink_0()
-                                .ml_auto()
-                                .child(Icon::new(arrow).size(GridMetrics::HEADER_ICON).color(tint)),
-                        )
-                    });
+                    .child(header_sort_control(
+                        state_for_sort.clone(),
+                        col_ix,
+                        sort_direction,
+                        tint,
+                        muted,
+                    ));
 
                 let presence_line = presence.map(|ratio| {
                     let clamped = ratio.clamp(0.0, 1.0);
@@ -1152,8 +1142,11 @@ impl DataTable {
                     })
                     .hover(|cell| cell.bg(theme.table_hover))
                     .cursor_pointer()
-                    .on_click(move |_event: &ClickEvent, _window, cx| {
-                        state_for_click.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
+                    .on_click(move |event: &ClickEvent, window, cx| {
+                        state_for_click.update(cx, |state, cx| {
+                            state.focus(window, cx);
+                            state.click_column(col_ix, event.modifiers(), cx);
+                        });
                     })
                     .on_mouse_down(
                         MouseButton::Right,
@@ -1687,6 +1680,38 @@ fn render_rows(
         .collect()
 }
 
+/// The sort control at the right edge of a column header: the current
+/// direction, or a faint up/down arrow while the column is not sorted. A press
+/// cycles the sort and stops there, so it does not reach the header, whose
+/// click selects the column.
+fn header_sort_control(
+    state: Entity<DataTableState>,
+    col_ix: usize,
+    sort_direction: Option<SortDirection>,
+    tint: Hsla,
+    muted: Hsla,
+) -> impl IntoElement {
+    let (icon, color) = match sort_direction {
+        Some(SortDirection::Ascending) => (AppIcon::ArrowUp, tint),
+        Some(SortDirection::Descending) => (AppIcon::ArrowDown, tint),
+        None => (AppIcon::ArrowUpDown, muted.opacity(0.6)),
+    };
+    div()
+        .id(("header-sort", col_ix))
+        .debug_selector(move || format!("header-sort-{col_ix}"))
+        .flex_shrink_0()
+        .ml_auto()
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            move |_event: &MouseDownEvent, _window, cx| {
+                cx.stop_propagation();
+                state.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
+            },
+        )
+        .child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1744,6 +1769,79 @@ mod tests {
             let horizontal = state.read(cx).horizontal_scroll_handle().offset().x;
             (vertical, horizontal)
         })
+    }
+
+    /// A click on a column header selects the whole column, and Shift+click
+    /// on another header every column in between; the sort control at the
+    /// header's right edge sorts without changing the selection.
+    #[gpui::test]
+    fn header_click_selects_columns_and_the_sort_control_sorts(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("header-select-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+        let row_count = visual.update(|_, cx| state.read(cx).row_count());
+
+        let header = visual
+            .debug_bounds("table-header")
+            .expect("the header is drawn");
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        let header_y = header.origin.y + header.size.height / 2.0;
+        // Left part of each header cell: the name, away from the sort control.
+        let name = |col: usize| {
+            let left = if col == 0 { 0.0 } else { first_col_width };
+            gpui::point(
+                header.origin.x + ROW_NUMBER_WIDTH + px(left + 12.0),
+                header_y,
+            )
+        };
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        visual.simulate_click(name(0), gpui::Modifiers::default());
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(selection.is_full_column_selected(0, row_count));
+            assert!(!selection.is_full_column_selected(1, row_count));
+        });
+
+        visual.simulate_click(name(1), shift);
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(selection.is_full_column_selected(0, row_count));
+            assert!(selection.is_full_column_selected(1, row_count));
+        });
+
+        let sort = visual
+            .debug_bounds("header-sort-0")
+            .expect("the sort control is drawn on an unsorted column");
+        visual.simulate_click(sort.center(), gpui::Modifiers::default());
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(
+                state.sort().map(|sort| sort.column_ix),
+                Some(0),
+                "the control sorts its column"
+            );
+            assert!(
+                state.selection().is_full_column_selected(1, row_count),
+                "sorting leaves the selection alone"
+            );
+        });
     }
 
     /// Ctrl+click (Cmd+click on macOS) on row numbers and cells adds them to

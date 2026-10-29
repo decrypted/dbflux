@@ -66,7 +66,7 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header still cycles the sort.
+list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted.
 
 ## Value panel
 

@@ -736,6 +736,24 @@ impl DataTableState {
         cx.notify();
     }
 
+    /// Selection change for a primary click on a column header: the whole
+    /// column, with Shift every column from the anchor's column to this one,
+    /// and with Ctrl (Cmd on macOS) the column added to, or taken out of, the
+    /// selection.
+    pub fn click_column(&mut self, col: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        self.commit_edit_in_progress(cx);
+        let row_count = self.row_count();
+        if modifiers.shift {
+            self.selection.extend_to_column(col, row_count);
+        } else if modifiers.secondary() {
+            self.selection.toggle_column(col, row_count);
+        } else {
+            self.selection.select_column(col, row_count);
+        }
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
     /// Commit an open inline editor, the way Enter does.
     ///
     /// Selecting a cell is a deliberate act, so a value typed into the previous

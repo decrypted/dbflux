@@ -71,7 +71,7 @@ modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
 esa columna: ordenar ascendente o descendente, quitar el orden y todos los
 operadores de filtro, en una sola lista plana. El clic izquierdo en la
-cabecera sigue alternando el orden.
+cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada.
 
 ## Panel de valor
 

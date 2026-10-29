@@ -875,3 +875,65 @@ fn focus_row_by_key_replaces_the_filter_with_a_quoted_equality(cx: &mut TestAppC
         );
     });
 }
+
+/// Copy as CSV / Copy as JSON take the selection, here two rows picked with
+/// Ctrl+click on their row numbers, through the same exporter as the export
+/// menu: a header row for CSV, one object per row keyed by column for JSON,
+/// and the row left out in between does not appear.
+#[gpui::test]
+fn copy_as_csv_and_json_take_only_the_selected_rows(cx: &mut TestAppContext) {
+    use dbflux_export::ExportFormat;
+
+    init_test_runtime(cx);
+    let app_state = cx.update(|cx| {
+        cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("isolated storage runtime"),
+            )
+            .expect("test storage setup")
+        })
+    });
+    let (_host, panel, window) = host_result_grid(cx, app_state);
+    window.run_until_parked();
+
+    let secondary = gpui::Modifiers::secondary_key();
+    window.update(|_, cx| {
+        let table_state = panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the grid has a table");
+        table_state.update(cx, |state, cx| {
+            state.click_row(0, gpui::Modifiers::default(), cx);
+            state.click_row(2, secondary, cx);
+        });
+    });
+
+    let copy = |window: &mut VisualTestContext, format: ExportFormat| {
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.copy_selection_with_format(format, window, cx)
+            });
+        });
+        window
+            .update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    };
+
+    let csv = copy(window, ExportFormat::Csv);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines, vec!["id,name", "1,row 1", "3,row 3"], "got {csv:?}");
+
+    let json = copy(window, ExportFormat::JsonPretty);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(
+        parsed,
+        serde_json::json!([
+            {"id": 1, "name": "row 1"},
+            {"id": 3, "name": "row 3"}
+        ]),
+        "got {json}"
+    );
+}

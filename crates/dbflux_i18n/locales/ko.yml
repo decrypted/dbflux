@@ -1595,6 +1595,8 @@ document:
       header: "%{column} · 행 %{row}"
       item:
         copy: 복사
+        copy_as_csv: "CSV로 복사"
+        copy_as_json: "JSON으로 복사"
         view_document: 문서 보기
         add_document: 문서 추가
         duplicate_document: 문서 복제

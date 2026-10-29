@@ -207,6 +207,18 @@ are unavailable, with explanatory tooltips. Pagination counts the grouped rows
 (not the underlying rows), so the page total is accurate. Aggregate columns keep
 the correct column kind, so charting still works.
 
+## Copy as CSV or JSON
+
+The context menu of a table result has **Copy as CSV** and **Copy as JSON**
+below **Copy**. They copy the selection, whether one range or several picked
+with `Ctrl`+click, through the same exporter as **Copy loaded rows to
+clipboard**: CSV starts with a header row of the column names, and JSON is an
+array with one object per row, keyed by column name, with numbers, booleans and
+`null` kept as such. Every row and column the selection covers is included; a
+cell inside that area but outside the selection is empty in CSV and `null` in
+JSON. Plain **Copy** (`Ctrl+c`) still copies tab-separated text without a
+header.
+
 ## Copy as Query
 
 The result context menu includes **Copy as Query**, which generates a

@@ -224,6 +224,18 @@ tooltips explicativos. La paginación cuenta las filas agrupadas (no las filas
 subyacentes), así que el total de páginas es correcto. Las columnas de agregado
 conservan el tipo de columna correcto, así que graficar sigue funcionando.
 
+## Copiar como CSV o JSON
+
+El menú contextual de un resultado de tabla tiene **Copiar como CSV** y
+**Copiar como JSON** debajo de **Copiar**. Copian la selección, sea un rango o
+varios elegidos con `Ctrl`+clic, con el mismo exportador que **Copiar filas
+cargadas al portapapeles**: el CSV empieza con una fila de cabecera con los
+nombres de las columnas, y el JSON es un array con un objeto por fila, con las
+columnas como claves y los números, booleanos y `null` como tales. Se incluyen
+todas las filas y columnas que abarca la selección; una celda dentro de esa área
+pero fuera de la selección queda vacía en CSV y `null` en JSON. **Copiar**
+(`Ctrl+c`) sigue copiando texto separado por tabulaciones sin cabecera.
+
 ## Copiar como query
 
 El menú contextual de resultados incluye **Copy as Query**, que genera una

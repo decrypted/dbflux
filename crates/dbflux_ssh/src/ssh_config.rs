@@ -12,6 +12,11 @@
 //! - no `Match` criterion ever spawns a process; a block with a criterion
 //!   the tunnel cannot evaluate (including `exec`) never activates, but a
 //!   `ProxyJump`/`ProxyCommand` inside it still fails resolution closed (S5);
+//! - a `ProxyCommand` in an active block is returned to the caller, which
+//!   runs it as the transport on Unix; on other platforms it stays an
+//!   unsupported directive. `ProxyJump` is always unsupported. The first
+//!   `ProxyJump`/`ProxyCommand` that applies wins, `none` included, like
+//!   OpenSSH, where the two directives share one slot;
 //! - `Include` is bounded by a recursion-depth cap and a total byte cap;
 //! - the SSH config is only ever read, never written.
 //!
@@ -111,6 +116,8 @@ pub struct ResolvedHost {
     pub user: Option<String>,
     pub port: u16,
     pub identity_file: Option<PathBuf>,
+    /// Effective `ProxyCommand` as written, tokens not expanded.
+    pub proxy_command: Option<String>,
 }
 
 /// Errors produced when resolving a host from an SSH config.
@@ -363,6 +370,8 @@ impl SshConfigFile {
             user: None,
             port: None,
             identity_file: None,
+            proxy_decided: false,
+            proxy_command: None,
             unsupported: None,
         };
         // OpenSSH's `read_config_file` starts with the block state active:
@@ -517,11 +526,11 @@ impl SshConfigFile {
             }
             KnownKeyword::ProxyJump(value) => {
                 walk.state
-                    .mark_unsupported(value, UnsupportedDirective::ProxyJump);
+                    .apply_proxy(value, UnsupportedDirective::ProxyJump);
             }
             KnownKeyword::ProxyCommand(value) => {
                 walk.state
-                    .mark_unsupported(value, UnsupportedDirective::ProxyCommand);
+                    .apply_proxy(value, UnsupportedDirective::ProxyCommand);
             }
         }
     }
@@ -544,6 +553,7 @@ impl SshConfigFile {
             user: state.user,
             port: state.port.unwrap_or(DEFAULT_PORT),
             identity_file,
+            proxy_command: state.proxy_command,
         }
     }
 }
@@ -600,6 +610,10 @@ struct Resolution {
     user: Option<String>,
     port: Option<u16>,
     identity_file: Option<String>,
+    /// Set once a `ProxyJump`/`ProxyCommand` applied from an active block,
+    /// `none` included: OpenSSH keeps the first one and ignores the rest.
+    proxy_decided: bool,
+    proxy_command: Option<String>,
     unsupported: Option<UnsupportedDirective>,
 }
 
@@ -616,13 +630,33 @@ struct Walk<'a> {
 }
 
 impl Resolution {
-    /// `ProxyJump`/`ProxyCommand` with the value `none` (case-insensitive)
-    /// count as unset; the first non-`none` value wins.
+    /// A proxy directive inside a block the tunnel cannot evaluate (S5).
+    /// `none` (case-insensitive) counts as unset there; the first non-`none`
+    /// value wins unless an active block already decided the proxy.
     fn mark_unsupported(&mut self, value: &str, directive: UnsupportedDirective) {
-        if value.eq_ignore_ascii_case("none") || self.unsupported.is_some() {
+        if value.eq_ignore_ascii_case("none") || self.proxy_decided || self.unsupported.is_some() {
             return;
         }
         self.unsupported = Some(directive);
+    }
+
+    /// A proxy directive in an active block. An earlier proxy from a block
+    /// the tunnel cannot evaluate keeps the host unsupported (S5): OpenSSH
+    /// would have used that one if its criterion evaluated true.
+    fn apply_proxy(&mut self, value: &str, directive: UnsupportedDirective) {
+        if self.proxy_decided || self.unsupported.is_some() {
+            return;
+        }
+        self.proxy_decided = true;
+        if value.eq_ignore_ascii_case("none") {
+            return;
+        }
+        match directive {
+            UnsupportedDirective::ProxyCommand if cfg!(unix) => {
+                self.proxy_command = Some(value.to_string());
+            }
+            _ => self.unsupported = Some(directive),
+        }
     }
 }
 
@@ -1181,6 +1215,36 @@ fn expand_tokens(value: &str, host_name: &str, user: Option<&str>, home: &Path) 
     out
 }
 
+/// Expands the `ProxyCommand` tokens OpenSSH documents for it: `%h`, `%n`,
+/// `%p`, `%r` and `%%`. An unknown token is an error naming it, like OpenSSH,
+/// so a command is never run with a token silently left in place.
+pub fn expand_proxy_command(
+    raw: &str,
+    host_name: &str,
+    port: u16,
+    user: &str,
+    alias: &str,
+) -> Result<String, String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('h') => out.push_str(host_name),
+            Some('n') => out.push_str(alias),
+            Some('p') => out.push_str(&port.to_string()),
+            Some('r') => out.push_str(user),
+            Some('%') => out.push('%'),
+            Some(other) => return Err(format!("unknown ProxyCommand token %{other}")),
+            None => return Err("ProxyCommand ends with a lone %".to_string()),
+        }
+    }
+    Ok(out)
+}
+
 /// Local user name for the `User` fallback and `%r`. `USER` first, then
 /// `USERNAME` (Windows); the only environment reads in this module.
 /// Also the local-user source for [`crate::resolve_for_dial`], so both
@@ -1481,13 +1545,21 @@ mod tests {
                 directive: "ProxyJump",
             })
         );
-        assert_eq!(
-            config.resolve_with_local_user("viacmd", "alice", &fixture.home()),
-            Err(SshConfigError::UnsupportedHost {
-                alias: "viacmd".to_string(),
-                directive: "ProxyCommand",
-            })
-        );
+        let viacmd = config.resolve_with_local_user("viacmd", "alice", &fixture.home());
+        if cfg!(unix) {
+            assert_eq!(
+                viacmd.unwrap().proxy_command.as_deref(),
+                Some("nc -w 1 %h %p")
+            );
+        } else {
+            assert_eq!(
+                viacmd,
+                Err(SshConfigError::UnsupportedHost {
+                    alias: "viacmd".to_string(),
+                    directive: "ProxyCommand",
+                })
+            );
+        }
         let clean = config
             .resolve_with_local_user("clean", "alice", &fixture.home())
             .unwrap();
@@ -1510,10 +1582,58 @@ mod tests {
         );
         assert_eq!(
             unsupported_of("viacmd"),
-            Some(UnsupportedDirective::ProxyCommand)
+            (!cfg!(unix)).then_some(UnsupportedDirective::ProxyCommand)
         );
         assert_eq!(unsupported_of("clean"), None);
         assert_eq!(unsupported_of("upper"), None);
+    }
+
+    /// OpenSSH keeps the first `ProxyJump`/`ProxyCommand` that applies,
+    /// `none` included, and ignores every later one.
+    #[test]
+    fn first_applying_proxy_directive_wins_none_included() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host direct\n  ProxyCommand none\n\nHost cmdfirst\n  ProxyCommand nc %h %p\n\nHost jumpfirst\n  ProxyJump bastion\n\nHost *\n  ProxyCommand fallback %h\n  ProxyJump other\n",
+        );
+        let config = fixture.load();
+        let resolve = |alias: &str| config.resolve_with_local_user(alias, "alice", &fixture.home());
+
+        assert_eq!(resolve("direct").unwrap().proxy_command, None);
+        assert_eq!(
+            resolve("jumpfirst"),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "jumpfirst".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+        if cfg!(unix) {
+            assert_eq!(
+                resolve("cmdfirst").unwrap().proxy_command.as_deref(),
+                Some("nc %h %p")
+            );
+        }
+    }
+
+    /// A proxy inside a block the tunnel cannot evaluate keeps failing closed
+    /// even when a later active block sets a `ProxyCommand` (S5).
+    #[test]
+    fn proxy_in_an_unevaluatable_block_still_fails_closed_before_an_active_one() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Match exec /usr/bin/true\n  ProxyJump hidden\n\nHost web\n  ProxyCommand nc %h %p\n",
+        );
+        let config = fixture.load();
+
+        assert_eq!(
+            config.resolve_with_local_user("web", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "web".to_string(),
+                directive: "ProxyJump",
+            })
+        );
     }
 
     #[test]

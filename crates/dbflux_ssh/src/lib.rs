@@ -28,20 +28,45 @@ use uuid::Uuid;
 
 pub mod ssh_config;
 
+#[cfg(unix)]
+mod proxy_command;
+
 pub use ssh_config::{
     ResolvedHost, SshConfigError, SshConfigFile, SshConfigHost, UnsupportedDirective,
 };
+
+/// Where and how to dial an SSH server, after SSH config resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialTarget {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub auth_method: SshAuthMethod,
+    /// `ProxyCommand` with its tokens expanded. When set, the session runs
+    /// over this command's stdin/stdout and `host`/`port` are never dialled.
+    pub proxy_command: Option<String>,
+}
+
+impl DialTarget {
+    fn direct(config: &SshTunnelConfig) -> Self {
+        Self {
+            host: config.host.clone(),
+            port: config.port,
+            user: config.user.clone(),
+            auth_method: config.auth_method.clone(),
+            proxy_command: None,
+        }
+    }
+}
 
 /// Resolves the SSH config alias a tunnel references, if any, into the parameters to dial.
 ///
 /// A tunnel with no alias is returned unchanged and no SSH config is read. An empty
 /// or whitespace-only alias is an error. A resolution failure is an error: the stored
 /// host, port and user are never used as a fallback (A7).
-pub fn resolve_for_dial(config: &SshTunnelConfig) -> Result<SshTunnelConfig, DbError> {
+pub fn resolve_for_dial(config: &SshTunnelConfig) -> Result<DialTarget, DbError> {
     let Some(alias) = config.ssh_config_host.as_deref() else {
-        let mut resolved = config.clone();
-        resolved.ssh_config_host = None;
-        return Ok(resolved);
+        return Ok(DialTarget::direct(config));
     };
     let Some(home) = dirs::home_dir() else {
         return Err(DbError::connection_failed(format!(
@@ -57,11 +82,9 @@ pub fn resolve_for_dial_in(
     config: &SshTunnelConfig,
     local_user: &str,
     home: &Path,
-) -> Result<SshTunnelConfig, DbError> {
+) -> Result<DialTarget, DbError> {
     let Some(alias) = config.ssh_config_host.as_deref() else {
-        let mut resolved = config.clone();
-        resolved.ssh_config_host = None;
-        return Ok(resolved);
+        return Ok(DialTarget::direct(config));
     };
     if alias.trim().is_empty() {
         // A hand-edited row or an imported bundle can carry an empty alias;
@@ -101,12 +124,22 @@ pub fn resolve_for_dial_in(
                 path.display()
             )),
         })?;
-    Ok(SshTunnelConfig {
+    let user = resolved.user.unwrap_or_else(|| local_user.to_string());
+    let proxy_command = resolved
+        .proxy_command
+        .map(|raw| {
+            ssh_config::expand_proxy_command(&raw, &resolved.host_name, resolved.port, &user, alias)
+                .map_err(|message| {
+                    DbError::connection_failed(format!("SSH config host '{alias}': {message}"))
+                })
+        })
+        .transpose()?;
+    Ok(DialTarget {
         host: resolved.host_name,
         port: resolved.port,
-        user: resolved.user.unwrap_or_else(|| local_user.to_string()),
+        user,
         auth_method: resolve_auth_method(&config.auth_method, resolved.identity_file),
-        ssh_config_host: None,
+        proxy_command,
     })
 }
 
@@ -264,19 +297,19 @@ pub fn open_tunnel(
 ) -> Result<OpenedSshTunnel, DbError> {
     // Resolve before logging, so a tunnel that references a host from the user's SSH
     // config reports the target it actually dials.
-    let config = resolve_for_dial(config)?;
+    let target = resolve_for_dial(config)?;
 
     log::info!(
         "[CONNECT] Starting SSH tunnel connection: {}@{}:{} -> {}:{}",
-        config.user,
-        config.host,
-        config.port,
+        target.user,
+        target.host,
+        target.port,
         db_host,
         db_port
     );
 
     let phase_start = std::time::Instant::now();
-    let session = establish_session(&config, secret)?;
+    let session = establish_resolved_session(&target, secret)?;
     log::info!(
         "[CONNECT] SSH session phase completed in {:.2}ms",
         phase_start.elapsed().as_secs_f64() * 1000.0
@@ -295,7 +328,7 @@ pub fn open_tunnel(
 
     Ok(OpenedSshTunnel {
         tunnel,
-        ssh_host: config.host,
+        ssh_host: target.host,
     })
 }
 
@@ -345,47 +378,50 @@ pub fn establish_session(
     config: &SshTunnelConfig,
     secret: Option<&str>,
 ) -> Result<Session, DbError> {
-    let total_start = std::time::Instant::now();
-
     // Resolve the SSH config alias first: every dial below —
-    // TCP connect, handshake, TOFU host-key step (keyed on the resolved
-    // host and port, A1) and authentication — uses the resolved target.
-    let resolved = resolve_for_dial(config)?;
-    let config = &resolved;
+    // TCP connect or ProxyCommand, handshake, TOFU host-key step (keyed on
+    // the resolved host and port, A1) and authentication — uses the
+    // resolved target.
+    let target = resolve_for_dial(config)?;
+    establish_resolved_session(&target, secret)
+}
 
-    log::info!(
-        "[SSH] Phase 1/3: TCP connect to {}:{}",
-        config.host,
-        config.port
-    );
-    let phase_start = std::time::Instant::now();
+/// I/O timeout for the transport and the libssh2 session.
+const SSH_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let tcp = TcpStream::connect((&*config.host, config.port)).map_err(|e| {
-        DbError::connection_failed(format!(
-            "Failed to connect to SSH server {}:{}: {}",
-            config.host, config.port, e
-        ))
-    })?;
-
-    tcp.set_nodelay(true).ok();
-    tcp.set_read_timeout(Some(std::time::Duration::from_secs(30)))
-        .ok();
-    tcp.set_write_timeout(Some(std::time::Duration::from_secs(30)))
-        .ok();
-
-    log::info!(
-        "[SSH] Phase 1/3: TCP connect completed in {:.2}ms",
-        phase_start.elapsed().as_secs_f64() * 1000.0
-    );
-
-    log::info!("[SSH] Phase 2/3: Creating SSH session and handshake");
-    let phase_start = std::time::Instant::now();
+fn establish_resolved_session(
+    config: &DialTarget,
+    secret: Option<&str>,
+) -> Result<Session, DbError> {
+    let total_start = std::time::Instant::now();
 
     let mut session = Session::new()
         .map_err(|e| DbError::connection_failed(format!("Failed to create SSH session: {}", e)))?;
 
-    session.set_tcp_stream(tcp);
-    session.set_timeout(30000);
+    let phase_start = std::time::Instant::now();
+    match &config.proxy_command {
+        Some(command) => {
+            log::info!("[SSH] Phase 1/3: Starting ProxyCommand: {command}");
+            attach_proxy_command(&mut session, command)?;
+        }
+        None => {
+            log::info!(
+                "[SSH] Phase 1/3: TCP connect to {}:{}",
+                config.host,
+                config.port
+            );
+            session.set_tcp_stream(connect_tcp(&config.host, config.port)?);
+        }
+    }
+    log::info!(
+        "[SSH] Phase 1/3: Transport ready in {:.2}ms",
+        phase_start.elapsed().as_secs_f64() * 1000.0
+    );
+
+    log::info!("[SSH] Phase 2/3: SSH handshake");
+    let phase_start = std::time::Instant::now();
+
+    session.set_timeout(SSH_IO_TIMEOUT.as_millis() as u32);
 
     session
         .handshake()
@@ -434,6 +470,35 @@ pub fn establish_session(
     );
 
     Ok(session)
+}
+
+fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, DbError> {
+    let tcp = TcpStream::connect((host, port)).map_err(|e| {
+        DbError::connection_failed(format!(
+            "Failed to connect to SSH server {}:{}: {}",
+            host, port, e
+        ))
+    })?;
+
+    tcp.set_nodelay(true).ok();
+    tcp.set_read_timeout(Some(SSH_IO_TIMEOUT)).ok();
+    tcp.set_write_timeout(Some(SSH_IO_TIMEOUT)).ok();
+    Ok(tcp)
+}
+
+#[cfg(unix)]
+fn attach_proxy_command(session: &mut Session, command: &str) -> Result<(), DbError> {
+    session.set_tcp_stream(proxy_command::spawn(command, SSH_IO_TIMEOUT)?);
+    Ok(())
+}
+
+/// The SSH config resolver never returns a `ProxyCommand` off Unix; this
+/// guards a hand-built [`DialTarget`].
+#[cfg(not(unix))]
+fn attach_proxy_command(_session: &mut Session, _command: &str) -> Result<(), DbError> {
+    Err(DbError::connection_failed(
+        "ProxyCommand is not supported by DBFlux's SSH tunnel on this platform",
+    ))
 }
 
 /// Expand `~` at the start of a path to the user's home directory.
@@ -979,11 +1044,11 @@ mod resolve_for_dial_tests {
                 key_path: Some(PathBuf::from("/keys/id_ed25519"))
             }
         );
-        assert_eq!(resolved.ssh_config_host, None);
+        assert_eq!(resolved.proxy_command, None);
     }
 
     #[test]
-    fn alias_resolves_host_port_and_user_and_clears_the_alias() {
+    fn alias_resolves_host_port_and_user() {
         let fixture = Fixture::new();
         fixture
             .write_ssh_config("Host web\n  HostName web.example.com\n  User deploy\n  Port 2222\n");
@@ -994,7 +1059,7 @@ mod resolve_for_dial_tests {
         assert_eq!(resolved.host, "web.example.com");
         assert_eq!(resolved.port, 2222);
         assert_eq!(resolved.user, "deploy");
-        assert_eq!(resolved.ssh_config_host, None);
+        assert_eq!(resolved.proxy_command, None);
     }
 
     #[test]
@@ -1045,6 +1110,42 @@ mod resolve_for_dial_tests {
         assert!(!message.contains("Failed to connect"), "got: {message}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn proxy_command_resolves_with_its_tokens_expanded() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config(
+            "Host viacmd\n  HostName bastion.example.com\n  User deploy\n  ProxyCommand cloudflared access ssh --hostname %h --port %p --user %r --alias %n --pct 100%%\n",
+        );
+        let config = aliased_tunnel("viacmd", None);
+
+        let resolved = resolve_for_dial_in(&config, "alice", &fixture.home()).unwrap();
+
+        assert_eq!(
+            resolved.proxy_command.as_deref(),
+            Some(
+                "cloudflared access ssh --hostname bastion.example.com --port 22 --user deploy --alias viacmd --pct 100%"
+            )
+        );
+        assert_eq!(resolved.host, "bastion.example.com");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proxy_command_with_an_unknown_token_fails_before_anything_runs() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config("Host viacmd\n  ProxyCommand connect %C\n");
+        let config = aliased_tunnel("viacmd", None);
+
+        let message = resolve_for_dial_in(&config, "alice", &fixture.home())
+            .unwrap_err()
+            .to_string();
+
+        assert!(message.contains("viacmd"), "got: {message}");
+        assert!(message.contains("%C"), "got: {message}");
+    }
+
+    #[cfg(not(unix))]
     #[test]
     fn proxy_command_error_names_the_directive_and_never_dials() {
         let fixture = Fixture::new();

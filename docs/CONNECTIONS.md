@@ -152,9 +152,17 @@ the `IdentityFile` that host names, falling back to your SSH agent or default
 keys when it names none. `Include`, `Match` and the `%h`, `%r` and `%d` tokens
 inside an `IdentityFile` resolve the way OpenSSH resolves them.
 
-A host whose config needs `ProxyJump` or `ProxyCommand` is listed and marked:
-DBFlux cannot reach it, and connecting fails with that reason instead of
-dialing the bastion directly. Host keys keep being verified against DBFlux's
+On Linux and macOS a host with a `ProxyCommand` works the way it does in a
+terminal: DBFlux runs the command through your `$SHELL` and speaks SSH over its
+standard input and output, so access proxies such as
+`cloudflared access ssh --hostname %h` work. The tokens `%h`, `%p`, `%r`, `%n`
+and `%%` are expanded; any other token fails the connection before the command
+runs. The command's error output appears in the log, which is where an access
+proxy prints its login URL.
+
+A host whose config needs `ProxyJump`, or `ProxyCommand` on Windows, is listed
+and marked: DBFlux cannot reach it, and connecting fails with that reason
+instead of dialing the bastion directly. Host keys keep being verified against DBFlux's
 own store in its data directory rather than your `~/.ssh/known_hosts`, so a
 host you have reached from a terminal for years still asks you to confirm its
 key the first time.

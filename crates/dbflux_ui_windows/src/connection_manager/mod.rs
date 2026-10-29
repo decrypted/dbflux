@@ -971,6 +971,7 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssm_instance_id),
             subscribe_input(cx, window, &input_ssm_region),
             subscribe_input(cx, window, &input_ssm_remote_port),
+            subscribe_input(cx, window, &conn_refresh_interval_input),
             subscribe_input(cx, window, &conn_pre_hook_extra_input),
             subscribe_input(cx, window, &conn_post_hook_extra_input),
             subscribe_input(cx, window, &conn_pre_disconnect_hook_extra_input),
@@ -5067,10 +5068,10 @@ mod accessible_name_tests {
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
     use super::keyboard_coverage_tests::open_manager;
-    use super::{ActiveTab, ConnectionManagerWindow};
-    use dbflux_components::accessibility::accessible_name;
+    use super::{ActiveTab, ConnectionManagerWindow, EditState, cm_setting_id};
+    use dbflux_components::accessibility::{accessibility_node, accessible_name};
     use dbflux_ui_base::keyboard_coverage::FrameCapture;
-    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, point, px};
 
     fn open_settings_tab(
         cx: &mut TestAppContext,
@@ -5095,6 +5096,53 @@ mod accessible_name_tests {
 
     fn override_name(field: &str) -> String {
         dbflux_i18n::t!("settings.general.override_field", field = field)
+    }
+
+    /// Clicking the refresh interval field, once its override is ticked,
+    /// focuses it for typing. The window root reclaims focus on a click while
+    /// the form is navigating, so the field has to enter edit mode first, as
+    /// the form's other text fields do.
+    #[gpui::test]
+    fn clicking_the_refresh_interval_field_focuses_it(cx: &mut TestAppContext) {
+        let (manager, window) = open_settings_tab(cx);
+        window.update(|_, cx| {
+            manager.update(cx, |manager, cx| {
+                manager.settings_tab.conn_override_refresh_interval = true;
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        let capture = FrameCapture::observe(window);
+        let frame = capture.frame(window);
+        let field_id = cm_setting_id("refresh_interval");
+        let bounds = accessibility_node(&frame, &field_id)
+            .and_then(|node| node.bounds())
+            .expect("the refresh interval field is drawn");
+        // Accessibility bounds are in device pixels; clicks take logical ones.
+        let scale = window.update(|window, _| window.scale_factor()) as f64;
+        let center = point(
+            px(((bounds.x0 + bounds.x1) / 2.0 / scale) as f32),
+            px(((bounds.y0 + bounds.y1) / 2.0 / scale) as f32),
+        );
+
+        window.simulate_click(center, Modifiers::default());
+        window.run_until_parked();
+
+        let focused = window.update(|window, cx| {
+            manager
+                .read(cx)
+                .settings_tab
+                .conn_refresh_interval_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        });
+        assert!(focused, "a click on the field focuses it");
+        assert_eq!(
+            window.update(|_, cx| manager.read(cx).edit_state),
+            EditState::Editing
+        );
     }
 
     /// The refresh policy and refresh interval rows each hold a checkbox and a

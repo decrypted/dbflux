@@ -146,7 +146,6 @@ impl SelectionState {
     }
 
     /// Select an entire row.
-    #[allow(dead_code)]
     pub fn select_row(&mut self, row: usize, col_count: usize) {
         if col_count == 0 {
             return;
@@ -155,15 +154,16 @@ impl SelectionState {
         self.active = Some(CellCoord::new(row, col_count - 1));
     }
 
-    /// Extend selection to include an entire row.
-    #[allow(dead_code)]
+    /// Extend the selection to whole rows, from the anchor's row to `row`.
+    ///
+    /// The anchor moves to the first column, so a range started on a cell
+    /// becomes full rows, as a Shift+click on a row number does in a grid.
     pub fn extend_to_row(&mut self, row: usize, col_count: usize) {
         if col_count == 0 {
             return;
         }
-        if self.anchor.is_none() {
-            self.anchor = Some(CellCoord::new(row, 0));
-        }
+        let anchor_row = self.anchor.map_or(row, |anchor| anchor.row);
+        self.anchor = Some(CellCoord::new(anchor_row, 0));
         self.active = Some(CellCoord::new(row, col_count - 1));
     }
 

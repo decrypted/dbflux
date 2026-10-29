@@ -681,6 +681,20 @@ impl DataTableState {
         }
     }
 
+    /// Selection change for a primary click on a row number: the whole row,
+    /// or with Shift every row from the anchor's row to this one.
+    pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        self.commit_edit_in_progress(cx);
+        let col_count = self.col_count();
+        if modifiers.shift {
+            self.selection.extend_to_row(row, col_count);
+        } else {
+            self.selection.select_row(row, col_count);
+        }
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
     /// Commit an open inline editor, the way Enter does.
     ///
     /// Selecting a cell is a deliberate act, so a value typed into the previous
@@ -2598,6 +2612,52 @@ mod tests {
             Some(CellCoord::new(0, 0)),
             "Home must jump to the first field of the current row"
         );
+    }
+
+    #[gpui::test]
+    fn row_number_click_selects_whole_rows_and_shift_extends_them(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| super::DataTableState::new(two_row_model(), cx));
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        // A cell in the second column, then Shift on the next row's number:
+        // full rows, not a range that starts in the clicked cell's column.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 1), gpui::Modifiers::default(), cx);
+                s.click_row(1, shift, cx);
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert!(selection.is_full_row_selected(0, 2), "anchor row whole");
+            assert!(
+                selection.is_full_row_selected(1, 2),
+                "shift-clicked row whole"
+            );
+        });
+
+        // A plain click on a row number starts over with that row alone.
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_row(1, gpui::Modifiers::default(), cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert!(selection.is_full_row_selected(1, 2));
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+            assert!(!selection.is_selected(CellCoord::new(0, 1)));
+        });
     }
 
     #[gpui::test]

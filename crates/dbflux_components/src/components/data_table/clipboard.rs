@@ -43,21 +43,40 @@ pub fn copy_row(model: &TableModel, row: usize) -> Option<String> {
 }
 
 /// Copy the current selection to clipboard format (TSV).
+///
+/// With several ranges (Ctrl+click), the text covers every row that holds a
+/// selected cell and every column that does, in table order; a cell outside
+/// the selection inside that grid is left empty. For one range this is the
+/// range itself.
 pub fn copy_selection(model: &TableModel, selection: &SelectionState) -> Option<String> {
-    let range = selection.selected_range()?;
-
-    let mut lines = Vec::new();
-    for row in range.start.row..=range.end.row {
-        let mut cells = Vec::new();
-        for col in range.start.col..=range.end.col {
-            if let Some(cell) = model.cell(row, col) {
-                cells.push(format_cell(cell));
-            } else {
-                cells.push(String::new());
-            }
-        }
-        lines.push(cells.join("\t"));
+    let ranges = selection.ranges();
+    if ranges.is_empty() {
+        return None;
     }
+    let rows: std::collections::BTreeSet<usize> = ranges
+        .iter()
+        .flat_map(|range| range.start.row..=range.end.row)
+        .collect();
+    let cols: std::collections::BTreeSet<usize> = ranges
+        .iter()
+        .flat_map(|range| range.start.col..=range.end.col)
+        .collect();
+
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|&row| {
+            cols.iter()
+                .map(|&col| {
+                    if selection.is_selected(CellCoord::new(row, col)) {
+                        model.cell(row, col).map(format_cell).unwrap_or_default()
+                    } else {
+                        String::new()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\t")
+        })
+        .collect();
 
     Some(lines.join("\n"))
 }
@@ -96,5 +115,44 @@ mod tests {
     fn test_escape_tsv() {
         assert_eq!(escape_tsv("hello\tworld"), "hello world");
         assert_eq!(escape_tsv("line1\nline2"), "line1 line2");
+    }
+
+    #[test]
+    fn copy_of_separate_rows_holds_only_those_rows() {
+        use super::super::model::{ColumnKind, ColumnSpec, RowData};
+
+        let columns = ["id", "name"]
+            .into_iter()
+            .map(|name| ColumnSpec {
+                id: name.into(),
+                title: name.into(),
+                kind: ColumnKind::Text,
+                align: gpui::TextAlign::Left,
+                type_name: "text".into(),
+            })
+            .collect();
+        let rows = (0..4)
+            .map(|i| RowData {
+                cells: vec![CellValue::int(i), CellValue::text(&format!("row{i}"))],
+            })
+            .collect();
+        let model = TableModel::new(columns, rows);
+
+        let mut selection = SelectionState::new();
+        selection.select_row(1, 2);
+        selection.toggle_row(3, 2);
+        assert_eq!(
+            copy_selection(&model, &selection).as_deref(),
+            Some("1\trow1\n3\trow3")
+        );
+
+        // Scattered cells: the grid of their rows and columns, gaps empty.
+        let mut selection = SelectionState::new();
+        selection.select_cell(CellCoord::new(0, 0));
+        selection.toggle_cell(CellCoord::new(2, 1));
+        assert_eq!(
+            copy_selection(&model, &selection).as_deref(),
+            Some("0\t\n\trow2")
+        );
     }
 }

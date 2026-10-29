@@ -1546,10 +1546,16 @@ fn render_rows(
                                 return;
                             }
 
-                            let modifiers = event.modifiers();
-                            state_for_click.update(cx, |state, cx| {
-                                state.click_cell(coord, modifiers, cx);
-                            });
+                            // A mouse press already selected the cell (see
+                            // `begin_drag_select`); selecting again on release
+                            // would undo a Ctrl+click toggle. Keyboard and touch
+                            // activation have no press, so they select here.
+                            if !matches!(event, ClickEvent::Mouse(_)) {
+                                let modifiers = event.modifiers();
+                                state_for_click.update(cx, |state, cx| {
+                                    state.click_cell(coord, modifiers, cx);
+                                });
+                            }
                         })
                         .on_mouse_down(
                             MouseButton::Right,
@@ -1738,6 +1744,75 @@ mod tests {
             let horizontal = state.read(cx).horizontal_scroll_handle().offset().x;
             (vertical, horizontal)
         })
+    }
+
+    /// Ctrl+click (Cmd+click on macOS) on row numbers and cells adds them to
+    /// the selection without dropping what is selected, as in a database
+    /// IDE's grid; Ctrl+click on a row selected on its own takes it out.
+    #[gpui::test]
+    fn ctrl_click_adds_rows_and_cells_to_the_selection(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("multi-select-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        let y = |row: usize| harness.origin.y + header_height + row_height * (row as f32 + 0.5);
+        let gutter = |row: usize| gpui::point(harness.origin.x + ROW_NUMBER_WIDTH / 2.0, y(row));
+        let first_cell = |row: usize| {
+            gpui::point(
+                harness.origin.x + ROW_NUMBER_WIDTH + px(first_col_width / 2.0),
+                y(row),
+            )
+        };
+        let secondary = gpui::Modifiers::secondary_key();
+
+        visual.simulate_click(gutter(1), gpui::Modifiers::default());
+        visual.simulate_click(gutter(3), secondary);
+        visual.simulate_click(first_cell(5), secondary);
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(selection.is_full_row_selected(1, 2), "first row kept");
+            assert!(
+                selection.is_full_row_selected(3, 2),
+                "ctrl-clicked row added"
+            );
+            assert!(
+                !selection.is_full_row_selected(2, 2),
+                "row in between left out"
+            );
+            assert!(
+                selection.is_selected(super::super::selection::CellCoord::new(5, 0)),
+                "ctrl-clicked cell added"
+            );
+        });
+
+        visual.simulate_click(gutter(3), secondary);
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(
+                !selection.is_full_row_selected(3, 2),
+                "ctrl-click again removes it"
+            );
+            assert!(selection.is_full_row_selected(1, 2));
+        });
     }
 
     /// Pressing on a cell and dragging to another selects the rectangle

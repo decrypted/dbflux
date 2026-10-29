@@ -537,6 +537,8 @@ impl DataTableState {
         };
         self.selection.active = self.selection.active.map(clamp);
         self.selection.anchor = self.selection.anchor.map(clamp);
+        // Ctrl+click ranges name rows of the previous model.
+        self.selection.clear_extra();
     }
 
     /// Return to the first row without touching the column scroll: a row set
@@ -670,7 +672,9 @@ impl DataTableState {
     /// Selection change for a primary click on a cell.
     ///
     /// Shift extends the range from the anchor, as Shift with the arrow keys
-    /// does; a plain click starts a new selection there. The grid and the
+    /// does; Ctrl (Cmd on macOS) adds the cell to the selection, or takes it
+    /// out when it is selected on its own; a plain click starts a new
+    /// selection there. The grid and the
     /// record view both route their clicks here so the modifier means the same
     /// thing in either layout.
     pub fn click_cell(
@@ -681,6 +685,11 @@ impl DataTableState {
     ) {
         if modifiers.shift {
             self.extend_selection(coord, cx);
+        } else if modifiers.secondary() {
+            self.commit_edit_in_progress(cx);
+            self.selection.toggle_cell(coord);
+            cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+            cx.notify();
         } else {
             self.select_cell(coord, cx);
         }
@@ -711,12 +720,15 @@ impl DataTableState {
     }
 
     /// Selection change for a primary click on a row number: the whole row,
-    /// or with Shift every row from the anchor's row to this one.
+    /// with Shift every row from the anchor's row to this one, and with
+    /// Ctrl (Cmd on macOS) the row added to, or taken out of, the selection.
     pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
         self.commit_edit_in_progress(cx);
         let col_count = self.col_count();
         if modifiers.shift {
             self.selection.extend_to_row(row, col_count);
+        } else if modifiers.secondary() {
+            self.selection.toggle_row(row, col_count);
         } else {
             self.selection.select_row(row, col_count);
         }

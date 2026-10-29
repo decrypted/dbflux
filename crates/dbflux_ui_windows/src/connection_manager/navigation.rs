@@ -1660,6 +1660,7 @@ impl ConnectionManagerWindow {
             &self.access.input_ssm_instance_id,
             &self.access.input_ssm_region,
             &self.access.input_ssm_remote_port,
+            &self.settings_tab.conn_refresh_interval_input,
             &self.settings_tab.conn_pre_hook_extra_input,
             &self.settings_tab.conn_post_hook_extra_input,
             &self.settings_tab.conn_pre_disconnect_hook_extra_input,

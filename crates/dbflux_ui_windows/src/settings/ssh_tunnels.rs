@@ -1094,6 +1094,60 @@ mod tests {
         });
     }
 
+    /// The delete confirmation renders a clickable OK button. A plain `Dialog`
+    /// draws no buttons from `button_props`, which left the dialog with no
+    /// visible way to confirm or cancel.
+    #[gpui::test]
+    fn delete_confirmation_ok_button_deletes_the_tunnel(cx: &mut gpui::TestAppContext) {
+        with_ssh_section_harness(cx, |app_state, section, window| {
+            let tunnel = SshTunnelProfile {
+                id: Uuid::new_v4(),
+                name: "doomed".to_string(),
+                config: SshTunnelConfig {
+                    host: "bastion.example.com".to_string(),
+                    port: 22,
+                    user: "deploy".to_string(),
+                    auth_method: SshAuthMethod::PrivateKey { key_path: None },
+                    ssh_config_host: None,
+                },
+                save_secret: false,
+            };
+
+            window.update(|_, cx| {
+                // The dialog entrance animation moves the surface and its
+                // hitbox, so the click point is only stable without it.
+                cx.set_reduce_motion(true);
+                app_state.update(cx, |state, _| state.add_ssh_tunnel(tunnel.clone()));
+                section.update(cx, |section, cx| {
+                    section.request_delete_tunnel(tunnel.id, cx)
+                });
+            });
+            window.run_until_parked();
+            window.update(|window, cx| window.draw(cx).clear(cx));
+
+            let dialog = window
+                .debug_bounds("dialog-0")
+                .expect("the delete confirmation is on screen");
+            window.simulate_click(
+                dialog.bottom_right() - gpui::point(gpui::px(28.), gpui::px(28.)),
+                Default::default(),
+            );
+            window.run_until_parked();
+
+            window.update(|_, cx| {
+                assert!(
+                    app_state
+                        .read(cx)
+                        .ssh_tunnels()
+                        .iter()
+                        .all(|t| t.id != tunnel.id),
+                    "clicking OK deletes the tunnel"
+                );
+                assert!(section.read(cx).pending_delete_tunnel_id.is_none());
+            });
+        });
+    }
+
     fn nav_private_key_new() -> SshFormNav {
         SshFormNav::new(SshAuthSelection::PrivateKey, None, SshFormField::Name)
     }

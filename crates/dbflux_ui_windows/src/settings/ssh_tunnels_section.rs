@@ -19,7 +19,7 @@ use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
+use gpui_component::dialog::{AlertDialog, DialogButtonProps};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1066,10 +1066,9 @@ impl Render for SshTunnelsSection {
             let entity_cancel = entity.clone();
 
             element.child(
-                Dialog::new(cx)
+                AlertDialog::new(cx)
                     .title(dbflux_i18n::t!("settings.ssh_tunnels.delete_dialog_title"))
                     .button_props(DialogButtonProps::default().show_cancel(true))
-                    .overlay_closable(false)
                     .close_button(false)
                     .on_ok(move |_, _, cx| {
                         entity.update(cx, |section, cx| {

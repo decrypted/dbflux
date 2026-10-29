@@ -15,7 +15,7 @@ use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
+use gpui_component::dialog::{AlertDialog, DialogButtonProps};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -911,10 +911,9 @@ impl Render for ProxiesSection {
             let body = proxies_delete_body(&proxy_delete_name, proxy_affected_count);
 
             element.child(
-                Dialog::new(cx)
+                AlertDialog::new(cx)
                     .title(dbflux_i18n::t!("settings.proxies.delete_dialog_title"))
                     .button_props(DialogButtonProps::default().show_cancel(true))
-                    .overlay_closable(false)
                     .close_button(false)
                     .on_ok(move |_, _, cx| {
                         entity.update(cx, |section, cx| {
@@ -936,10 +935,9 @@ impl Render for ProxiesSection {
             let entity_cancel = entity.clone();
 
             element.child(
-                Dialog::new(cx)
+                AlertDialog::new(cx)
                     .title(dbflux_i18n::t!("settings.proxies.discard_dialog_title"))
                     .button_props(DialogButtonProps::default().show_cancel(true))
-                    .overlay_closable(false)
                     .close_button(false)
                     .on_ok(move |_, window, cx| {
                         entity.update(cx, |section, cx| {

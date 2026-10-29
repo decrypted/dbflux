@@ -10,9 +10,9 @@ use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
-    IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px,
-    uniform_list,
+    IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement, Pixels, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
+    Window, canvas, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
@@ -474,6 +474,7 @@ impl gpui::Render for DataTable {
         let resize_drag_for_move = self.resize_drag.clone();
         let state_for_resize_move = self.state.clone();
         let resize_drag_for_up = self.resize_drag.clone();
+        let state_for_drag_up = self.state.clone();
 
         // Forward horizontal wheel/trackpad deltas to the horizontal scroll
         // handle. The handle is owned by a 1px phantom scroller at the bottom
@@ -635,10 +636,11 @@ impl gpui::Render for DataTable {
                     });
                 }
             })
-            .on_mouse_up(MouseButton::Left, move |_event, _window, _cx| {
+            .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
                 if let Ok(mut drag) = resize_drag_for_up.lock() {
                     drag.col = None;
                 }
+                state_for_drag_up.update(cx, |state, _| state.end_drag_select());
             })
             .child(inner_table)
             // Measure viewport size and sync horizontal scroll offset using canvas
@@ -1515,6 +1517,23 @@ fn render_rows(
                             |d| d.italic(),
                         )
                         .when(is_pending_delete, |d| d.line_through())
+                        .on_mouse_down(MouseButton::Left, {
+                            let state = state_entity.clone();
+                            move |event: &MouseDownEvent, window, cx| {
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.begin_drag_select(coord, event.modifiers, cx);
+                                });
+                            }
+                        })
+                        .on_mouse_move({
+                            let state = state_entity.clone();
+                            move |event: &MouseMoveEvent, _window, cx| {
+                                if event.pressed_button == Some(MouseButton::Left) {
+                                    state.update(cx, |state, cx| state.drag_select_to(coord, cx));
+                                }
+                            }
+                        })
                         .on_click(move |event: &ClickEvent, window, cx| {
                             state_for_click.update(cx, |state, cx| {
                                 state.focus(window, cx);
@@ -1719,6 +1738,66 @@ mod tests {
             let horizontal = state.read(cx).horizontal_scroll_handle().offset().x;
             (vertical, horizontal)
         })
+    }
+
+    /// Pressing on a cell and dragging to another selects the rectangle
+    /// between them, as in a database IDE's grid; releasing ends the drag, so
+    /// moving afterwards does not change the selection.
+    #[gpui::test]
+    fn dragging_across_cells_selects_the_range(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("drag-select-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        // Both columns sit inside the 600px harness only when the first one
+        // is narrow enough; the second column's left edge is enough to land in it.
+        let cell = |row: usize, col: usize| {
+            let x = if col == 0 {
+                ROW_NUMBER_WIDTH + px(first_col_width / 2.0)
+            } else {
+                ROW_NUMBER_WIDTH + px(first_col_width + 10.0)
+            };
+            gpui::point(
+                harness.origin.x + x,
+                harness.origin.y + header_height + row_height * (row as f32 + 0.5),
+            )
+        };
+        let none = gpui::Modifiers::default();
+
+        visual.simulate_mouse_down(cell(1, 0), MouseButton::Left, none);
+        visual.simulate_mouse_move(cell(2, 1), MouseButton::Left, none);
+        visual.simulate_mouse_move(cell(3, 1), MouseButton::Left, none);
+        visual.simulate_mouse_up(cell(3, 1), MouseButton::Left, none);
+        visual.run_until_parked();
+        // After release, hovering elsewhere must not move the selection.
+        visual.simulate_mouse_move(cell(5, 0), None, none);
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let range = state
+                .read(cx)
+                .selection()
+                .selected_range()
+                .expect("a drag selects a range");
+            assert_eq!(range.start, super::super::selection::CellCoord::new(1, 0));
+            assert_eq!(range.end, super::super::selection::CellCoord::new(3, 1));
+        });
     }
 
     /// Clicks land on the row-number gutter itself: a click there selects

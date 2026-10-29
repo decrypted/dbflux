@@ -4108,6 +4108,9 @@ settings:
     grid_fk_labels:
       label: "Mostrar el valor del registro referenciado en celdas de clave foránea"
       hint: "Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias."
+    grid_pk_sort_desc:
+      label: "Ordenar las tablas por clave primaria, lo más reciente primero"
+      hint: "Las tablas se abren ordenadas por su clave primaria de forma descendente, así las filas más recientes de una clave autoincremental aparecen primero. Se aplica a las tablas abiertas después de guardar; hacer clic en un encabezado de columna sigue ordenando como antes."
     vim_mode:
       label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."

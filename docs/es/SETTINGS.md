@@ -92,6 +92,7 @@ y permanece en English por ahora.
 | Setting                      | Default | Qué hace |
 | ---------------------------- | ------- | -------- |
 | **Mostrar el valor del registro referenciado en celdas de clave foránea** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
+| **Ordenar las tablas por clave primaria, lo más reciente primero** | Off | Las tablas se abren ordenadas por su clave primaria de forma descendente en lugar de ascendente, así las filas más recientes de una clave autoincremental aparecen primero. Al quitar el orden de una columna se vuelve a este orden. Se aplica a las tablas abiertas después de guardar. |
 
 ### Inicio y sesión
 

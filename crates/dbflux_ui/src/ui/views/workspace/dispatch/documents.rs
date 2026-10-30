@@ -204,8 +204,14 @@ impl Workspace {
             | Command::EditBindingContext
             | Command::FilterByContext
             // Copy belongs to the SQL preview modal, which answers it as its
-            // own action.
-            | Command::CopyPreview => Some(false),
+            // own action, and the value editor keys to the cell editor.
+            | Command::CopyPreview
+            | Command::CopyEditorText
+            | Command::CopyEditorTextCompact
+            | Command::FormatEditorText
+            | Command::CompactEditorText
+            | Command::ToggleDialogMaximized
+            | Command::ResetDialogSize => Some(false),
 
             _ => None,
         }

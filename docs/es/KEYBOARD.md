@@ -879,6 +879,10 @@ menú, un desplegable o un selector, los atajos globales esperan a que se cierre
 | `Enter` | Confirmar, cuando el botón principal está habilitado |
 | `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Desplazar el contenido de un diálogo largo |
 | `Escape` / `Ctrl+s` / `Cmd+s` | Cerrar / guardar el editor de celda y la vista previa de documento |
+| `Ctrl+Shift+k` / `Ctrl+Shift+h` (`Cmd` en macOS) | Copiar el texto del editor de celda tal como se ve / compactado |
+| `Ctrl+Shift+u` / `Ctrl+Shift+j` (`Cmd` en macOS) | Formatear / compactar el JSON o XML del editor de celda |
+| `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) | Maximizar o restaurar el editor de celda (o doble clic en su barra de título) |
+| `Ctrl+Shift+Backspace` (`Cmd+Shift+Backspace`) | Restablecer el tamaño predeterminado del editor de celda |
 | `Tab` / `Shift+Tab` | Pasar al control siguiente / anterior dentro del diálogo |
 
 `Tab` y `Shift+Tab` dan la vuelta dentro de un diálogo abierto: desde el último

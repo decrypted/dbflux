@@ -187,6 +187,46 @@ En el data grid:
   <img src="../images/results/editing-light.webp" alt="La tabla customers con una celda editada aún sin guardar y los botones Save y Revert habilitados">
 </picture>
 
+### Editar valores largos
+
+Las columnas JSON y los valores largos se abren en el editor modal de celdas.
+Una celda de texto cuyo contenido se interpreta como un objeto o un array JSON,
+o como XML, se abre ahí en el mismo editor que recibe una columna JSON,
+detectado igual que en el panel de valor: con formato legible, resaltado de
+sintaxis, números de línea y plegado, una línea de estado que indica si el
+texto sigue siendo válido, y **Format** y **Compact**. El título nombra el tipo
+de la columna y el formato, por ejemplo `Editar raw_result (TEXT · JSON)`. Los
+números y cadenas sueltos siguen siendo texto sin formato.
+
+Mostrar un valor con formato no cambia cómo se guarda. Un valor guardado en una
+sola línea se vuelve a guardar compacto, quitando solo los espacios entre
+elementos, de modo que el orden de las claves, números como `2312.64496440` y
+cadenas como `"2725.8328350479"` quedan exactamente como estaban. Un valor
+guardado en varias líneas se guarda tal como se editó, y **Save** sin cambios no
+crea ninguna edición pendiente. Si el texto de una columna de texto deja de ser
+válido, el primer **Save** muestra un aviso y el segundo lo guarda tal como se
+escribió; una columna JSON lo rechaza.
+
+**Copy** copia al portapapeles el texto del editor tal como se ve, con las
+ediciones sin guardar, y **Copy compact** lo copia compactado. Arrastra el borde
+derecho o inferior del editor, o su esquina inferior derecha, para cambiar su
+tamaño, o maximízalo con el botón junto al botón de cerrar o con un doble clic en
+su barra de título. El editor queda dentro del panel sobre el que se abre, así
+que su barra de título y sus botones siguen a la vista con cualquier tamaño, por
+largo que sea el valor. El tamaño se recuerda para el siguiente valor; **Reset
+size**, el botón anterior al de maximizar, devuelve al editor su tamaño
+predeterminado y olvida el recordado.
+
+| Teclas | Acción |
+|--------|--------|
+| `Ctrl+s` (`Cmd+s`) | Guardar |
+| `Ctrl+Shift+k` / `Ctrl+Shift+h` | Copiar / Copiar compacto (`Cmd` en macOS) |
+| `Ctrl+Shift+u` / `Ctrl+Shift+j` | Formatear / Compactar |
+| `Ctrl+Shift+Enter` | Maximizar o restaurar el editor |
+| `Ctrl+Shift+Backspace` | Restablecer el tamaño predeterminado del editor |
+
+`Ctrl+c` (`Cmd+c`) sigue copiando el texto seleccionado.
+
 ### Cuándo los resultados son editables
 
 Los browses de tabla planos son editables cuando la tabla tiene una primary key.

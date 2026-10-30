@@ -842,6 +842,10 @@ shortcuts wait until it closes.
 | `Enter` | Confirm, when the primary button is enabled |
 | `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Scroll a long dialog body |
 | `Escape` / `Ctrl+s` / `Cmd+s` | Close / save the cell editor and the document preview |
+| `Ctrl+Shift+k` / `Ctrl+Shift+h` (`Cmd` on macOS) | Copy the cell editor's text as shown / compacted |
+| `Ctrl+Shift+u` / `Ctrl+Shift+j` (`Cmd` on macOS) | Format / compact the cell editor's JSON or XML |
+| `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) | Maximize or restore the cell editor (or double-click its title bar) |
+| `Ctrl+Shift+Backspace` (`Cmd+Shift+Backspace`) | Reset the cell editor to its default size |
 | `Tab` / `Shift+Tab` | Move to the next / previous control inside the dialog |
 
 `Tab` and `Shift+Tab` wrap around inside an open dialog: from the last control

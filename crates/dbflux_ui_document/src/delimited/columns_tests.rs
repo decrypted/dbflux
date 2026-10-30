@@ -823,9 +823,125 @@ fn the_column_controls_and_dialogs_are_covered(cx: &mut TestAppContext) {
 
     assert!(start_cell_edit(&document, window, 0, 1));
     let checked = covered_ids(&document, window);
-    for control in ["cell-editor-cancel", "cell-editor-save"] {
+    for control in [
+        "cell-editor-cancel",
+        "cell-editor-save",
+        "cell-editor-copy",
+        "cell-editor-maximize",
+        "modal-title-bar",
+    ] {
         assert!(checked.iter().any(|id| id == control), "{checked:?}");
     }
+    press(window, "escape");
+    assert!(!cell_editor_is_open(&document, window));
+}
+
+/// A field holding JSON opens in the JSON editor, whose Copy compact,
+/// Format and Compact are covered as well.
+#[gpui::test]
+fn the_json_editor_controls_are_covered(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("column-coverage-json");
+    let json = format!(
+        r#"{{"success":true,"msg":"ok","data":{{"amount":"2725.8328350479","usd":2312.64496440,"note":"{}"}}}}"#,
+        "x".repeat(60)
+    );
+    let bytes = format!("name,raw\nAna,\"{}\"\n", json.replace('"', "\"\""));
+    let path = local_file(&directory, "responses.csv", bytes.as_bytes());
+
+    let (document, window) = open_local(cx, path);
+
+    assert!(start_cell_edit(&document, window, 0, 1));
+    let checked = covered_ids(&document, window);
+    for control in [
+        "cell-editor-copy",
+        "cell-editor-copy-compact",
+        "cell-editor-format",
+        "cell-editor-compact",
+        "cell-editor-maximize",
+        "cell-editor-save",
+    ] {
+        assert!(checked.iter().any(|id| id == control), "{checked:?}");
+    }
+    press(window, "escape");
+    assert!(!cell_editor_is_open(&document, window));
+}
+
+fn cell_editor_is_maximized(
+    document: &Entity<DelimitedDocument>,
+    window: &mut VisualTestContext,
+) -> bool {
+    window.update(|_, cx| {
+        document
+            .read(cx)
+            .cell_editor()
+            .is_some_and(|editor| editor.read(cx).is_maximized())
+    })
+}
+
+/// With the app keymap and the keyboard in the text editor, the maximize
+/// chord toggles the dialog: the input layer binds the same chord at the
+/// editor's depth (run in a new tab), which used to take it. Save and
+/// Escape still work from the maximized dialog.
+#[gpui::test]
+fn the_maximize_chord_toggles_the_dialog_from_its_editor(cx: &mut TestAppContext) {
+    #[cfg(target_os = "macos")]
+    let (maximize, save) = ("cmd-shift-enter", "cmd-s");
+    #[cfg(not(target_os = "macos"))]
+    let (maximize, save) = ("ctrl-shift-enter", "ctrl-s");
+
+    let directory = TestDirectory::new("modal-maximize-chord");
+    let json = format!(
+        "[{}]",
+        (0..1000)
+            .map(|id| format!(r#"{{"id":{id}}}"#))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let bytes = format!("name,raw\nAna,\"{}\"\n", json.replace('"', "\"\""));
+    let path = local_file(&directory, "responses.csv", bytes.as_bytes());
+
+    let (document, window) = open_local(cx, path);
+
+    assert!(start_cell_edit(&document, window, 0, 1));
+    // The typed text lands in the editor: the keyboard is there.
+    window.simulate_input("X");
+
+    // The test host lets a keymap command nobody answers fall through to the
+    // next binding, where the workspace takes it: the chord must rank the
+    // dialog's own action first on the editor's real key context stack.
+    let top = window.update(|window, cx| {
+        let stack = window.context_stack();
+        let keys = [gpui::Keystroke::parse(maximize).expect("valid keystroke")];
+        let (matches, _) = cx.key_bindings().borrow().bindings_for_input(&keys, &stack);
+        matches.first().map(|binding| binding.action().name())
+    });
+    assert_eq!(
+        top,
+        Some(gpui::Action::name(
+            &dbflux_components::actions::ToggleDialogMaximized
+        ))
+    );
+
+    press(window, maximize);
+    assert!(cell_editor_is_maximized(&document, window));
+    press(window, maximize);
+    assert!(!cell_editor_is_maximized(&document, window));
+
+    // The typed X broke the JSON: the first Save warns, the second stores
+    // the text as typed.
+    press(window, maximize);
+    assert!(cell_editor_is_maximized(&document, window));
+    press(window, save);
+    assert!(cell_editor_is_open(&document, window));
+    press(window, save);
+    assert!(!cell_editor_is_open(&document, window));
+    assert!(has_pending_operations(&document, window));
+
+    assert!(start_cell_edit(&document, window, 0, 1));
+    assert!(
+        cell_editor_is_maximized(&document, window),
+        "the next dialog opens maximized again"
+    );
     press(window, "escape");
     assert!(!cell_editor_is_open(&document, window));
 }

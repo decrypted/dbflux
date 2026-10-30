@@ -4,6 +4,7 @@
 mod add_member_modal;
 mod audit;
 pub mod buckets_table;
+mod cell_editor_host;
 pub mod chart;
 pub mod chart_document;
 mod chrome;

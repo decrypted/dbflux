@@ -167,11 +167,16 @@ components:
     valid:
       one: "有效的 JSON · %{count} 行"
       many: "有效的 JSON · %{count} 行"
+    valid_xml:
+      one: "有效的 XML · %{count} 行"
+      many: "有效的 XML · %{count} 行"
     empty_error: 文档不能为空
     format: 格式化
     compact: 紧凑
     cancel: 取消
     save: 保存
+    copy: 复制
+    copy_compact: 紧凑复制
   value_source:
     literal: 字符
     env: 环境变量
@@ -3730,6 +3735,13 @@ modals:
     title_column: "编辑 %{column}（%{type_name}）"
     title_json: 编辑 JSON
     title_text: 编辑文本
+    title_xml: 编辑 XML
+    maximize: 最大化
+    restore: 恢复大小
+    reset_size: 重置大小
+    invalid_warning: "已不是有效的 %{format}：%{error}。再次保存将以纯文本存储。"
+    copied: 值已复制到剪贴板
+    copied_compact: 紧凑值已复制到剪贴板
   create_dashboard:
     name_label: 仪表盘名称
     title: 新建仪表盘
@@ -4418,6 +4430,12 @@ settings:
       load_more: 加载更多
       edit_expiry: 编辑过期时间…
       copy_preview: 复制预览
+      copy_editor_text: 复制编辑器文本
+      copy_editor_text_compact: 紧凑复制编辑器文本
+      format_editor_text: 格式化编辑器文本
+      compact_editor_text: 紧凑编辑器文本
+      toggle_dialog_maximized: 最大化或恢复对话框
+      reset_dialog_size: 重置对话框大小
       import_items: "导入…"
       import_from_client: "从其他客户端导入…"
       reset_binding: "重置快捷键"

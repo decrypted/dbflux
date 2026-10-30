@@ -167,11 +167,16 @@ components:
     valid:
       one: "JSON válido · %{count} línea"
       many: "JSON válido · %{count} líneas"
+    valid_xml:
+      one: "XML válido · %{count} línea"
+      many: "XML válido · %{count} líneas"
     empty_error: El documento no puede estar vacío
     format: Formatear
     compact: Compactar
     cancel: Cancelar
     save: Guardar
+    copy: Copiar
+    copy_compact: Copiar compacto
   value_source:
     literal: Literal
     env: Variable de entorno
@@ -3730,6 +3735,13 @@ modals:
     title_column: "Editar %{column} (%{type_name})"
     title_json: Editar JSON
     title_text: Editar texto
+    title_xml: Editar XML
+    maximize: Maximizar
+    restore: Restaurar tamaño
+    reset_size: Restablecer tamaño
+    invalid_warning: "Ya no es %{format} válido: %{error}. Guarda de nuevo para almacenarlo como texto sin formato."
+    copied: Valor copiado al portapapeles
+    copied_compact: Valor compacto copiado al portapapeles
   create_dashboard:
     name_label: Nombre del dashboard
     title: Nuevo dashboard
@@ -4418,6 +4430,12 @@ settings:
       load_more: Cargar más
       edit_expiry: Editar expiración…
       copy_preview: Copiar vista previa
+      copy_editor_text: Copiar texto del editor
+      copy_editor_text_compact: Copiar texto del editor compactado
+      format_editor_text: Formatear texto del editor
+      compact_editor_text: Compactar texto del editor
+      toggle_dialog_maximized: Maximizar o restaurar diálogo
+      reset_dialog_size: Restablecer tamaño del diálogo
       import_items: "Importar…"
       import_from_client: "Importar desde otro cliente…"
       reset_binding: "Restablecer atajo"

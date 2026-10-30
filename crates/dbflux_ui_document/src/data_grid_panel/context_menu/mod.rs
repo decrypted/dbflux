@@ -1492,15 +1492,23 @@ impl DataGridPanel {
     }
 
     /// The part of the result the grid selection covers: every row that holds
-    /// a selected cell and every column that does, in result order. A cell in
-    /// that grid but outside the selection is `Null`, where the plain copy
-    /// leaves it empty.
+    /// a selected cell and every column that does, in the order the grid
+    /// shows them. A cell in that grid but outside the selection is `Null`,
+    /// where the plain copy leaves it empty.
+    ///
+    /// The selection names visual rows, so each is resolved through the edit
+    /// buffer: a pending insert copies its values, and a base row copies the
+    /// result's value or, for a cell with an unsaved edit, the edited one.
     fn selection_result(&self, cx: &App) -> Option<dbflux_core::QueryResult> {
+        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
         use dbflux_components::components::data_table::selection::CellCoord;
         use std::collections::BTreeSet;
 
         let table_state = self.grid_table.table_state.as_ref()?;
-        let selection = table_state.read(cx).selection();
+        let state = table_state.read(cx);
+        let selection = state.selection();
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
         let ranges = selection.ranges();
         if ranges.is_empty() {
             return None;
@@ -1508,7 +1516,7 @@ impl DataGridPanel {
         let rows: BTreeSet<usize> = ranges
             .iter()
             .flat_map(|range| range.start.row..=range.end.row)
-            .filter(|&row| row < self.result.rows.len())
+            .filter(|&row| row < visual_order.len())
             .collect();
         // Columns in the order the grid shows them, as the plain copy does.
         let mut cols: Vec<usize> = ranges
@@ -1524,21 +1532,39 @@ impl DataGridPanel {
             .iter()
             .filter_map(|&col| self.result.columns.get(col).cloned())
             .collect();
+        let shown_value = |row: usize, col: usize| -> Value {
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_row)) if buffer.is_cell_dirty(base_row, col) => {
+                    let null = CellValue::null();
+                    buffer.get_cell(base_row, col, &null).to_value()
+                }
+                Some(VisualRowSource::Base(base_row)) => self
+                    .result
+                    .rows
+                    .get(base_row)
+                    .and_then(|values| values.get(col))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                Some(VisualRowSource::Insert(insert_idx)) => buffer
+                    .get_pending_insert_by_idx(insert_idx)
+                    .and_then(|cells| cells.get(col))
+                    .map(CellValue::to_value)
+                    .unwrap_or(Value::Null),
+                None => Value::Null,
+            }
+        };
         let rows = rows
             .iter()
-            .filter_map(|&row| {
-                let values = self.result.rows.get(row)?;
-                Some(
-                    cols.iter()
-                        .map(|&col| {
-                            if selection.is_selected(CellCoord::new(row, col)) {
-                                values.get(col).cloned().unwrap_or(Value::Null)
-                            } else {
-                                Value::Null
-                            }
-                        })
-                        .collect(),
-                )
+            .map(|&row| {
+                cols.iter()
+                    .map(|&col| {
+                        if selection.is_selected(CellCoord::new(row, col)) {
+                            shown_value(row, col)
+                        } else {
+                            Value::Null
+                        }
+                    })
+                    .collect()
             })
             .collect();
 

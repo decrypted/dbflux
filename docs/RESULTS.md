@@ -270,15 +270,39 @@ command palette. The available formats depend on the result shape and include:
 - **Text**
 - **Binary** (for binary-shaped results)
 
-The menu's **Save loaded rows as file** and **Copy loaded rows to clipboard**
-sections write the rows the grid holds, which for a table is the current page,
-and the toast states how many rows went into the file or the clipboard.
+The top of the menu chooses what is exported, and the **Save as file** and
+**Copy to clipboard** formats below it follow that choice:
 
-When the grid shows a table or a collection read page by page, the menu adds
-**Export all rows to file**, in CSV or in JSON with one object per line. It
-reads the whole table or collection again with the grid's current filter, sort
-and column selection, one page at a time, and streams it into the one file you
-choose, so the data never has to fit in memory. A table shown through the query
+- **Rows**: **Selected** writes the loaded rows that hold a selected cell,
+  **Loaded** the rows the grid holds (for a table, the current page), and
+  **All** every row of the table or collection (see below; offered only where
+  the grid can read it again page by page). **Selected** is disabled, with the
+  reason under the row, until a cell is selected.
+- **Columns**: **Visible**, the default, writes the shown columns in the order
+  the grid shows them, so hidden columns are left out and moved or pinned
+  columns keep their place. **All** writes every column in result order, hidden
+  ones included. **Selected** writes the shown columns that hold a selected
+  cell, in screen order. Selected rows with selected columns write the cells of
+  a selected range with their values; with several `Ctrl`+click ranges, every
+  row and column they cover.
+- **Include header row (column names)**, on by default, and **Delimiter**
+  (comma, semicolon or tab) apply to CSV saved or copied from this menu and to
+  Export all rows as CSV. The context menu's Copy as CSV is not affected.
+
+The caption over the options states what the formats write, for example
+"Export 12 selected rows, 4 columns", and the toast after a save or copy states
+the same rows and columns with the path or the byte count. The menu opens on the
+first format, so `Ctrl+e` `Enter` still saves at once. `k` or `Up` moves up to
+the options; `Enter`, `Right` or `l` on an option row steps to its next choice,
+passing over the ones that do not apply, or ticks the header checkbox, and a
+click picks a choice directly. Your choices are kept for every grid, not per
+table, and across restarts.
+
+With **Rows** set to **All**, the menu offers **Export all rows to file**, in
+CSV or in JSON with one object per line. It reads the whole table or collection
+again with the grid's current filter, sort and column selection, one page at a
+time, writes the columns the **Columns** option picks, and streams it into the
+one file you choose, so the data never has to fit in memory. A table shown through the query
 builder or a relational filter is read through the same query, starting at its
 offset and stopping at its limit when it sets one. The export runs as a task in
 the Tasks panel, which shows its progress and can cancel it; the toast states

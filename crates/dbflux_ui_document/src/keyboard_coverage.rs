@@ -99,6 +99,16 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::MenuSelect),
         ),
         ("export-menu.*", KeyboardPath::Command(Command::MenuSelect)),
+        // The export menu's option rows: Enter on the highlighted row steps
+        // its Rows, Columns or Delimiter choice, or ticks the header row.
+        (
+            "export-option-*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
+        (
+            "segmented-export-*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
         (
             "export-trigger",
             KeyboardPath::Command(Command::ExportResults),

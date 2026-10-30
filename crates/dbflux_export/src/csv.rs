@@ -1,12 +1,68 @@
 use crate::ExportError;
-use csv::Writer;
+use csv::{Writer, WriterBuilder};
 use dbflux_core::{QueryResult, QueryResultShape, Value};
 use std::io::Write;
+
+/// The field separator of a CSV document. Semicolon is what spreadsheets in
+/// locales with a decimal comma expect; tab gives TSV.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CsvDelimiter {
+    #[default]
+    Comma,
+    Semicolon,
+    Tab,
+}
+
+impl CsvDelimiter {
+    pub const ALL: [CsvDelimiter; 3] = [Self::Comma, Self::Semicolon, Self::Tab];
+
+    pub fn byte(self) -> u8 {
+        match self {
+            Self::Comma => b',',
+            Self::Semicolon => b';',
+            Self::Tab => b'\t',
+        }
+    }
+}
+
+/// How a CSV document is written. The default is what every CSV export
+/// wrote before the options existed: a header row and commas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CsvOptions {
+    pub include_header: bool,
+    pub delimiter: CsvDelimiter,
+}
+
+impl Default for CsvOptions {
+    fn default() -> Self {
+        Self {
+            include_header: true,
+            delimiter: CsvDelimiter::Comma,
+        }
+    }
+}
+
+impl CsvOptions {
+    pub(crate) fn writer<W: Write>(self, writer: W) -> Writer<W> {
+        WriterBuilder::new()
+            .delimiter(self.delimiter.byte())
+            .from_writer(writer)
+    }
+}
 
 pub struct CsvExporter;
 
 impl CsvExporter {
     pub fn export(&self, result: &QueryResult, writer: &mut dyn Write) -> Result<(), ExportError> {
+        self.export_with_options(result, CsvOptions::default(), writer)
+    }
+
+    pub fn export_with_options(
+        &self,
+        result: &QueryResult,
+        options: CsvOptions,
+        writer: &mut dyn Write,
+    ) -> Result<(), ExportError> {
         match &result.shape {
             QueryResultShape::Text => {
                 if let Some(body) = &result.text_body {
@@ -23,10 +79,12 @@ impl CsvExporter {
             QueryResultShape::Table | QueryResultShape::Json => {}
         }
 
-        let mut csv_writer = Writer::from_writer(writer);
+        let mut csv_writer = options.writer(writer);
 
-        let headers: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
-        csv_writer.write_record(&headers)?;
+        if options.include_header {
+            let headers: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+            csv_writer.write_record(&headers)?;
+        }
 
         for row in &result.rows {
             for value in row.iter() {
@@ -240,6 +298,101 @@ mod tests {
 
         let output = String::from_utf8(buf).unwrap();
         assert_eq!(output.trim(), "id,name");
+    }
+
+    #[test]
+    fn without_header_writes_only_the_rows() {
+        let result = make_result(
+            vec!["id", "name"],
+            vec![
+                vec![Value::Int(1), Value::Text("Alice".to_string())],
+                vec![Value::Int(2), Value::Text("Bob".to_string())],
+            ],
+        );
+        let options = CsvOptions {
+            include_header: false,
+            ..CsvOptions::default()
+        };
+
+        let mut buf = Vec::new();
+        CsvExporter
+            .export_with_options(&result, options, &mut buf)
+            .unwrap();
+
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output.lines().collect::<Vec<_>>(), vec!["1,Alice", "2,Bob"]);
+    }
+
+    #[test]
+    fn without_header_an_empty_result_writes_nothing() {
+        let result = make_result(vec!["id", "name"], vec![]);
+        let options = CsvOptions {
+            include_header: false,
+            ..CsvOptions::default()
+        };
+
+        let mut buf = Vec::new();
+        CsvExporter
+            .export_with_options(&result, options, &mut buf)
+            .unwrap();
+
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn semicolon_and_tab_delimiters_separate_and_quote_by_that_byte() {
+        let result = make_result(
+            vec!["id", "note"],
+            vec![vec![Value::Int(1), Value::Text("a;b, c".to_string())]],
+        );
+
+        let mut semicolon = Vec::new();
+        CsvExporter
+            .export_with_options(
+                &result,
+                CsvOptions {
+                    delimiter: CsvDelimiter::Semicolon,
+                    ..CsvOptions::default()
+                },
+                &mut semicolon,
+            )
+            .unwrap();
+        let semicolon = String::from_utf8(semicolon).unwrap();
+        assert_eq!(
+            semicolon.lines().collect::<Vec<_>>(),
+            vec!["id;note", "1;\"a;b, c\""]
+        );
+
+        let mut tab = Vec::new();
+        CsvExporter
+            .export_with_options(
+                &result,
+                CsvOptions {
+                    delimiter: CsvDelimiter::Tab,
+                    ..CsvOptions::default()
+                },
+                &mut tab,
+            )
+            .unwrap();
+        let tab = String::from_utf8(tab).unwrap();
+        assert_eq!(
+            tab.lines().collect::<Vec<_>>(),
+            vec!["id\tnote", "1\ta;b, c"]
+        );
+    }
+
+    #[test]
+    fn default_options_match_the_plain_export() {
+        let result = make_result(vec!["a"], vec![vec![Value::Text("x".to_string())]]);
+
+        let mut plain = Vec::new();
+        CsvExporter.export(&result, &mut plain).unwrap();
+        let mut with_defaults = Vec::new();
+        CsvExporter
+            .export_with_options(&result, CsvOptions::default(), &mut with_defaults)
+            .unwrap();
+
+        assert_eq!(plain, with_defaults);
     }
 
     #[test]

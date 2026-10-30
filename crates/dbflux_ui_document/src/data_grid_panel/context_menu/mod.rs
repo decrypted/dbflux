@@ -137,10 +137,12 @@ pub(super) fn place_context_menu(
 
 /// One row of the data grid's export menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ExportMenuEntry {
-    /// Write the loaded rows to a file in this format.
+pub(crate) enum ExportMenuEntry {
+    /// A Rows, Columns or CSV choice; the format rows below follow it.
+    Option(super::export_options::ExportOptionRow),
+    /// Write the chosen rows and columns to a file in this format.
     Save(ExportFormat),
-    /// Put the loaded rows on the clipboard in this format.
+    /// Put the chosen rows and columns on the clipboard in this format.
     Copy(ExportFormat),
     /// Page through the whole table and stream it to a file in this format.
     SaveAll(dbflux_transfer::FileFormat),
@@ -1223,8 +1225,15 @@ impl DataGridPanel {
             return;
         }
 
+        self.load_export_options(cx);
         self.chrome.export_menu_open = true;
-        self.chrome.export_menu_selected = 0;
+        // The keyboard starts on the first format, so Ctrl+E Enter still
+        // saves at once; the options sit above it.
+        self.chrome.export_menu_selected = self
+            .export_menu_entries()
+            .iter()
+            .position(|entry| !matches!(entry, ExportMenuEntry::Option(_)))
+            .unwrap_or(0);
         self.focus.export_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
@@ -1239,26 +1248,29 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// The rows of the export menu, in the order it draws them: a save row
-    /// per format, a copy row per format, then, when the whole table can be
-    /// read again, an export-all row per streaming format.
-    pub(super) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
-        let formats = dbflux_export::available_formats(&self.result.shape);
-        let export_all_formats: &[dbflux_transfer::FileFormat] = if self.can_export_all_rows() {
-            &dbflux_transfer::FileFormat::ALL
-        } else {
-            &[]
-        };
+    /// The rows of the export menu, in the order it draws them: the option
+    /// rows, then a save row and a copy row per format, or, when the Rows
+    /// option is All rows, an export-all row per streaming format.
+    pub(crate) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
+        let options = self
+            .export_option_rows()
+            .into_iter()
+            .map(ExportMenuEntry::Option);
 
-        formats
-            .iter()
-            .map(|&format| ExportMenuEntry::Save(format))
+        if self.exports_all_rows() {
+            return options
+                .chain(
+                    dbflux_transfer::FileFormat::ALL
+                        .iter()
+                        .map(|&format| ExportMenuEntry::SaveAll(format)),
+                )
+                .collect();
+        }
+
+        let formats = dbflux_export::available_formats(&self.result.shape);
+        options
+            .chain(formats.iter().map(|&format| ExportMenuEntry::Save(format)))
             .chain(formats.iter().map(|&format| ExportMenuEntry::Copy(format)))
-            .chain(
-                export_all_formats
-                    .iter()
-                    .map(|&format| ExportMenuEntry::SaveAll(format)),
-            )
             .collect()
     }
 
@@ -1272,6 +1284,12 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> bool {
         let entries = self.export_menu_entries();
+
+        if let Some(&entry) = entries.get(self.chrome.export_menu_selected)
+            && let Some(handled) = self.dispatch_export_option_command(entry, cmd, cx)
+        {
+            return handled;
+        }
 
         match cmd {
             Command::MenuDown | Command::SelectNext => {
@@ -1309,6 +1327,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         match entry {
+            ExportMenuEntry::Option(row) => self.activate_export_option(row, cx),
             ExportMenuEntry::Save(format) => self.export_with_format(format, window, cx),
             ExportMenuEntry::Copy(format) => self.copy_to_clipboard_with_format(format, window, cx),
             ExportMenuEntry::SaveAll(format) => self.export_all_rows(format, window, cx),
@@ -1325,8 +1344,8 @@ impl DataGridPanel {
             self.close_export_menu(window, cx);
         }
 
-        let result = self.result.clone();
-        let loaded_rows = loaded_row_count(&result);
+        let (result, scope_label) = self.export_menu_payload(cx);
+        let csv_options = self.export_menu_csv_options();
         let base_name = self.export_base_name();
         let extension = format.extension();
         let suggested_name = format!("{}.{}", base_name, extension);
@@ -1394,15 +1413,15 @@ impl DataGridPanel {
             let export_result = (|| {
                 let file = File::create(&target_path)?;
                 let mut writer = BufWriter::new(file);
-                dbflux_export::export(&result, format, &mut writer)?;
+                dbflux_export::export_with_csv_options(&result, format, csv_options, &mut writer)?;
                 Ok::<_, dbflux_export::ExportError>(())
             })();
 
             let path_text = target_path.display().to_string();
-            let (message, is_error) = match (&export_result, loaded_rows) {
-                (Ok(()), Some(count)) if used_fallback => (
-                    crate::labels::context_menu_export_native_picker_fallback_rows_toast(
-                        count, &path_text,
+            let (message, is_error) = match (&export_result, scope_label.as_deref()) {
+                (Ok(()), Some(scope)) if used_fallback => (
+                    crate::labels::context_menu_export_native_picker_fallback_scope_toast(
+                        scope, &path_text,
                     ),
                     false,
                 ),
@@ -1410,8 +1429,8 @@ impl DataGridPanel {
                     crate::labels::context_menu_export_native_picker_fallback_toast(&path_text),
                     false,
                 ),
-                (Ok(()), Some(count)) => (
-                    crate::labels::context_menu_export_exported_rows_toast(count, &path_text),
+                (Ok(()), Some(scope)) => (
+                    crate::labels::context_menu_export_exported_scope_toast(scope, &path_text),
                     false,
                 ),
                 (Ok(()), None) => (
@@ -1468,10 +1487,30 @@ impl DataGridPanel {
             return;
         }
 
+        let (result, scope_label) = self.export_menu_payload(cx);
         let mut buffer: Vec<u8> = Vec::new();
-        let export_result = dbflux_export::export(&self.result, format, &mut buffer);
-        let row_count = loaded_row_count(&self.result);
+        let export_result = dbflux_export::export_with_csv_options(
+            &result,
+            format,
+            self.export_menu_csv_options(),
+            &mut buffer,
+        );
+        let byte_len = buffer.len();
+        let row_count = scope_label.is_some().then_some(result.rows.len());
         self.finish_clipboard_copy(export_result, buffer, format, row_count, cx);
+
+        // The shared copy report words a row count; the menu states the rows
+        // and columns it chose instead.
+        if let Some(scope) = scope_label
+            && let Some(toast) = self.pending.toast.as_mut()
+            && !toast.is_error
+        {
+            toast.message = crate::labels::context_menu_clipboard_copied_scope_toast(
+                &scope,
+                format.name(),
+                byte_len,
+            );
+        }
     }
 
     /// Context menu Copy as CSV / Copy as JSON: the selected cells through the
@@ -4422,15 +4461,6 @@ impl DataGridPanel {
             CellKind::Nested { .. } => Value::Text(cell.display_text().to_string()),
         }
     }
-}
-
-/// How many rows an export of the loaded result writes, or `None` for a text
-/// or binary payload, which has no rows to count.
-fn loaded_row_count(result: &dbflux_core::QueryResult) -> Option<usize> {
-    let is_payload =
-        result.rows.is_empty() && (result.text_body.is_some() || result.raw_bytes.is_some());
-
-    (!is_payload).then_some(result.rows.len())
 }
 
 pub(super) fn record_export_audit(

@@ -1696,12 +1696,8 @@ document:
         toast:
           native_picker_fallback: "O seletor de arquivos nativo não está disponível — exportado para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
           exported: "Exportado para %{path}"
-          exported_rows:
-            one: "1 linha carregada exportada para %{path}"
-            many: "%{count} linhas carregadas exportadas para %{path}"
-          native_picker_fallback_rows:
-            one: "O seletor de arquivos nativo não está disponível — 1 linha carregada exportada para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
-            many: "O seletor de arquivos nativo não está disponível — %{count} linhas carregadas exportadas para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
+          exported_scope: "Exportado para %{path}: %{scope}"
+          native_picker_fallback_scope: "O seletor de arquivos nativo não está disponível — exportado para %{path} (%{scope}). Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
       clipboard:
         error:
           binary_unsupported: Dados binários brutos não podem ser copiados para a área de transferência — escolha Hex ou Base64.
@@ -1712,6 +1708,7 @@ document:
           copied_rows:
             one: "1 linha carregada copiada como %{format} (%{bytes} bytes) para a área de transferência"
             many: "%{count} linhas carregadas copiadas como %{format} (%{bytes} bytes) para a área de transferência"
+          copied_scope: "Copiado como %{format} (%{bytes} bytes) para a área de transferência: %{scope}"
       document:
         toast:
           inserted: Documento inserido
@@ -1777,15 +1774,44 @@ document:
           many: "%{count} alterações pendentes"
       export:
         trigger: Exportar
-        save_as_file: Salvar linhas carregadas como arquivo
-        copy_to_clipboard: Copiar linhas carregadas para a área de transferência
+        save_as_file: "Salvar como arquivo"
+        copy_to_clipboard: "Copiar para a área de transferência"
         export_all_rows: Exportar todas as linhas para um arquivo
+        options:
+          title: "Exportar %{scope}"
+          rows: "Linhas"
+          columns: "Colunas"
+          header: "Incluir linha de cabeçalho (nomes das colunas)"
+          delimiter: "Separador"
+          rows_selected: "Selecionadas"
+          rows_loaded: "Carregadas"
+          rows_all: "Todas"
+          columns_all: "Todas"
+          columns_visible: "Visíveis"
+          columns_selected: "Selecionadas"
+          delimiter_comma: "Vírgula"
+          delimiter_semicolon: "Ponto e vírgula"
+          delimiter_tab: "Tab"
+          no_selected_rows: "Selecione células para exportar as linhas selecionadas"
+          no_selected_columns: "Selecione células para exportar as colunas selecionadas"
+        scope:
+          summary: "%{rows}, %{columns}"
+          selected_rows:
+            one: "1 linha selecionada"
+            many: "%{count} linhas selecionadas"
+          loaded_rows:
+            one: "1 linha carregada"
+            many: "%{count} linhas carregadas"
+          all_rows: "todas as linhas"
+          all_rows_count:
+            one: "1 linha"
+            many: "todas as %{count} linhas"
+          columns:
+            one: "1 coluna"
+            many: "%{count} colunas"
         all:
           task: "Exportar todas as linhas de %{table}"
           toast:
-            exported:
-              one: "1 linha exportada para %{path}"
-              many: "Todas as %{count} linhas exportadas para %{path}"
             cancelled: "Exportação cancelada — %{path} contém apenas as linhas gravadas antes da interrupção"
             dropped_columns: "Os campos que aparecem pela primeira vez depois da primeira página não estão no arquivo: %{columns}"
           error:

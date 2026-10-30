@@ -1208,7 +1208,7 @@ struct ResolvedSshTunnel {
 }
 
 struct McpAccessManager {
-    ssh_tunnel: Option<ResolvedSshTunnel>,
+    ssh_tunnel: Option<Arc<ResolvedSshTunnel>>,
     #[cfg(feature = "aws")]
     ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>,
 }
@@ -1220,18 +1220,20 @@ impl McpAccessManager {
         ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>,
     ) -> Self {
         Self {
-            ssh_tunnel,
+            ssh_tunnel: ssh_tunnel.map(Arc::new),
             ssm_factory,
         }
     }
 
     #[cfg(not(feature = "aws"))]
     fn new(ssh_tunnel: Option<ResolvedSshTunnel>) -> Self {
-        Self { ssh_tunnel }
+        Self {
+            ssh_tunnel: ssh_tunnel.map(Arc::new),
+        }
     }
 
     #[allow(clippy::result_large_err)]
-    fn open_ssh(
+    async fn open_ssh(
         &self,
         ssh_tunnel_profile_id: &uuid::Uuid,
         remote_host: &str,
@@ -1241,25 +1243,36 @@ impl McpAccessManager {
             .ssh_tunnel
             .as_ref()
             .filter(|tunnel| tunnel.id == *ssh_tunnel_profile_id)
+            .cloned()
             .ok_or_else(|| {
                 dbflux_core::DbError::connection_failed(format!(
-                    "SSH tunnel profile '{}' was not found",
+                    "SSH tunnel profile '{}' was not found; the MCP server reads tunnel \
+                     profiles when it starts, so restart it after adding or changing one",
                     ssh_tunnel_profile_id
                 ))
             })?;
+        let remote_host = remote_host.to_string();
 
-        let dbflux_ssh::OpenedSshTunnel { tunnel, .. } = dbflux_ssh::open_tunnel(
-            &resolved.config,
-            resolved
-                .secret
-                .as_ref()
-                .map(|secret| secret.expose_secret()),
-            remote_host,
-            remote_port,
-        )?;
-        let local_port = tunnel.local_port();
+        // open_tunnel blocks on the connect, a handshake of up to 30 s and
+        // authentication, so it must not run on an async worker.
+        tokio::task::spawn_blocking(move || -> Result<AccessHandle, dbflux_core::DbError> {
+            let dbflux_ssh::OpenedSshTunnel { tunnel, .. } = dbflux_ssh::open_tunnel(
+                &resolved.config,
+                resolved
+                    .secret
+                    .as_ref()
+                    .map(|secret| secret.expose_secret()),
+                &remote_host,
+                remote_port,
+            )?;
+            let local_port = tunnel.local_port();
 
-        Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
+            Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
+        })
+        .await
+        .map_err(|error| {
+            dbflux_core::DbError::connection_failed(format!("SSH tunnel task failed: {error}"))
+        })?
     }
 
     async fn open_managed(
@@ -1310,7 +1323,10 @@ impl AccessManager for McpAccessManager {
             AccessKind::Direct => Ok(AccessHandle::direct()),
             AccessKind::Ssh {
                 ssh_tunnel_profile_id,
-            } => self.open_ssh(ssh_tunnel_profile_id, remote_host, remote_port),
+            } => {
+                self.open_ssh(ssh_tunnel_profile_id, remote_host, remote_port)
+                    .await
+            }
             AccessKind::Proxy { .. } => Err(dbflux_core::DbError::connection_failed(
                 "Proxy tunnels are not supported by the MCP server access manager",
             )),
@@ -3826,7 +3842,7 @@ mod tests {
 
         assert!(
             matches!(&error, DbError::ConnectionFailed(failure)
-                if failure.message == format!("SSH tunnel profile '{missing}' was not found")),
+                if failure.message.starts_with(&format!("SSH tunnel profile '{missing}' was not found;"))),
             "unexpected error: {error:?}"
         );
     }

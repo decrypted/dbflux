@@ -49,6 +49,16 @@ pub fn copy_row(model: &TableModel, row: usize) -> Option<String> {
 /// the selection inside that grid is left empty. For one range this is the
 /// range itself.
 pub fn copy_selection(model: &TableModel, selection: &SelectionState) -> Option<String> {
+    copy_selection_with(selection, |row, col| model.cell(row, col))
+}
+
+/// [`copy_selection`] with the cell at each visual position looked up by
+/// `cell`, for a table whose shown rows are not the model's rows one to one
+/// (pending inserts, unsaved edits).
+pub fn copy_selection_with<'a>(
+    selection: &SelectionState,
+    cell: impl Fn(usize, usize) -> Option<&'a CellValue>,
+) -> Option<String> {
     let ranges = selection.ranges();
     if ranges.is_empty() {
         return None;
@@ -68,7 +78,7 @@ pub fn copy_selection(model: &TableModel, selection: &SelectionState) -> Option<
             cols.iter()
                 .map(|&col| {
                     if selection.is_selected(CellCoord::new(row, col)) {
-                        model.cell(row, col).map(format_cell).unwrap_or_default()
+                        cell(row, col).map(format_cell).unwrap_or_default()
                     } else {
                         String::new()
                     }
@@ -153,6 +163,16 @@ mod tests {
         assert_eq!(
             copy_selection(&model, &selection).as_deref(),
             Some("0\t\n\trow2")
+        );
+
+        // Overlapping ranges copy each cell once.
+        let mut selection = SelectionState::new();
+        selection.select_cell(CellCoord::new(0, 0));
+        selection.extend_to(CellCoord::new(1, 1));
+        selection.toggle_cell(CellCoord::new(1, 1));
+        assert_eq!(
+            copy_selection(&model, &selection).as_deref(),
+            Some("0\trow0\n1\trow1")
         );
     }
 }

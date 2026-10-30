@@ -92,6 +92,7 @@ y permanece en English por ahora.
 | Setting                      | Default | Qué hace |
 | ---------------------------- | ------- | -------- |
 | **Mostrar el valor del registro referenciado en celdas de clave foránea** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
+| **Hacer clic en la cabecera de una columna la ordena** | Off | Desactivado: un clic en la cabecera de una columna selecciona la columna entera, y la flecha del borde derecho de la cabecera ordena. Activado: un clic normal ordena la columna (sin orden, ascendente, descendente), y `Shift`+clic y `Ctrl`+clic siguen seleccionando columnas. Las tablas que mantienen el orden del archivo (CSV, Parquet, hojas de cálculo) siempre seleccionan. |
 
 ### Inicio y sesión
 

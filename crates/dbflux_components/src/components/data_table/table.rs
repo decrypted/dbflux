@@ -772,6 +772,7 @@ impl DataTable {
         let fk_cols = state.fk_columns().clone();
         let annotated = state.has_header_annotations();
         let header_height = state.header_height(cx);
+        let reorderable = state.columns_reorderable();
 
         let header_cells: Vec<_> = state
             .visible_columns()
@@ -817,7 +818,13 @@ impl DataTable {
                     .hover(|s| s.bg(theme.table_hover))
                     .cursor_pointer();
 
-                header_reorder(header, &state_entity, col_spec.title.clone(), col_ix, theme)
+                let header = if reorderable {
+                    header_reorder(header, &state_entity, col_spec.title.clone(), col_ix, theme)
+                } else {
+                    header
+                };
+
+                header
                     .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.focus(window, cx);

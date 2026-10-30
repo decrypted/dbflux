@@ -34,7 +34,6 @@ dbflux_approval = { workspace = true }
 dbflux_audit = { workspace = true }
 dbflux_storage = { workspace = true }
 dbflux_ipc = { workspace = true }
-dbflux_ssh = { workspace = true }
 
 # Optional driver crates
 dbflux_driver_sqlite = { workspace = true, optional = true }

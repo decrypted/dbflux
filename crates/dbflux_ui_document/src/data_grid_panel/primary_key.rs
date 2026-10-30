@@ -22,6 +22,7 @@ impl DataGridPanel {
                     "[PK] Cannot fetch table details: profile {} is not connected",
                     profile_id
                 );
+                self.release_first_page(cx);
                 return;
             };
             Self::table_details_database(connected, source_database.as_deref())
@@ -74,6 +75,7 @@ impl DataGridPanel {
                     ),
                     cx,
                 );
+                self.release_first_page(cx);
                 return;
             }
         };
@@ -103,6 +105,7 @@ impl DataGridPanel {
                         );
                         entity.update(cx, |panel, cx| {
                             panel.pk_details_pending = false;
+                            panel.release_first_page(cx);
                             cx.notify();
                         });
                         return;
@@ -155,7 +158,54 @@ impl DataGridPanel {
 
     /// Applies primary-key columns the panel just learned about and rebuilds the
     /// table, so editability and any committed builder binding see them.
+    ///
+    /// A first page held back for the key is read here: in key order when the
+    /// key arrived (the requery), unsorted when the table has none.
     pub(super) fn apply_pk_details(&mut self, pk_names: Vec<String>, cx: &mut Context<Self>) {
+        self.apply_pk_details_to_source(pk_names, cx);
+        self.release_first_page(cx);
+    }
+
+    /// Read the first page now if it was held back for the primary key: with
+    /// the order just learned, or as the source stands when no key is coming.
+    ///
+    /// Read here rather than queued for the next frame, as an open always did:
+    /// a tab that is not drawn yet still loads its rows.
+    pub(super) fn release_first_page(&mut self, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.first_page_awaits_pk) {
+            return;
+        }
+
+        if let Some(requery) = self.pending.requery.take() {
+            self.run_table_query_in(
+                requery.profile_id,
+                requery.database,
+                requery.table,
+                requery.pagination,
+                requery.order_by,
+                requery.total_rows,
+                None,
+                cx,
+            );
+            return;
+        }
+
+        if let DataSource::Table {
+            profile_id,
+            database,
+            table,
+            pagination,
+            order_by,
+            total_rows,
+        } = self.source.clone()
+        {
+            self.run_table_query_in(
+                profile_id, database, table, pagination, order_by, total_rows, None, cx,
+            );
+        }
+    }
+
+    fn apply_pk_details_to_source(&mut self, pk_names: Vec<String>, cx: &mut Context<Self>) {
         self.pk_details_pending = false;
         // The details carry the table's facets (a hypertable's time axis).
         self.sync_source_facets(cx);

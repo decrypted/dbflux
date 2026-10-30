@@ -871,6 +871,11 @@ pub struct DataGridPanel {
     /// answers, the grid is read-only for want of a key it may well have, so
     /// the "no primary key" banner waits rather than flashing on every open.
     pk_details_pending: bool,
+    /// The table opened before its primary key was known, and its first page
+    /// waits for it: read without the key, the page is unsorted, and with
+    /// newest-first sorting it shows the oldest rows until the reordered page
+    /// replaces it.
+    first_page_awaits_pk: bool,
     /// The key arrived after the first page and the table is being read again
     /// in key order. The rows on screen were built without the key, so the
     /// banner waits for the reordered page instead of flashing until it lands.
@@ -986,7 +991,12 @@ impl DataGridPanel {
         let mut panel =
             Self::new_internal(source, app_state.clone(), pk_columns.clone(), window, cx);
         panel.init_table_views(window, cx);
-        panel.refresh(window, cx);
+        if pk_columns.is_empty() {
+            panel.first_page_awaits_pk = true;
+            panel.refresh.state = GridState::Loading;
+        } else {
+            panel.refresh(window, cx);
+        }
 
         // The details carry the primary key when the schema snapshot did not,
         // and the table's facets either way; the fetch reuses cached details.
@@ -1470,6 +1480,7 @@ impl DataGridPanel {
             panel_origin: Point::default(),
             panel_size: Size::default(),
             pk_details_pending: false,
+            first_page_awaits_pk: false,
             pk_requery_pending: false,
             nearest_neighbors: None,
             last_replayable_read: None,

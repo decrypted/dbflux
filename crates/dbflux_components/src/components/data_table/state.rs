@@ -537,6 +537,8 @@ impl DataTableState {
         };
         self.selection.active = self.selection.active.map(clamp);
         self.selection.anchor = self.selection.anchor.map(clamp);
+        // Ctrl+click ranges name rows of the previous model.
+        self.selection.clear_extra();
     }
 
     /// Return to the first row without touching the column scroll: a row set
@@ -670,32 +672,54 @@ impl DataTableState {
     /// Selection change for a primary click on a cell.
     ///
     /// Shift extends the range from the anchor, as Shift with the arrow keys
-    /// does; a plain click starts a new selection there. The grid and the
-    /// record view both route their clicks here so the modifier means the same
-    /// thing in either layout.
+    /// does; Ctrl (Cmd on macOS) adds the cell to the selection, or takes it
+    /// out when it is selected on its own; a plain click starts a new
+    /// selection there. The grid and the record view both route their clicks
+    /// here so Shift means the same thing in either layout. The record view
+    /// shows one field range only, so there Ctrl+click is a plain click.
     pub fn click_cell(
         &mut self,
         coord: CellCoord,
         modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) {
+        self.apply_cell_click(coord, modifiers, cx);
+    }
+
+    /// `click_cell`, returning whether `coord` ended up as the start of the
+    /// range being made (false after a Ctrl+click that deselected).
+    fn apply_cell_click(
+        &mut self,
+        coord: CellCoord,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if modifiers.shift {
             self.extend_selection(coord, cx);
+            true
+        } else if modifiers.secondary() && !self.record_mode {
+            self.commit_edit_in_progress(cx);
+            let added = self.selection.toggle_cell(coord);
+            cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+            cx.notify();
+            added
         } else {
             self.select_cell(coord, cx);
+            true
         }
     }
 
     /// Left button pressed on a cell: select it, or extend to it with Shift,
-    /// and start a drag selection from there.
+    /// and start a drag selection from there. A Ctrl+press that took the cell
+    /// out starts no drag, so a small move before the release does not select
+    /// it again or stretch a restored range.
     pub fn begin_drag_select(
         &mut self,
         coord: CellCoord,
         modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) {
-        self.click_cell(coord, modifiers, cx);
-        self.drag_selecting = true;
+        self.drag_selecting = self.apply_cell_click(coord, modifiers, cx);
     }
 
     /// The pointer moved onto `coord` with the left button held: extend the
@@ -711,7 +735,8 @@ impl DataTableState {
     }
 
     /// Selection change for a primary click on a row number: the whole row,
-    /// or with Shift every row from the anchor's row to this one.
+    /// with Shift every row from the anchor's row to this one, and with
+    /// Ctrl (Cmd on macOS) the row added to, or taken out of, the selection.
     pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
         // A press on a row number never starts a cell drag.
         self.drag_selecting = false;
@@ -719,6 +744,8 @@ impl DataTableState {
         let col_count = self.col_count();
         if modifiers.shift {
             self.selection.extend_to_row(row, col_count);
+        } else if modifiers.secondary() {
+            self.selection.toggle_row(row, col_count);
         } else {
             self.selection.select_row(row, col_count);
         }
@@ -768,6 +795,11 @@ impl DataTableState {
             return;
         }
         self.record_mode = record_mode;
+        // The record view draws one field range; Ctrl+click ranges kept from
+        // the grid would be invisible there and still be copied.
+        if record_mode {
+            self.selection.clear_extra();
+        }
 
         // The record view highlights the active field, and Enter edits it, so
         // entering the mode without a selection would leave both with nothing
@@ -2797,6 +2829,88 @@ mod tests {
         window.update(|_, app| {
             let selection = state.read(app).selection();
             assert_eq!(selection.active, Some(CellCoord::new(1, 1)));
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+        });
+    }
+
+    /// The record view shows one field range: Ctrl+click there is a plain
+    /// click, and entering the mode drops the grid's Ctrl+click ranges.
+    #[gpui::test]
+    fn record_mode_ctrl_click_is_a_plain_click(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, window) = record_mode_state(cx);
+        let secondary = gpui::Modifiers::secondary_key();
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 1), secondary, cx)
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(0, 1)));
+            assert_eq!(selection.ranges().len(), 1);
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+        });
+
+        // Ctrl+click on the only selected field keeps it, no jump to row 0.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
+        });
+        window.update(|_, app| {
+            assert_eq!(
+                state.read(app).selection().active,
+                Some(CellCoord::new(1, 1))
+            );
+        });
+
+        // Ranges added in the grid are dropped on the way into the mode.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.set_record_mode(false, cx);
+                s.click_cell(CellCoord::new(0, 0), secondary, cx);
+                assert_eq!(s.selection().ranges().len(), 2);
+                s.set_record_mode(true, cx);
+            });
+        });
+        window.update(|_, app| {
+            assert_eq!(state.read(app).selection().ranges().len(), 1);
+        });
+    }
+
+    /// A new model drops the Ctrl+click ranges, which name rows of the old one.
+    #[gpui::test]
+    fn a_new_model_drops_the_ctrl_click_ranges(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| super::DataTableState::new(three_column_model(), cx));
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        let secondary = gpui::Modifiers::secondary_key();
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 0), gpui::Modifiers::default(), cx);
+                s.click_cell(CellCoord::new(2, 2), secondary, cx);
+                assert_eq!(s.selection().ranges().len(), 2);
+                s.set_model(three_column_model(), super::ModelSwap::KeepCursor, cx);
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.ranges().len(), 1);
+            assert!(selection.is_selected(CellCoord::new(2, 2)), "cursor kept");
             assert!(!selection.is_selected(CellCoord::new(0, 0)));
         });
     }

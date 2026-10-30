@@ -313,7 +313,12 @@ Notas:
 
 - Las fuentes Secret/Parameter pueden apuntar a una **clave JSON** dentro de un
   secreto JSON, de forma que un único documento JSON almacenado puede alimentar
-  varios campos.
+  varios campos. Escribe la clave después del nombre o ARN del secreto como
+  `<locator>#<clave>`, por ejemplo `rds!db-1a2b#password` para la contraseña de
+  un secreto que gestiona RDS. La indicación bajo el campo dice si se usa el valor
+  completo o una sola clave. Un secreto de Secrets Manager que contiene un objeto
+  JSON pero se referencia sin clave se rechaza al conectar, y el error lista las
+  claves del secreto (nunca sus valores).
 - Los valores resueltos se cachean durante **5 minutos** para evitar volver a
   obtenerlos en cada reconexión.
 - Las fuentes Secret/Parameter respaldadas por un auth provider **requieren un

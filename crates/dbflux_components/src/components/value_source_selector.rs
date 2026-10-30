@@ -290,7 +290,8 @@ impl ValueSourceSelector {
     }
 
     /// One line telling the user where an environment or dotenv value is read
-    /// from and when, built from the reference typed in the field's input.
+    /// from and when, or which part of a Secrets Manager or Parameter Store
+    /// value is used, built from the reference typed in the field's input.
     /// `None` for any other source or an empty reference.
     pub fn source_hint(&self, primary_value: &str, cx: &App) -> Option<String> {
         source_hint(self.selected_source(cx), primary_value)
@@ -412,11 +413,22 @@ fn source_hint(kind: ValueSourceKind, primary_value: &str) -> Option<String> {
                 path = path
             ))
         }
-        ValueSourceKind::Literal
-        | ValueSourceKind::Secret
-        | ValueSourceKind::SecretProvider(_)
-        | ValueSourceKind::Parameter
-        | ValueSourceKind::Auth => None,
+        // A JSON secret without a key would be used whole, so an RDS-managed
+        // secret sends `{"username":…,"password":…}` as the password.
+        ValueSourceKind::Secret | ValueSourceKind::Parameter => {
+            match parse_secret_inline_reference(primary_value).1 {
+                Some(key) => Some(dbflux_i18n::t!(
+                    "components.value_source.hint.json_key",
+                    key = key
+                )),
+                None => Some(dbflux_i18n::t!("components.value_source.hint.whole_value")),
+            }
+        }
+        // External providers declare JSON key support in their manifest,
+        // which this component does not see.
+        ValueSourceKind::Literal | ValueSourceKind::SecretProvider(_) | ValueSourceKind::Auth => {
+            None
+        }
     }
 }
 
@@ -485,7 +497,10 @@ mod tests {
         assert_eq!(source_hint(ValueSourceKind::Literal, "secret"), None);
         assert_eq!(source_hint(ValueSourceKind::Env, "  "), None);
         assert_eq!(source_placeholder(ValueSourceKind::Literal), None);
-        assert_eq!(source_hint(ValueSourceKind::Secret, "prod/db"), None);
+        assert_eq!(
+            source_hint(ValueSourceKind::SecretProvider("vault".into()), "kv/db"),
+            None
+        );
 
         let env = source_hint(ValueSourceKind::Env, "DB_PASSWORD").expect("env hint");
         assert!(env.contains("DB_PASSWORD"), "{env}");
@@ -502,6 +517,29 @@ mod tests {
             Some(dbflux_i18n::t!(
                 "components.value_source.hint.dotenv_missing_key"
             ))
+        );
+    }
+
+    #[test]
+    fn secret_and_parameter_hints_say_which_part_of_the_value_is_used() {
+        let whole = dbflux_i18n::t!("components.value_source.hint.whole_value");
+        let arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:rds!db-1a2b";
+
+        for kind in [ValueSourceKind::Secret, ValueSourceKind::Parameter] {
+            assert_eq!(source_hint(kind.clone(), "  "), None);
+            assert_eq!(
+                source_hint(kind.clone(), arn).as_deref(),
+                Some(whole.as_str())
+            );
+
+            let keyed = source_hint(kind, &format!("{arn}#password")).expect("key hint");
+            assert!(keyed.contains("password"), "{keyed}");
+            assert_ne!(keyed, whole);
+        }
+
+        assert!(
+            whole.contains("#"),
+            "the hint shows the #key syntax: {whole}"
         );
     }
 
@@ -606,6 +644,8 @@ mod tests {
             "components.value_source.hint.env",
             "components.value_source.hint.dotenv",
             "components.value_source.hint.dotenv_missing_key",
+            "components.value_source.hint.whole_value",
+            "components.value_source.hint.json_key",
         ];
 
         for key in keys {

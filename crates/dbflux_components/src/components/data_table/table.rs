@@ -2148,9 +2148,11 @@ mod tests {
         // Out to another cell and back: the release on the start cell keeps
         // the cell the drag ended on.
         let (start, away) = (fx.cell(4, 0), fx.cell(5, 1));
-        fx.visual.simulate_mouse_down(start, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_down(start, MouseButton::Left, none);
         fx.visual.simulate_mouse_move(away, MouseButton::Left, none);
-        fx.visual.simulate_mouse_move(start, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_move(start, MouseButton::Left, none);
         fx.visual.simulate_mouse_up(start, MouseButton::Left, none);
         fx.visual.run_until_parked();
         assert_eq!(fx.range(), CellRange::single(CellCoord::new(4, 0)));
@@ -2170,12 +2172,14 @@ mod tests {
         fx.visual.run_until_parked();
 
         let jitter = gpui::point(b.x + px(1.0), b.y + px(1.0));
-        fx.visual.simulate_mouse_down(b, MouseButton::Left, secondary);
+        fx.visual
+            .simulate_mouse_down(b, MouseButton::Left, secondary);
         fx.visual
             .simulate_mouse_move(jitter, MouseButton::Left, secondary);
         fx.visual
             .simulate_mouse_move(other, MouseButton::Left, secondary);
-        fx.visual.simulate_mouse_up(other, MouseButton::Left, secondary);
+        fx.visual
+            .simulate_mouse_up(other, MouseButton::Left, secondary);
         fx.visual.run_until_parked();
 
         let state = fx.state.clone();
@@ -2227,7 +2231,10 @@ mod tests {
             let state = state.read(cx);
             assert_eq!(state.editing_cell(), Some(CellCoord::new(3, 1)));
             assert!(state.selection().is_selected(CellCoord::new(3, 1)));
-            assert!(state.selection().is_selected(CellCoord::new(0, 0)), "A kept");
+            assert!(
+                state.selection().is_selected(CellCoord::new(0, 0)),
+                "A kept"
+            );
         });
 
         // The cell selected on its own: the first press takes it out.
@@ -2253,16 +2260,20 @@ mod tests {
         let none = gpui::Modifiers::default();
 
         let (start, end, outside) = (fx.cell(1, 0), fx.cell(2, 1), fx.outside());
-        fx.visual.simulate_mouse_down(start, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_down(start, MouseButton::Left, none);
         fx.visual.simulate_mouse_move(end, MouseButton::Left, none);
-        fx.visual.simulate_mouse_move(outside, MouseButton::Left, none);
-        fx.visual.simulate_mouse_up(outside, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_move(outside, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_up(outside, MouseButton::Left, none);
         fx.visual.run_until_parked();
         let dragged = CellRange::new(CellCoord::new(1, 0), CellCoord::new(2, 1));
         assert_eq!(fx.range(), dragged);
 
         let later = fx.cell(4, 1);
-        fx.visual.simulate_mouse_move(later, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_move(later, MouseButton::Left, none);
         fx.visual.run_until_parked();
         assert_eq!(fx.range(), dragged, "no drag runs after the release");
 

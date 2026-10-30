@@ -2786,9 +2786,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn row_number_click_keeps_the_active_cell_in_the_first_column(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn row_number_click_keeps_the_active_cell_in_the_first_column(cx: &mut gpui::TestAppContext) {
         use super::super::selection::CellCoord;
 
         let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -2877,7 +2875,9 @@ mod tests {
         let secondary = gpui::Modifiers::secondary_key();
 
         window.update(|_, app| {
-            state.update(app, |s, cx| s.click_cell(CellCoord::new(0, 1), secondary, cx));
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 1), secondary, cx)
+            });
         });
         window.update(|_, app| {
             let selection = state.read(app).selection();
@@ -2888,8 +2888,12 @@ mod tests {
 
         // Ctrl+click on the only selected field keeps it, no jump to row 0.
         window.update(|_, app| {
-            state.update(app, |s, cx| s.click_cell(CellCoord::new(1, 1), secondary, cx));
-            state.update(app, |s, cx| s.click_cell(CellCoord::new(1, 1), secondary, cx));
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
         });
         window.update(|_, app| {
             assert_eq!(

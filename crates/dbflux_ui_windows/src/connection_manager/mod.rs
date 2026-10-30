@@ -5068,8 +5068,9 @@ mod accessible_name_tests {
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
     use super::keyboard_coverage_tests::open_manager;
-    use super::{ActiveTab, ConnectionManagerWindow, EditState, cm_setting_id};
+    use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, cm_setting_id};
     use dbflux_components::accessibility::{accessibility_node, accessible_name};
+    use dbflux_components::controls::InputState;
     use dbflux_ui_base::keyboard_coverage::FrameCapture;
     use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, point, px};
 
@@ -5098,12 +5099,11 @@ mod accessible_name_tests {
         dbflux_i18n::t!("settings.general.override_field", field = field)
     }
 
-    /// Clicking the refresh interval field, once its override is ticked,
-    /// focuses it for typing. The window root reclaims focus on a click while
-    /// the form is navigating, so the field has to enter edit mode first, as
-    /// the form's other text fields do.
-    #[gpui::test]
-    fn clicking_the_refresh_interval_field_focuses_it(cx: &mut TestAppContext) {
+    /// Opens the Settings tab with the refresh interval override ticked, so
+    /// its field takes input.
+    fn open_settings_tab_with_refresh_override(
+        cx: &mut TestAppContext,
+    ) -> (Entity<ConnectionManagerWindow>, &mut VisualTestContext) {
         let (manager, window) = open_settings_tab(cx);
         window.update(|_, cx| {
             manager.update(cx, |manager, cx| {
@@ -5113,12 +5113,16 @@ mod accessible_name_tests {
         });
         window.run_until_parked();
 
+        (manager, window)
+    }
+
+    /// Clicks the middle of the element drawn with `element_id`.
+    fn click_drawn(window: &mut VisualTestContext, element_id: &str) {
         let capture = FrameCapture::observe(window);
         let frame = capture.frame(window);
-        let field_id = cm_setting_id("refresh_interval");
-        let bounds = accessibility_node(&frame, &field_id)
+        let bounds = accessibility_node(&frame, element_id)
             .and_then(|node| node.bounds())
-            .expect("the refresh interval field is drawn");
+            .unwrap_or_else(|| panic!("{element_id} is drawn"));
         // Accessibility bounds are in device pixels; clicks take logical ones.
         let scale = window.update(|window, _| window.scale_factor()) as f64;
         let center = point(
@@ -5128,20 +5132,112 @@ mod accessible_name_tests {
 
         window.simulate_click(center, Modifiers::default());
         window.run_until_parked();
+    }
 
-        let focused = window.update(|window, cx| {
-            manager
-                .read(cx)
-                .settings_tab
-                .conn_refresh_interval_input
+    fn is_focused(
+        window: &mut VisualTestContext,
+        manager: &Entity<ConnectionManagerWindow>,
+        input: impl Fn(&ConnectionManagerWindow) -> Entity<InputState>,
+    ) -> bool {
+        window.update(|window, cx| {
+            input(manager.read(cx))
                 .read(cx)
                 .focus_handle(cx)
                 .is_focused(window)
-        });
-        assert!(focused, "a click on the field focuses it");
+        })
+    }
+
+    fn refresh_interval_input(manager: &ConnectionManagerWindow) -> Entity<InputState> {
+        manager.settings_tab.conn_refresh_interval_input.clone()
+    }
+
+    fn pre_hook_extra_input(manager: &ConnectionManagerWindow) -> Entity<InputState> {
+        manager.settings_tab.conn_pre_hook_extra_input.clone()
+    }
+
+    /// Clicking the refresh interval field, once its override is ticked,
+    /// focuses it for typing. The window root reclaims focus on a click while
+    /// the form is navigating, so the field has to enter edit mode first, as
+    /// the form's other text fields do.
+    #[gpui::test]
+    fn clicking_the_refresh_interval_field_focuses_it(cx: &mut TestAppContext) {
+        let (manager, window) = open_settings_tab_with_refresh_override(cx);
+
+        click_drawn(window, &cm_setting_id("refresh_interval"));
+
+        assert!(
+            is_focused(window, &manager, refresh_interval_input),
+            "a click on the field focuses it"
+        );
         assert_eq!(
             window.update(|_, cx| manager.read(cx).edit_state),
             EditState::Editing
+        );
+    }
+
+    /// Enter in the refresh interval field leaves it for the next field of
+    /// the ring, as in the form's other text fields.
+    #[gpui::test]
+    fn enter_in_the_refresh_interval_field_moves_to_the_next_field(cx: &mut TestAppContext) {
+        let (manager, window) = open_settings_tab_with_refresh_override(cx);
+        click_drawn(window, &cm_setting_id("refresh_interval"));
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let manager = manager.read(cx);
+            assert_eq!(manager.edit_state, EditState::Navigating);
+            assert_eq!(manager.form_focus, FormFocus::SettingsConfirmDangerous);
+        });
+        assert!(!is_focused(window, &manager, refresh_interval_input));
+    }
+
+    /// Clicking from another text field into the refresh interval field keeps
+    /// the form editing: the old field's blur arrives after the new one has
+    /// focus and must not drop the form back to navigation.
+    #[gpui::test]
+    fn clicking_from_another_field_into_the_refresh_interval_keeps_editing(
+        cx: &mut TestAppContext,
+    ) {
+        let (manager, window) = open_settings_tab_with_refresh_override(cx);
+        click_drawn(window, &cm_setting_id("pre_connect_hook_extra"));
+        assert!(is_focused(window, &manager, pre_hook_extra_input));
+
+        click_drawn(window, &cm_setting_id("refresh_interval"));
+
+        assert!(is_focused(window, &manager, refresh_interval_input));
+        assert_eq!(
+            window.update(|_, cx| manager.read(cx).edit_state),
+            EditState::Editing,
+            "the hook field's late blur keeps the form editing"
+        );
+    }
+
+    /// Clicking from the refresh interval field into another text field and
+    /// typing a navigation key types it there instead of moving the cursor.
+    #[gpui::test]
+    fn typing_after_leaving_the_refresh_interval_by_click_reaches_the_new_field(
+        cx: &mut TestAppContext,
+    ) {
+        let (manager, window) = open_settings_tab_with_refresh_override(cx);
+        click_drawn(window, &cm_setting_id("refresh_interval"));
+
+        click_drawn(window, &cm_setting_id("pre_connect_hook_extra"));
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
+
+        assert!(is_focused(window, &manager, pre_hook_extra_input));
+        assert_eq!(
+            window.update(|_, cx| manager.read(cx).edit_state),
+            EditState::Editing
+        );
+        assert_eq!(
+            window.update(|_, cx| pre_hook_extra_input(manager.read(cx))
+                .read(cx)
+                .value()
+                .to_string()),
+            "j"
         );
     }
 

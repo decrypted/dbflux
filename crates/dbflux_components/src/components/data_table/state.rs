@@ -101,6 +101,10 @@ pub struct DataTableState {
     /// Updated when scroll handle offset changes to trigger re-renders.
     horizontal_offset: Pixels,
 
+    /// Set while the left button, pressed on a cell, is held: moving over
+    /// other cells extends the selection to them.
+    drag_selecting: bool,
+
     // --- Edit Mode ---
     /// Cell currently being edited (inline editor is open).
     editing_cell: Option<CellCoord>,
@@ -200,6 +204,7 @@ impl DataTableState {
             record_mode: false,
             horizontal_scroll_handle: ScrollHandle::new(),
             horizontal_offset: px(0.0),
+            drag_selecting: false,
             editing_cell: None,
             cell_input: None,
             enum_dropdown: None,
@@ -681,9 +686,35 @@ impl DataTableState {
         }
     }
 
+    /// Left button pressed on a cell: select it, or extend to it with Shift,
+    /// and start a drag selection from there.
+    pub fn begin_drag_select(
+        &mut self,
+        coord: CellCoord,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        self.click_cell(coord, modifiers, cx);
+        self.drag_selecting = true;
+    }
+
+    /// The pointer moved onto `coord` with the left button held: extend the
+    /// selection to it while a drag selection is running.
+    pub fn drag_select_to(&mut self, coord: CellCoord, cx: &mut Context<Self>) {
+        if self.drag_selecting && self.selection.active != Some(coord) {
+            self.extend_selection(coord, cx);
+        }
+    }
+
+    pub fn end_drag_select(&mut self) {
+        self.drag_selecting = false;
+    }
+
     /// Selection change for a primary click on a row number: the whole row,
     /// or with Shift every row from the anchor's row to this one.
     pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        // A press on a row number never starts a cell drag.
+        self.drag_selecting = false;
         self.commit_edit_in_progress(cx);
         let col_count = self.col_count();
         if modifiers.shift {

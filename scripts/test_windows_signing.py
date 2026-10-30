@@ -5,7 +5,10 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = ROOT / ".github/workflows/build.yml"
-SIGNED_GATE = "if: inputs.channel == 'stable' || inputs.channel == 'rc'"
+# The fork (decrypted/dbflux) can turn signing off with `windows_signing: false`; the gate keeps
+# stable and rc signing on unless a caller says otherwise, and upstream's callers never do
+# (see test_signing_is_on_unless_a_fork_caller_turns_it_off).
+SIGNED_GATE = "if: inputs.windows_signing && (inputs.channel == 'stable' || inputs.channel == 'rc')"
 SIGNPATH_ACTION = "signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092"
 
 
@@ -70,6 +73,15 @@ class WindowsSigningTests(unittest.TestCase):
             ("Generate checksums", "Upload artifacts"),
         ):
             self.assertLess(names.index(earlier), names.index(later))
+
+    def test_signing_is_on_unless_a_fork_caller_turns_it_off(self):
+        match = re.search(r"^      windows_signing:\n(?P<body>(?:        [^\n]*\n)+)", self.build, re.MULTILINE)
+        self.assertIsNotNone(match, "build.yml has no windows_signing input")
+        self.assertIn("type: boolean", match.group("body"))
+        self.assertIn("default: true", match.group("body"))
+        for caller in ("release.yml", "nightly.yml"):
+            text = (ROOT / ".github/workflows" / caller).read_text(encoding="utf-8")
+            self.assertNotIn("windows_signing: false", text, caller)
 
     def test_stable_and_rc_signing_fail_closed_without_credentials_or_trusted_ci(self):
         preflight = self.steps.get("Check Windows signing prerequisites", "")

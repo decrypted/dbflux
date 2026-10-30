@@ -1227,7 +1227,10 @@ impl QueryLanguage {
     /// on `;`, skipping separators that appear inside single-quoted strings,
     /// double-quoted / backtick-quoted identifiers, line comments (`--`), block
     /// comments (`/* */`, nestable), and PostgreSQL dollar-quoted bodies
-    /// (`$tag$ ... $tag$`). Empty statements (only whitespace) are dropped.
+    /// (`$tag$ ... $tag$`). A segment holding only whitespace and comments is
+    /// dropped. A comment that follows a `;` on the same line annotates the
+    /// statement before it, so it does not start the next one. MySQL
+    /// executable comments (`/*! */`, `/*M! */`) count as code.
     ///
     /// For every other language the trimmed buffer is returned as a single
     /// statement, since they do not use `;`-delimited batches.
@@ -1251,11 +1254,14 @@ impl QueryLanguage {
         self.split_statements(text).len()
     }
 
-    /// Byte bounds of the statement containing `offset` in `text`.
+    /// Byte bounds of the raw `;`-delimited segment containing `offset` in
+    /// `text`; for non-SQL editor modes the whole buffer is a single
+    /// statement.
     ///
-    /// Statement boundaries follow the same rules as
-    /// [`QueryLanguage::split_statements`]; for non-SQL editor modes the whole
-    /// buffer is a single statement.
+    /// Unlike [`QueryLanguage::split_statements`] the segment is untrimmed and
+    /// keeps every comment: a comment after a `;` on the same line opens the
+    /// next segment instead of staying with the statement it annotates, and a
+    /// segment holding only comments is returned like any other.
     pub fn statement_bounds_at(&self, text: &str, offset: usize) -> std::ops::Range<usize> {
         if self.editor_mode() != "sql" {
             return 0..text.len();
@@ -1280,19 +1286,18 @@ impl QueryLanguage {
             return None;
         }
 
-        Some(
-            sql_statement_ranges(text)
-                .into_iter()
-                .filter_map(|range| {
-                    let segment = text.get(range.clone())?;
-                    let leading = segment.len() - segment.trim_start().len();
-                    let trailing = segment.len() - segment.trim_end().len();
-                    let trimmed = (range.start + leading)..(range.end - trailing);
+        Some(sql_statement_spans(text))
+    }
 
-                    (trimmed.start < trimmed.end).then_some(trimmed)
-                })
-                .collect(),
-        )
+    /// Byte offset of the first code in `statement`, past its leading
+    /// whitespace and comments: where a statement that opens with a comment
+    /// block actually begins. `0` for a language without a statement splitter.
+    pub fn statement_code_offset(&self, statement: &str) -> usize {
+        if self.editor_mode() != "sql" {
+            return 0;
+        }
+
+        skip_sql_trivia(statement, 0, false)
     }
 }
 
@@ -1334,13 +1339,98 @@ impl EditorLanguageProfile {
 /// `;`-delimited SQL statement splitter that is aware of strings, identifiers,
 /// comments, and dollar-quoted bodies. See [`QueryLanguage::split_statements`].
 fn split_sql_statements(text: &str) -> Vec<String> {
+    sql_statement_spans(text)
+        .into_iter()
+        .filter_map(|range| text.get(range).map(str::to_string))
+        .collect()
+}
+
+/// Byte ranges of the executable statements in `text`, trimmed of
+/// surrounding whitespace. See [`QueryLanguage::split_statements`] for which
+/// comments a statement keeps.
+fn sql_statement_spans(text: &str) -> Vec<std::ops::Range<usize>> {
     sql_statement_ranges(text)
         .into_iter()
-        .filter_map(|range| {
-            let statement = text[range].trim();
-            (!statement.is_empty()).then(|| statement.to_string())
+        .enumerate()
+        .filter_map(|(index, range)| {
+            let segment = text.get(range.clone())?;
+
+            let mut start = 0;
+            if index > 0 {
+                let line_end = skip_sql_trivia(segment, 0, true);
+                if segment.get(line_end..)?.starts_with('\n') {
+                    start = line_end;
+                }
+            }
+
+            if skip_sql_trivia(segment, start, false) == segment.len() {
+                return None;
+            }
+
+            let body = segment.get(start..)?;
+            let leading = body.len() - body.trim_start().len();
+            let trailing = segment.len() - segment.trim_end().len();
+
+            Some((range.start + start + leading)..(range.end - trailing))
         })
         .collect()
+}
+
+/// Offset in `text` of the first code at or after `from`, skipping
+/// whitespace, `--` comments and block comments (nestable, as the scanner
+/// reads them). MySQL executable comments (`/*!`, `/*M!`) are code. With
+/// `same_line`, stops at the first line break outside a block comment.
+/// Returns `text.len()` when only whitespace and comments remain.
+fn skip_sql_trivia(text: &str, from: usize, same_line: bool) -> usize {
+    let mut offset = from;
+
+    while let Some(rest) = text.get(offset..) {
+        let Some(next) = rest.chars().next() else {
+            return text.len();
+        };
+
+        if next == '\n' && same_line {
+            return offset;
+        }
+
+        if next.is_whitespace() {
+            offset += next.len_utf8();
+        } else if rest.starts_with("--") {
+            offset += rest.find('\n').unwrap_or(rest.len());
+        } else if rest.starts_with("/*") && !rest.starts_with("/*!") && !rest.starts_with("/*M!") {
+            offset += block_comment_len(rest);
+        } else {
+            return offset;
+        }
+    }
+
+    text.len()
+}
+
+/// Byte length of the block comment `text` opens with, through its closing
+/// `*/`, or all of `text` when the comment is unterminated.
+fn block_comment_len(text: &str) -> usize {
+    let mut depth = 0usize;
+    let mut offset = 0;
+
+    while let Some(rest) = text.get(offset..) {
+        if rest.starts_with("/*") {
+            depth += 1;
+            offset += 2;
+        } else if rest.starts_with("*/") {
+            depth = depth.saturating_sub(1);
+            offset += 2;
+            if depth == 0 {
+                return offset;
+            }
+        } else if let Some(next) = rest.chars().next() {
+            offset += next.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    text.len()
 }
 
 /// Byte ranges of the `;`-delimited segments in `text` (separators excluded,
@@ -2546,6 +2636,145 @@ mod tests {
 
         assert_eq!(located, QueryLanguage::Sql.split_statements(text));
         assert_eq!(located, vec!["SELECT 1", "SELECT 'a;b'\n  FROM t"]);
+    }
+
+    #[test]
+    fn a_comment_after_a_semicolon_stays_with_its_statement() {
+        let text = "SET @a = 1; -- the void snapshot; occurredAt\n\n-- 1. Preview.\nSELECT @a;";
+
+        assert_eq!(
+            QueryLanguage::Sql.split_statements(text),
+            vec!["SET @a = 1", "-- 1. Preview.\nSELECT @a"]
+        );
+    }
+
+    #[test]
+    fn a_block_comment_after_a_semicolon_stays_with_its_statement() {
+        let text = "SELECT 1; /* first;\n   still first */\nSELECT 2";
+
+        assert_eq!(
+            QueryLanguage::Sql.split_statements(text),
+            vec!["SELECT 1", "SELECT 2"]
+        );
+    }
+
+    #[test]
+    fn code_after_a_semicolon_on_the_same_line_keeps_its_comment() {
+        let text = "SELECT 1; /* second */ SELECT 2";
+
+        assert_eq!(
+            QueryLanguage::Sql.split_statements(text),
+            vec!["SELECT 1", "/* second */ SELECT 2"]
+        );
+    }
+
+    #[test]
+    fn leading_comments_on_their_own_lines_belong_to_the_next_statement() {
+        let text = "-- header\n-- more\n\nSELECT 1;\n\n/* apply */\nSTART TRANSACTION;";
+
+        assert_eq!(
+            QueryLanguage::Sql.split_statements(text),
+            vec![
+                "-- header\n-- more\n\nSELECT 1",
+                "/* apply */\nSTART TRANSACTION"
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_only_segments_are_not_statements() {
+        for text in [
+            "SELECT 1;\n-- end of script\n",
+            "SELECT 1; -- done",
+            "SELECT 1;\n/* trailing; block */",
+            "SELECT 1;\n-- one\n/* two */\n-- three",
+            "SELECT 1;\n/* unterminated; comment",
+        ] {
+            assert_eq!(
+                QueryLanguage::Sql.split_statements(text),
+                vec!["SELECT 1"],
+                "{text:?}"
+            );
+        }
+
+        assert_eq!(QueryLanguage::Sql.statement_count("-- nothing; here"), 0);
+        assert_eq!(QueryLanguage::Sql.statement_count("/* a */ ; -- b\n;"), 0);
+    }
+
+    #[test]
+    fn executable_comments_are_statements() {
+        let text = "/*!40101 SET NAMES utf8mb4 */;\n/*M!100616 SET NOTE_VERBOSITY=0 */;\nSELECT 1;";
+
+        assert_eq!(
+            QueryLanguage::Sql.split_statements(text),
+            vec![
+                "/*!40101 SET NAMES utf8mb4 */",
+                "/*M!100616 SET NOTE_VERBOSITY=0 */",
+                "SELECT 1"
+            ]
+        );
+    }
+
+    #[test]
+    fn statement_ranges_follow_the_comment_rules() {
+        let text = "SET @fx = 'x';\nSET @at = 1; -- trailing\n\n-- 1. Preview\nSELECT 1;\n-- end";
+        let ranges = QueryLanguage::Sql
+            .statement_ranges(text)
+            .expect("SQL splits into statements");
+
+        let located: Vec<&str> = ranges.iter().map(|range| &text[range.clone()]).collect();
+
+        assert_eq!(located, QueryLanguage::Sql.split_statements(text));
+        assert_eq!(
+            located,
+            vec!["SET @fx = 'x'", "SET @at = 1", "-- 1. Preview\nSELECT 1"]
+        );
+    }
+
+    #[test]
+    fn statement_code_offset_skips_leading_comments() {
+        let statement = "-- 2. Apply; check counts\n/* a /* nested */ b */\n  START TRANSACTION";
+
+        let offset = QueryLanguage::Sql.statement_code_offset(statement);
+
+        assert_eq!(&statement[offset..], "START TRANSACTION");
+        assert_eq!(QueryLanguage::Sql.statement_code_offset("SELECT 1"), 0);
+        assert_eq!(
+            QueryLanguage::Sql.statement_code_offset("/*!40101 SET NAMES utf8 */"),
+            0
+        );
+        assert_eq!(
+            QueryLanguage::MongoQuery.statement_code_offset("// c\ndb.users.find()"),
+            0
+        );
+    }
+
+    #[test]
+    fn crlf_line_endings_follow_the_same_comment_rules() {
+        let text = "SET @a = 1; -- note\r\n\r\n-- 1. Preview\r\nSELECT @a;\r\n-- end\r\n";
+
+        assert_eq!(
+            QueryLanguage::Sql.split_statements(text),
+            vec!["SET @a = 1", "-- 1. Preview\r\nSELECT @a"]
+        );
+        assert_eq!(
+            QueryLanguage::Sql.split_statements("SELECT 1; -- note\r\nSELECT 2"),
+            vec!["SELECT 1", "SELECT 2"]
+        );
+
+        let statement = "-- 1. Preview\r\nSELECT @a";
+        let offset = QueryLanguage::Sql.statement_code_offset(statement);
+        assert_eq!(&statement[offset..], "SELECT @a");
+    }
+
+    #[test]
+    fn multibyte_comments_split_on_char_boundaries() {
+        let text = "SELECT 'ü'; -- über → ok\n-- ñandú\nSELECT 2;";
+
+        assert_eq!(
+            QueryLanguage::Sql.split_statements(text),
+            vec!["SELECT 'ü'", "-- ñandú\nSELECT 2"]
+        );
     }
 
     #[test]

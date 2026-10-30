@@ -435,10 +435,11 @@ pub(super) struct EditorState {
     /// `cached_supports_connection_context` whenever the effective language can
     /// change (construction, connection change, query-mode switch).
     pub(super) cached_effective_language: QueryLanguage,
-    /// Byte ranges of the buffer's statements from the language's statement
-    /// splitter, refreshed on every edit. `None` when the language has no
-    /// splitter, which also hides the statement gutter.
-    pub(super) statement_ranges: Option<Vec<std::ops::Range<usize>>>,
+    /// The buffer's statements from the language's statement splitter, with
+    /// the offset each one's run marker sits on, refreshed on every edit.
+    /// `None` when the language has no splitter, which also hides the
+    /// statement gutter.
+    pub(super) statements: Option<Vec<gpui_base::input::GutterStatement>>,
     /// The gutter style installed on the editor, compared against the theme
     /// on every render so a palette switch repaints the gutter.
     pub(super) gutter_style: Option<gpui_base::input::GutterStatementStyle>,
@@ -1193,7 +1194,7 @@ impl CodeDocument {
                 cached_effective_language: query_language.clone(),
                 language_binding,
                 query_language,
-                statement_ranges: None,
+                statements: None,
                 gutter_style: None,
                 gutter_shown: false,
             },

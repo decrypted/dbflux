@@ -457,17 +457,27 @@ pub struct GutterStatementStyle {
     pub cursor_line_fill: Hsla,
 }
 
+/// One statement of a [`GutterStatements`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GutterStatement {
+    /// Bytes of the statement, comments that lead into it included.
+    pub range: Range<usize>,
+    /// Offset whose row carries the run marker, the statement's first code,
+    /// so a comment block above a statement does not take the marker.
+    pub marker: usize,
+}
+
 /// Statement decorations for a code editor's gutter: a run marker on the
-/// first line of every statement, and the statement under the cursor
+/// first code line of every statement, and the statement under the cursor
 /// highlighted in the gutter with a bar, a fill and strong line numbers. The
 /// text area keeps the editor background.
 ///
-/// The ranges are byte ranges into the buffer in buffer order; the owner
+/// The statements are byte ranges into the buffer in buffer order; the owner
 /// replaces them after every edit. Clicking a marker calls `on_run` with that
 /// statement's range.
 #[derive(Clone)]
 pub struct GutterStatements {
-    pub ranges: Vec<Range<usize>>,
+    pub statements: Vec<GutterStatement>,
     pub style: GutterStatementStyle,
     pub on_run: Rc<dyn Fn(Range<usize>, &mut Window, &mut App)>,
 }
@@ -476,8 +486,9 @@ impl GutterStatements {
     /// The statement containing `offset`: its range with the `;` that ends
     /// it, so a cursor right after the separator still belongs to it.
     pub fn statement_at(&self, text: &Rope, offset: usize) -> Option<Range<usize>> {
-        self.ranges
+        self.statements
             .iter()
+            .map(|statement| &statement.range)
             .find(|range| {
                 let end = if text.char_at(range.end) == Some(';') {
                     range.end + 1

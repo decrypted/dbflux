@@ -132,6 +132,11 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             "keybindings-context-filter.*",
             KeyboardPath::Command(Command::FilterByContext),
         ),
+        // SSH tunnels: the tunnel list moves with J and K, Enter opens one.
+        (
+            "ssh-tunnel-item-*",
+            KeyboardPath::Command(Command::SelectNext),
+        ),
         // Drivers: the driver list moves with J and K.
         (
             "settings-driver-*",

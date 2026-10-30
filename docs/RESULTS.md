@@ -230,10 +230,27 @@ clipboard**: CSV starts with a header row of the column names, and JSON is an
 array with one object per row, keyed by column name, with numbers, booleans and
 `null` kept as such. Every row and column the selection covers is included; a
 cell inside that area but outside the selection is empty in CSV and `null` in
-JSON. Plain **Copy** (`Ctrl+c`) still copies tab-separated text without a
-header.
+JSON. Plain **Copy** (`Ctrl+c`) copies tab-separated text, without a header
+unless **Include column names when copying** is on in Settings → General →
+Data grid, which starts it with a line of the copied columns' names.
 `Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
 the menu shows it next to the item.
+
+Below them the menu has three more extractors:
+
+- **Copy as SQL IN list** copies the selected values of one column as a list
+  for a `WHERE ... IN`, such as `('a', 'O''Brien')` or `(1, 2, 3)`, quoted the
+  way the connection's driver writes literals (ANSI quoting for a result
+  without a connection). A value selected more than once is listed once and
+  `NULL` is left out, since `IN (NULL)` matches nothing. With several columns
+  selected it lists the leftmost one.
+- **Copy as INSERT statements**, on a table, copies one `INSERT` per selected
+  row with the selected columns, written by the same driver generator as
+  **Copy as Query**. Each row gives its own values for those columns, even
+  where a cell inside the selected area is not itself selected.
+- **Copy as Markdown table** copies the same rows and columns as Copy as CSV as
+  a Markdown table with a header row; `NULL` and unselected cells are empty and
+  `|` and line breaks inside values are escaped.
 
 ## Copy as Query
 

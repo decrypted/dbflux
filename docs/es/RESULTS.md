@@ -249,9 +249,30 @@ nombres de las columnas, y el JSON es un array con un objeto por fila, con las
 columnas como claves y los números, booleanos y `null` como tales. Se incluyen
 todas las filas y columnas que abarca la selección; una celda dentro de esa área
 pero fuera de la selección queda vacía en CSV y `null` en JSON. **Copiar**
-(`Ctrl+c`) sigue copiando texto separado por tabulaciones sin cabecera.
+(`Ctrl+c`) copia texto separado por tabulaciones, sin cabecera salvo que
+**Incluir los nombres de columna al copiar** esté activado en Ajustes → General
+→ Cuadrícula de datos, que lo empieza con una línea con los nombres de las
+columnas copiadas.
 `Ctrl+Alt+c` (`Cmd+Alt+c` en macOS) ejecuta **Copiar como JSON** desde el
 teclado; el menú lo muestra junto a la entrada.
+
+Debajo, el menú tiene tres extractores más:
+
+- **Copiar como lista IN de SQL** copia los valores seleccionados de una
+  columna como lista para un `WHERE ... IN`, por ejemplo `('a', 'O''Brien')` o
+  `(1, 2, 3)`, con las comillas que usa el driver de la conexión (comillas ANSI
+  en un resultado sin conexión). Un valor seleccionado varias veces aparece una
+  sola vez y `NULL` se omite, porque `IN (NULL)` no coincide con nada. Con
+  varias columnas seleccionadas usa la de más a la izquierda.
+- **Copiar como sentencias INSERT**, en una tabla, copia un `INSERT` por cada
+  fila seleccionada con las columnas seleccionadas, escrito por el mismo
+  generador del driver que **Copiar como query**. Cada fila aporta sus propios
+  valores para esas columnas, aunque una celda dentro del área no esté
+  seleccionada.
+- **Copiar como tabla Markdown** copia las mismas filas y columnas que Copiar
+  como CSV como una tabla Markdown con fila de cabecera; las celdas `NULL` y
+  las no seleccionadas quedan vacías, y `|` y los saltos de línea dentro de los
+  valores se escapan.
 
 ## Copiar como query
 

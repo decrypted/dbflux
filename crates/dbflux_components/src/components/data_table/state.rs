@@ -77,6 +77,10 @@ pub struct DataTableState {
     /// hosts that sort one column at a time never see it.
     then_sorts: Vec<SortState>,
 
+    /// Whether a plain copy starts with a line of column names. The host
+    /// sets it from its settings; off keeps the values-only TSV.
+    copy_column_names: bool,
+
     /// Whether a modifier click on a sort arrow adds a sort key. Off unless
     /// the host sorts by several keys; without it the click sorts as a plain
     /// click does.
@@ -208,6 +212,7 @@ impl DataTableState {
             sort: None,
             then_sorts: Vec::new(),
             multi_sort: false,
+            copy_column_names: false,
             viewport_size: Size::default(),
             selection: SelectionState::new(),
             focus_handle: cx.focus_handle(),
@@ -986,7 +991,19 @@ impl DataTableState {
     // --- Clipboard ---
 
     pub fn copy_selection(&self) -> Option<String> {
-        clipboard::copy_selection(&self.model, &self.selection)
+        if self.copy_column_names {
+            clipboard::copy_selection_with_column_names(&self.model, &self.selection)
+        } else {
+            clipboard::copy_selection(&self.model, &self.selection)
+        }
+    }
+
+    pub fn copy_column_names(&self) -> bool {
+        self.copy_column_names
+    }
+
+    pub fn set_copy_column_names(&mut self, enabled: bool) {
+        self.copy_column_names = enabled;
     }
 
     // --- Focus ---

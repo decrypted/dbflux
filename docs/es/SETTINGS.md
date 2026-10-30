@@ -92,6 +92,7 @@ y permanece en English por ahora.
 | Setting                      | Default | Qué hace |
 | ---------------------------- | ------- | -------- |
 | **Mostrar el valor del registro referenciado en celdas de clave foránea** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
+| **Incluir los nombres de columna al copiar** | Off | Copiar (`Ctrl+C`) en la cuadrícula de datos empieza el texto separado por tabulaciones con una línea con los nombres de las columnas copiadas. Copiar como CSV, JSON y las demás entradas Copiar como no cambian. Se aplica a las cuadrículas abiertas al guardar. |
 
 ### Inicio y sesión
 

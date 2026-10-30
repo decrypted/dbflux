@@ -1597,6 +1597,9 @@ document:
         copy: Copy
         copy_as_csv: "Copy as CSV"
         copy_as_json: "Copy as JSON"
+        copy_as_sql_in_list: "Copy as SQL IN list"
+        copy_as_insert_statements: "Copy as INSERT statements"
+        copy_as_markdown: "Copy as Markdown table"
         view_document: View document
         add_document: Add document
         duplicate_document: Duplicate document
@@ -4111,6 +4114,9 @@ settings:
     grid_fk_labels:
       label: "Show referenced-row labels in foreign-key cells"
       hint: "Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after saving; the row inspector always resolves references."
+    grid_copy_column_names:
+      label: "Include column names when copying"
+      hint: "Copy (Ctrl+C) from the data grid starts the tab-separated text with a line of column names. Copy as CSV, JSON and the other Copy as entries are not affected."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."

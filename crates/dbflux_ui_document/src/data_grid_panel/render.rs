@@ -335,6 +335,9 @@ impl Render for DataGridPanel {
             .when_some(self.context_menu.as_ref(), |d, menu| {
                 d.child(self.render_context_menu(menu, st.is_editable, cx))
             })
+            .when_some(self.column_chooser.as_ref(), |d, chooser| {
+                d.child(self.render_column_chooser(chooser, cx))
+            })
             .when(self.chrome.export_menu_open, |d| {
                 d.child(self.render_export_backdrop(cx))
             })

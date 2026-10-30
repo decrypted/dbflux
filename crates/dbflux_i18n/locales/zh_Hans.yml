@@ -1645,6 +1645,17 @@ document:
         title: 排序
         remove: 移除排序
         add_to_sort: "添加到排序：%{column}"
+      column:
+        title: 列
+        fit_width: 适应宽度
+        pin: 固定列
+        unpin: 取消固定列
+        hide: 隐藏列
+        choose: "列…"
+        move_left: 左移
+        move_right: 右移
+        chooser_title: 列
+        show_all: 显示所有列
       generate_sql:
         title: 生成 SQL
       toolbar:
@@ -4367,6 +4378,7 @@ settings:
       copy_selection_as_json: "将选区复制为 JSON"
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
+      open_column_menu: 打开列菜单
       open_pane_actions: 打开面板操作
       menu_up: 菜单上移
       menu_down: 菜单下移

@@ -84,6 +84,41 @@ added key replaces that order, since rows sorted by the primary key first have
 no ties left for another column to order; removing the ordering returns to the
 default order.
 
+`Shift+m` opens the same menu from the keyboard, for the column of the selected
+cell. The menu ends with a **Column** section of view settings, which change
+how the grid shows the column and never the query. **Fit width** sizes the
+column to its header and its loaded values, up to 640 pixels so one long JSON
+value does not push the rest of the grid off screen; a double-click on the
+resize edge at the header's right border does the same.
+
+**Hide column** takes the column off the screen, and **Columns…** lists every
+column with a check mark on the shown ones: `Enter`, `Space` or a click shows
+or hides the highlighted column while the list stays open, **Show all
+columns** brings every hidden one back, and `Escape` closes it. **Move left**
+and **Move right** move the column one place; dragging a header onto another
+header moves its column into that place.
+
+**Pin column** keeps the column at the left edge, right after the row numbers,
+while the grid scrolls sideways, like a frozen pane: pin `id` and `created_at`
+to keep them in view on a wide log table. Pinned columns lead the grid in the
+order they were pinned and show a pin in their header; **Unpin column** lets
+the column scroll again, as the first of the others. Selecting, editing,
+sorting, resizing and the row numbers work the same on pinned columns. Move
+left and Move right stay on their side of the pinned edge; dragging a header
+across it pins or unpins its column.
+
+The query keeps reading every column (a table still runs `SELECT *`); to leave
+a column out of the query itself, use the query builder's projection. Copy
+(with or without column names), Copy as CSV, Copy as JSON, Copy as SQL IN list,
+Copy as INSERT statements and Copy as Markdown table follow the screen: the
+shown columns, in the order the grid shows them, and the IN list takes the
+leftmost of them. Copy row, Copy as Query and Export use the whole row in
+the result's own order, hidden columns included. A table remembers its layout
+for its connection, database, schema and table, across closing it and
+restarting DBFlux; moving every column back to the table's own order with all
+of them shown forgets it. A query result keeps its layout while its tab is
+open. A document grid keeps the order of its fields and offers only Fit width.
+
 ## Value panel
 
 Right-click a cell and choose **View Value**, or press `v`, to open the cell

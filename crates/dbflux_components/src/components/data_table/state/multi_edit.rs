@@ -356,4 +356,30 @@ mod tests {
         assert_eq!(count, 0);
         assert_eq!(dirty(&state, window), vec![(1, 1)]);
     }
+
+    /// A hidden column is not part of the selection, so an edit of several
+    /// cells never writes to it.
+    #[gpui::test]
+    fn a_hidden_column_takes_no_part_in_a_multi_cell_edit(cx: &mut gpui::TestAppContext) {
+        let (state, window) = editable_state(cx);
+
+        let targets = window.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.hide_column(1, cx);
+                state.click_row(0, gpui::Modifiers::default(), cx);
+                let shift = gpui::Modifiers {
+                    shift: true,
+                    ..gpui::Modifiers::default()
+                };
+                state.click_row(1, shift, cx);
+                state.multi_edit_targets(CellCoord::new(0, 0))
+            })
+        });
+
+        assert!(
+            !targets.iter().any(|target| target.col == 1),
+            "the hidden `name` is left alone: {targets:?}"
+        );
+        assert!(targets.contains(&CellCoord::new(1, 0)), "{targets:?}");
+    }
 }

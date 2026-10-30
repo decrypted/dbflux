@@ -10,6 +10,7 @@ use gpui::{
 
 use super::annotation::HeaderAnnotation;
 use super::clipboard;
+use super::column_layout::ColumnLayout;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, KeyedPendingEdits, TableModel};
 use super::selection::{CellCoord, SelectionState};
@@ -23,6 +24,8 @@ use crate::fonts;
 use crate::tokens::GridMetrics;
 
 mod autoscroll;
+mod fit;
+mod layout;
 mod multi_edit;
 
 /// Grid face and glyph advances an auto-sized column width was estimated
@@ -70,8 +73,13 @@ pub struct DataTableState {
     /// Metrics the auto-sized column widths were last estimated with.
     auto_width_metrics: GridTextMetrics,
 
-    /// Prefix sums of column widths for hit-testing: [0, w0, w0+w1, ...].
+    /// Prefix sums of the shown columns' widths in screen order, for
+    /// hit-testing: [0, w0, w0+w1, ...].
     column_offsets: Vec<f32>,
+
+    /// Screen order and visibility of the columns. Everything else keeps
+    /// addressing columns by model index.
+    column_layout: Arc<ColumnLayout>,
 
     /// Current sort state.
     sort: Option<SortState>,
@@ -237,6 +245,7 @@ impl DataTableState {
             manually_sized: vec![false; col_count],
             auto_width_metrics,
             column_offsets,
+            column_layout: Arc::new(ColumnLayout::identity(col_count)),
             sort: None,
             then_sorts: Vec::new(),
             multi_sort: false,
@@ -361,21 +370,6 @@ impl DataTableState {
             return MIN_COLUMN_WIDTH;
         };
 
-        let cell_char = metrics.cell_char_advance;
-        let type_char = metrics.type_char_advance;
-        let padding = f32::from(CELL_PADDING_X) * 2.0;
-        let gap = f32::from(GridMetrics::HEADER_GAP);
-
-        let type_chars = column.type_name.chars().count();
-        let type_width = if type_chars == 0 {
-            0.0
-        } else {
-            gap + type_chars as f32 * type_char
-        };
-        let icon_width = gap + f32::from(GridMetrics::HEADER_ICON);
-        let header_width =
-            padding + column.title.chars().count() as f32 * cell_char + type_width + icon_width;
-
         let longest_value = model
             .rows
             .iter()
@@ -384,10 +378,38 @@ impl DataTableState {
             .map(|cell| cell.display_text().chars().count())
             .max()
             .unwrap_or(0);
-        let content_width = (padding + longest_value as f32 * cell_char + AUTO_WIDTH_SLACK)
-            .min(MAX_AUTO_COLUMN_WIDTH);
+        let content_width = Self::content_width(longest_value, metrics).min(MAX_AUTO_COLUMN_WIDTH);
 
-        header_width.max(content_width).max(MIN_COLUMN_WIDTH).ceil()
+        Self::header_width(column, metrics)
+            .max(content_width)
+            .max(MIN_COLUMN_WIDTH)
+            .ceil()
+    }
+
+    /// Width a header needs for its name, type label and a key or sort icon.
+    fn header_width(column: &super::model::ColumnSpec, metrics: &GridTextMetrics) -> f32 {
+        let padding = f32::from(CELL_PADDING_X) * 2.0;
+        let gap = f32::from(GridMetrics::HEADER_GAP);
+
+        let type_chars = column.type_name.chars().count();
+        let type_width = if type_chars == 0 {
+            0.0
+        } else {
+            gap + type_chars as f32 * metrics.type_char_advance
+        };
+        let icon_width = gap + f32::from(GridMetrics::HEADER_ICON);
+
+        padding
+            + column.title.chars().count() as f32 * metrics.cell_char_advance
+            + type_width
+            + icon_width
+    }
+
+    /// Width a cell needs for a value of `chars` characters.
+    fn content_width(chars: usize, metrics: &GridTextMetrics) -> f32 {
+        let padding = f32::from(CELL_PADDING_X) * 2.0;
+
+        padding + chars as f32 * metrics.cell_char_advance + AUTO_WIDTH_SLACK
     }
 
     fn calculate_offsets(widths: &[f32]) -> Vec<f32> {
@@ -433,8 +455,16 @@ impl DataTableState {
             .map(|column| column.title.clone())
             .collect();
 
+        let previous_layout = (!self.column_layout.is_identity())
+            .then(|| self.column_layout.to_spec(&previous_titles));
+
         self.close_editor(false, false, cx);
         self.model = model;
+        let layout = match previous_layout {
+            Some(spec) => ColumnLayout::from_spec(&spec, &self.column_titles()),
+            None => ColumnLayout::identity(self.model.col_count()),
+        };
+        self.install_column_layout(layout);
         self.reload_column_widths(previous_widths);
         self.reload_header_annotations(&previous_titles);
         self.edit_buffer.reset_for_base(self.model.row_count());
@@ -548,7 +578,7 @@ impl DataTableState {
 
         self.column_widths = widths;
         self.manually_sized = manual;
-        self.column_offsets = Self::calculate_offsets(&self.column_widths);
+        self.column_offsets = self.layout_offsets();
     }
 
     /// Re-estimates every column the user has not resized when the grid
@@ -570,7 +600,7 @@ impl DataTableState {
         }
 
         self.auto_width_metrics = metrics;
-        self.column_offsets = Self::calculate_offsets(&self.column_widths);
+        self.column_offsets = self.layout_offsets();
     }
 
     /// Keep the cursor inside the new model's bounds. A model with no rows (or
@@ -588,6 +618,7 @@ impl DataTableState {
         };
         self.selection.active = self.selection.active.map(clamp);
         self.selection.anchor = self.selection.anchor.map(clamp);
+        self.keep_selection_on_screen();
         // Ctrl+click ranges name rows of the previous model.
         self.selection.clear_extra();
     }
@@ -645,9 +676,16 @@ impl DataTableState {
                 *manual = true;
             }
 
-            self.column_offsets = Self::calculate_offsets(&self.column_widths);
+            self.column_offsets = self.layout_offsets();
             cx.notify();
         }
+    }
+
+    /// Distance from the first column's left edge to `col`'s, before any
+    /// horizontal scroll; `None` past the last column.
+    pub fn column_left(&self, col: usize) -> Option<f32> {
+        let position = self.column_layout.view_position(col)?;
+        self.column_offsets.get(position).copied()
     }
 
     /// Width of a row: the row-number column plus every data column.
@@ -934,8 +972,12 @@ impl DataTableState {
         // The record view highlights the active field, and Enter edits it, so
         // entering the mode without a selection would leave both with nothing
         // to act on.
-        if record_mode && self.selection.active.is_none() && self.row_count() > 0 {
-            self.select_cell(CellCoord::new(0, 0), cx);
+        if record_mode
+            && self.selection.active.is_none()
+            && self.row_count() > 0
+            && let Some((first, _)) = self.screen_edge_columns()
+        {
+            self.select_cell(CellCoord::new(0, first), cx);
         }
 
         if let Some(active) = self.selection.active {
@@ -983,24 +1025,27 @@ impl DataTableState {
     /// Move active cell in a direction. If extend is true, extend selection instead of moving.
     pub fn move_active(&mut self, direction: Direction, extend: bool, cx: &mut Context<Self>) {
         let row_count = self.row_count();
-        let col_count = self.col_count();
+        let Some((first_col, _)) = self.screen_edge_columns() else {
+            return;
+        };
 
-        if row_count == 0 || col_count == 0 {
+        if row_count == 0 {
             return;
         }
 
         // No selection yet - select first cell
         let Some(current) = self.selection.active else {
-            self.select_cell(CellCoord::new(0, 0), cx);
-            self.scroll_to_cell(0, 0);
+            self.select_cell(CellCoord::new(0, first_col), cx);
+            self.scroll_to_cell(0, first_col);
             return;
         };
 
+        // Left and right walk the columns as the screen shows them.
         let new_coord = match self.effective_direction(direction) {
             Direction::Up => CellCoord::new(current.row.saturating_sub(1), current.col),
             Direction::Down => CellCoord::new((current.row + 1).min(row_count - 1), current.col),
-            Direction::Left => CellCoord::new(current.row, current.col.saturating_sub(1)),
-            Direction::Right => CellCoord::new(current.row, (current.col + 1).min(col_count - 1)),
+            Direction::Left => CellCoord::new(current.row, self.screen_neighbor(current.col, -1)),
+            Direction::Right => CellCoord::new(current.row, self.screen_neighbor(current.col, 1)),
         };
 
         if extend {
@@ -1015,20 +1060,25 @@ impl DataTableState {
     /// Move to an edge of the table.
     pub fn move_to_edge(&mut self, edge: Edge, extend: bool, cx: &mut Context<Self>) {
         let row_count = self.row_count();
-        let col_count = self.col_count();
+        let Some((first_col, last_col)) = self.screen_edge_columns() else {
+            return;
+        };
 
-        if row_count == 0 || col_count == 0 {
+        if row_count == 0 {
             return;
         }
 
-        let current = self.selection.active.unwrap_or(CellCoord::new(0, 0));
+        let current = self
+            .selection
+            .active
+            .unwrap_or(CellCoord::new(0, first_col));
         let new_coord = match self.effective_edge(edge) {
             Edge::Top => CellCoord::new(0, current.col),
             Edge::Bottom => CellCoord::new(row_count - 1, current.col),
-            Edge::Left => CellCoord::new(current.row, 0),
-            Edge::Right => CellCoord::new(current.row, col_count - 1),
-            Edge::Home => CellCoord::new(0, 0),
-            Edge::End => CellCoord::new(row_count - 1, col_count - 1),
+            Edge::Left => CellCoord::new(current.row, first_col),
+            Edge::Right => CellCoord::new(current.row, last_col),
+            Edge::Home => CellCoord::new(0, first_col),
+            Edge::End => CellCoord::new(row_count - 1, last_col),
         };
 
         if extend {
@@ -1121,6 +1171,10 @@ impl DataTableState {
 
     /// Scroll to ensure the given column is visible.
     pub fn scroll_to_column(&self, col: usize) {
+        // Offsets are laid out by screen position; a hidden column has none.
+        let Some(col) = self.column_layout.view_position(col) else {
+            return;
+        };
         if col >= self.column_offsets.len() {
             return;
         }
@@ -1151,12 +1205,25 @@ impl DataTableState {
             return;
         }
 
+        // Pinned columns never scroll out of view, and the strip holding them
+        // and the gutter covers the left of the viewport, so a scrolling
+        // column must clear it to be seen.
+        let pinned = self.column_layout.pinned_count();
+        if col < pinned {
+            return;
+        }
+        let fixed = if pinned > 0 {
+            ROW_NUMBER_WIDTH + px(self.pinned_width())
+        } else {
+            px(0.0)
+        };
+
         let current_offset = self.horizontal_offset;
-        let visible_left = current_offset;
+        let visible_left = current_offset + fixed;
         let visible_right = current_offset + viewport_width;
 
         let new_offset = if col_left < visible_left {
-            col_left
+            col_left - fixed
         } else if col_right > visible_right {
             col_right - viewport_width
         } else {
@@ -1178,8 +1245,10 @@ impl DataTableState {
     /// offsets for when the user switches back.
     pub fn scroll_to_cell(&self, row: usize, col: usize) {
         if self.record_mode {
-            self.record_scroll_handle
-                .scroll_to_item(col, gpui::ScrollStrategy::Center);
+            if let Some(field) = self.column_layout.view_position(col) {
+                self.record_scroll_handle
+                    .scroll_to_item(field, gpui::ScrollStrategy::Center);
+            }
             return;
         }
 

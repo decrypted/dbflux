@@ -1645,6 +1645,17 @@ document:
         title: 정렬
         remove: 정렬 제거
         add_to_sort: "정렬에 추가: %{column}"
+      column:
+        title: 열
+        fit_width: 너비 맞춤
+        pin: 열 고정
+        unpin: 열 고정 해제
+        hide: 열 숨기기
+        choose: "열…"
+        move_left: 왼쪽으로 이동
+        move_right: 오른쪽으로 이동
+        chooser_title: 열
+        show_all: 모든 열 표시
       generate_sql:
         title: SQL 생성
       toolbar:
@@ -4367,6 +4378,7 @@ settings:
       copy_selection_as_json: "선택 영역을 JSON으로 복사"
       results_set_null: 셀을 NULL로 설정
       open_context_menu: 상황에 맞는 메뉴 열기
+      open_column_menu: 열 메뉴 열기
       open_pane_actions: 패널 작업 열기
       menu_up: 메뉴 위로
       menu_down: 메뉴 아래로

@@ -709,6 +709,10 @@ impl DataGridPanel {
             }
         }
 
+        if self.column_chooser.is_some() {
+            return self.dispatch_column_chooser_command(cmd, window, cx);
+        }
+
         // Handle context menu commands when menu is open
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);
@@ -915,6 +919,10 @@ impl DataGridPanel {
                     self.open_context_menu_at_selection(window, cx);
                 }
                 true
+            }
+            // The document view draws no column headers.
+            Command::OpenColumnMenu if self.view_config.mode != crate::DataViewMode::Document => {
+                self.open_column_menu_at_selection(window, cx)
             }
             Command::ResultsCopyCell => {
                 self.handle_copy(window, cx);

@@ -90,6 +90,46 @@ primaria), la primera clave añadida sustituye ese orden, porque las filas
 ordenadas primero por la clave primaria no dejan empates que otra columna pueda
 ordenar; quitar el orden vuelve al orden por defecto.
 
+`Shift+m` abre el mismo menú desde el teclado, para la columna de la celda
+seleccionada. El menú termina con una sección **Columna** de ajustes de vista,
+que cambian cómo la grilla muestra la columna y nunca la consulta. **Ajustar
+ancho** ajusta la columna a su cabecera y a sus valores cargados, hasta 640
+píxeles para que un valor JSON largo no saque el resto de la grilla de la
+pantalla; un doble clic en el borde de redimensionado, a la derecha de la
+cabecera, hace lo mismo.
+
+**Ocultar columna** quita la columna de la pantalla, y **Columnas…** lista todas
+las columnas con una marca en las visibles: `Enter`, `Space` o un clic muestra u
+oculta la columna resaltada mientras la lista sigue abierta, **Mostrar todas las
+columnas** devuelve todas las ocultas, y `Escape` la cierra. **Mover a la
+izquierda** y **Mover a la derecha** mueven la columna un lugar; arrastrar una
+cabecera sobre otra mueve su columna a ese lugar.
+
+**Fijar columna** mantiene la columna en el borde izquierdo, justo después de
+los números de fila, mientras la grilla se desplaza en horizontal, como un panel
+inmovilizado: fija `id` y `created_at` para tenerlas a la vista en una tabla de
+logs ancha. Las columnas fijadas van al principio de la grilla en el orden en
+que se fijaron y muestran un alfiler en su cabecera; **Soltar columna** deja que
+la columna vuelva a desplazarse, como la primera de las demás. Seleccionar,
+editar, ordenar, redimensionar y los números de fila funcionan igual en las
+columnas fijadas. Mover a la izquierda y Mover a la derecha se quedan en su lado
+del borde de las fijadas; arrastrar una cabecera a través de él fija o suelta su
+columna.
+
+La consulta sigue leyendo todas las columnas (una tabla sigue ejecutando
+`SELECT *`); para dejar una columna fuera de la consulta misma, usa la
+proyección del constructor de consultas. Copiar (con o sin nombres de columna),
+Copiar como CSV, Copiar como JSON, Copiar como lista IN de SQL, Copiar como
+sentencias INSERT y Copiar como tabla Markdown siguen la pantalla: las columnas
+visibles, en el orden en que la grilla las muestra, y la lista IN toma la que
+está más a la izquierda. Copiar fila, Copiar como consulta y Exportar usan la fila completa en
+el orden propio del resultado, columnas ocultas incluidas. Una tabla recuerda su
+disposición para su conexión, base de datos, esquema y tabla, al cerrarla y al
+reiniciar DBFlux; volver a poner todas las columnas en el orden propio de la
+tabla, todas visibles, la olvida. Un resultado de consulta conserva su
+disposición mientras su pestaña está abierta. Una grilla de documentos mantiene
+el orden de sus campos y solo ofrece Ajustar ancho.
+
 ## Panel de valor
 
 Haz clic derecho en una celda y elige **Ver valor**, o pulsa `v`, para abrir la

@@ -170,3 +170,38 @@ fn a_query_result_menu_offers_the_extractors_without_inserts(cx: &mut TestAppCon
     );
     assert!(!actions.contains(&Some(ContextMenuAction::CopyAsInsertStatements)));
 }
+
+/// With `name` moved in front of `id` on screen, the IN list takes the
+/// leftmost column the grid shows, not the lowest model index, and the
+/// Markdown table lists the columns in screen order.
+#[gpui::test]
+fn copy_extractors_follow_the_screen_order_of_columns(cx: &mut TestAppContext) {
+    let (panel, _app_state, window) = people_panel(cx);
+    window.update(|_, app| {
+        let table_state = panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("table state");
+        table_state.update(app, |state, cx| {
+            state.move_column(1, 0, cx);
+        });
+    });
+
+    // Screen order is name, id: select both by their headers.
+    select_columns(&panel, window, 1, 0);
+    window.update(|_, app| panel.update(app, |panel, cx| panel.copy_selection_as_in_list(cx)));
+    assert_eq!(
+        clipboard_text(window),
+        "('O''Brien', 'Ann')",
+        "the leftmost column on screen is `name`"
+    );
+
+    window.update(|_, app| panel.update(app, |panel, cx| panel.copy_selection_as_markdown(cx)));
+    let markdown = clipboard_text(window);
+    assert!(
+        markdown.starts_with("| name | id |"),
+        "columns in screen order: {markdown}"
+    );
+}

@@ -339,6 +339,7 @@ impl DataGridPanel {
                 .push(cx);
             }
 
+            self.restore_column_layout(cx);
             self.rebuild_result_views(cx);
             return;
         }
@@ -428,6 +429,9 @@ impl DataGridPanel {
                     }
                     DataTableEvent::StepOutRequested => {
                         this.step_out_of_document_value(cx);
+                    }
+                    DataTableEvent::ColumnLayoutChanged => {
+                        this.save_column_layout(cx);
                     }
                     DataTableEvent::ContextMenuRequested {
                         row,
@@ -525,6 +529,7 @@ impl DataGridPanel {
         self.grid_table.data_table = Some(data_table);
         self.grid_table.table_subscription = Some(subscription);
 
+        self.restore_column_layout(cx);
         self.rebuild_result_views(cx);
     }
 

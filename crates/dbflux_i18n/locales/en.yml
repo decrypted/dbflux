@@ -1645,6 +1645,17 @@ document:
         title: Order
         remove: Remove ordering
         add_to_sort: "Add to sort: %{column}"
+      column:
+        title: Column
+        fit_width: Fit width
+        pin: Pin column
+        unpin: Unpin column
+        hide: Hide column
+        choose: "Columns…"
+        move_left: Move left
+        move_right: Move right
+        chooser_title: Columns
+        show_all: Show all columns
       generate_sql:
         title: Generate SQL
       toolbar:
@@ -4367,6 +4378,7 @@ settings:
       copy_selection_as_json: "Copy selection as JSON"
       results_set_null: Set cell to NULL
       open_context_menu: Open context menu
+      open_column_menu: Open column menu
       open_pane_actions: Open pane actions
       menu_up: Menu up
       menu_down: Menu down

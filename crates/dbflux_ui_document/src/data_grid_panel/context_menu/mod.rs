@@ -27,6 +27,7 @@ use gpui_component::ActiveTheme;
 use std::fs::File;
 use std::io::BufWriter;
 
+mod columns;
 mod copy_extractors;
 mod items;
 mod sections;
@@ -221,7 +222,7 @@ impl DataGridPanel {
             return;
         };
 
-        let (row, col, cell_x, horizontal_offset) = {
+        let (row, col, cell_x) = {
             let ts = table_state.read(cx);
 
             let (row, col) = ts
@@ -230,12 +231,11 @@ impl DataGridPanel {
                 .map(|c| (c.row, c.col))
                 .unwrap_or((0, 0));
 
-            let widths = ts.column_widths();
+            // Left edge of the cell's column as the screen draws it, scroll
+            // and pinned columns included.
+            let cell_x = ts.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH);
 
-            // Calculate cell x position: sum of column widths up to col
-            let cell_x: f32 = widths.iter().take(col).sum();
-
-            (row, col, cell_x, ts.horizontal_offset())
+            (row, col, cell_x)
         };
 
         // Calculate position in window coordinates:
@@ -243,7 +243,7 @@ impl DataGridPanel {
         // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
         let toolbar_height = px(36.0); // Approximate toolbar height
         let position = Point {
-            x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(cell_x) - horizontal_offset + px(20.0),
+            x: self.panel_origin.x + cell_x + px(20.0),
             y: self.panel_origin.y
                 + toolbar_height
                 + fonts::grid_header_height(cx)
@@ -746,6 +746,7 @@ impl DataGridPanel {
             .unwrap_or(false);
 
         if self.context_menu.is_some()
+            || self.column_chooser.is_some()
             || self.chrome.export_menu_open
             || self.collection.history_open
         {
@@ -1119,6 +1120,11 @@ impl DataGridPanel {
             ContextMenuAction::RemoveOrdering,
         ];
         actions.extend(filter_items.into_iter().map(|(_, action)| action));
+        actions.extend(
+            self.column_menu_items(menu.col, cx)
+                .into_iter()
+                .map(|item| item.action),
+        );
 
         match cmd {
             Command::MenuDown => {
@@ -1511,11 +1517,15 @@ impl DataGridPanel {
             .flat_map(|range| range.start.row..=range.end.row)
             .filter(|&row| row < self.result.rows.len())
             .collect();
-        let cols: BTreeSet<usize> = ranges
+        // Columns in the order the grid shows them, as the plain copy does.
+        let mut cols: Vec<usize> = ranges
             .iter()
             .flat_map(|range| range.start.col..=range.end.col)
             .filter(|&col| col < self.result.columns.len())
+            .collect::<BTreeSet<usize>>()
+            .into_iter()
             .collect();
+        selection.sort_by_screen_order(&mut cols);
 
         let columns = cols
             .iter()
@@ -2072,6 +2082,20 @@ impl DataGridPanel {
             }
             ContextMenuAction::FindSimilarRows => {
                 self.find_similar_rows_at(menu.row, menu.col, cx);
+            }
+            // The chooser takes the keyboard, so focus stays with it rather
+            // than going back to the grid.
+            ContextMenuAction::ChooseColumns => {
+                self.open_column_chooser(menu.position, window, cx);
+                return;
+            }
+            ContextMenuAction::FitColumnWidth
+            | ContextMenuAction::HideColumn
+            | ContextMenuAction::MoveColumnLeft
+            | ContextMenuAction::MoveColumnRight
+            | ContextMenuAction::PinColumn
+            | ContextMenuAction::UnpinColumn => {
+                self.handle_column_menu_action(action, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {
                 let query = self.chart_host_current_query(cx);

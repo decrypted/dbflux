@@ -45,9 +45,10 @@ pub fn copy_row(model: &TableModel, row: usize) -> Option<String> {
 /// Copy the current selection to clipboard format (TSV).
 ///
 /// With several ranges (Ctrl+click), the text covers every row that holds a
-/// selected cell and every column that does, in table order; a cell outside
-/// the selection inside that grid is left empty. For one range this is the
-/// range itself.
+/// selected cell and every column that does, the columns in the order the
+/// grid shows them; a cell outside the selection inside that grid is left
+/// empty. For one range this is the range itself. A hidden column is never
+/// part of a selection, so it is never copied.
 pub fn copy_selection(model: &TableModel, selection: &SelectionState) -> Option<String> {
     let (rows, cols) = selection_grid(selection)?;
     Some(selection_lines(model, selection, &rows, &cols).join("\n"))
@@ -76,10 +77,9 @@ pub fn copy_selection_with_column_names(
     Some(lines.join("\n"))
 }
 
-type SelectionGrid = (
-    std::collections::BTreeSet<usize>,
-    std::collections::BTreeSet<usize>,
-);
+/// The rows holding a selected cell, top to bottom, and the columns holding
+/// one, in the order the grid shows them.
+type SelectionGrid = (std::collections::BTreeSet<usize>, Vec<usize>);
 
 /// Every row and every column that holds a selected cell.
 fn selection_grid(selection: &SelectionState) -> Option<SelectionGrid> {
@@ -91,10 +91,13 @@ fn selection_grid(selection: &SelectionState) -> Option<SelectionGrid> {
         .iter()
         .flat_map(|range| range.start.row..=range.end.row)
         .collect();
-    let cols = ranges
+    let mut cols: Vec<usize> = ranges
         .iter()
         .flat_map(|range| range.start.col..=range.end.col)
+        .collect::<std::collections::BTreeSet<usize>>()
+        .into_iter()
         .collect();
+    selection.sort_by_screen_order(&mut cols);
     Some((rows, cols))
 }
 
@@ -102,7 +105,7 @@ fn selection_lines(
     model: &TableModel,
     selection: &SelectionState,
     rows: &std::collections::BTreeSet<usize>,
-    cols: &std::collections::BTreeSet<usize>,
+    cols: &[usize],
 ) -> Vec<String> {
     rows.iter()
         .map(|&row| {

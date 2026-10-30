@@ -181,14 +181,25 @@ impl DataTableState {
         let content_y = f32::from(inside_y - body.top() - scroll_y);
         let row = ((content_y / f32::from(row_height)).max(0.0) as usize).min(row_count - 1);
 
-        // Rows are drawn shifted left by the horizontal offset, row number first.
-        let content_x =
-            f32::from(inside_x - body.left() + self.horizontal_offset - ROW_NUMBER_WIDTH);
-        let col = self
+        // Rows are drawn shifted left by the horizontal offset, row number
+        // first, except for the pinned strip at the left edge, which does not
+        // scroll. Offsets run in screen order, so the hit is a screen
+        // position, mapped back to the model column the selection holds.
+        let screen_x = f32::from(inside_x - body.left() - ROW_NUMBER_WIDTH);
+        let in_pinned_strip =
+            self.column_layout.pinned_count() > 0 && screen_x < self.pinned_width();
+        let content_x = if in_pinned_strip {
+            screen_x
+        } else {
+            screen_x + f32::from(self.horizontal_offset)
+        };
+        let last_position = self.column_layout.visible_count().checked_sub(1)?;
+        let position = self
             .column_offsets
             .partition_point(|offset| *offset <= content_x)
             .saturating_sub(1)
-            .min(col_count - 1);
+            .min(last_position);
+        let col = self.column_layout.model_column(position)?;
 
         Some(CellCoord::new(row, col))
     }
@@ -229,5 +240,68 @@ mod tests {
         let very_far = edge_step(point(px(300.0), px(2000.0)), body()).y;
         assert!(far > near);
         assert_eq!(very_far, px(MAX_STEP));
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use std::sync::Arc;
+
+    use gpui::{AppContext as _, TestAppContext, point, px, size};
+
+    use super::super::DataTableState;
+    use crate::components::data_table::model::{
+        CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+    };
+    use crate::components::data_table::selection::CellCoord;
+    use crate::components::data_table::theme::ROW_NUMBER_WIDTH;
+
+    /// The cell under a dragged pointer is found by screen position: a
+    /// column pinned to the left edge is hit where the strip draws it, and
+    /// a scrolling column through the scroll, as the model column it is.
+    #[gpui::test]
+    fn the_drag_hit_test_follows_moved_and_pinned_columns(cx: &mut TestAppContext) {
+        let columns = ["a", "b", "c", "d"]
+            .iter()
+            .map(|name| ColumnSpec {
+                id: (*name).into(),
+                title: (*name).into(),
+                kind: ColumnKind::Text,
+                align: gpui::TextAlign::Left,
+                type_name: "text".into(),
+            })
+            .collect();
+        let rows = (0..3)
+            .map(|_| RowData {
+                cells: (0..4).map(|_| CellValue::text("x")).collect(),
+            })
+            .collect();
+        let model = Arc::new(TableModel::new(columns, rows));
+
+        let state = cx.new(|cx| DataTableState::new(model, cx));
+        let hit = cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                for col in 0..4 {
+                    state.set_column_width(col, 100.0, cx);
+                }
+                // Screen order c (pinned), a, b, d, scrolled 150 px.
+                state.pin_column(2, cx);
+                state.horizontal_offset = px(150.0);
+
+                let body = gpui::Bounds::new(point(px(0.0), px(0.0)), size(px(600.0), px(300.0)));
+                let at = |x: f32| point(ROW_NUMBER_WIDTH + px(x), px(5.0));
+                (
+                    state.cell_at(at(50.0), body, px(20.0)),
+                    state.cell_at(at(130.0), body, px(20.0)),
+                )
+            })
+        });
+
+        assert_eq!(hit.0, Some(CellCoord::new(0, 2)), "inside the pinned strip");
+        assert_eq!(
+            hit.1,
+            Some(CellCoord::new(0, 1)),
+            "130 px plus the 150 px scroll lands on `b`, the third on screen"
+        );
     }
 }

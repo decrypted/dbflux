@@ -268,11 +268,15 @@ impl DataGridPanel {
         let table_state = self.grid_table.table_state.as_ref()?;
         let selection = table_state.read(cx).selection();
         let ranges = selection.ranges();
+        // The leftmost selected column as the grid shows it, which is not the
+        // lowest model index once columns are moved or pinned. Every column
+        // of every range is a candidate: a range covering adjacent model
+        // columns starts at the lowest index, not at the leftmost on screen.
         let column = ranges
             .iter()
-            .map(|range| range.start.col)
+            .flat_map(|range| range.start.col..=range.end.col)
             .filter(|&col| col < self.result.columns.len())
-            .min()?;
+            .min_by_key(|&col| (selection.view_position(col).unwrap_or(usize::MAX), col))?;
         let rows: BTreeSet<usize> = ranges
             .iter()
             .flat_map(|range| range.start.row..=range.end.row)
@@ -290,7 +294,8 @@ impl DataGridPanel {
     /// that row's values in those columns.
     fn selected_rows_and_columns(&self, cx: &App) -> Option<(Vec<ColumnMeta>, Vec<Vec<Value>>)> {
         let table_state = self.grid_table.table_state.as_ref()?;
-        let ranges = table_state.read(cx).selection().ranges();
+        let selection = table_state.read(cx).selection();
+        let ranges = selection.ranges();
         if ranges.is_empty() {
             return None;
         }
@@ -298,11 +303,15 @@ impl DataGridPanel {
             .iter()
             .flat_map(|range| range.start.row..=range.end.row)
             .collect();
-        let cols: BTreeSet<usize> = ranges
+        // Columns in the order the grid shows them, as the plain copy does.
+        let mut cols: Vec<usize> = ranges
             .iter()
             .flat_map(|range| range.start.col..=range.end.col)
             .filter(|&col| col < self.result.columns.len())
+            .collect::<BTreeSet<usize>>()
+            .into_iter()
             .collect();
+        selection.sort_by_screen_order(&mut cols);
 
         let columns = cols
             .iter()

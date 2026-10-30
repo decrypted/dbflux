@@ -202,10 +202,20 @@ impl DataGridPanel {
             action_index += 1;
         }
 
+        self.push_column_menu_rows(
+            menu,
+            MenuRowCursor {
+                rows: &mut rows,
+                visual_index: &mut action_index,
+                selected_index: menu.selected_index,
+            },
+            cx,
+        );
+
         rows
     }
 
-    fn column_menu_action_row(
+    pub(super) fn column_menu_action_row(
         label: String,
         action: ContextMenuAction,
         icon: AppIcon,

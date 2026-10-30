@@ -1039,7 +1039,6 @@ pub fn load_config(
     let profiles_repo = runtime.connection_profiles();
     let auth_repo = runtime.auth_profiles();
     let proxy_repo = runtime.proxy_profiles();
-    let ssh_repo = runtime.ssh_tunnels();
     let hooks_repo = runtime.hook_definitions();
     let general_settings = load_general_settings(&runtime.general_settings());
     let (driver_overrides, driver_settings) = load_driver_maps(
@@ -1052,7 +1051,7 @@ pub fn load_config(
     let profiles = load_profiles(&profiles_repo);
     let auth_profiles = load_auth_profiles(&auth_repo);
     let proxy_profiles = load_proxy_profiles(&proxy_repo, &proxy_repo.auth_repo());
-    let ssh_tunnels = load_ssh_tunnels(&ssh_repo);
+    let ssh_tunnels = dbflux_storage::load_ssh_tunnel_profiles(runtime);
 
     Ok(LoadedConfig {
         general_settings,
@@ -1877,50 +1876,6 @@ fn load_proxy_profiles(
                     auth,
                     no_proxy: dto.no_proxy,
                     enabled: dto.enabled,
-                    save_secret: dto.save_secret,
-                })
-            })
-            .collect()
-    } else {
-        Vec::new()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SSH Tunnel helpers
-// ---------------------------------------------------------------------------
-
-fn load_ssh_tunnels(
-    repo: &dbflux_storage::repositories::ssh_tunnel_profiles::SshTunnelProfileRepository,
-) -> Vec<SshTunnelProfile> {
-    if let Ok(entries) = repo.all() {
-        entries
-            .into_iter()
-            .filter_map(|dto| {
-                let id = uuid::Uuid::parse_str(&dto.id).ok()?;
-                let auth_method = match dto.auth_method.as_str() {
-                    "key" => {
-                        if let Ok(Some(auth_dto)) = repo.get_auth(&dto.id) {
-                            dbflux_core::SshAuthMethod::PrivateKey {
-                                key_path: auth_dto.key_path.map(std::path::PathBuf::from),
-                            }
-                        } else {
-                            dbflux_core::SshAuthMethod::PrivateKey { key_path: None }
-                        }
-                    }
-                    _ => dbflux_core::SshAuthMethod::Password,
-                };
-                let config = dbflux_core::SshTunnelConfig {
-                    host: dto.host,
-                    port: dto.port as u16,
-                    user: dto.user,
-                    auth_method,
-                    ssh_config_host: dto.ssh_config_host,
-                };
-                Some(SshTunnelProfile {
-                    id,
-                    name: dto.name,
-                    config,
                     save_secret: dto.save_secret,
                 })
             })

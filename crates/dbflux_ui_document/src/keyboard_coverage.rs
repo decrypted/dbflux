@@ -91,12 +91,21 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::SelectNext),
         ),
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
-        // The table menu of the column carries Order ascending / descending,
-        // which is also the keyboard path of the header's sort arrow.
+        // A row number selects its row: Home, then Shift+End, does the same.
+        (
+            "row-number-*",
+            KeyboardPath::Command(Command::ExtendSelectRowEnd),
+        ),
+        // A header click selects the column, or sorts it with Settings >
+        // General > Data grid > Column header click sorts.
         (
             "header-col-*",
-            KeyboardPath::Command(Command::OpenContextMenu),
+            KeyboardPath::MouseOnly(
+                "gap: no key selects a whole column; with the header click set to \
+                 sort, the column's table menu (`m`) orders it",
+            ),
         ),
+        // The table menu of the column carries Order ascending / descending.
         (
             "header-sort-*",
             KeyboardPath::Command(Command::OpenContextMenu),
@@ -773,8 +782,8 @@ pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
 /// toolbar, insert above, add and rename a column, discard, the cancel of a
 /// running load of the rest, and reload: each select entry opens its list
 /// with the keyboard on it. Save is the table's save key. The rows stay in
-/// file order, so the document does not sort and a column header click has
-/// no action for a key to reach. The column prompt and the offer to load the
+/// file order, so the document does not sort; a column header click selects
+/// the column, which no key does. The column prompt and the offer to load the
 /// rest confirm with Enter and close with Escape, and the modal cell editor
 /// saves with its save key and closes with Escape. `t` switches between the
 /// table and the text view and `Shift+T` between raw and aligned text, in
@@ -791,6 +800,11 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        // A row number selects its row: Home, then Shift+End, does the same.
+        (
+            "row-number-*",
+            KeyboardPath::Command(Command::ExtendSelectRowEnd),
+        ),
         (
             "segmented-delimited-view-*",
             KeyboardPath::Command(Command::CycleDocumentView),
@@ -815,8 +829,8 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
         (
             "header-col-*",
             KeyboardPath::MouseOnly(
-                "a header click has no action in this document: rows stay in file order, \
-                 and renaming the column is in the pane actions menu",
+                "gap: a header click selects the column and no key does; rows stay in \
+                 file order, and renaming the column is in the pane actions menu",
             ),
         ),
         (
@@ -882,8 +896,8 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
 
 /// A Parquet file tab: the read-only table of the rows loaded so far, the
 /// control that loads the next window (`]`) and the reload (`f5`). The rows
-/// stay in file order, so the document does not sort and a column header
-/// click has no action for a key to reach.
+/// stay in file order, so the document does not sort; a column header click
+/// selects the column, which no key does.
 ///
 /// `t` switches between Data and Columns. In Data, `f` opens the column
 /// picker with the keyboard on its list (`Dropdown`): Space toggles the
@@ -904,10 +918,16 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        // A row number selects its row: Home, then Shift+End, does the same.
+        (
+            "row-number-*",
+            KeyboardPath::Command(Command::ExtendSelectRowEnd),
+        ),
         (
             "header-col-*",
             KeyboardPath::MouseOnly(
-                "a header click has no action in this document: rows stay in file order",
+                "gap: a header click selects the column and no key does; rows stay in \
+                 file order",
             ),
         ),
         (
@@ -982,6 +1002,11 @@ pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        // A row number selects its row: Home, then Shift+End, does the same.
+        (
+            "row-number-*",
+            KeyboardPath::Command(Command::ExtendSelectRowEnd),
+        ),
         (
             "segmented-spreadsheet-view-*",
             KeyboardPath::Command(Command::CycleDocumentView),
@@ -989,7 +1014,8 @@ pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
         (
             "header-col-*",
             KeyboardPath::MouseOnly(
-                "a header click has no action in this document: rows stay in sheet order",
+                "gap: a header click selects the column and no key does; rows stay in \
+                 sheet order",
             ),
         ),
         (

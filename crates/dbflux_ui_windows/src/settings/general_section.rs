@@ -42,6 +42,7 @@ pub(super) enum GeneralFormRow {
     TableAliasUseAs,
     GridFkLabels,
     GridReviewBeforeSave,
+    GridHeaderClickSorts,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -1976,6 +1977,10 @@ mod tests {
             (
                 "grid-review-before-save",
                 "settings.general.grid_review_before_save.label",
+            ),
+            (
+                "grid-header-click-sorts",
+                "settings.general.grid_header_click_sorts.label",
             ),
             ("restore-session", "settings.general.restore_session.label"),
             ("reopen-conns", "settings.general.reopen_connections.label"),

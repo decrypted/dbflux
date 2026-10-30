@@ -114,11 +114,14 @@ impl DataTableState {
     /// selection extended to the cell now under the pointer, clamped into the
     /// body. Returns whether the pointer is still past an edge.
     fn autoscroll_tick(&mut self, cx: &mut Context<Self>) -> bool {
+        // Record mode or an emptied result stop drawing the body, and with it
+        // the listener that would end the drag: stop here instead.
+        let body_gone = self.record_mode || self.row_count() == 0;
         let Some(autoscroll) = self.drag_autoscroll.as_mut() else {
             return false;
         };
         let step = edge_step(autoscroll.pointer, autoscroll.body);
-        if !self.drag_selecting || step == Point::default() {
+        if !self.drag_selecting || body_gone || step == Point::default() {
             // This runs inside the task itself: detached, it ends on its own
             // when this returns, and the next move past an edge starts anew.
             if let Some(task) = autoscroll.task.take() {
@@ -129,23 +132,32 @@ impl DataTableState {
         let (pointer, body, row_height) =
             (autoscroll.pointer, autoscroll.body, autoscroll.row_height);
 
+        let mut moved = false;
         if step.y != px(0.0) {
             let base = self.vertical_scroll_handle.0.borrow().base_handle.clone();
             let offset = base.offset();
             let max_y = base.max_offset().y.max(px(0.0));
             let y = (offset.y - step.y).clamp(-max_y, px(0.0));
-            base.set_offset(Point::new(offset.x, y));
+            if y != offset.y {
+                base.set_offset(Point::new(offset.x, y));
+                moved = true;
+            }
         }
         if step.x != px(0.0) && self.apply_horizontal_wheel_delta(-step.x) {
             self.sync_horizontal_offset(cx);
+            moved = true;
         }
 
         if let Some(coord) = self.cell_at(pointer, body, row_height)
             && self.selection.active != Some(coord)
         {
             self.extend_selection(coord, cx);
+            moved = true;
         }
-        cx.notify();
+        // Held past the last row or column nothing moves: no redraw.
+        if moved {
+            cx.notify();
+        }
         true
     }
 

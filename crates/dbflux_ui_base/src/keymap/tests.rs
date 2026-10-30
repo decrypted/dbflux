@@ -2201,6 +2201,30 @@ fn primary_alt_c_copies_the_selection_as_json_and_leaves_open_saved_chart() {
     }
 }
 
+/// Ctrl+Alt is AltGr on Windows, where AltGr+C types a character on some
+/// layouts. A text field inside the results (the filter bar, an inline cell
+/// editor in the grid) roots the keyboard in `TextInput`, so the Results
+/// layer's primary+Alt+C does not reach it and the key stays typed text.
+#[test]
+fn primary_alt_c_is_typed_text_in_a_field_inside_the_results() {
+    let keymap = native_keymap();
+    let copy_json = gpui_keystrokes(&KeySequence::from(KeyChord::new(
+        "c",
+        Modifiers::primary_alt(),
+    )));
+    let text_root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+
+    for stack in [
+        element_stack(text_root.clone(), &["Input"]),
+        element_stack(text_root, &[data_table::CONTEXT, "Input"]),
+    ] {
+        assert!(
+            top_action(&keymap, &copy_json, &stack).is_none(),
+            "`{copy_json}` must stay typed text in {stack:?}"
+        );
+    }
+}
+
 /// `/` focuses the query history's search from its list, but stays a typed
 /// character in the history's own fields (search, rename, save name), which
 /// sit inside the history element.

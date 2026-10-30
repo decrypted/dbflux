@@ -1129,9 +1129,8 @@ impl DelimitedDocument {
     }
 
     /// Follows the table: the rows are the file's records in file order, so
-    /// the document does not sort them. A header click sets the sort
-    /// indicator before it reports the change, and the indicator is cleared
-    /// again here. Row operations and save requests are the document's to
+    /// the table does not sort (`set_sortable(false)`). Row operations and
+    /// save requests are the document's to
     /// carry out. A staged cell edit emits no event, only a notification, so
     /// the dirty state is worked out again on every change of the table, and
     /// the text view is marked to be rendered again the next time it is
@@ -1142,15 +1141,7 @@ impl DelimitedDocument {
     ) -> Vec<Subscription> {
         let table_subscription = cx.subscribe(
             table_state,
-            |this, table_state, event: &DataTableEvent, cx| {
-                if matches!(event, DataTableEvent::SortChanged(Some(_))) {
-                    table_state.update(cx, |state, cx| {
-                        state.clear_sort_without_emit();
-                        cx.notify();
-                    });
-                    return;
-                }
-
+            |this, _table_state, event: &DataTableEvent, cx| {
                 this.handle_table_event(event, cx);
             },
         );

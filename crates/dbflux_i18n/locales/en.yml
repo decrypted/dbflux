@@ -1787,8 +1787,12 @@ document:
           average: "Avg %{value}"
           min: "Min %{value}"
           max: "Max %{value}"
-          nulls_skipped: "%{count} NULL skipped"
-          non_numeric_skipped: "%{count} non-numeric skipped"
+          nulls_skipped:
+            one: "%{count} NULL skipped"
+            many: "%{count} NULLs skipped"
+          non_numeric_skipped:
+            one: "%{count} non-numeric skipped"
+            many: "%{count} non-numeric skipped"
       export:
         trigger: Export
         save_as_file: Save loaded rows as file
@@ -4138,6 +4142,9 @@ settings:
     grid_fk_labels:
       label: "Show referenced-row labels in foreign-key cells"
       hint: "Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after saving; the row inspector always resolves references."
+    grid_header_click_sorts:
+      label: "Clicking a column header sorts the column"
+      hint: "Off: a click on a column header selects the whole column and the arrow at its right edge sorts. On: the click sorts the column; Shift+click and Ctrl+click still select columns."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."

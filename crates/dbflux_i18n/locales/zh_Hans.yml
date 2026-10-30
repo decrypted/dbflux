@@ -1633,6 +1633,7 @@ document:
       order:
         title: 排序
         remove: 移除排序
+        add_to_sort: "添加到排序：%{column}"
       generate_sql:
         title: 生成 SQL
       toolbar:

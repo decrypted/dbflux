@@ -1633,6 +1633,7 @@ document:
       order:
         title: Order
         remove: Remove ordering
+        add_to_sort: "Add to sort: %{column}"
       generate_sql:
         title: Generate SQL
       toolbar:

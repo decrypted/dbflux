@@ -102,6 +102,16 @@ pub struct DataTableState {
     /// Current sort state.
     sort: Option<SortState>,
 
+    /// Sort keys that follow `sort`, in order. Only a modifier click on a
+    /// sort arrow fills it, and every single-column sort clears it, so the
+    /// hosts that sort one column at a time never see it.
+    then_sorts: Vec<SortState>,
+
+    /// Whether a modifier click on a sort arrow adds a sort key. Off unless
+    /// the host sorts by several keys; without it the click sorts as a plain
+    /// click does.
+    multi_sort: bool,
+
     /// Whether the table sorts: a header offers the sort arrow and the sort
     /// can be set. A host that keeps rows in source order (a file opened as a
     /// table) turns it off.
@@ -231,6 +241,8 @@ impl DataTableState {
             auto_width_metrics,
             column_offsets,
             sort: None,
+            then_sorts: Vec::new(),
+            multi_sort: false,
             sortable: true,
             viewport_size: Size::default(),
             selection: SelectionState::new(),
@@ -666,12 +678,14 @@ impl DataTableState {
         self.sortable
     }
 
-    /// Turning sorting off drops the current sort, and from then on
-    /// [`Self::set_sort`] and [`Self::cycle_sort`] keep the rows in order.
+    /// Turning sorting off drops the current sort keys, and from then on
+    /// [`Self::set_sort`], [`Self::cycle_sort`] and [`Self::cycle_sort_key`]
+    /// keep the rows in order.
     pub fn set_sortable(&mut self, sortable: bool) {
         self.sortable = sortable;
         if !sortable {
             self.sort = None;
+            self.then_sorts.clear();
         }
     }
 
@@ -681,8 +695,11 @@ impl DataTableState {
         if sort.is_some() && !self.sortable {
             return;
         }
-        if self.sort != sort {
+        // Dropping the secondary keys is a change even when the first key
+        // stays the same.
+        if self.sort != sort || !self.then_sorts.is_empty() {
             self.sort = sort;
+            self.then_sorts.clear();
             cx.emit(DataTableEvent::SortChanged(sort));
             cx.notify();
         }
@@ -691,17 +708,88 @@ impl DataTableState {
     /// Set sort state without emitting an event (for initial state).
     pub fn set_sort_without_emit(&mut self, sort: SortState) {
         self.sort = Some(sort);
+        self.then_sorts.clear();
     }
 
     /// Drop sort state without emitting an event, for a reload that replaces
     /// the columns the sort index points at.
     pub fn clear_sort_without_emit(&mut self) {
         self.sort = None;
+        self.then_sorts.clear();
     }
 
-    /// Cycle sort state for a column: none -> asc -> desc -> none
+    /// Every sort key in order: the first one, then the ones added with a
+    /// modifier click.
+    pub fn sort_keys(&self) -> Vec<SortState> {
+        self.sort
+            .iter()
+            .chain(self.then_sorts.iter())
+            .copied()
+            .collect()
+    }
+
+    /// Set every sort key without emitting an event, for a reload whose rows
+    /// arrive sorted by them.
+    pub fn set_sort_keys_without_emit(&mut self, keys: &[SortState]) {
+        let mut keys = keys.iter().copied();
+        self.sort = keys.next();
+        self.then_sorts = keys.collect();
+    }
+
+    /// The position (1 for the first) of a column among the sort keys, while
+    /// there are several; a single sort has no order worth showing.
+    pub fn sort_rank(&self, col_ix: usize) -> Option<usize> {
+        if self.then_sorts.is_empty() {
+            return None;
+        }
+
+        self.sort
+            .iter()
+            .chain(self.then_sorts.iter())
+            .position(|key| key.column_ix == col_ix)
+            .map(|position| position + 1)
+    }
+
+    pub fn multi_sort_enabled(&self) -> bool {
+        self.multi_sort
+    }
+
+    pub fn set_multi_sort_enabled(&mut self, enabled: bool) {
+        self.multi_sort = enabled;
+    }
+
+    /// Adds a column as the next sort key or cycles it where it already is:
+    /// asc -> desc -> dropped. One remaining key (or none) goes out as the
+    /// plain `SortChanged` hosts already handle; only several keys need
+    /// `SortKeysChanged`.
+    pub fn cycle_sort_key(&mut self, col_ix: usize, cx: &mut Context<Self>) {
+        if !self.sortable {
+            return;
+        }
+        if !self.multi_sort {
+            self.cycle_sort(col_ix, cx);
+            return;
+        }
+
+        let keys = next_sort_keys(&self.sort_keys(), col_ix);
+        self.set_sort_keys_without_emit(&keys);
+
+        if keys.len() > 1 {
+            cx.emit(DataTableEvent::SortKeysChanged(keys));
+        } else {
+            cx.emit(DataTableEvent::SortChanged(keys.first().copied()));
+        }
+        cx.notify();
+    }
+
+    /// Cycle sort state for a column: none -> asc -> desc -> none. Under a
+    /// sort by several keys the click first narrows the sort to its column.
     pub fn cycle_sort(&mut self, col_ix: usize, cx: &mut Context<Self>) {
-        let new_sort = next_sort_state(self.sort, col_ix);
+        let new_sort = if self.then_sorts.is_empty() {
+            next_sort_state(self.sort, col_ix)
+        } else {
+            Some(sole_sort_key(&self.sort_keys(), col_ix))
+        };
 
         self.set_sort(new_sort, cx);
     }
@@ -812,12 +900,17 @@ impl DataTableState {
 
     /// A primary click on a column header. It selects the column (see
     /// [`Self::click_column`]); with the header click set to sort, a plain
-    /// click on a table that sorts cycles the sort instead, while Shift and
+    /// click on a table that sorts cycles the sort instead, and Alt+click adds
+    /// the column as the next sort key as on the sort arrow, while Shift and
     /// Ctrl (Cmd on macOS) still select.
     pub fn click_header(&mut self, col: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
         let plain = !modifiers.shift && !modifiers.secondary();
         if plain && self.sortable && header_click_sorts(cx) {
-            self.cycle_sort(col, cx);
+            if modifiers.alt {
+                self.cycle_sort_key(col, cx);
+            } else {
+                self.cycle_sort(col, cx);
+            }
         } else {
             self.click_column(col, modifiers, cx);
         }
@@ -1889,6 +1982,39 @@ fn next_sort_state(current: Option<SortState>, col_ix: usize) -> Option<SortStat
     }
 }
 
+/// The single key a plain click on `col_ix` leaves under a sort by several
+/// keys: the column alone, in the direction it already sorts by, or ascending
+/// when it is not a key. Cycling from the first key instead would clear every
+/// key on a click on it.
+fn sole_sort_key(keys: &[SortState], col_ix: usize) -> SortState {
+    keys.iter()
+        .find(|key| key.column_ix == col_ix)
+        .copied()
+        .unwrap_or(SortState::ascending(col_ix))
+}
+
+/// The sort keys after a modifier click on `col_ix`: a column not yet sorted
+/// joins at the end ascending, a sorted one flips to descending in place, and
+/// a descending one leaves, so the keys after it move up.
+fn next_sort_keys(keys: &[SortState], col_ix: usize) -> Vec<SortState> {
+    let mut next = keys.to_vec();
+
+    match next.iter().position(|key| key.column_ix == col_ix) {
+        Some(position) => {
+            if let Some(key) = next.get_mut(position)
+                && key.direction == dbflux_core::SortDirection::Ascending
+            {
+                key.direction = dbflux_core::SortDirection::Descending;
+            } else {
+                next.remove(position);
+            }
+        }
+        None => next.push(SortState::ascending(col_ix)),
+    }
+
+    next
+}
+
 impl EventEmitter<DataTableEvent> for DataTableState {}
 
 impl Focusable for DataTableState {
@@ -1914,6 +2040,47 @@ mod tests {
 
         let step3 = next_sort_state(step2, column);
         assert_eq!(step3, None);
+    }
+
+    #[test]
+    fn next_sort_keys_appends_flips_and_drops_a_column() {
+        use super::next_sort_keys;
+
+        let keys = next_sort_keys(&[SortState::ascending(1)], 4);
+        assert_eq!(keys, vec![SortState::ascending(1), SortState::ascending(4)]);
+
+        let keys = next_sort_keys(&keys, 1);
+        assert_eq!(
+            keys,
+            vec![SortState::descending(1), SortState::ascending(4)],
+            "the first key flips where it is"
+        );
+
+        let keys = next_sort_keys(&keys, 1);
+        assert_eq!(
+            keys,
+            vec![SortState::ascending(4)],
+            "a descending key leaves and the next one moves up"
+        );
+    }
+
+    #[test]
+    fn sole_sort_key_keeps_a_key_in_its_direction() {
+        use super::sole_sort_key;
+
+        let keys = [SortState::descending(2), SortState::ascending(0)];
+
+        assert_eq!(
+            sole_sort_key(&keys, 2),
+            SortState::descending(2),
+            "the first key stays, so a click on it does not clear the sort"
+        );
+        assert_eq!(sole_sort_key(&keys, 0), SortState::ascending(0));
+        assert_eq!(
+            sole_sort_key(&keys, 5),
+            SortState::ascending(5),
+            "a column that is not a key sorts ascending, as on a single sort"
+        );
     }
 
     #[test]

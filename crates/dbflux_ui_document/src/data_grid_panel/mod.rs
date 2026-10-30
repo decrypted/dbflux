@@ -9,6 +9,7 @@ mod facets;
 pub(crate) mod filter_bar;
 mod fk_display;
 mod grid;
+mod multi_sort;
 pub(crate) mod mutation_confirm;
 pub(crate) mod mutation_executor;
 mod mutations;
@@ -600,6 +601,10 @@ struct GridTableState {
     table_state: Option<Entity<DataTableState>>,
     table_subscription: Option<Subscription>,
     local_sort_state: Option<LocalSortState>,
+    /// The in-memory sort keys after `local_sort_state`. Read only while
+    /// `local_sort_state` is set, and rewritten by every in-memory sort, so
+    /// the resets that drop `local_sort_state` alone leave nothing stale.
+    local_sort_then: Vec<LocalSortState>,
     original_row_order: Option<Vec<usize>>,
     /// Read by the next `rebuild_table` and reset to `Preserve` there.
     reload: TableReload,
@@ -1376,6 +1381,7 @@ impl DataGridPanel {
                 table_state: None,
                 table_subscription: None,
                 local_sort_state: None,
+                local_sort_then: Vec::new(),
                 original_row_order: None,
                 reload: TableReload::default(),
                 keep_edits_on_reload: false,

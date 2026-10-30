@@ -140,6 +140,19 @@ schema](QUERY_BUILDER.md#autocompletado-consciente-del-schema)).
   <img src="../images/results/filtering-light.webp" alt="La tabla customers filtrada con una condición WHERE escrita en la barra de filtro">
 </picture>
 
+### Filtrar por una celda
+
+El submenú **Filtro** del menú contextual de una celda (`m`, o clic derecho)
+reduce el filtro al valor de la celda con `=`, `<>`, `<`, `>`, `LIKE`, `IS NULL`
+y los demás operadores que admite el tipo de la columna. `Alt`+clic en una celda
+hace lo mismo con `=` en un solo paso (`IS NULL` para una celda NULL) y
+selecciona la celda. Ambos conservan el filtro actual como término `AND`, entre
+paréntesis cuando tiene un `OR` de primer nivel, así que `status = 500` pasa a
+`status = 500 AND "method" = 'getbets'`, y una condición que el filtro ya
+contiene no se añade dos veces. Los valores binarios, JSON y anidados no se
+pueden añadir así. Algunos gestores de ventanas de Linux usan `Alt`+arrastrar
+para mover ventanas; un `Alt`+clic sin mover el puntero sigue funcionando.
+
 ### Historial de filtros
 
 Cada filtro con el que una tabla se leyó correctamente se guarda para esa tabla

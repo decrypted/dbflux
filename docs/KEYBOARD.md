@@ -423,6 +423,10 @@ Toolbar submenu opens it too. While it is open, typing narrows the list, `Up` /
 removes it and `Escape` closes the list; its last row clears the table's history.
 See [Filter history](RESULTS.md#filter-history).
 
+The Filter submenu of a cell's context menu (`m`) is the keyboard counterpart of
+`Alt`+click on a cell: its entries add the cell's value to the table's filter as
+an `AND` condition. See [Filtering by a cell](RESULTS.md#filtering-by-a-cell).
+
 When the results offer no context menu of their own, `m` opens the pane actions
 menu instead, the same one the command palette's **Open pane actions** shows.
 

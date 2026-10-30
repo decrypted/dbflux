@@ -536,6 +536,8 @@ struct PendingActions {
     /// The JSON view has to be reloaded with the page. Deferred to render
     /// because setting an editor's text needs a `Window`.
     json_reload: bool,
+    /// Cell (visual row, column) an Alt+click asked to add to the filter.
+    filter_cell: Option<(usize, usize)>,
 }
 
 /// How the grid should treat the state held by an existing `DataTableState`

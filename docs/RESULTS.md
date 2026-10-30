@@ -129,6 +129,18 @@ builder — see [Schema-aware autocomplete](QUERY_BUILDER.md#schema-aware-autoco
   <img src="images/results/filtering-light.webp" alt="The customers table filtered by a WHERE condition typed in the filter bar">
 </picture>
 
+### Filtering by a cell
+
+The **Filter** submenu of a cell's context menu (`m`, or a right click) narrows
+the filter to the cell's value with `=`, `<>`, `<`, `>`, `LIKE`, `IS NULL` and
+the other operators the column's type allows. `Alt`+click on a cell does the
+same with `=` in one step (`IS NULL` for a NULL cell) and selects the cell. Both
+keep the current filter as an `AND` term, in parentheses when it has a top-level
+`OR`, so `status = 500` becomes `status = 500 AND "method" = 'getbets'`, and a
+condition the filter already holds is not added twice. Binary, JSON and nested
+values cannot be added this way. Some Linux window managers use `Alt`+drag to
+move windows; a plain `Alt`+click without moving the pointer still works.
+
 ### Filter history
 
 Every filter a table was read with successfully is kept for that table

@@ -1813,6 +1813,7 @@ document:
         builder_notice: Rows come from the builder query
         edit_in_builder: Edit in builder
         reset_builder: Reset
+        value_not_filterable: "This value cannot be added to the filter"
         history:
           toggle: "Filter history"
           delete: "Remove from history"

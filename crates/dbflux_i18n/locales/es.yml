@@ -1813,6 +1813,7 @@ document:
         builder_notice: Las filas vienen de la consulta del generador
         edit_in_builder: Editar en el generador
         reset_builder: Restablecer
+        value_not_filterable: "Este valor no se puede añadir al filtro"
         history:
           toggle: "Historial de filtros"
           delete: "Quitar del historial"

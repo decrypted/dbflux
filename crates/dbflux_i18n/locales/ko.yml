@@ -1813,6 +1813,7 @@ document:
         builder_notice: 행은 빌더 쿼리에서 가져옵니다
         edit_in_builder: 빌더에서 편집
         reset_builder: 초기화
+        value_not_filterable: "이 값은 필터에 추가할 수 없습니다"
         history:
           toggle: "필터 기록"
           delete: "기록에서 제거"

@@ -667,14 +667,25 @@ impl DataTableState {
     /// Shift extends the range from the anchor, as Shift with the arrow keys
     /// does; a plain click starts a new selection there. The grid and the
     /// record view both route their clicks here so the modifier means the same
-    /// thing in either layout.
+    /// thing in either layout. Alt alone also asks the host to filter by the
+    /// cell (`AddToFilterRequested`), so the cell the filter came from is the
+    /// one selected.
     pub fn click_cell(
         &mut self,
         coord: CellCoord,
         modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) {
-        if modifiers.shift {
+        let alt_only =
+            modifiers.alt && !modifiers.shift && !modifiers.control && !modifiers.platform;
+
+        if alt_only {
+            self.select_cell(coord, cx);
+            cx.emit(DataTableEvent::AddToFilterRequested {
+                row: coord.row,
+                col: coord.col,
+            });
+        } else if modifiers.shift {
             self.extend_selection(coord, cx);
         } else {
             self.select_cell(coord, cx);
@@ -3859,5 +3870,76 @@ mod tests {
             vec![edited],
             "a change in the tail of a long value must be staged"
         );
+    }
+
+    /// Alt+click selects the cell like a plain click and asks the host to
+    /// filter by it; Alt with another modifier is not that gesture.
+    #[gpui::test]
+    fn alt_click_selects_the_cell_and_asks_to_filter_by_it(cx: &mut gpui::TestAppContext) {
+        use super::super::events::DataTableEvent;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let columns = ["id", "method"]
+                .into_iter()
+                .map(|name| ColumnSpec {
+                    id: name.into(),
+                    title: name.into(),
+                    kind: ColumnKind::Text,
+                    align: TextAlign::Left,
+                    type_name: "text".into(),
+                })
+                .collect();
+            let rows = (0..3)
+                .map(|row| RowData {
+                    cells: vec![CellValue::text(&row.to_string()), CellValue::text("get")],
+                })
+                .collect();
+            let state = cx.new(|cx| {
+                super::DataTableState::new(std::sync::Arc::new(TableModel::new(columns, rows)), cx)
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let requested = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let _subscription = window.update(|_, app| {
+            let requested = requested.clone();
+            app.subscribe(&state, move |_state, event: &DataTableEvent, _app| {
+                if let DataTableEvent::AddToFilterRequested { row, col } = event {
+                    requested.borrow_mut().push((*row, *col));
+                }
+            })
+        });
+
+        let click = |modifiers: gpui::Modifiers, window: &mut gpui::VisualTestContext| {
+            window.update(|_, app| {
+                state.update(app, |s, cx| {
+                    s.click_cell(CellCoord::new(2, 1), modifiers, cx)
+                });
+            });
+            window.run_until_parked();
+        };
+
+        click(gpui::Modifiers::alt(), window);
+        assert_eq!(requested.borrow().as_slice(), &[(2, 1)]);
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(2, 1)),
+            "the filtered cell is the one selected"
+        );
+
+        click(
+            gpui::Modifiers {
+                alt: true,
+                shift: true,
+                ..Default::default()
+            },
+            window,
+        );
+        click(gpui::Modifiers::default(), window);
+        assert_eq!(requested.borrow().len(), 1, "only Alt alone filters");
     }
 }

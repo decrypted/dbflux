@@ -877,6 +877,160 @@ fn focus_row_by_key_replaces_the_filter_with_a_quoted_equality(cx: &mut TestAppC
     });
 }
 
+/// Copy as CSV / Copy as JSON copy what the grid shows: the selection names
+/// visual rows, so a pending insert above a base row is copied at its place
+/// and an unsaved edit is copied with its new value.
+#[gpui::test]
+fn copy_as_csv_and_json_follow_pending_inserts_and_edits(cx: &mut TestAppContext) {
+    use dbflux_components::components::data_table::model::CellValue;
+    use dbflux_export::ExportFormat;
+
+    init_test_runtime(cx);
+    let app_state = cx.update(|cx| {
+        cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("isolated storage runtime"),
+            )
+            .expect("test storage setup")
+        })
+    });
+    let (_host, panel, window) = host_result_grid(cx, app_state);
+    window.run_until_parked();
+
+    // Visual rows: 0 = row 1, 1 = the pending insert, 2 = row 2 (edited),
+    // 3 = row 3.
+    let shift = gpui::Modifiers {
+        shift: true,
+        ..gpui::Modifiers::default()
+    };
+    window.update(|_, cx| {
+        let table_state = panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the grid has a table");
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            buffer.add_pending_insert_after(0, vec![CellValue::int(99), CellValue::text("new")]);
+            buffer.set_cell(1, 1, CellValue::text("edited"));
+            state.click_row(1, gpui::Modifiers::default(), cx);
+            state.click_row(2, shift, cx);
+        });
+    });
+
+    let copy = |window: &mut VisualTestContext, format: ExportFormat| {
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.copy_selection_with_format(format, window, cx)
+            });
+        });
+        window
+            .update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    };
+
+    let csv = copy(window, ExportFormat::Csv);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines, vec!["id,name", "99,new", "2,edited"], "got {csv:?}");
+
+    let json = copy(window, ExportFormat::JsonPretty);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(
+        parsed,
+        serde_json::json!([
+            {"id": 99, "name": "new"},
+            {"id": 2, "name": "edited"}
+        ]),
+        "got {json}"
+    );
+
+    // Plain Copy follows the same rows.
+    window.update(|window, cx| panel.update(cx, |panel, cx| panel.handle_copy(window, cx)));
+    let tsv = window
+        .update(|_, cx| cx.read_from_clipboard())
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert_eq!(tsv, "99\tnew\n2\tedited");
+}
+
+/// Scattered cells picked with Ctrl+click copy the grid of their rows and
+/// columns, the cells outside the selection empty in CSV and `null` in JSON;
+/// a selected column copies just that column.
+#[gpui::test]
+fn copy_as_csv_and_json_of_scattered_cells_and_a_column(cx: &mut TestAppContext) {
+    use dbflux_components::components::data_table::selection::CellCoord;
+    use dbflux_export::ExportFormat;
+
+    init_test_runtime(cx);
+    let app_state = cx.update(|cx| {
+        cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("isolated storage runtime"),
+            )
+            .expect("test storage setup")
+        })
+    });
+    let (_host, panel, window) = host_result_grid(cx, app_state);
+    window.run_until_parked();
+
+    let table_state = window.update(|_, cx| {
+        panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the grid has a table")
+    });
+    let secondary = gpui::Modifiers::secondary_key();
+    window.update(|_, cx| {
+        table_state.update(cx, |state, cx| {
+            state.click_cell(CellCoord::new(0, 0), gpui::Modifiers::default(), cx);
+            state.click_cell(CellCoord::new(2, 1), secondary, cx);
+        });
+    });
+
+    let copy = |window: &mut VisualTestContext, format: ExportFormat| {
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.copy_selection_with_format(format, window, cx)
+            });
+        });
+        window
+            .update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    };
+
+    let csv = copy(window, ExportFormat::Csv);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines, vec!["id,name", "1,", ",row 3"], "got {csv:?}");
+    let json = copy(window, ExportFormat::JsonPretty);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(
+        parsed,
+        serde_json::json!([
+            {"id": 1, "name": null},
+            {"id": null, "name": "row 3"}
+        ]),
+        "got {json}"
+    );
+
+    window.update(|_, cx| {
+        table_state.update(cx, |state, cx| {
+            state.click_column(1, gpui::Modifiers::default(), cx);
+        });
+    });
+    let csv = copy(window, ExportFormat::Csv);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(
+        lines,
+        vec!["name", "row 1", "row 2", "row 3"],
+        "got {csv:?}"
+    );
+}
+
 /// Copy as CSV / Copy as JSON take the selection, here two rows picked with
 /// Ctrl+click on their row numbers, through the same exporter as the export
 /// menu: a header row for CSV, one object per row keyed by column for JSON,

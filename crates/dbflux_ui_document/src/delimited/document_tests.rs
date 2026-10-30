@@ -967,8 +967,8 @@ fn the_extension_hint_is_the_text_after_the_last_dot() {
     assert_eq!(extension_hint(".csv"), None);
 }
 
-/// A header click has no action here, so the registry must not name a
-/// command for it.
+/// A header click selects the column here, which no key does, so the
+/// registry lists it as a known gap rather than naming a command.
 #[test]
 fn the_registry_lists_the_column_headers_as_mouse_only() {
     let header = DELIMITED
@@ -978,7 +978,7 @@ fn the_registry_lists_the_column_headers_as_mouse_only() {
         .map(|(_, path)| *path);
 
     assert!(
-        matches!(header, Some(KeyboardPath::MouseOnly(reason)) if !reason.starts_with("gap:")),
+        matches!(header, Some(KeyboardPath::MouseOnly(reason)) if reason.starts_with("gap:")),
         "{header:?}"
     );
 }

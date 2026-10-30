@@ -46,7 +46,7 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
-With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty.
+With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. The extra ranges are for copying: delete, duplicate, save and the other row actions act on the row of the cursor, a right-click selects the cell under the pointer, and the record view treats `Ctrl`+click as a plain click.
 
 ## Record view
 
@@ -66,7 +66,7 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted.
+list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does.
 
 ## Value panel
 

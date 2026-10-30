@@ -89,7 +89,9 @@ order they were pinned and show a pin in their header; **Unpin column** lets
 the column scroll again, as the first of the others. Selecting, editing,
 sorting, resizing and the row numbers work the same on pinned columns. Move
 left and Move right stay on their side of the pinned edge; dragging a header
-across it pins or unpins its column.
+across it pins or unpins its column. Pinned columns take at most two thirds of
+the grid's width, so the other columns always keep room: in a narrow grid the
+pinned columns past that scroll with the others until it is wide enough again.
 
 The query keeps reading every column (a table still runs `SELECT *`); to leave
 a column out of the query itself, use the query builder's projection. Copy,

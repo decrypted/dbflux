@@ -1093,7 +1093,7 @@ impl DataTableState {
         // Pinned columns never scroll out of view, and the strip holding them
         // and the gutter covers the left of the viewport, so a scrolling
         // column must clear it to be seen.
-        let pinned = self.column_layout.pinned_count();
+        let pinned = self.pinned_shown_count();
         if col < pinned {
             return;
         }

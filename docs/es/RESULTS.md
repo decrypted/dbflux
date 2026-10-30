@@ -97,7 +97,9 @@ la columna vuelva a desplazarse, como la primera de las demás. Seleccionar,
 editar, ordenar, redimensionar y los números de fila funcionan igual en las
 columnas fijadas. Mover a la izquierda y Mover a la derecha se quedan en su lado
 del borde de las fijadas; arrastrar una cabecera a través de él fija o suelta su
-columna.
+columna. Las columnas fijadas ocupan como mucho dos tercios del ancho de la
+grilla, para que las demás siempre tengan sitio: en una grilla estrecha, las
+fijadas que no caben se desplazan con las demás hasta que vuelva a haber ancho.
 
 La consulta sigue leyendo todas las columnas (una tabla sigue ejecutando
 `SELECT *`); para dejar una columna fuera de la consulta misma, usa la

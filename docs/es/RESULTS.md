@@ -186,6 +186,8 @@ En el data grid:
 - `y` — copiar la fila seleccionada.
 - `Ctrl+c` (`Cmd+c`) — copiar la(s) celda(s) seleccionada(s) al portapapeles.
 
+Con varias celdas seleccionadas, `Enter`, `F2` o un doble clic en una de ellas abre el editor para todas, y la barra de estado indica cuántas celdas cambiará la edición. El valor que confirmas se escribe en cada celda seleccionada del mismo tipo de columna que lo admita, como cambios sin guardar que Guardar y Revertir tratan igual que cualquier otra edición, y un solo deshacer (`u` o `Ctrl+z`) revierte la edición entera. Se omiten las celdas de columnas de solo lectura, las filas marcadas para eliminar y los valores que el editor en línea no edita (JSON, texto largo o de varias líneas), y también las columnas de clave cuando la selección abarca varias filas, porque un mismo valor en la clave de cada fila nunca podría guardarse; un valor elegido de la lista de valores permitidos de una columna solo va a columnas con la misma lista.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/results/editing-dark.webp">
   <img src="../images/results/editing-light.webp" alt="La tabla customers con una celda editada aún sin guardar y los botones Save y Revert habilitados">

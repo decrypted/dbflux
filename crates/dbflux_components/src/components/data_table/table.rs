@@ -1540,13 +1540,7 @@ fn render_rows(
                             move |event: &MouseDownEvent, window, cx| {
                                 state.update(cx, |state, cx| {
                                     state.focus(window, cx);
-                                    // The second press of a Ctrl+double-click
-                                    // opens the editor on release; toggling
-                                    // again would take the cell back out first.
-                                    if event.click_count >= 2 && event.modifiers.secondary() {
-                                        return;
-                                    }
-                                    state.begin_drag_select(coord, event.modifiers, cx);
+                                    state.press_cell(coord, event.modifiers, event.click_count, cx);
                                 });
                             }
                         })
@@ -2364,7 +2358,6 @@ mod tests {
         assert_eq!(vertical(visual), released, "releasing stops the scrolling");
         assert!(!visual.update(|_, cx| state.read(cx).is_drag_selecting()));
     }
-
     /// Twelve text columns, far wider together than the scroll harness.
     fn wide_model() -> Arc<TableModel> {
         use super::super::model::{CellValue, ColumnKind, ColumnSpec, RowData};
@@ -2484,6 +2477,84 @@ mod tests {
         visual.simulate_mouse_up(left, MouseButton::Left, none);
         visual.run_until_parked();
         assert!(!visual.update(|_, cx| state.read(cx).is_drag_selecting()));
+    }
+
+    /// A double-click on a cell of a larger selection opens the editor for
+    /// the whole selection: the first press collapses it, as any press does,
+    /// and the second brings it back.
+    #[gpui::test]
+    fn double_click_inside_a_selection_edits_all_of_it(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+        use gpui::{MouseDownEvent, MouseUpEvent};
+
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut state = DataTableState::new(overflow_model(), cx);
+                state.set_pk_columns(vec![0]);
+                state
+            });
+            let table = cx.new(|cx| DataTable::new("multi-edit-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        let y = |row: usize| harness.origin.y + header_height + row_height * (row as f32 + 0.5);
+        let gutter = |row: usize| gpui::point(harness.origin.x + ROW_NUMBER_WIDTH / 2.0, y(row));
+        let cell = gpui::point(
+            harness.origin.x + ROW_NUMBER_WIDTH + px(first_col_width + 10.0),
+            y(2),
+        );
+        let none = gpui::Modifiers::default();
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        visual.simulate_click(gutter(1), none);
+        visual.simulate_click(gutter(3), shift);
+        visual.run_until_parked();
+
+        for click_count in [1, 2] {
+            visual.simulate_event(MouseDownEvent {
+                button: MouseButton::Left,
+                position: cell,
+                modifiers: none,
+                click_count,
+                first_mouse: false,
+            });
+            visual.simulate_event(MouseUpEvent {
+                button: MouseButton::Left,
+                position: cell,
+                modifiers: none,
+                click_count,
+            });
+        }
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(state.editing_cell(), Some(CellCoord::new(2, 1)));
+            assert!(state.selection().is_full_row_selected(1, 2));
+            assert!(state.selection().is_full_row_selected(3, 2));
+            assert_eq!(
+                state.multi_edit_count(),
+                3,
+                "rows 1 to 3 of the text column; the integer key column is skipped"
+            );
+        });
     }
 
     /// A render of the overflow model with a counter of the selection

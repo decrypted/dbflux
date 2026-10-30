@@ -9,6 +9,7 @@ mod facets;
 pub(crate) mod filter_bar;
 mod fk_display;
 mod grid;
+mod multi_edit;
 pub(crate) mod mutation_confirm;
 pub(crate) mod mutation_executor;
 mod mutations;

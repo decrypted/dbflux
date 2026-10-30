@@ -1764,6 +1764,7 @@ document:
         pending_changes:
           one: "대기 중인 변경 사항 %{count}개"
           many: "대기 중인 변경 사항 %{count}개"
+        multi_edit: "셀 %{count}개 편집 중"
         selection:
           cells: "셀 %{count}개"
           sum: "합계 %{value}"

@@ -23,6 +23,7 @@ use crate::fonts;
 use crate::tokens::GridMetrics;
 
 mod autoscroll;
+mod multi_edit;
 
 /// Grid face and glyph advances an auto-sized column width was estimated
 /// with. A change in any of them re-estimates the auto-sized columns.
@@ -151,6 +152,14 @@ pub struct DataTableState {
     /// Cell currently being edited (inline editor is open).
     editing_cell: Option<CellCoord>,
 
+    /// Every cell the open editor writes to when committed, the edited one
+    /// first; empty unless the edit started on a selection of several cells.
+    edit_targets: Vec<CellCoord>,
+
+    /// The selection a plain press on one of its cells collapsed, kept so
+    /// the second press of a double-click can bring it back for the edit.
+    selection_before_press: Option<(CellCoord, SelectionState)>,
+
     /// Input state for the inline cell editor.
     cell_input: Option<Entity<InputState>>,
 
@@ -253,6 +262,8 @@ impl DataTableState {
             drag_selecting: false,
             drag_autoscroll: None,
             editing_cell: None,
+            edit_targets: Vec::new(),
+            selection_before_press: None,
             cell_input: None,
             enum_dropdown: None,
             _editing_subs: Vec::new(),
@@ -1338,6 +1349,8 @@ impl DataTableState {
     ) -> bool {
         use super::model::{ColumnKind, VisualRowSource};
 
+        self.edit_targets.clear();
+
         if self.document.is_some() && self.is_nested_cell(coord) {
             cx.emit(DataTableEvent::StepIntoRequested {
                 row: coord.row,
@@ -1461,10 +1474,15 @@ impl DataTableState {
             // be silently discarded.
             self._editing_subs.clear();
 
+            // Captured for the same reason as `coord`: the dismissal may have
+            // closed the editor, and with it the targets, by now.
+            let targets = self.multi_edit_targets(coord);
+            let targets_for_selection = targets.clone();
             self._editing_subs.push(cx.subscribe(
                 &dropdown,
                 move |this, _dropdown, event: &DropdownSelectionChanged, cx| {
                     let value = event.item.value.to_string();
+                    this.edit_targets = targets_for_selection.clone();
                     this.apply_enum_selection_at(coord, &value, cx);
                 },
             ));
@@ -1477,6 +1495,7 @@ impl DataTableState {
             ));
 
             self.editing_cell = Some(coord);
+            self.edit_targets = targets;
             self.enum_dropdown = Some(dropdown);
             self.cell_input = None;
             self.scroll_to_cell(coord.row, coord.col);
@@ -1507,6 +1526,7 @@ impl DataTableState {
         );
 
         self.editing_cell = Some(coord);
+        self.edit_targets = self.multi_edit_targets(coord);
         self.cell_input = Some(input);
         self.enum_dropdown = None;
         self.scroll_to_cell(coord.row, coord.col);
@@ -1540,7 +1560,7 @@ impl DataTableState {
             super::model::CellValue::text(value)
         };
 
-        self.stage_cell_value(coord.row, coord.col, cell_value);
+        self.stage_edit_value(coord, cell_value);
 
         cx.notify();
     }
@@ -1548,6 +1568,9 @@ impl DataTableState {
     fn cancel_enum_edit(&mut self, cx: &mut Context<Self>) {
         self.editing_cell = None;
         self.enum_dropdown = None;
+        // A selection delivered after this dismissal brings back its own
+        // copy of the targets.
+        self.edit_targets.clear();
         cx.notify();
     }
 
@@ -1706,15 +1729,12 @@ impl DataTableState {
             if let Some(input) = self.cell_input.take() {
                 let value_str = input.read(cx).value().to_string();
 
-                self.stage_cell_value(
-                    coord.row,
-                    coord.col,
-                    super::model::CellValue::text(&value_str),
-                );
+                self.stage_edit_value(coord, super::model::CellValue::text(&value_str));
             }
         } else {
             self.cell_input = None;
         }
+        self.edit_targets.clear();
 
         // The input and dropdown these watch are gone; they are re-subscribed
         // when the next edit starts.

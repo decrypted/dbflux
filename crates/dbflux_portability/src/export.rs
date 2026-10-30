@@ -274,6 +274,7 @@ pub fn export(
             settings_overrides_payload,
             kind,
             uri_secret_fields,
+            driver_params: profile.driver_params.clone(),
         });
     }
 
@@ -1507,6 +1508,29 @@ mod tests {
     //
     // A Literal is a static inline value (username, region, etc.), not a secret locator.
     // It belongs in the cleartext value_refs map alongside Env/Parameter/Auth/Secret locators.
+
+    #[test]
+    fn driver_params_travel_in_cleartext_and_parse_back() {
+        let mut profile = postgres_profile();
+        profile.driver_params = vec![
+            dbflux_core::DriverParam::new("options", "-c statement_timeout=5000"),
+            dbflux_core::DriverParam::new("connect_timeout", "5"),
+        ];
+        let graph = simple_graph(&profile, FormValues::default());
+
+        let (bytes, _report) = export(
+            &graph,
+            &default_opts_plaintext(),
+            &IncludeAllHints,
+            &NoTransforms,
+            &NoSecrets,
+        )
+        .expect("export");
+
+        let parsed = crate::import::parse(&bytes).expect("bundle parses");
+        let entry = parsed.bundle.connections.first().expect("one connection");
+        assert_eq!(entry.driver_params, profile.driver_params);
+    }
 
     #[test]
     fn value_ref_literal_appears_in_cleartext_value_refs() {

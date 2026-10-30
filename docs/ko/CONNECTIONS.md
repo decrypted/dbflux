@@ -397,7 +397,66 @@ dotenv 파일은 다음 규칙을 지켜야 합니다. 그렇지 않으면 파�
 - URI에 포함된 비밀번호는 추출되어 별도로 저장되며(저장하면 키링에 저장됨)
   URI 텍스트에는 유지되지 않습니다.
 - SSH/프록시/SSM 터널을 통해 연결하면 URI를 입력했더라도 DBFlux는 항상 필드
-  기반 설정(`127.0.0.1:<local port>`로 재작성됨)을 사용합니다.
+  기반 설정(`127.0.0.1:<local port>`로 재작성됨)을 사용합니다. 이때 URI의
+  쿼리 옵션은 쓰이지 않으므로 모든 모드에 적용되는 드라이버 매개변수(드라이버
+  매개변수 참고)로 설정하세요.
+
+---
+
+## 드라이버 매개변수
+
+Main 탭의 Transport 아래에 있는 **Driver parameters** 섹션에는 다른
+데이터베이스 클라이언트의 Advanced 탭처럼 드라이버에 넘길 추가 `키 = 값`
+옵션을 둡니다. 매개변수를 받는 드라이버인 **MySQL/MariaDB**와
+**PostgreSQL**에서 표시되며, 다른 드라이버에는 표시되지 않습니다.
+
+- 키와 값 입력란에 적고 **Add**(그 위에서 `Enter`)로 행을 추가합니다. 행의
+  **Edit**는 행을 입력란으로 다시 불러오고, **Update**는 그 자리에 다시 쓰며,
+  **Remove**는 행을 지웁니다. 입력란에 적었지만 아직 추가하지 않은 키도 연결과
+  함께 저장됩니다.
+- 매개변수는 **모든 연결 모드**에 적용됩니다: 필드 모드, URI 모드, 그리고 SSH
+  터널, 프록시 또는 SSM을 통한 연결. 호스트와 포트와 따로 저장되므로 터널이
+  `127.0.0.1:<local port>`로 재작성해도 유지됩니다.
+- **우선순위:** 같은 키라면 뒤의 행이 앞의 행보다 우선합니다. URI 모드에서는
+  URI 자체의 쿼리 옵션이 먼저 적용되고 매개변수가 이를 덮어씁니다.
+- 폼이 소유한 키는 키 이름을 밝힌 오류와 함께 거부됩니다: 호스트, 포트,
+  사용자, 비밀번호, 데이터베이스, 모든 SSL/TLS 설정, 그리고 MySQL에서는 설정한
+  호스트, 터널 또는 프록시를 우회하게 되는 `socket`과 `prefer_socket`도
+  해당합니다. 알 수 없는 키나 드라이버가 해석할 수 없는 값도 행을 추가할 때,
+  그리고 저장, 테스트, 연결 시에 다시 같은 방식으로 거부됩니다.
+- 값은 **일반 텍스트**입니다. 값 소스가 아니고 키링에 저장되지 않으며 내보내기
+  번들에 암호화되지 않은 채 담깁니다. 비밀번호나 토큰을 넣지 마세요.
+
+| 드라이버 | 지원되는 키 |
+|--------|----------------|
+| MySQL / MariaDB | `compress` (`true`, `false`, `fast`, `best`, `0`-`9`), `tcp_connect_timeout_ms`, `tcp_keepalive_time_ms`, `tcp_keepalive_probe_interval_secs` / `tcp_keepalive_probe_count` (Linux, macOS), `tcp_user_timeout_ms` (Linux), `stmt_cache_size`, `max_allowed_packet`, `secure_auth`, `enable_cleartext_plugin` |
+| PostgreSQL | `application_name`, `options` (예: `-c statement_timeout=5000`), `connect_timeout`, `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`, `keepalives_retries`, `target_session_attrs` (`any`, `read-write`, `read-only`), `channel_binding` (`disable`, `prefer`, `require`) |
+
+MySQL 키는 Rust `mysql` 클라이언트의 URL 옵션을 따르고 그 클라이언트가
+검증하므로 그 규칙이 적용됩니다(예: `compress`에 수준을 지정할 수는 있지만
+클라이언트는 항상 기본 수준으로 압축합니다). 풀 옵션인 `pool_min`,
+`pool_max`, `reset_connection`, `check_health`는 거부됩니다: DBFlux는 풀이
+아니라 일반 연결을 엽니다. PostgreSQL 키는 libpq의 연결 매개변수를 따르며
+시간 제한은 정수 초 단위입니다. DBFlux는 자체 클라이언트 식별자를
+`application_name`(PostgreSQL)과 `program_name`(MySQL)으로 보내며, 명시한
+`application_name` 매개변수가 이를 대체합니다.
+
+### MySQL 압축
+
+MySQL과 MariaDB에서는 Transport 섹션에 **Auto**, **On**, **Off**를 고르는
+**Compression** 스위치가 있습니다. 목록의 `compress` 매개변수를 편집하므로
+스위치와 목록은 항상 일치합니다:
+
+- **Auto**는 `compress` 행이 없는 상태입니다. SSH 터널, 프록시 또는 SSM을
+  통한 연결은 압축되고 직접 연결은 압축되지 않습니다.
+- **On**은 `compress=true`를 씁니다. `compress=best` 같은 수준이 적힌 행도
+  On으로 표시됩니다.
+- **Off**는 `compress=false`를 씁니다.
+
+기본값이 Auto이므로, 터널, 프록시 또는 SSM을 거치는 기존 MySQL 연결은
+업데이트 후 프로토콜 압축을 쓰기 시작합니다. 압축은 서버가 제공할 때만
+적용되므로 압축을 지원하지 않는 서버에도 압축 없이 그대로 연결됩니다. 터널
+연결을 압축하지 않으려면 **Off**로 설정하세요.
 
 ---
 

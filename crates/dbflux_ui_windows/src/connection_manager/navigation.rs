@@ -1719,6 +1719,8 @@ impl ConnectionManagerWindow {
             &self.settings_tab.conn_post_hook_extra_input,
             &self.settings_tab.conn_pre_disconnect_hook_extra_input,
             &self.settings_tab.conn_post_disconnect_hook_extra_input,
+            &self.form.driver_param_key_input,
+            &self.form.driver_param_value_input,
         ];
 
         #[cfg(feature = "mcp")]
@@ -2744,7 +2746,48 @@ impl ConnectionManagerWindow {
                 let current = (!current.trim().is_empty()).then_some(current);
                 self.browse_ssl_cert(slot, current, window, cx);
             }
+            MainExtraStop::Compression => {
+                self.step_main_extra_choice(index, true);
+            }
+            MainExtraStop::DriverParamEdit(row) => {
+                self.edit_driver_param(row, window, cx);
+                self.focus_driver_param_input(MainExtraStop::DriverParamKey, window, cx);
+            }
+            MainExtraStop::DriverParamRemove(row) => {
+                self.remove_driver_param(row, window, cx);
+            }
+            stop @ (MainExtraStop::DriverParamKey | MainExtraStop::DriverParamValue) => {
+                self.focus_driver_param_input(stop, window, cx);
+            }
+            MainExtraStop::DriverParamApply => {
+                self.apply_driver_param(window, cx);
+            }
+            MainExtraStop::DriverParamCancel => {
+                self.cancel_driver_param_edit(window, cx);
+            }
         }
+    }
+
+    /// Moves the ring to the key or value input of the parameter editor and
+    /// starts editing it.
+    fn focus_driver_param_input(
+        &mut self,
+        stop: MainExtraStop,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = match stop {
+            MainExtraStop::DriverParamKey => self.form.driver_param_key_input.clone(),
+            MainExtraStop::DriverParamValue => self.form.driver_param_value_input.clone(),
+            _ => return,
+        };
+        if let Some(focus) = self.main_extra_focus_where(|candidate| {
+            super::driver_params::same_driver_param_stop(candidate, &stop)
+        }) {
+            self.form_focus = focus;
+        }
+        self.edit_state = EditState::Editing;
+        input.update(cx, |state, cx| state.focus(window, cx));
     }
 
     /// Moves the choice of a segmented Main-tab extra stop (a driver select
@@ -2796,10 +2839,20 @@ impl ConnectionManagerWindow {
                 }
                 true
             }
+            MainExtraStop::Compression => {
+                self.step_compression_choice(forward);
+                true
+            }
             MainExtraStop::SslCert(_)
             | MainExtraStop::ShowAllDatabases
             | MainExtraStop::ReadOnly
-            | MainExtraStop::ConnectOnStartup => false,
+            | MainExtraStop::ConnectOnStartup
+            | MainExtraStop::DriverParamEdit(_)
+            | MainExtraStop::DriverParamRemove(_)
+            | MainExtraStop::DriverParamKey
+            | MainExtraStop::DriverParamValue
+            | MainExtraStop::DriverParamApply
+            | MainExtraStop::DriverParamCancel => false,
             MainExtraStop::NavigatorView => {
                 use dbflux_core::NavigatorView::{Advanced, Compact, Simple};
                 self.form.navigator_view = match (self.form.navigator_view, forward) {
@@ -2837,10 +2890,22 @@ impl ConnectionManagerWindow {
                 .filter(|section| !section.fields.is_empty())
                 .position(|section| section.fields.iter().any(|f| f.id == "database"))
                 .map_or(0, |section| section + 1),
-            // The navigator section follows the transport section, when
-            // the driver has one.
+            // The driver parameters section follows the transport section,
+            // when the driver has one.
+            Some(
+                MainExtraStop::DriverParamEdit(_)
+                | MainExtraStop::DriverParamRemove(_)
+                | MainExtraStop::DriverParamKey
+                | MainExtraStop::DriverParamValue
+                | MainExtraStop::DriverParamApply
+                | MainExtraStop::DriverParamCancel,
+            ) => main_tab.sections.len() + 2 + usize::from(driver.metadata().ssl_modes.is_some()),
+            // The navigator section follows the parameters section.
             Some(MainExtraStop::NavigatorView) => {
-                main_tab.sections.len() + 2 + usize::from(driver.metadata().ssl_modes.is_some())
+                main_tab.sections.len()
+                    + 2
+                    + usize::from(driver.metadata().ssl_modes.is_some())
+                    + usize::from(driver.driver_params_spec().is_some())
             }
             // The safety section follows the navigator section, and the
             // startup section closes the tab.
@@ -2848,6 +2913,7 @@ impl ConnectionManagerWindow {
                 main_tab.sections.len()
                     + 2
                     + usize::from(driver.metadata().ssl_modes.is_some())
+                    + usize::from(driver.driver_params_spec().is_some())
                     + usize::from(Self::shows_navigator_view(driver.as_ref()))
                     + usize::from(matches!(stop, MainExtraStop::ConnectOnStartup))
             }

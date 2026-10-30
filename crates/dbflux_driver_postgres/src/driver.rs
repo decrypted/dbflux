@@ -44,6 +44,10 @@ use postgres::{
 use postgres_native_tls::MakeTlsConnector;
 
 use crate::tls::{PgTlsFiles, TlsVerification, build_tls_connector, take_uri_tls_files};
+
+mod params;
+
+use params::{POSTGRES_DRIVER_PARAMS, PgDriverParams};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -775,12 +779,17 @@ impl DbDriver for PostgresDriver {
         ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_postgres_config(&profile.config)?;
+        let driver_params = PgDriverParams::from_profile(profile)?;
 
         let password = password.map(|value| value.expose_secret());
         let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
         if config.use_uri {
-            return self.connect_with_uri(config.uri.as_deref().unwrap_or(""), password);
+            return self.connect_with_uri(
+                config.uri.as_deref().unwrap_or(""),
+                password,
+                &driver_params,
+            );
         }
 
         if let Some(tunnel_config) = &config.ssh_tunnel {
@@ -794,6 +803,7 @@ impl DbDriver for PostgresDriver {
                 password,
                 &config.ssl_mode,
                 &config.tls_files,
+                &driver_params,
             )
         } else {
             self.connect_direct(&PostgresConnectParams {
@@ -804,8 +814,17 @@ impl DbDriver for PostgresDriver {
                 database: &config.database,
                 ssl_mode: &config.ssl_mode,
                 tls_files: &config.tls_files,
+                driver_params: &driver_params,
             })
         }
+    }
+
+    fn driver_params_spec(&self) -> Option<&'static dbflux_core::DriverParamsSpec> {
+        Some(&POSTGRES_DRIVER_PARAMS)
+    }
+
+    fn validate_driver_params(&self, params: &[dbflux_core::DriverParam]) -> Result<(), DbError> {
+        PgDriverParams::resolve(params).map(|_resolved| ())
     }
 
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
@@ -1107,6 +1126,7 @@ struct PostgresConnectParams<'a> {
     /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`).
     ssl_mode: &'a str,
     tls_files: &'a PgTlsFiles,
+    driver_params: &'a PgDriverParams,
 }
 
 /// Escapes a value for a libpq keyword/value connection string.
@@ -1248,17 +1268,7 @@ fn connect_postgres(
     notices: &NoticeBuffer,
 ) -> Result<Client, DbError> {
     let ssl_mode = parse_pg_sslmode(params.ssl_mode);
-
-    let conn_string = with_client_identity(&with_keyword_sslmode(
-        &build_keyword_conn_string(
-            params.host,
-            params.port,
-            params.user,
-            params.password,
-            params.database,
-        ),
-        ssl_mode,
-    ));
+    let conn_string = direct_conn_string(params, ssl_mode);
 
     if ssl_mode == PgSslMode::Disable {
         return connect_client(&conn_string, NoTls, notices)
@@ -1281,6 +1291,36 @@ fn connect_postgres(
     }
 }
 
+/// The keyword/value connection string of a direct or tunneled connection:
+/// the form fields, the TLS mode, DBFlux's client identity, then the driver
+/// parameters, which win over everything before them.
+fn direct_conn_string(params: &PostgresConnectParams, ssl_mode: PgSslMode) -> String {
+    params
+        .driver_params
+        .append_to_keyword(&with_client_identity(&with_keyword_sslmode(
+            &build_keyword_conn_string(
+                params.host,
+                params.port,
+                params.user,
+                params.password,
+                params.database,
+            ),
+            ssl_mode,
+        )))
+}
+
+/// The connection URI of a URI-mode connection: the user's URI with its own
+/// query options, DBFlux's client identity unless the URI names one, then the
+/// driver parameters, which win over the URI's query options.
+fn uri_conn_string(
+    base_uri: &str,
+    password: Option<&str>,
+    driver_params: &PgDriverParams,
+) -> String {
+    let uri = inject_password_into_pg_uri(base_uri, password);
+    driver_params.append_to_uri(&with_client_identity(&uri))
+}
+
 /// Whether a failed TLS attempt in `prefer` mode failed while negotiating
 /// TLS, the only case where libpq-style `prefer` retries without it. A server
 /// answer (wrong password, unknown database, missing privilege) or a network
@@ -1298,9 +1338,9 @@ impl PostgresDriver {
         &self,
         base_uri: &str,
         password: Option<&str>,
+        driver_params: &PgDriverParams,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let uri = inject_password_into_pg_uri(base_uri, password);
-        let uri = with_client_identity(&uri);
+        let uri = uri_conn_string(base_uri, password, driver_params);
 
         let ssl_mode = parse_pg_uri_sslmode(&uri);
         let uri = with_protocol_sslmode(&uri);
@@ -1392,6 +1432,7 @@ impl PostgresDriver {
         db_password: Option<&str>,
         ssl_mode: &str,
         tls_files: &PgTlsFiles,
+        driver_params: &PgDriverParams,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -1412,6 +1453,7 @@ impl PostgresDriver {
                 database,
                 ssl_mode,
                 tls_files,
+                driver_params,
             },
             &notices,
         )?;

@@ -438,6 +438,10 @@ pub fn save_profiles(
             value_refs_repo.insert(&dto)?;
         }
 
+        // driver_params → connection_profile_driver_params (ordered rows)
+        repo.driver_params()
+            .replace_for_profile(profile_id, &profile.driver_params)?;
+
         // access_kind params → connection_profile_access_params
         let access_params_repo = repo.access_params();
         access_params_repo.delete_for_profile(profile_id)?;
@@ -1716,6 +1720,16 @@ fn load_profiles(
                 None
             };
 
+            let driver_params = repo
+                .driver_params()
+                .get_for_profile(profile_id)
+                .unwrap_or_else(|error| {
+                    log::warn!(
+                        "Loading connection profile {profile_id} without its driver parameters: {error}"
+                    );
+                    Vec::new()
+                });
+
             // Load hooks from connection_profile_hooks
             let hooks_repo = repo.hooks();
             let hooks_dtos = hooks_repo.get_for_profile(profile_id).ok().unwrap_or_default();
@@ -1808,6 +1822,7 @@ fn load_profiles(
                 navigator_view: dbflux_core::NavigatorView::from_storage_str(&dto.navigator_view),
                 show_all_databases: dto.show_all_databases,
                 connect_on_startup: dto.connect_on_startup,
+                driver_params,
             })
         })
         .collect()
@@ -2538,6 +2553,45 @@ mod tests {
 
         assert!(find(eager.id).connect_on_startup);
         assert!(!find(manual.id).connect_on_startup);
+    }
+
+    #[test]
+    fn profile_driver_params_round_trip_in_order() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut tuned = ConnectionProfile::new("tuned", DbConfig::default_postgres());
+        tuned.driver_params = vec![
+            dbflux_core::DriverParam::new("connect_timeout", "5"),
+            dbflux_core::DriverParam::new("options", "-c statement_timeout=5000"),
+            dbflux_core::DriverParam::new("connect_timeout", "9"),
+        ];
+        let plain = ConnectionProfile::new("plain", DbConfig::default_postgres());
+
+        save_profiles(&runtime, &[tuned.clone(), plain.clone()])
+            .expect("save profiles with driver parameters");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let find = |id| {
+            loaded
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .expect("reloaded profile")
+        };
+
+        assert_eq!(find(tuned.id).driver_params, tuned.driver_params);
+        assert!(find(plain.id).driver_params.is_empty());
+
+        tuned.driver_params.clear();
+        save_profiles(&runtime, std::slice::from_ref(&tuned)).expect("save cleared parameters");
+        let reloaded = load_config(&runtime).expect("load configuration").profiles;
+        assert!(
+            reloaded
+                .iter()
+                .find(|candidate| candidate.id == tuned.id)
+                .expect("reloaded profile")
+                .driver_params
+                .is_empty()
+        );
     }
 
     #[test]

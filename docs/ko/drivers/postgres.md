@@ -17,6 +17,7 @@
 - 저장 루틴(함수, 프로시저, 집계 함수, 윈도우 함수)을 스키마 트리에서 읽기 전용 정의 뷰어와 함께 노출합니다.
 - 인증, SSL, SSH 터널링, URI/수동 연결 모드를 지원합니다. libpq와 마찬가지로 `verify-ca`는 인증서 체인만 검증하고, `verify-full`은 호스트 이름도 확인합니다.
 - TLS 인증서 파일: Connection Manager의 루트 인증서, 클라이언트 인증서, 클라이언트 키 필드 또는 libpq URI 매개변수 `sslrootcert`, `sslcert`, `sslkey`(예: `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`). `verify-ca`와 `verify-full`에서는 루트 인증서가 신뢰할 수 있는 루트에 추가되며, 체인을 검증하지 않는 다른 모드에서는 무시됩니다. 클라이언트 인증서와 키는 `disable`을 제외한 모든 모드에서 상호 TLS용으로 제시됩니다. 파일은 PEM 형식이며 클라이언트 키는 PKCS#8이어야 합니다. 파일이 없거나 읽을 수 없거나 유효하지 않은 경우, 또는 키 없이 클라이언트 인증서만 있는 경우(또는 그 반대)에는 연결을 시도하기 전에 해당 파일을 명시한 오류로 연결이 실패합니다. `sslmode=disable`에서는 파일이 무시됩니다.
+- `application_name`, `options`, `connect_timeout`, keepalive 설정, `target_session_attrs` 같은 드라이버 매개변수(`키 = 값`, Connection Manager의 Main 탭)는 터널을 포함한 모든 연결 모드에서 연결 문자열 뒤에 추가되어 URI 쿼리 옵션보다 우선하며, 알 수 없는 키와 폼이 소유한 키(호스트, 자격 증명, 데이터베이스, `ssl*`)는 연결 전에 거부됩니다.
 - PostgreSQL 취소 토큰을 통한 쿼리 취소를 지원합니다.
 - CRUD, 인덱스, reindex, 외래 키, 타입 작업을 위한 PostgreSQL 전용 SQL/코드 생성을 포함합니다.
 - 다중 문 스크립트(여러 개의 `;`로 구분된 문)는 단순 쿼리 프로토콜을 통해 배치로 실행되며 문마다 하나의 결과 집합을 반환합니다.

@@ -338,6 +338,30 @@ connection_manager:
     ssm: "SSM"
     proxy: "프록시"
     ssh: "SSH"
+  compression:
+    option:
+      auto: "자동"
+      enabled: "켜기"
+      disabled: "끄기"
+  driver_params:
+    label: "매개변수"
+    help: "모든 연결 모드에서, 터널이나 프록시를 통할 때도 키 = 값 형식으로 드라이버에 전달되는 옵션입니다. 같은 키라면 뒤의 행이 앞의 행보다 우선하고, 행은 연결 URI의 쿼리 옵션보다 우선합니다. 값은 일반 텍스트로 저장되므로 비밀번호나 토큰을 넣지 마세요."
+    supported: "지원되는 키: %{keys}."
+    empty: "드라이버 매개변수가 없습니다."
+    editor_label: "새 매개변수"
+    editor_help: "호스트, 포트, 자격 증명, 데이터베이스와 SSL은 위의 필드에서 설정하며 매개변수로 지정할 수 없습니다."
+    key_label: "매개변수 키"
+    value_label: "매개변수 값"
+    key_placeholder: "키"
+    value_placeholder: "값"
+    add: "추가"
+    update: "업데이트"
+    cancel: "취소"
+    edit: "편집"
+    remove: "제거"
+    edit_named: "매개변수 %{key} 편집"
+    remove_named: "매개변수 %{key} 제거"
+    key_required: "매개변수를 추가하기 전에 키를 입력하세요."
   navigator_view:
     label: "탐색기 보기"
     help: "고급은 테이블과 뷰를 폴더로 묶고 스키마의 타입, 인덱스, 외래 키, 루틴과 함께 표시합니다. 간결은 폴더 없이 각 스키마의 테이블, 뷰, 루틴, 데이터 타입을 바로 나열하고, 인스턴스 보기를 하나의 Instance 폴더로 묶습니다. 단순은 데이터베이스, 스키마, 그리고 테이블과 뷰만 표시합니다."
@@ -464,11 +488,14 @@ connection_manager:
     connect_on_startup_overridden: "설정 > 일반 > 시작 및 세션에서 \"열려 있던 연결에 다시 연결\"이 켜져 있는 동안에는 사용되지 않습니다. 시작 시 열 연결은 그 설정이 결정하며, 여기서 고른 값은 그 설정을 끌 때를 위해 유지됩니다."
     name: 이름
     ssl_mode: SSL 모드
+    compression: "압축"
+    compression_help: "자동은 SSH 터널, 프록시 또는 SSM을 통한 연결을 압축하고 직접 연결은 압축하지 않습니다. 아래 드라이버 매개변수로 저장됩니다. 압축을 지원하지 않는 서버에는 압축 없이 연결합니다."
     ca_certificate: CA 인증서
     client_cert: 클라이언트 인증서
     client_key: 클라이언트 키
   section:
     transport: 전송
+    driver_params: "드라이버 매개변수"
     navigator: "탐색기"
     safety: "안전"
     startup: "시작"

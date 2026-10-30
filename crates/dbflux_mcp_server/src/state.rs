@@ -616,6 +616,15 @@ fn load_profiles(
         let value_refs = load_profile_value_refs(&repo, &profile_id)?;
         let access_kind = load_access_kind(&repo, &dto, &profile_id)?;
         let mcp_governance = load_profile_governance(&repo, &profile_id)?;
+        let driver_params = repo
+            .driver_params()
+            .get_for_profile(&profile_id)
+            .map_err(|e| {
+                format!(
+                    "Failed to load driver parameters for '{}': {}",
+                    profile_id, e
+                )
+            })?;
 
         let mut hook_load_error = None;
         let hooks = match repo.hooks().get_for_profile(&profile_id) {
@@ -688,6 +697,7 @@ fn load_profiles(
             navigator_view: dbflux_core::NavigatorView::Advanced,
             show_all_databases: true,
             connect_on_startup: dto.connect_on_startup,
+            driver_params,
         };
 
         if hook_load_error.is_none()

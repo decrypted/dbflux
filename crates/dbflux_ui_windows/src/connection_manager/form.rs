@@ -276,6 +276,13 @@ impl ConnectionManagerWindow {
             }
         }
 
+        if let Some(driver) = self.form.selected_driver.clone()
+            && driver.driver_params_spec().is_some()
+            && let Err(error) = driver.validate_driver_params(&self.effective_driver_params(cx))
+        {
+            self.validation_errors.push(error.to_string());
+        }
+
         self.validation_errors.is_empty()
     }
 
@@ -430,6 +437,7 @@ impl ConnectionManagerWindow {
         profile.show_all_databases = self.form.show_all_databases;
         profile.read_only_flag = self.form.read_only;
         profile.connect_on_startup = self.form.connect_on_startup;
+        profile.driver_params = self.effective_driver_params(cx);
         profile.proxy_profile_id = self.access.selected_proxy_id;
         profile.auth_profile_id = self.auth_profile.selected_auth_profile_id;
         profile.value_refs = self.collect_value_refs(cx);

@@ -338,6 +338,30 @@ connection_manager:
     ssm: "SSM"
     proxy: "Proxy"
     ssh: "SSH"
+  compression:
+    option:
+      auto: "Automático"
+      enabled: "Activada"
+      disabled: "Desactivada"
+  driver_params:
+    label: "Parámetros"
+    help: "Opciones que se pasan al controlador como clave = valor en todos los modos de conexión, también a través de un túnel o un proxy. Una fila posterior reemplaza a una anterior con la misma clave, y las filas reemplazan las opciones de consulta de una URI de conexión. Los valores se guardan como texto plano: no pongas contraseñas ni tokens aquí."
+    supported: "Claves admitidas: %{keys}."
+    empty: "Sin parámetros del controlador."
+    editor_label: "Nuevo parámetro"
+    editor_help: "El host, el puerto, las credenciales, la base de datos y SSL vienen de los campos de arriba y no se pueden definir como parámetros."
+    key_label: "Clave del parámetro"
+    value_label: "Valor del parámetro"
+    key_placeholder: "clave"
+    value_placeholder: "valor"
+    add: "Añadir"
+    update: "Actualizar"
+    cancel: "Cancelar"
+    edit: "Editar"
+    remove: "Quitar"
+    edit_named: "Editar el parámetro %{key}"
+    remove_named: "Quitar el parámetro %{key}"
+    key_required: "Escribe una clave antes de añadir el parámetro."
   navigator_view:
     label: "Vista del navegador"
     help: "Avanzada agrupa tablas y vistas en carpetas, junto a los tipos, índices, claves foráneas y rutinas del esquema. Compacta quita las carpetas: cada esquema muestra directamente sus tablas, vistas, rutinas y tipos de datos, y las vistas de la instancia comparten una carpeta Instance. Simple muestra solo bases de datos, esquemas y sus tablas y vistas."
@@ -464,11 +488,14 @@ connection_manager:
     connect_on_startup_overridden: "No se usa mientras \"Reconectar las conexiones que estaban abiertas\" esté activado en Ajustes > General > Inicio y sesión: ese ajuste decide qué conexiones se abren al iniciar. La elección se conserva para cuando se desactive."
     name: Nombre
     ssl_mode: Modo SSL
+    compression: "Compresión"
+    compression_help: "Automático comprime las conexiones a través de un túnel SSH, un proxy o SSM y deja sin comprimir las conexiones directas. Se guarda como un parámetro del controlador más abajo. Un servidor sin soporte de compresión se conecta sin comprimir."
     ca_certificate: Certificado de CA
     client_cert: Certificado de cliente
     client_key: Clave de cliente
   section:
     transport: TRANSPORTE
+    driver_params: "PARÁMETROS DEL CONTROLADOR"
     navigator: "NAVEGADOR"
     safety: "SEGURIDAD"
     startup: "INICIO"

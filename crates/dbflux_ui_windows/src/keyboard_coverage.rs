@@ -335,6 +335,10 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::FocusRight),
         ),
         (
+            "segmented-compression-*",
+            KeyboardPath::Command(Command::FocusRight),
+        ),
+        (
             "cm-show-all-databases",
             KeyboardPath::Command(Command::Execute),
         ),
@@ -355,6 +359,24 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
         ("save-password", KeyboardPath::Command(Command::Execute)),
         ("toggle-password", KeyboardPath::Command(Command::Execute)),
         ("test-connection", KeyboardPath::Command(Command::Execute)),
+        // The driver parameter list: Enter on a row's Edit or Remove, and on
+        // Add (Update) or Cancel of the editor.
+        (
+            "cm-driver-param-edit-*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "cm-driver-param-remove-*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "cm-driver-param-apply",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "cm-driver-param-cancel",
+            KeyboardPath::Command(Command::Execute),
+        ),
         (
             "access-method-dropdown.*",
             KeyboardPath::Command(Command::Execute),

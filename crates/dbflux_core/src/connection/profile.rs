@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::access::AccessKind;
 use crate::config::app::GlobalOverrides;
+use crate::connection::driver_params::DriverParam;
 use crate::connection::hook::{ConnectionHookBindings, ConnectionHooks};
 use crate::driver::form::FormValues;
 use crate::values::ValueRef;
@@ -1645,6 +1646,12 @@ pub struct ConnectionProfile {
     /// the sidebar connection menu. Defaults to `false`.
     #[serde(default)]
     pub connect_on_startup: bool,
+
+    /// Driver parameters (`key = value`) the driver maps onto its client
+    /// library's options. They sit outside `config` so the tunnel and proxy
+    /// rewrite of host and port keeps them. Plain text, never secrets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub driver_params: Vec<DriverParam>,
 }
 
 fn default_show_all_databases() -> bool {
@@ -1675,6 +1682,7 @@ impl ConnectionProfile {
             navigator_view: NavigatorView::Advanced,
             show_all_databases: true,
             connect_on_startup: false,
+            driver_params: Vec::new(),
         }
     }
 
@@ -1703,6 +1711,7 @@ impl ConnectionProfile {
             navigator_view: NavigatorView::Advanced,
             show_all_databases: true,
             connect_on_startup: false,
+            driver_params: Vec::new(),
             mcp_governance: None,
         }
     }
@@ -1735,6 +1744,7 @@ impl ConnectionProfile {
             navigator_view: NavigatorView::Advanced,
             show_all_databases: true,
             connect_on_startup: false,
+            driver_params: Vec::new(),
         }
     }
 
@@ -1772,6 +1782,7 @@ impl ConnectionProfile {
             navigator_view: NavigatorView::Advanced,
             show_all_databases: true,
             connect_on_startup: false,
+            driver_params: Vec::new(),
         }
     }
 
@@ -1853,6 +1864,21 @@ impl ConnectionProfile {
 
     /// Returns true if this profile uses the new connect pipeline
     /// (has auth profile, value refs, or unified access method).
+    /// Whether the connection reaches the server through an SSH tunnel, a
+    /// proxy or a managed access method (SSM) instead of directly. Read from
+    /// the profile, not the host, because `redirect_to_tunnel` points the
+    /// config at a loopback port that looks like a local server.
+    pub fn is_tunneled(&self) -> bool {
+        let access_is_indirect = match &self.access_kind {
+            Some(AccessKind::Direct) | None => false,
+            Some(
+                AccessKind::Ssh { .. } | AccessKind::Proxy { .. } | AccessKind::Managed { .. },
+            ) => true,
+        };
+
+        access_is_indirect || self.proxy_profile_id.is_some() || self.config.has_ssh_tunnel()
+    }
+
     pub fn uses_pipeline(&self) -> bool {
         self.auth_profile_id.is_some() || !self.value_refs.is_empty() || self.access_kind.is_some()
     }

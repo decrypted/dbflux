@@ -16,6 +16,7 @@
 - `DECIMAL` 값을 MySQL이 저장한 정확한 십진수로 표시합니다.
 - 인증, SSH 터널링, URI/수동 연결 모드를 지원합니다.
 - 다섯 가지 고유 SSL 모드(`DISABLED`, `PREFERRED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`)를 갖춘 TLS: `VERIFY_CA`는 호스트 이름 검증을 건너뛰면서 서버 인증서 체인을 검증하고, `VERIFY_IDENTITY`는 둘 다 검증합니다. 검증 모드에서는 사용자 지정 루트 CA가 시스템 신뢰 저장소를 대체하며, 클라이언트 인증서 + 키로 상호 TLS를 활성화할 수 있습니다. `rustls`/`aws-lc-rs` 백엔드를 사용합니다.
+- 드라이버 매개변수(`키 = 값`, Connection Manager의 Main 탭)는 터널과 프록시를 포함한 모든 연결 모드에서 `mysql` 클라이언트의 URL 옵션으로 매핑되며, 알 수 없는 키와 폼이 소유한 키는 연결 전에 거부됩니다. Compression 스위치(Auto, On, Off)는 `compress` 매개변수를 편집하며, Auto는 SSH 터널, 프록시 또는 SSM을 통한 연결을 압축합니다.
 - 전용 취소 경로(`KILL QUERY` 흐름)를 통한 쿼리 취소를 지원합니다.
 - CRUD, 인덱스, 외래 키, 테이블 DDL 작업을 위한 SQL/코드 생성을 포함합니다.
 - 루틴 탐색: `information_schema.ROUTINES`에서 저장 프로시저와 사용자 정의 함수를 매개변수 타입 및 반환 타입 힌트와 함께 나열합니다(함수만 해당).

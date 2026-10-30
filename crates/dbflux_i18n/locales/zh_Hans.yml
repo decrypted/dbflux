@@ -338,6 +338,30 @@ connection_manager:
     ssm: "SSM"
     proxy: "代理"
     ssh: "SSH"
+  compression:
+    option:
+      auto: "自动"
+      enabled: "开启"
+      disabled: "关闭"
+  driver_params:
+    label: "参数"
+    help: "以 键 = 值 的形式传给驱动的选项，在所有连接模式下生效，包括经由隧道或代理的连接。同一个键的后一行会覆盖前一行，参数也会覆盖连接 URI 中的查询选项。值以纯文本保存：不要在这里填写密码或令牌。"
+    supported: "支持的键：%{keys}。"
+    empty: "没有驱动参数。"
+    editor_label: "新参数"
+    editor_help: "主机、端口、凭据、数据库和 SSL 由上方的字段设置，不能作为参数设置。"
+    key_label: "参数键"
+    value_label: "参数值"
+    key_placeholder: "键"
+    value_placeholder: "值"
+    add: "添加"
+    update: "更新"
+    cancel: "取消"
+    edit: "编辑"
+    remove: "移除"
+    edit_named: "编辑参数 %{key}"
+    remove_named: "移除参数 %{key}"
+    key_required: "添加参数前请先输入键。"
   navigator_view:
     label: "导航器视图"
     help: "高级视图将表和视图分组到文件夹中，并与模式的类型、索引、外键和例程并列显示。紧凑视图不使用文件夹，每个模式直接列出其表、视图、例程和数据类型，并将实例视图归入一个 Instance 文件夹。简单视图只显示数据库、模式及其表和视图。"
@@ -464,11 +488,14 @@ connection_manager:
     connect_on_startup_overridden: "当 设置 > 常规 > 启动与会话 中的“重新连接之前打开的连接”开启时，此选项不生效：启动时打开哪些连接由该设置决定。此处的选择会保留，待该设置关闭后生效。"
     name: 名称
     ssl_mode: SSL 模式
+    compression: "压缩"
+    compression_help: "自动：经由 SSH 隧道、代理或 SSM 的连接会压缩，直接连接不压缩。该设置作为下方的驱动参数保存。不支持压缩的服务器会以不压缩的方式连接。"
     ca_certificate: CA 证书
     client_cert: 客户端证书
     client_key: 客户端密钥
   section:
     transport: 传输
+    driver_params: "驱动参数"
     navigator: "导航器"
     safety: "安全"
     startup: "启动"

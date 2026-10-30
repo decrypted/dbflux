@@ -639,6 +639,7 @@ pub fn apply(
         profile.set_kind(kind);
         profile.auth_profile_id = auth_profile_id;
         profile.access_kind = access_kind;
+        profile.driver_params = conn_entry.driver_params.clone();
 
         // proxy_profile_id is a legacy field; keep it in sync with access_kind when applicable.
         if let Some(dbflux_core::AccessKind::Proxy { proxy_profile_id }) = &profile.access_kind {
@@ -1121,6 +1122,7 @@ mod tests {
             // Tests that specifically exercise missing/invalid kind override this field.
             kind: Some("Postgres".to_string()),
             uri_secret_fields: vec![],
+            driver_params: vec![],
         }
     }
 
@@ -2268,6 +2270,29 @@ encryption = "none"
             "value_ref for 'host' must be Env{{key: DB_HOST}}, got: {:?}",
             vref
         );
+    }
+
+    #[test]
+    fn apply_connection_driver_params_are_preserved_in_order() {
+        let mut entry = make_connection_entry("conn-params-1");
+        entry.driver_params = vec![
+            dbflux_core::DriverParam::new("connect_timeout", "5"),
+            dbflux_core::DriverParam::new("connect_timeout", "9"),
+        ];
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(entry.clone());
+
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+
+        let import_plan = plan(&parsed, &empty_dest());
+        let actions = apply(&parsed, &import_plan, &ResolutionChoices::default()).expect("apply");
+
+        let conn = actions.connections.first().expect("one connection");
+        assert_eq!(conn.driver_params, entry.driver_params);
     }
 
     /// A bundle with no value_refs must produce a profile with an empty value_refs map.

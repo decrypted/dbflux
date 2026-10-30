@@ -560,7 +560,7 @@ impl ConnectionManagerWindow {
     /// multiplied the two into a nearly invisible field. Callers dim other
     /// disabled controls themselves.
     #[allow(clippy::too_many_arguments)]
-    fn cm_control_frame(
+    pub(super) fn cm_control_frame(
         &self,
         focused: bool,
         field: Option<FormFocus>,

@@ -1769,6 +1769,7 @@ mod tests {
                     settings_overrides_payload: None,
                     kind: Some("Postgres".to_string()),
                     uri_secret_fields: vec![],
+                    driver_params: vec![],
                 },
                 ConnectionEntry {
                     local_id: "c2".to_string(),
@@ -1787,6 +1788,7 @@ mod tests {
                     settings_overrides_payload: None,
                     kind: Some("MongoDB".to_string()),
                     uri_secret_fields: vec![],
+                    driver_params: vec![],
                 },
             ],
             auth_profiles: vec![AuthEntry {

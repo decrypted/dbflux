@@ -1,4 +1,4 @@
-use super::{NoticeBuffer, PostgresConnectParams, connect_postgres};
+use super::{NoticeBuffer, PgDriverParams, PostgresConnectParams, connect_postgres};
 use crate::tls::PgTlsFiles;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -96,6 +96,7 @@ fn connect_with_prefer(port: u16) -> String {
         database: "postgres",
         ssl_mode: "prefer",
         tls_files: &tls_files,
+        driver_params: &PgDriverParams::default(),
     };
 
     match connect_postgres(&params, &NoticeBuffer::default()) {

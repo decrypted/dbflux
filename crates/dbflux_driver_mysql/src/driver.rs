@@ -33,6 +33,10 @@ use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use mysql::prelude::*;
 use mysql::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 
+mod params;
+
+use params::{MYSQL_DRIVER_PARAMS, MysqlDriverParams};
+
 /// MySQL driver metadata.
 pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "mysql".into(),
@@ -838,12 +842,13 @@ impl DbDriver for MysqlDriver {
         ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = extract_mysql_config(&profile.config)?;
+        let params = MysqlDriverParams::from_profile(profile)?;
 
         let password = password.map(|value| value.expose_secret());
         let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
         if config.use_uri {
-            return self.connect_with_uri(config.uri.as_deref().unwrap_or(""), password);
+            return self.connect_with_uri(config.uri.as_deref().unwrap_or(""), password, &params);
         }
 
         if let Some(tunnel_config) = &config.ssh_tunnel {
@@ -857,6 +862,7 @@ impl DbDriver for MysqlDriver {
                 password,
                 &config.ssl_mode,
                 &config.ssl_paths,
+                &params,
             )
         } else {
             self.connect_direct(
@@ -867,8 +873,17 @@ impl DbDriver for MysqlDriver {
                 password,
                 &config.ssl_mode,
                 &config.ssl_paths,
+                &params,
             )
         }
+    }
+
+    fn driver_params_spec(&self) -> Option<&'static dbflux_core::DriverParamsSpec> {
+        Some(&MYSQL_DRIVER_PARAMS)
+    }
+
+    fn validate_driver_params(&self, params: &[dbflux_core::DriverParam]) -> Result<(), DbError> {
+        MysqlDriverParams::resolve(params, false).map(|_resolved| ())
     }
 
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
@@ -1330,6 +1345,28 @@ fn build_mysql_opts(
     builder.into()
 }
 
+/// Builds the options of a URI-mode connection: the URI's query options
+/// first, then the driver parameters, which win over the URI.
+fn build_mysql_uri_opts(
+    base_uri: &str,
+    password: Option<&str>,
+    params: &MysqlDriverParams,
+) -> Result<Opts, DbError> {
+    let uri = inject_password_into_mysql_uri(base_uri, password);
+
+    let opts = Opts::from_url(&uri).map_err(|e| format_mysql_uri_error(&e, base_uri))?;
+    // MySQL connection URIs have no program_name/application_name query key,
+    // so the identity attr must be applied unconditionally after parsing.
+    let opts: Opts = OptsBuilder::from_opts(opts)
+        .connect_attrs(Some(HashMap::from([(
+            "program_name".to_string(),
+            dbflux_core::client_identity().to_string(),
+        )])))
+        .into();
+
+    params.apply(opts)
+}
+
 fn initial_database_from_opts(opts: &Opts) -> Option<String> {
     opts.get_db_name().map(str::to_owned)
 }
@@ -1371,18 +1408,9 @@ impl MysqlDriver {
         &self,
         base_uri: &str,
         password: Option<&str>,
+        params: &MysqlDriverParams,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let uri = inject_password_into_mysql_uri(base_uri, password);
-
-        let opts = Opts::from_url(&uri).map_err(|e| format_mysql_uri_error(&e, base_uri))?;
-        // MySQL connection URIs have no program_name/application_name query key,
-        // so the identity attr must be applied unconditionally after parsing.
-        let opts: Opts = OptsBuilder::from_opts(opts)
-            .connect_attrs(Some(HashMap::from([(
-                "program_name".to_string(),
-                dbflux_core::client_identity().to_string(),
-            )])))
-            .into();
+        let opts = build_mysql_uri_opts(base_uri, password, params)?;
 
         let catalog_conn =
             Conn::new(opts.clone()).map_err(|e| format_mysql_uri_error(&e, base_uri))?;
@@ -1429,6 +1457,7 @@ impl MysqlDriver {
         password: Option<&str>,
         ssl_mode: &str,
         ssl_paths: &MysqlSslPaths,
+        params: &MysqlDriverParams,
     ) -> Result<Box<dyn Connection>, DbError> {
         log::info!(
             "Connecting directly to MySQL at {}:{} as {} (database: {:?}, ssl: {})",
@@ -1441,8 +1470,15 @@ impl MysqlDriver {
 
         // For PREFERRED mode: attempt SSL first, fall back to plain on failure.
         let (opts, catalog_conn) = if ssl_mode == "PREFERRED" {
-            let ssl_opts =
-                build_mysql_opts(host, port, user, database, password, "PREFERRED", ssl_paths);
+            let ssl_opts = params.apply(build_mysql_opts(
+                host,
+                port,
+                user,
+                database,
+                password,
+                "PREFERRED",
+                ssl_paths,
+            ))?;
             match Conn::new(ssl_opts.clone()) {
                 Ok(c) => {
                     log::info!("[SSL] Catalog connection established with SSL (PREFERRED mode)");
@@ -1456,16 +1492,18 @@ impl MysqlDriver {
                         "[SSL] TLS negotiation failed ({}), falling back to non-SSL",
                         ssl_err
                     );
-                    let no_ssl_opts = build_mysql_opts(
+                    let no_ssl_opts = params.apply(build_mysql_opts(
                         host, port, user, database, password, "DISABLED", ssl_paths,
-                    );
+                    ))?;
                     let c = Conn::new(no_ssl_opts.clone())
                         .map_err(|e| format_mysql_error(&e, host, port))?;
                     (no_ssl_opts, c)
                 }
             }
         } else {
-            let opts = build_mysql_opts(host, port, user, database, password, ssl_mode, ssl_paths);
+            let opts = params.apply(build_mysql_opts(
+                host, port, user, database, password, ssl_mode, ssl_paths,
+            ))?;
             let c = Conn::new(opts.clone()).map_err(|e| format_mysql_error(&e, host, port))?;
             (opts, c)
         };
@@ -1516,6 +1554,7 @@ impl MysqlDriver {
         db_password: Option<&str>,
         ssl_mode: &str,
         ssl_paths: &MysqlSslPaths,
+        params: &MysqlDriverParams,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -1534,7 +1573,7 @@ impl MysqlDriver {
         // For PREFERRED mode: attempt SSL first, fall back to plain on failure.
         log::info!("[DB] Connecting catalog via tunnel (ssl: {})", ssl_mode);
         let (working_ssl_mode, catalog_conn) = if ssl_mode == "PREFERRED" {
-            let ssl_opts = build_mysql_opts(
+            let ssl_opts = params.apply(build_mysql_opts(
                 "127.0.0.1",
                 local_port1,
                 db_user,
@@ -1542,7 +1581,7 @@ impl MysqlDriver {
                 db_password,
                 "PREFERRED",
                 ssl_paths,
-            );
+            ))?;
             match Conn::new(ssl_opts) {
                 Ok(c) => {
                     log::info!("[SSL] Catalog connection established with SSL");
@@ -1556,7 +1595,7 @@ impl MysqlDriver {
                         "[SSL] TLS negotiation failed ({}), falling back to non-SSL",
                         ssl_err
                     );
-                    let no_ssl_opts = build_mysql_opts(
+                    let no_ssl_opts = params.apply(build_mysql_opts(
                         "127.0.0.1",
                         local_port1,
                         db_user,
@@ -1564,14 +1603,14 @@ impl MysqlDriver {
                         db_password,
                         "DISABLED",
                         ssl_paths,
-                    );
+                    ))?;
                     let c = Conn::new(no_ssl_opts)
                         .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
                     ("DISABLED", c)
                 }
             }
         } else {
-            let opts = build_mysql_opts(
+            let opts = params.apply(build_mysql_opts(
                 "127.0.0.1",
                 local_port1,
                 db_user,
@@ -1579,7 +1618,7 @@ impl MysqlDriver {
                 db_password,
                 ssl_mode,
                 ssl_paths,
-            );
+            ))?;
             let c =
                 Conn::new(opts).map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
             (ssl_mode, c)
@@ -1596,7 +1635,7 @@ impl MysqlDriver {
         let ssh_query_tunnel = Arc::new(std::sync::Mutex::new(tunnel2));
 
         // Create query connection using the SSL mode that worked for catalog.
-        let query_opts = build_mysql_opts(
+        let query_opts = params.apply(build_mysql_opts(
             "127.0.0.1",
             local_port2,
             db_user,
@@ -1604,7 +1643,7 @@ impl MysqlDriver {
             db_password,
             working_ssl_mode,
             ssl_paths,
-        );
+        ))?;
         let mut query_conn = Conn::new(query_opts.clone())
             .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port2))?;
 

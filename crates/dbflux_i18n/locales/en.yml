@@ -338,6 +338,30 @@ connection_manager:
     ssm: "SSM"
     proxy: "Proxy"
     ssh: "SSH"
+  compression:
+    option:
+      auto: "Auto"
+      enabled: "On"
+      disabled: "Off"
+  driver_params:
+    label: "Parameters"
+    help: "Options passed to the driver as key = value in every connection mode, including through a tunnel or proxy. A later row overrides an earlier one with the same key, and rows override the query options of a connection URI. Values are stored as plain text: do not put passwords or tokens here."
+    supported: "Supported keys: %{keys}."
+    empty: "No driver parameters."
+    editor_label: "New parameter"
+    editor_help: "Host, port, credentials, database and SSL come from the fields above and cannot be set as parameters."
+    key_label: "Parameter key"
+    value_label: "Parameter value"
+    key_placeholder: "key"
+    value_placeholder: "value"
+    add: "Add"
+    update: "Update"
+    cancel: "Cancel"
+    edit: "Edit"
+    remove: "Remove"
+    edit_named: "Edit parameter %{key}"
+    remove_named: "Remove parameter %{key}"
+    key_required: "Enter a key before adding the parameter."
   navigator_view:
     label: "Navigator view"
     help: "Advanced groups tables and views in folders, next to the schema's types, indexes, foreign keys and routines. Compact drops the folders: each schema lists its tables, views, routines and data types directly, and the instance views share one Instance folder. Simple shows only databases, schemas, and their tables and views."
@@ -464,11 +488,14 @@ connection_manager:
     connect_on_startup_overridden: "Not used while \"Reconnect to the connections that were open\" is on in Settings > General > Startup and session: that setting decides which connections open at startup. The choice here is kept for when it is turned off."
     name: Name
     ssl_mode: SSL mode
+    compression: "Compression"
+    compression_help: "Auto compresses connections through an SSH tunnel, a proxy or SSM and leaves direct connections uncompressed. Stored as a driver parameter below. A server without compression support connects uncompressed."
     ca_certificate: CA certificate
     client_cert: Client cert
     client_key: Client key
   section:
     transport: TRANSPORT
+    driver_params: "DRIVER PARAMETERS"
     navigator: "NAVIGATOR"
     safety: "SAFETY"
     startup: "STARTUP"

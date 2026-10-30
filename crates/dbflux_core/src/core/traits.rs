@@ -434,6 +434,21 @@ pub trait DbDriver: Send + Sync {
         None
     }
 
+    /// The driver parameters the connection manager offers for this driver.
+    /// `None` hides the parameters section, and the driver ignores any
+    /// parameters a profile carries.
+    fn driver_params_spec(&self) -> Option<&'static crate::DriverParamsSpec> {
+        None
+    }
+
+    /// Checks driver parameters without connecting, so the connection manager
+    /// can refuse to save them. Unknown keys, invalid values and keys owned by
+    /// the connection form are errors naming the key. The connect path runs
+    /// the same checks.
+    fn validate_driver_params(&self, _params: &[crate::DriverParam]) -> Result<(), DbError> {
+        Ok(())
+    }
+
     /// Create a connection without providing a password.
     ///
     /// Delegates to `connect_with_password(profile, None)`.

@@ -259,7 +259,36 @@ dotenv 文件必须满足以下规则，否则连接会失败，错误信息会�
 - URI 模式适用于 **PostgreSQL、MySQL/MariaDB、SQL Server、MongoDB 和 Redis**；SQLite、DynamoDB、CloudWatch 和 InfluxDB 则使用各自基于字段的表单。
 - **开启** URI 模式时，以单个 URI 字段为准，其他字段会被忽略；**关闭**时则使用各个字段。
 - URI 中内嵌的密码会被提取出来单独保存（保存时存入密钥环），不会留在 URI 文本里。
-- 通过 SSH/代理/SSM 隧道连接时，即使你填写的是 URI，DBFlux 也始终使用基于字段的配置（重写为 `127.0.0.1:<本地端口>`）。
+- 通过 SSH/代理/SSM 隧道连接时，即使你填写的是 URI，DBFlux 也始终使用基于字段的配置（重写为 `127.0.0.1:<本地端口>`）。此时 URI 中的查询选项不会生效，请改用在所有模式下都生效的驱动参数（见“驱动参数”）。
+
+---
+
+## 驱动参数
+
+基础选项卡（Main）中 Transport 下方的 **Driver parameters** 区域保存传给驱动的额外 `键 = 值` 选项，相当于其他数据库客户端的 Advanced 选项卡。只有接受参数的驱动会显示它：**MySQL/MariaDB** 和 **PostgreSQL**，其他驱动不显示。
+
+- 在键和值输入框中填写后点 **Add**（或在其上按 `Enter`）添加一行；某一行的 **Edit** 会把它重新载入输入框，**Update** 原位写回，**Remove** 删除该行。已在输入框中填写但尚未添加的键也会随连接一起保存。
+- 参数在**所有连接模式**下生效：字段模式、URI 模式，以及经由 SSH 隧道、代理或 SSM 的连接。参数与主机和端口分开保存，因此隧道把地址重写为 `127.0.0.1:<本地端口>` 后参数依然保留。
+- **优先级：**同一个键的后一行覆盖前一行。在 URI 模式下，先应用 URI 自身的查询选项，再由参数覆盖。
+- 属于表单的键会被拒绝，错误信息会指出该键：主机、端口、用户、密码、数据库、所有 SSL/TLS 设置；对 MySQL 还包括 `socket` 和 `prefer_socket`，因为它们会绕过已配置的主机、隧道或代理。未知的键或驱动无法解析的值同样会被拒绝，在添加该行时以及保存、测试和连接时都会检查。
+- 值是**纯文本**：它们不是取值来源，不保存在密钥环中，并以明文形式写入导出包。不要在其中填写密码或令牌。
+
+| 驱动 | 支持的键 |
+|--------|----------------|
+| MySQL / MariaDB | `compress` (`true`, `false`, `fast`, `best`, `0`-`9`), `tcp_connect_timeout_ms`, `tcp_keepalive_time_ms`, `tcp_keepalive_probe_interval_secs` / `tcp_keepalive_probe_count` (Linux、macOS), `tcp_user_timeout_ms` (Linux), `stmt_cache_size`, `max_allowed_packet`, `secure_auth`, `enable_cleartext_plugin` |
+| PostgreSQL | `application_name`, `options` (例如 `-c statement_timeout=5000`), `connect_timeout`, `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`, `keepalives_retries`, `target_session_attrs` (`any`, `read-write`, `read-only`), `channel_binding` (`disable`, `prefer`, `require`) |
+
+MySQL 的键遵循 Rust `mysql` 客户端的 URL 选项并由其校验，因此适用它的规则（例如 `compress` 可以写压缩级别，但该客户端总是以默认级别压缩）。连接池选项 `pool_min`、`pool_max`、`reset_connection` 和 `check_health` 会被拒绝：DBFlux 打开的是普通连接，而不是连接池。PostgreSQL 的键遵循 libpq 的连接参数，超时以整秒为单位。DBFlux 会以 `application_name`（PostgreSQL）和 `program_name`（MySQL）发送自己的客户端标识；显式设置的 `application_name` 参数会替换它。
+
+### MySQL 压缩
+
+对于 MySQL 和 MariaDB，Transport 区域有一个 **Compression** 开关，可选 **Auto**、**On** 和 **Off**。它编辑的是列表中的 `compress` 参数，因此开关与列表始终一致：
+
+- **Auto** 表示没有 `compress` 行。经由 SSH 隧道、代理或 SSM 的连接会压缩，直接连接不压缩。
+- **On** 写入 `compress=true`。写有级别的行（如 `compress=best`）也显示为 On。
+- **Off** 写入 `compress=false`。
+
+默认值是 Auto，因此更新后，经由隧道、代理或 SSM 的现有 MySQL 连接会开始使用协议压缩。只有服务器提供压缩时压缩才会生效，所以不支持压缩的服务器仍能以不压缩的方式连接。若要让经由隧道的连接保持不压缩，请选择 **Off**。
 
 ---
 

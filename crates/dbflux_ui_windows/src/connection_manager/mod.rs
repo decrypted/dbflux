@@ -1,4 +1,5 @@
 mod access_tab;
+mod driver_params;
 pub mod export_modal;
 mod form;
 mod hooks_tab;
@@ -266,6 +267,19 @@ pub(super) enum MainExtraStop {
     ShowAllDatabases,
     ReadOnly,
     ConnectOnStartup,
+    /// The Compression switch of the Transport section, for a driver whose
+    /// parameter spec declares one.
+    Compression,
+    /// Edit button of a driver parameter row.
+    DriverParamEdit(usize),
+    /// Remove button of a driver parameter row.
+    DriverParamRemove(usize),
+    DriverParamKey,
+    DriverParamValue,
+    /// Add, or Update while a row is edited.
+    DriverParamApply,
+    /// Cancel, shown while a row is edited.
+    DriverParamCancel,
 }
 
 /// Identifies which SSL certificate slot a file picker writes into.
@@ -350,6 +364,15 @@ struct FormState {
     ssl_ca_cert_input: Entity<InputState>,
     ssl_client_cert_input: Entity<InputState>,
     ssl_client_key_input: Entity<InputState>,
+    /// Driver parameters being edited, in list order. The Compression switch
+    /// writes into this list too.
+    driver_params: Vec<dbflux_core::DriverParam>,
+    /// Row the parameter editor writes back to; `None` while it adds a row.
+    driver_param_editing: Option<usize>,
+    /// Why the driver refuses the current list, or why Add did nothing.
+    driver_param_error: Option<String>,
+    driver_param_key_input: Entity<InputState>,
+    driver_param_value_input: Entity<InputState>,
     show_password: bool,
     show_ssh_passphrase: bool,
     show_ssh_password: bool,
@@ -609,6 +632,17 @@ impl ConnectionManagerWindow {
             value_source_selector("cm-user", &secret_providers, window, cx);
         let password_value_source_selector =
             value_source_selector("cm-password", &secret_providers, window, cx);
+
+        let driver_param_key_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.driver_params.key_placeholder"
+            ))
+        });
+        let driver_param_value_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.driver_params.value_placeholder"
+            ))
+        });
 
         let input_ssh_host =
             cx.new(|cx| InputState::new(window, cx).placeholder("bastion.example.com"));
@@ -979,6 +1013,8 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssh_key_passphrase),
             subscribe_input(cx, window, &input_ssh_password),
             subscribe_input(cx, window, &input_ssm_instance_id),
+            subscribe_input(cx, window, &driver_param_key_input),
+            subscribe_input(cx, window, &driver_param_value_input),
             subscribe_input(cx, window, &input_ssm_region),
             subscribe_input(cx, window, &input_ssm_remote_port),
             subscribe_input(cx, window, &conn_refresh_interval_input),
@@ -1046,6 +1082,11 @@ impl ConnectionManagerWindow {
                 ssl_ca_cert_input,
                 ssl_client_cert_input,
                 ssl_client_key_input,
+                driver_params: Vec::new(),
+                driver_param_editing: None,
+                driver_param_error: None,
+                driver_param_key_input,
+                driver_param_value_input,
                 show_password: false,
                 show_ssh_passphrase: false,
                 show_ssh_password: false,
@@ -1185,6 +1226,7 @@ impl ConnectionManagerWindow {
         instance.form.show_all_databases = profile.show_all_databases;
         instance.form.read_only = profile.read_only_flag;
         instance.form.connect_on_startup = profile.connect_on_startup;
+        instance.load_driver_params(profile.driver_params.clone(), window, cx);
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
@@ -1469,6 +1511,7 @@ impl ConnectionManagerWindow {
         self.form.input_name.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
+        self.load_driver_params(Vec::new(), window, cx);
 
         if let Some(driver) = driver {
             // Initialize SSL mode to the driver's first declared ssl mode option, if any.
@@ -2050,7 +2093,13 @@ impl ConnectionManagerWindow {
                     stops.push(MainExtraStop::SslCert(SslCertSlot::ClientKey));
                 }
             }
+
+            if self.compression_param().is_some() {
+                stops.push(MainExtraStop::Compression);
+            }
         }
+
+        stops.extend(self.driver_param_stops());
 
         if Self::shows_navigator_view(driver.as_ref()) {
             stops.push(MainExtraStop::NavigatorView);

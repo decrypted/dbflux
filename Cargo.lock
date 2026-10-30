@@ -3479,6 +3479,7 @@ dependencies = [
  "rustls 0.23.45",
  "serde_json",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]

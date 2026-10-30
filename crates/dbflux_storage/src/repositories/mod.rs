@@ -15,6 +15,7 @@ pub mod connection_driver_configs;
 pub mod connection_folders;
 pub mod connection_profile_access_params;
 pub mod connection_profile_configs;
+pub mod connection_profile_driver_params;
 pub mod connection_profile_governance;
 pub mod connection_profile_governance_binding_policies;
 pub mod connection_profile_governance_binding_roles;

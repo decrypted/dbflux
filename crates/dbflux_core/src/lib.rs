@@ -92,6 +92,10 @@ pub use connection::secret_store::{
     SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
     SecretValue,
 };
+pub use connection::{
+    CompressionChoice, CompressionParam, DriverParam, DriverParamKey, DriverParamsSpec,
+    driver_param_value, driver_params_map, refuse_form_owned_params,
+};
 
 pub use connection::dump_analysis::{
     DumpAnalysisError, DumpAnalysisReport, DumpAnalyzer, DumpKeyEntry, DumpPrefixEntry,

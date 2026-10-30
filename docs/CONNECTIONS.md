@@ -423,7 +423,68 @@ switches between them.
   keyring when you save it), not kept in the URI text.
 - When you connect through an SSH/proxy/SSM tunnel, DBFlux always uses the
   field-based config (rewritten to `127.0.0.1:<local port>`), even if you typed a
-  URI.
+  URI. Query options in the URI are not used then; set them as
+  [driver parameters](#driver-parameters), which apply in every mode.
+
+---
+
+## Driver parameters
+
+The **Driver parameters** section of the Main tab, under Transport, holds extra
+`key = value` options for the driver, like the Advanced tab of other database
+clients. It is shown for drivers that take parameters: **MySQL/MariaDB** and
+**PostgreSQL**. Other drivers do not show it.
+
+- Add a row with the key and value inputs and **Add** (`Enter` on it); a row's
+  **Edit** loads it back into the inputs, where **Update** writes it in place,
+  and **Remove** drops it. A key typed in the inputs but not yet added is saved
+  with the connection too.
+- Parameters apply in **every connection mode**: fields mode, URI mode, and
+  connections through an SSH tunnel, a proxy or SSM. They are stored outside the
+  host and port, so the tunnel rewrite to `127.0.0.1:<local port>` keeps them.
+- **Precedence:** a later row wins over an earlier row with the same key. In URI
+  mode the URI's own query options apply first and the parameters override
+  them.
+- Keys owned by the form are refused with an error that names the key: host,
+  port, user, password, database, every SSL/TLS setting, and for MySQL also
+  `socket` and `prefer_socket`, which would bypass the configured host, tunnel
+  or proxy. An unknown key or a value the driver cannot parse is refused the
+  same way, when the row is added and again on Save, Test and Connect.
+- Values are **plain text**. They are not value sources, are not stored in the
+  keyring, and travel in cleartext in export bundles. Do not put passwords or
+  tokens in them.
+
+| Driver | Supported keys |
+|--------|----------------|
+| MySQL / MariaDB | `compress` (`true`, `false`, `fast`, `best`, `0`-`9`), `tcp_connect_timeout_ms`, `tcp_keepalive_time_ms`, `tcp_keepalive_probe_interval_secs` and `tcp_keepalive_probe_count` (Linux, macOS), `tcp_user_timeout_ms` (Linux), `stmt_cache_size`, `max_allowed_packet`, `secure_auth`, `enable_cleartext_plugin` |
+| PostgreSQL | `application_name`, `options` (for example `-c statement_timeout=5000`), `connect_timeout`, `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`, `keepalives_retries`, `target_session_attrs` (`any`, `read-write`, `read-only`), `channel_binding` (`disable`, `prefer`, `require`) |
+
+MySQL keys follow the URL options of the `mysql` Rust client and are validated
+by it, so its own rules apply (for example a level of `compress` is accepted,
+but the client always compresses at its default level). The pool options
+`pool_min`, `pool_max`, `reset_connection` and `check_health` are refused:
+DBFlux opens plain connections, not a pool. PostgreSQL keys follow libpq's
+connection parameters; timeouts are whole seconds. DBFlux sends its own client
+identity as `application_name` (PostgreSQL) and `program_name` (MySQL); an
+explicit `application_name` parameter replaces it.
+
+### MySQL compression
+
+For MySQL and MariaDB the Transport section has a **Compression** switch with
+**Auto**, **On** and **Off**. It edits the `compress` parameter of the list, so
+the switch and the list always agree:
+
+- **Auto** is the absence of a `compress` row. A connection through an SSH
+  tunnel, a proxy or SSM is compressed; a direct connection is not.
+- **On** writes `compress=true`. A row with a level such as `compress=best`
+  also shows as On.
+- **Off** writes `compress=false`.
+
+Auto is the default, so existing MySQL connections that go through a tunnel,
+proxy or SSM start using protocol compression after the update. Compression only
+takes effect when the server offers it, so a server without compression support
+still connects, uncompressed. Set **Off** to keep a tunneled connection
+uncompressed.
 
 ---
 

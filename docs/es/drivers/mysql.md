@@ -29,6 +29,7 @@ Base de datos relacional open-source popular.
   personalizada reemplaza el trust store del sistema en los modos que verifican,
   y un certificado de cliente + clave habilita mutual TLS. Usa el backend
   `rustls`/`aws-lc-rs`.
+- Los parámetros del controlador (`clave = valor`, pestaña Main del Connection Manager) se asignan a las opciones de URL del cliente `mysql` en todos los modos de conexión, túneles y proxies incluidos; las claves desconocidas y las que pertenecen al formulario se rechazan antes de conectar. Un selector Compression (Auto, On, Off) edita el parámetro `compress`; Auto comprime las conexiones a través de un túnel SSH, un proxy o SSM.
 - Soporta cancelación de queries a través de un camino de cancelación dedicado
   (flujo `KILL QUERY`).
 - Incluye generación de SQL/código para CRUD, índices, foreign keys, y

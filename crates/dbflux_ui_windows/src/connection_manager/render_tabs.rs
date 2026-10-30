@@ -192,6 +192,10 @@ impl ConnectionManagerWindow {
             sections.push(transport_section);
         }
 
+        if let Some(spec) = driver.driver_params_spec() {
+            sections.push(self.render_driver_params_section(spec, cx));
+        }
+
         if self
             .form
             .selected_driver
@@ -570,6 +574,10 @@ impl ConnectionManagerWindow {
                     }
                 }
             }
+        }
+
+        if let Some(compression_row) = self.render_compression_row(cx) {
+            section = section.child(compression_row);
         }
 
         section.into_any_element()

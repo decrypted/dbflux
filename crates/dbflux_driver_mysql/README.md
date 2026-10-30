@@ -17,6 +17,7 @@ Popular open-source relational database.
 - Displays `DECIMAL` values as the exact decimal MySQL stores.
 - Supports authentication, SSH tunneling, and URI/manual connection modes.
 - TLS with the five native SSL modes (`DISABLED`, `PREFERRED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`): `VERIFY_CA` verifies the server chain while skipping hostname validation and `VERIFY_IDENTITY` verifies both. A custom root CA replaces the system trust store for the verifying modes, and a client certificate + key enables mutual TLS. Uses the `rustls`/`aws-lc-rs` backend.
+- Driver parameters (`key = value`, connection manager Main tab) map onto the `mysql` client's URL options in every connection mode, tunnels and proxies included; unknown keys and keys owned by the form are refused before connecting. A Compression switch (Auto, On, Off) edits the `compress` parameter; Auto compresses connections through an SSH tunnel, a proxy or SSM. See Connecting to a Database — Advanced Setup.
 - Supports query cancellation through a dedicated cancel path (`KILL QUERY` flow).
 - Includes SQL/code generation for CRUD, indexes, foreign keys, and table DDL operations.
 - Routine discovery: lists stored procedures and user-defined functions from `information_schema.ROUTINES` including parameter types and return type hints (Functions only).

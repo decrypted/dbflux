@@ -17,6 +17,7 @@
 - 以 MySQL 存储的精确小数展示 `DECIMAL` 取值。
 - 支持身份认证、SSH 隧道，以及 URI/手动两种连接模式。
 - TLS 支持五种原生 SSL 模式（`DISABLED`、`PREFERRED`、`REQUIRED`、`VERIFY_CA`、`VERIFY_IDENTITY`）：`VERIFY_CA` 会校验证书链但跳过主机名校验，`VERIFY_IDENTITY` 则两者都校验。自定义根 CA 会在校验模式下取代系统信任库；客户端证书 + 私钥可启用双向 TLS。使用 `rustls`/`aws-lc-rs` 后端。
+- 驱动参数（`键 = 值`，Connection Manager 的 Main 选项卡）在所有连接模式下（包括隧道和代理）映射到 `mysql` 客户端的 URL 选项；未知的键和属于表单的键会在连接前被拒绝。Compression 开关（Auto、On、Off）编辑 `compress` 参数；Auto 会压缩经由 SSH 隧道、代理或 SSM 的连接。
 - 通过专用的取消路径（`KILL QUERY` 流程）支持查询取消。
 - 包含面向 CRUD、索引、外键与表 DDL 操作的 SQL/代码生成。
 - 例程发现：从 `information_schema.ROUTINES` 列出存储过程与用户自定义函数，包含参数类型与返回类型提示（仅函数）。

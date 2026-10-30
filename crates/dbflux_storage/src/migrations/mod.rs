@@ -197,6 +197,7 @@ impl MigrationRegistry {
         registry.register(mod_054_general_settings_grid_review_before_save::MigrationImpl);
         registry.register(mod_056_general_settings_grid_filter_autoquote::MigrationImpl);
         registry.register(mod_058_general_settings_grid_header_click_sorts::MigrationImpl);
+        registry.register(mod_059_connection_profile_driver_params::MigrationImpl);
         registry
     }
 
@@ -441,6 +442,7 @@ mod mod_052_general_settings_grid_copy_column_names;
 mod mod_054_general_settings_grid_review_before_save;
 mod mod_056_general_settings_grid_filter_autoquote;
 mod mod_058_general_settings_grid_header_click_sorts;
+mod mod_059_connection_profile_driver_params;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1171,6 +1173,65 @@ mod tests {
     }
 
     #[test]
+    fn test_059_driver_params_table_cascades_with_its_profile() {
+        let temp_dir = temp_dir("059_connection_profile_driver_params");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let registry = MigrationRegistry::new();
+        registry.run_all(&conn).expect("create schema");
+        conn.execute_batch(
+            "DROP TABLE cfg_connection_profile_driver_params;
+             DELETE FROM sys_migrations WHERE name = '059_connection_profile_driver_params';
+             INSERT INTO cfg_connection_profiles (id, name) VALUES ('legacy', 'Legacy');",
+        )
+        .expect("restore pre-059 schema with an existing profile");
+
+        registry.run_all(&conn).expect("upgrade profile schema");
+        let existing_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM cfg_connection_profile_driver_params WHERE profile_id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count driver params");
+        assert_eq!(
+            existing_rows, 0,
+            "existing profiles start without parameters"
+        );
+
+        conn.execute(
+            "INSERT INTO cfg_connection_profile_driver_params (profile_id, position, param_key, param_value)
+             VALUES ('legacy', 0, 'compress', 'true')",
+            [],
+        )
+        .expect("insert a parameter");
+        conn.execute(
+            "DELETE FROM cfg_connection_profiles WHERE id = 'legacy'",
+            [],
+        )
+        .expect("delete the profile");
+        let orphaned: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM cfg_connection_profile_driver_params",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count driver params");
+        assert_eq!(orphaned, 0, "parameters go with their profile");
+
+        registry
+            .run_all(&conn)
+            .expect("rerun profile schema upgrade");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn test_migration_name_order_invariant() {
         let temp_dir = temp_dir("name_order");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1238,6 +1299,7 @@ mod tests {
             "054_general_settings_grid_review_before_save",
             "056_general_settings_grid_filter_autoquote",
             "058_general_settings_grid_header_click_sorts",
+            "059_connection_profile_driver_params",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

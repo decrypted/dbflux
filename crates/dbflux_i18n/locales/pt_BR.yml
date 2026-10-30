@@ -338,6 +338,30 @@ connection_manager:
     ssm: "SSM"
     proxy: "Proxy"
     ssh: "SSH"
+  compression:
+    option:
+      auto: "Automático"
+      enabled: "Ligada"
+      disabled: "Desligada"
+  driver_params:
+    label: "Parâmetros"
+    help: "Opções passadas ao driver como chave = valor em todos os modos de conexão, inclusive por um túnel ou proxy. Uma linha posterior substitui uma anterior com a mesma chave, e as linhas substituem as opções de consulta de uma URI de conexão. Os valores ficam salvos como texto puro: não coloque senhas nem tokens aqui."
+    supported: "Chaves aceitas: %{keys}."
+    empty: "Nenhum parâmetro do driver."
+    editor_label: "Novo parâmetro"
+    editor_help: "Host, porta, credenciais, banco de dados e SSL vêm dos campos acima e não podem ser definidos como parâmetros."
+    key_label: "Chave do parâmetro"
+    value_label: "Valor do parâmetro"
+    key_placeholder: "chave"
+    value_placeholder: "valor"
+    add: "Adicionar"
+    update: "Atualizar"
+    cancel: "Cancelar"
+    edit: "Editar"
+    remove: "Remover"
+    edit_named: "Editar o parâmetro %{key}"
+    remove_named: "Remover o parâmetro %{key}"
+    key_required: "Digite uma chave antes de adicionar o parâmetro."
   navigator_view:
     label: "Visão do navegador"
     help: "Avançada agrupa tabelas e views em pastas, ao lado dos tipos, índices, chaves estrangeiras e rotinas do esquema. Compacta remove as pastas: cada esquema lista diretamente suas tabelas, views, rotinas e tipos de dados, e as visões da instância ficam em uma pasta Instance. Simples mostra apenas bancos de dados, esquemas e suas tabelas e views."
@@ -464,11 +488,14 @@ connection_manager:
     connect_on_startup_overridden: "Não é usado enquanto \"Reconectar às conexões que estavam abertas\" estiver ativado em Configurações > Geral > Inicialização e sessão: essa configuração decide quais conexões abrem ao iniciar. A escolha é mantida para quando ela for desativada."
     name: Nome
     ssl_mode: Modo SSL
+    compression: "Compressão"
+    compression_help: "Automático comprime as conexões por um túnel SSH, um proxy ou SSM e deixa as conexões diretas sem compressão. Fica salvo como um parâmetro do driver abaixo. Um servidor sem suporte a compressão conecta sem compressão."
     ca_certificate: Certificado da CA
     client_cert: Certificado do cliente
     client_key: Chave do cliente
   section:
     transport: TRANSPORTE
+    driver_params: "PARÂMETROS DO DRIVER"
     navigator: "NAVEGADOR"
     safety: "SEGURANÇA"
     startup: "INICIALIZAÇÃO"

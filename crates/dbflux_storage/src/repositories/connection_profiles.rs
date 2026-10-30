@@ -14,6 +14,7 @@ use crate::error::StorageError;
 pub use super::connection_driver_configs::ConnectionDriverConfigsRepository;
 pub use super::connection_profile_access_params::ConnectionProfileAccessParamsRepository;
 pub use super::connection_profile_configs::ConnectionProfileConfigsRepository;
+pub use super::connection_profile_driver_params::ConnectionProfileDriverParamsRepository;
 pub use super::connection_profile_governance::ConnectionProfileGovernanceRepository;
 pub use super::connection_profile_governance_binding_policies::ConnectionProfileGovernanceBindingPoliciesRepository;
 pub use super::connection_profile_governance_binding_roles::ConnectionProfileGovernanceBindingRolesRepository;
@@ -89,6 +90,11 @@ impl ConnectionProfileRepository {
     /// Returns an access params repository for this profile.
     pub fn access_params(&self) -> ConnectionProfileAccessParamsRepository {
         ConnectionProfileAccessParamsRepository::new(self.conn.clone())
+    }
+
+    /// Returns a driver params repository for this profile.
+    pub fn driver_params(&self) -> ConnectionProfileDriverParamsRepository {
+        ConnectionProfileDriverParamsRepository::new(self.conn.clone())
     }
 
     /// Returns a governance bindings repository for this profile.

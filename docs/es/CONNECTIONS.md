@@ -444,7 +444,72 @@ interruptor **Use URI** en la pestaña Main alterna entre ambos.
   keyring al guardarla), no se conserva en el texto de la URI.
 - Al conectar a través de un túnel SSH/proxy/SSM, DBFlux siempre usa la
   configuración basada en campos (reescrita a `127.0.0.1:<local port>`), incluso
-  si escribiste una URI.
+  si escribiste una URI. Las opciones de consulta de la URI no se usan entonces;
+  defínelas como parámetros del controlador (ver Parámetros del controlador), que
+  se aplican en todos los modos.
+
+---
+
+## Parámetros del controlador
+
+La sección **Driver parameters** de la pestaña Main, debajo de Transport, guarda
+opciones adicionales `clave = valor` para el controlador, como la pestaña
+Advanced de otros clientes de bases de datos. Aparece en los controladores que
+aceptan parámetros: **MySQL/MariaDB** y **PostgreSQL**. Los demás no la muestran.
+
+- Añade una fila con los campos de clave y valor y **Add** (`Enter` sobre él);
+  **Edit** de una fila la carga de nuevo en los campos, donde **Update** la
+  reescribe en su sitio, y **Remove** la quita. Una clave escrita en los campos
+  pero aún no añadida también se guarda con la conexión.
+- Los parámetros se aplican en **todos los modos de conexión**: modo
+  formulario, modo URI y conexiones a través de un túnel SSH, un proxy o SSM. Se
+  guardan fuera del host y el puerto, así que la reescritura del túnel a
+  `127.0.0.1:<local port>` los conserva.
+- **Precedencia:** una fila posterior gana a una anterior con la misma clave. En
+  modo URI se aplican primero las opciones de consulta de la propia URI y los
+  parámetros las reemplazan.
+- Las claves que pertenecen al formulario se rechazan con un error que nombra
+  la clave: host, puerto, usuario, contraseña, base de datos, cualquier ajuste
+  SSL/TLS y, en MySQL, también `socket` y `prefer_socket`, que saltarían el
+  host, el túnel o el proxy configurados. Una clave desconocida o un valor que
+  el controlador no entiende se rechaza igual, al añadir la fila y de nuevo al
+  guardar, probar y conectar.
+- Los valores son **texto plano**. No son fuentes de valores, no se guardan en
+  el keyring y viajan sin cifrar en los paquetes de exportación. No pongas
+  contraseñas ni tokens en ellos.
+
+| Controlador | Claves admitidas |
+|--------|----------------|
+| MySQL / MariaDB | `compress` (`true`, `false`, `fast`, `best`, `0`-`9`), `tcp_connect_timeout_ms`, `tcp_keepalive_time_ms`, `tcp_keepalive_probe_interval_secs` / `tcp_keepalive_probe_count` (Linux, macOS), `tcp_user_timeout_ms` (Linux), `stmt_cache_size`, `max_allowed_packet`, `secure_auth`, `enable_cleartext_plugin` |
+| PostgreSQL | `application_name`, `options` (por ejemplo `-c statement_timeout=5000`), `connect_timeout`, `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`, `keepalives_retries`, `target_session_attrs` (`any`, `read-write`, `read-only`), `channel_binding` (`disable`, `prefer`, `require`) |
+
+Las claves de MySQL siguen las opciones de URL del cliente Rust `mysql` y él las
+valida, así que se aplican sus reglas (por ejemplo, acepta un nivel en
+`compress`, pero siempre comprime con su nivel por defecto). Las opciones de
+pool `pool_min`, `pool_max`, `reset_connection` y `check_health` se rechazan:
+DBFlux abre conexiones simples, no un pool. Las claves de PostgreSQL siguen los
+parámetros de conexión de libpq; los tiempos de espera son segundos enteros.
+DBFlux envía su propia identidad de cliente como `application_name`
+(PostgreSQL) y `program_name` (MySQL); un parámetro `application_name`
+explícito la reemplaza.
+
+### Compresión en MySQL
+
+En MySQL y MariaDB la sección Transport tiene un selector **Compression** con
+**Auto**, **On** y **Off**. Edita el parámetro `compress` de la lista, así que el
+selector y la lista siempre coinciden:
+
+- **Auto** es la ausencia de una fila `compress`. Una conexión a través de un
+  túnel SSH, un proxy o SSM se comprime; una conexión directa no.
+- **On** escribe `compress=true`. Una fila con un nivel como `compress=best`
+  también se muestra como On.
+- **Off** escribe `compress=false`.
+
+Auto es el valor por defecto, así que las conexiones MySQL existentes que pasan
+por un túnel, un proxy o SSM empiezan a usar compresión del protocolo tras la
+actualización. La compresión solo se activa cuando el servidor la ofrece, así
+que un servidor sin soporte de compresión sigue conectando, sin comprimir.
+Elige **Off** para mantener sin comprimir una conexión por túnel.
 
 ---
 

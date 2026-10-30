@@ -1,6 +1,7 @@
 pub(crate) mod context;
 pub(crate) mod dashboard_import;
 pub(crate) mod dashboard_source;
+pub(crate) mod driver_params;
 pub(crate) mod dump_analysis;
 pub(crate) mod hook;
 pub(crate) mod instance_catalog;
@@ -37,6 +38,10 @@ pub trait TreeStore {
 }
 
 pub use context::{ExecutionContext, ExecutionSourceContext, MetricQuerySeries};
+pub use driver_params::{
+    CompressionChoice, CompressionParam, DriverParam, DriverParamKey, DriverParamsSpec,
+    driver_param_value, driver_params_map, refuse_form_owned_params,
+};
 pub use hook::{
     ConnectionHook, ConnectionHookBindings, ConnectionHooks, DetachedProcessHandle,
     DetachedProcessReceiver, DetachedProcessSender, HookContext, HookExecution, HookExecutionMode,

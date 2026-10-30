@@ -167,6 +167,12 @@ pub struct ConnectionEntry {
     /// Empty in bundles that predate this field or where no URI transform was applied.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uri_secret_fields: Vec<String>,
+
+    /// Driver parameters (`key = value`) in list order, in cleartext: they
+    /// are plain configuration and never hold secrets. Empty in bundles
+    /// written before driver parameters existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub driver_params: Vec<dbflux_core::DriverParam>,
 }
 
 /// Connection access binding.
@@ -402,6 +408,7 @@ mod tests {
                 settings_overrides_payload: None,
                 kind: None,
                 uri_secret_fields: vec![],
+                driver_params: vec![],
             }],
             auth_profiles: vec![],
             ssh_tunnels: vec![SshEntry {

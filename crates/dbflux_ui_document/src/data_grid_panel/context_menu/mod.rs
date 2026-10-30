@@ -27,6 +27,7 @@ use gpui_component::ActiveTheme;
 use std::fs::File;
 use std::io::BufWriter;
 
+mod columns;
 mod items;
 mod sections;
 pub(super) mod toolbar;
@@ -1113,6 +1114,11 @@ impl DataGridPanel {
             ContextMenuAction::RemoveOrdering,
         ];
         actions.extend(filter_items.into_iter().map(|(_, action)| action));
+        actions.extend(
+            self.column_menu_items(menu.col, cx)
+                .into_iter()
+                .map(|item| item.action),
+        );
 
         match cmd {
             Command::MenuDown => {
@@ -2035,6 +2041,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::FindSimilarRows => {
                 self.find_similar_rows_at(menu.row, menu.col, cx);
+            }
+            ContextMenuAction::FitColumnWidth => {
+                self.handle_column_menu_action(action, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {
                 let query = self.chart_host_current_query(cx);

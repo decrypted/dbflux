@@ -2201,6 +2201,30 @@ fn primary_alt_c_copies_the_selection_as_json_and_leaves_open_saved_chart() {
     }
 }
 
+/// Shift+m opens the column header menu from the results and from the grid
+/// inside them, beside `m` for the cell menu.
+#[test]
+fn shift_m_opens_the_column_menu_from_the_results() {
+    let keymap = native_keymap();
+    let results = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(results.clone(), &[data_table::CONTEXT]);
+    let column_menu = gpui_keystrokes(&KeySequence::from(KeyChord::new("m", Modifiers::shift())));
+    let cell_menu = gpui_keystrokes(&KeySequence::from(KeyChord::new("m", Modifiers::none())));
+
+    for stack in [vec![results], grid] {
+        for (keys, command) in [
+            (&column_menu, Command::OpenColumnMenu),
+            (&cell_menu, Command::OpenContextMenu),
+        ] {
+            let action = top_action(&keymap, keys, &stack).expect("bound");
+            assert!(
+                runs_command(action.as_ref(), command),
+                "`{keys}` must run {command:?} in {stack:?}"
+            );
+        }
+    }
+}
+
 /// `/` focuses the query history's search from its list, but stays a typed
 /// character in the history's own fields (search, rename, save name), which
 /// sit inside the history element.

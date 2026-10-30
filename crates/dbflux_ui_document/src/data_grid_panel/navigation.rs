@@ -884,6 +884,10 @@ impl DataGridPanel {
                 }
                 true
             }
+            // The document view draws no column headers.
+            Command::OpenColumnMenu if self.view_config.mode != crate::DataViewMode::Document => {
+                self.open_column_menu_at_selection(window, cx)
+            }
             Command::ResultsCopyCell => {
                 self.handle_copy(window, cx);
                 true

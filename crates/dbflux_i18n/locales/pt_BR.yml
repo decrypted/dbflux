@@ -1633,6 +1633,9 @@ document:
       order:
         title: Ordenar
         remove: Remover ordenação
+      column:
+        title: Coluna
+        fit_width: Ajustar largura
       generate_sql:
         title: Gerar SQL
       toolbar:
@@ -4340,6 +4343,7 @@ settings:
       copy_selection_as_json: "Copiar a seleção como JSON"
       results_set_null: Definir célula como NULL
       open_context_menu: Abrir menu de contexto
+      open_column_menu: Abrir menu da coluna
       open_pane_actions: Abrir ações do painel
       menu_up: Menu para cima
       menu_down: Menu para baixo

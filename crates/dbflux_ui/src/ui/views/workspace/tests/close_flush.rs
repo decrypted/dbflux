@@ -910,3 +910,59 @@ fn the_shutdown_flush_deadline_bounds_a_write_that_never_completes(cx: &mut Test
 
     drop(task);
 }
+
+/// After Settings → Reset clears the restored tabs, neither opening a tab
+/// nor the write at quit records the session again, so the next start opens
+/// without them.
+#[gpui::test]
+fn a_reset_session_stays_empty_until_the_restart(cx: &mut TestAppContext) {
+    let (workspace, app_state, window) = new_workspace(cx);
+    let path = temp_shutdown_path("reset-session");
+    let shadow = temp_shutdown_path("reset-session-shadow");
+    open_shutdown_code_tab(
+        window,
+        &workspace,
+        &app_state,
+        &path,
+        &shadow,
+        "SELECT 1;",
+        "SELECT 1;",
+        false,
+        true,
+    );
+    assert_eq!(manifest_tab_count(window, &app_state), 1);
+
+    window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            state
+                .reset_stored_state(&[dbflux_storage::ResetCategory::Session])
+                .expect("reset the session");
+        });
+    });
+    assert_eq!(manifest_tab_count(window, &app_state), 0);
+
+    let other = temp_shutdown_path("reset-session-other");
+    let other_shadow = temp_shutdown_path("reset-session-other-shadow");
+    open_shutdown_code_tab(
+        window,
+        &workspace,
+        &app_state,
+        &other,
+        &other_shadow,
+        "SELECT 2;",
+        "SELECT 2;",
+        false,
+        true,
+    );
+    window.update(|_, cx| workspace.update(cx, |workspace, cx| workspace.persist_session(cx)));
+
+    assert_eq!(
+        manifest_tab_count(window, &app_state),
+        0,
+        "nothing writes the session back before the restart"
+    );
+
+    for file in [&path, &shadow, &other, &other_shadow] {
+        std::fs::remove_file(file).ok();
+    }
+}

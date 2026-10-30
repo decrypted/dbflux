@@ -16,7 +16,7 @@ pub use active_query::{
 };
 pub use cell_editor::{
     CellEditorClosedEvent, CellEditorCopiedEvent, CellEditorModal, CellEditorSaveEvent,
-    EditorGeometry, install_editor_geometry_store,
+    EditorGeometry, forget_editor_geometry, install_editor_geometry_store,
 };
 pub use delete_connection::{
     DeleteConnectionOutcome, DeleteConnectionRequest, ModalDeleteConnection,

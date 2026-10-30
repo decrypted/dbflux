@@ -11,7 +11,7 @@ use gpui::{App, Context};
 
 /// Prefix of the `st_ui_state` keys. The version lets a later layout format
 /// use new keys instead of misreading old rows.
-const KEY_PREFIX: &str = "grid_column_layout.v1";
+const KEY_PREFIX: &str = dbflux_storage::ui_state_keys::GRID_COLUMN_LAYOUT_PREFIX;
 
 impl DataGridPanel {
     /// The store key of this grid's layout: profile, database, schema and

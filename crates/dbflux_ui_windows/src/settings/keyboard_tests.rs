@@ -15,7 +15,7 @@ use gpui::{AppContext as _, Entity, KeyDownEvent, Keystroke, TestAppContext, Vis
 use std::cell::RefCell;
 use std::rc::Rc;
 
-fn open_settings(
+pub(super) fn open_settings(
     cx: &mut TestAppContext,
     section: SettingsSectionId,
 ) -> (Entity<SettingsCoordinator>, &mut VisualTestContext) {
@@ -51,7 +51,10 @@ fn open_settings(
 }
 
 /// Moves the keyboard into the section content, as Ctrl+L does.
-fn focus_content(settings: &Entity<SettingsCoordinator>, window: &mut VisualTestContext) {
+pub(super) fn focus_content(
+    settings: &Entity<SettingsCoordinator>,
+    window: &mut VisualTestContext,
+) {
     window.update(|window, cx| {
         settings.update(cx, |settings, cx| {
             settings.focus_handle.focus(window, cx);
@@ -646,6 +649,7 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
         SettingsSectionId::Audit,
         SettingsSectionId::Keybindings,
         SettingsSectionId::Updates,
+        SettingsSectionId::Reset,
         SettingsSectionId::Proxies,
         SettingsSectionId::SshTunnels,
         SettingsSectionId::AuthProfiles,

@@ -13,6 +13,7 @@ pub enum SettingsSectionId {
     McpPolicies,
     Keybindings,
     Updates,
+    Reset,
     Proxies,
     SshTunnels,
     AuthProfiles,

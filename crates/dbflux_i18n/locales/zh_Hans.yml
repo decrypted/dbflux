@@ -5249,6 +5249,74 @@ settings:
       save_failed_copy: "保存失败：%{error}"
     toast:
       saved: 审计设置已保存。
+  reset:
+    title: "重置"
+    subtitle: "按类别清除 DBFlux 记住的内容。"
+    intro: "每一行在你确认后清除 DBFlux 数据库中保存的一类状态。连接、认证配置、代理、SSH 隧道、驱动参数、密钥环中的密钥、钩子、RPC 服务、MCP 设置、已保存的查询和已保存的审计筛选器永远不会被改动。"
+    button: "重置…"
+    error: "无法重置%{name}"
+    groups:
+      interface: "界面"
+      history: "会话与历史"
+      settings: "设置"
+      everything: "全部"
+      audit: "审计日志"
+    count:
+      none: "未保存任何内容"
+      one: "已保存 1 项"
+      many: "已保存 %{count} 项"
+      customized: "已自定义"
+      defaults: "默认值"
+      events_range: "%{count} 个事件，%{oldest} 至 %{newest}"
+    confirm:
+      title: "重置%{name}？"
+      final_title: "永久重置%{name}？"
+      includes: "将清除：%{names}。"
+      current: "当前：%{count}。"
+      untouched: "连接、配置、密钥、钩子、RPC 服务、MCP 设置和已保存的查询不会被改动。"
+      final_body: "这是最后一步：%{name}（%{count}）将被删除。"
+      irreversible: "此操作无法撤销。"
+      continue: "继续…"
+      reset: "重置"
+      reset_permanently: "永久重置"
+      cancel: "取消"
+    toast:
+      done: "已重置%{name}（移除 %{count} 项）。"
+      restart_note: "部分内容在下次启动时生效。"
+    rows:
+      window_layout:
+        name: "窗口和对话框尺寸"
+        description: "主窗口的尺寸和位置、单元格编辑器的尺寸及是否最大化，以及查询结果的显示位置。下次启动时主窗口以默认尺寸打开。"
+      column_layouts:
+        name: "表格列布局"
+        description: "按表记住的隐藏、移动、固定和调整宽度的列。已打开的表在重新打开前保留其布局。"
+      filter_history:
+        name: "WHERE 筛选历史"
+        description: "表格中以前的 WHERE 筛选条件以及文档集合中以前的查询。"
+      export_options:
+        name: "导出菜单选项"
+        description: "数据表格导出菜单中的行、列和 CSV 表头选项。"
+      session:
+        name: "恢复的标签页"
+        description: "DBFlux 启动时重新打开的标签页以及随之重新连接的连接。下次启动时不会打开当前的标签页；重启前打开的标签页也不会被记住，其中未保存的草稿查询将丢失。"
+      query_history:
+        name: "查询历史"
+        description: "在 SQL 编辑器中执行的查询，即历史面板中列出的内容。已加星标的条目和已保存的查询会保留。"
+      recent_files:
+        name: "最近文件"
+        description: "最近打开的文件列表。文件本身不受影响。"
+      schema_snapshots:
+        name: "架构快照"
+        description: "连接时捕获的架构快照，架构比较会以其为基准。"
+      general_settings:
+        name: "常规设置"
+        description: "将 设置 → 常规 中的所有设置恢复为默认值：主题、字体、编辑器、数据表格、启动、刷新和查询安全。语言更改在重启后生效。"
+      everything:
+        name: "以上全部"
+        description: "一次性重置以上所有行。不包括下方的审计日志。"
+      audit_log:
+        name: "审计日志"
+        description: "所有审计事件：查询、连接、配置更改、MCP 请求和审批以及捕获的日志行。启用审计时，重置操作本身会作为第一条新事件被记录。"
   nav:
     no_results: "没有匹配的设置"
     search_placeholder: "搜索设置"
@@ -5257,6 +5325,7 @@ settings:
     keybindings: 键盘快捷键
     updates: 更新
     audit: 审计
+    reset: "重置"
     about: 关于
     network: 网络
     ssh_tunnels: "SSH 隧道"

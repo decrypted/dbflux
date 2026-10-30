@@ -10,7 +10,8 @@ use dbflux_ui_base::toast::{Toast, now_hms};
 use gpui::{App, Entity};
 
 /// Key under which the cell editor's size is stored in `st_ui_state`.
-pub(crate) const CELL_EDITOR_GEOMETRY_KEY: &str = "cell_editor_geometry";
+pub(crate) const CELL_EDITOR_GEOMETRY_KEY: &str =
+    dbflux_storage::ui_state_keys::CELL_EDITOR_GEOMETRY;
 
 /// Persists the cell editor's size in `st_ui_state`. Only the first call of
 /// the app installs the store; it reads the stored size once.

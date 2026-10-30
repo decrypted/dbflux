@@ -198,6 +198,12 @@ impl Workspace {
     pub(in crate::ui::views::workspace) fn write_session_manifest(&self, cx: &mut App) {
         use dbflux_core::SessionTab;
 
+        // Settings → Reset cleared the session; the next start must open
+        // without these tabs.
+        if self.app_state.read(cx).session_persistence_held() {
+            return;
+        }
+
         let runtime = self.app_state.read(cx).storage_runtime();
 
         let repo = runtime.sessions();

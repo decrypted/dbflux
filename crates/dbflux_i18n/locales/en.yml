@@ -5249,6 +5249,74 @@ settings:
       save_failed_copy: "Failed to save: %{error}"
     toast:
       saved: Audit settings saved.
+  reset:
+    title: "Reset"
+    subtitle: "Clear what DBFlux remembers, one kind at a time."
+    intro: "Each row clears one kind of state stored in the DBFlux database, after you confirm. Connections, auth profiles, proxies, SSH tunnels, driver parameters, keyring secrets, hooks, RPC services, MCP settings, saved queries and saved audit filters are never touched."
+    button: "Reset…"
+    error: "Could not reset %{name}"
+    groups:
+      interface: "Interface"
+      history: "Session and history"
+      settings: "Settings"
+      everything: "Everything"
+      audit: "Audit log"
+    count:
+      none: "Nothing stored"
+      one: "1 entry stored"
+      many: "%{count} entries stored"
+      customized: "Customized"
+      defaults: "At defaults"
+      events_range: "%{count} events, %{oldest} to %{newest}"
+    confirm:
+      title: "Reset %{name}?"
+      final_title: "Reset %{name} permanently?"
+      includes: "This clears: %{names}."
+      current: "Currently: %{count}."
+      untouched: "Connections, profiles, secrets, hooks, RPC services, MCP settings and saved queries are not touched."
+      final_body: "This is the last step: %{name} (%{count}) will be deleted."
+      irreversible: "This can't be undone."
+      continue: "Continue…"
+      reset: "Reset"
+      reset_permanently: "Reset permanently"
+      cancel: "Cancel"
+    toast:
+      done: "%{name} reset (%{count} removed)."
+      restart_note: "Some of it applies at the next start."
+    rows:
+      window_layout:
+        name: "Window and dialog sizes"
+        description: "The main window's size and position, the cell editor's size and whether it was maximized, and where query results open. The main window opens at its default size at the next start."
+      column_layouts:
+        name: "Grid column layouts"
+        description: "Hidden, moved, pinned and resized columns, remembered per table. Open tables keep their layout until you reopen them."
+      filter_history:
+        name: "WHERE filter history"
+        description: "Previous WHERE filters of table grids and previous queries of document collections."
+      export_options:
+        name: "Export menu choices"
+        description: "The rows, columns and CSV header choices of the data grid's export menu."
+      session:
+        name: "Restored tabs"
+        description: "The tabs DBFlux reopens at startup and the connections it reconnects with them. The next start opens without the current tabs; tabs opened before the restart are not remembered either, and unsaved scratch queries in them are lost."
+      query_history:
+        name: "Query history"
+        description: "Queries run from the SQL editor, as listed in the history panel. Starred entries and saved queries are kept."
+      recent_files:
+        name: "Recent files"
+        description: "The list of recently opened files. The files themselves stay."
+      schema_snapshots:
+        name: "Schema snapshots"
+        description: "Schema snapshots captured on connect, which the schema diff compares against."
+      general_settings:
+        name: "General settings"
+        description: "Every setting of Settings → General back to its default: theme, fonts, editor, data grid, startup, refresh and query safety. A language change applies after a restart."
+      everything:
+        name: "Everything above"
+        description: "Every row above in one go. The audit log below is not included."
+      audit_log:
+        name: "Audit log"
+        description: "Every audit event: queries, connections, configuration changes, MCP requests and approvals, and captured log lines. With auditing on, the reset itself is recorded as the first new event."
   nav:
     no_results: "No settings match"
     search_placeholder: "Search settings"
@@ -5257,6 +5325,7 @@ settings:
     keybindings: Keybindings
     updates: Updates
     audit: Audit
+    reset: "Reset"
     about: About
     network: Network
     ssh_tunnels: "SSH tunnels"

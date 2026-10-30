@@ -111,6 +111,16 @@ pub fn install_editor_geometry_store(
     global.store = Some(Rc::new(store));
 }
 
+/// Drops the remembered geometry, so the next editor opens at the default
+/// size. The store stays installed and gets the next size the user picks.
+pub fn forget_editor_geometry(cx: &mut App) {
+    if let Some(global) = cx.try_global::<EditorGeometryGlobal>()
+        && global.geometry.is_some()
+    {
+        cx.global_mut::<EditorGeometryGlobal>().geometry = None;
+    }
+}
+
 fn remembered_geometry(cx: &App) -> Option<EditorGeometry> {
     cx.try_global::<EditorGeometryGlobal>()
         .and_then(|global| global.geometry)
@@ -1314,7 +1324,7 @@ mod structured_text_tests {
     // recursion.
     use super::{
         CellEditorCopiedEvent, CellEditorModal, CellEditorSaveEvent, DEFAULT_SIZE, EditorGeometry,
-        MIN_SIZE, install_editor_geometry_store,
+        MIN_SIZE, forget_editor_geometry, install_editor_geometry_store,
     };
     use crate::actions;
     use crate::components::value_format::{ValueFormat, format_value};
@@ -1770,5 +1780,27 @@ mod structured_text_tests {
 
         let (_host, modal, window) = open_text_cell(cx, RAW_RESULT);
         assert_eq!(card(&modal, window), size(px(900.0), px(700.0)));
+    }
+
+    #[gpui::test]
+    fn a_forgotten_size_opens_the_next_editor_at_the_default(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            install_editor_geometry_store(
+                || {
+                    Some(EditorGeometry {
+                        width: 900.0,
+                        height: 700.0,
+                        maximized: true,
+                    })
+                },
+                |_| {},
+                cx,
+            )
+        });
+        cx.update(forget_editor_geometry);
+
+        let (_host, modal, window) = open_text_cell(cx, RAW_RESULT);
+        assert!(!window.update(|_, cx| modal.read(cx).is_maximized()));
+        assert_eq!(card(&modal, window), DEFAULT_SIZE);
     }
 }

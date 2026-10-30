@@ -43,7 +43,7 @@ impl GeneralSettingsRepository {
                        ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        table_alias_completion, table_alias_use_as,
-                       grid_fk_labels, grid_header_click_sorts,
+                       grid_fk_labels, grid_copy_column_names, grid_header_click_sorts,
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -88,8 +88,9 @@ impl GeneralSettingsRepository {
                 table_alias_completion: row.get(30)?,
                 table_alias_use_as: row.get(31)?,
                 grid_fk_labels: row.get(32)?,
-                grid_header_click_sorts: row.get(33)?,
-                updated_at: row.get(34)?,
+                grid_copy_column_names: row.get(33)?,
+                grid_header_click_sorts: row.get(34)?,
+                updated_at: row.get(35)?,
             })
         });
 
@@ -121,9 +122,9 @@ impl GeneralSettingsRepository {
                     ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     table_alias_completion, table_alias_use_as,
-                    grid_fk_labels, grid_header_click_sorts,
+                    grid_fk_labels, grid_copy_column_names, grid_header_click_sorts,
                     updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, datetime('now'))
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -157,6 +158,7 @@ impl GeneralSettingsRepository {
                     table_alias_completion = excluded.table_alias_completion,
                     table_alias_use_as = excluded.table_alias_use_as,
                     grid_fk_labels = excluded.grid_fk_labels,
+                    grid_copy_column_names = excluded.grid_copy_column_names,
                     grid_header_click_sorts = excluded.grid_header_click_sorts,
                     updated_at = datetime('now')
                 "#,
@@ -193,6 +195,7 @@ impl GeneralSettingsRepository {
                     settings.table_alias_completion,
                     settings.table_alias_use_as,
                     settings.grid_fk_labels,
+                    settings.grid_copy_column_names,
                     settings.grid_header_click_sorts,
                 ],
             )
@@ -269,6 +272,7 @@ pub struct GeneralSettingsDto {
     /// Whether foreign-key grid cells resolve to the referenced row's label:
     /// 1 on, 0 off.
     pub grid_fk_labels: i32,
+    pub grid_copy_column_names: i32,
     /// 1 when a column header click sorts instead of selecting the column.
     pub grid_header_click_sorts: i32,
     pub updated_at: String,
@@ -338,6 +342,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            grid_copy_column_names: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -401,6 +406,7 @@ mod tests {
                 table_alias_completion: 1,
                 table_alias_use_as: 0,
                 grid_fk_labels: 0,
+                grid_copy_column_names: 0,
                 grid_header_click_sorts: 0,
                 updated_at: String::new(),
             };
@@ -484,6 +490,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            grid_copy_column_names: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -531,6 +538,10 @@ mod tests {
         assert_eq!(
             fetched.grid_fk_labels, 0,
             "grid_fk_labels column default should be 0"
+        );
+        assert_eq!(
+            fetched.grid_copy_column_names, 0,
+            "grid_copy_column_names column default should be 0"
         );
         assert_eq!(
             fetched.vim_leader, "space",
@@ -585,6 +596,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            grid_copy_column_names: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -642,6 +654,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            grid_copy_column_names: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -731,6 +744,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            grid_copy_column_names: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -810,6 +824,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 1,
+            grid_copy_column_names: 1,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -818,6 +833,8 @@ mod tests {
 
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.grid_fk_labels, 1);
+        assert_eq!(fetched.grid_copy_column_names, 1);
+        assert_eq!(fetched.grid_header_click_sorts, 0, "a column of its own");
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");
@@ -868,6 +885,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            grid_copy_column_names: 0,
             grid_header_click_sorts: 1,
             updated_at: String::new(),
         };
@@ -876,6 +894,7 @@ mod tests {
 
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.grid_header_click_sorts, 1);
+        assert_eq!(fetched.grid_copy_column_names, 0, "a column of its own");
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");

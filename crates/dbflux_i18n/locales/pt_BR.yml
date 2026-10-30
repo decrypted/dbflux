@@ -1597,6 +1597,9 @@ document:
         copy: Copiar
         copy_as_csv: "Copiar como CSV"
         copy_as_json: "Copiar como JSON"
+        copy_as_sql_in_list: "Copiar como lista IN de SQL"
+        copy_as_insert_statements: "Copiar como instruções INSERT"
+        copy_as_markdown: "Copiar como tabela Markdown"
         view_document: Ver documento
         add_document: Adicionar documento
         duplicate_document: Duplicar documento
@@ -1702,6 +1705,7 @@ document:
           copied_rows:
             one: "1 linha carregada copiada como %{format} (%{bytes} bytes) para a área de transferência"
             many: "%{count} linhas carregadas copiadas como %{format} (%{bytes} bytes) para a área de transferência"
+          in_list_only_nulls: "Nada copiado: todos os valores selecionados são NULL e uma lista SQL IN não corresponde a NULL"
       document:
         toast:
           inserted: Documento inserido
@@ -4111,6 +4115,9 @@ settings:
     grid_fk_labels:
       label: "Mostrar o valor do registro referenciado em células de chave estrangeira"
       hint: "Células que contêm uma chave estrangeira resolvem e mostram o valor do registro referenciado ao lado do seu id. Aplica-se às páginas carregadas após salvar; o inspetor de linhas sempre resolve referências."
+    grid_copy_column_names:
+      label: "Incluir os nomes das colunas ao copiar"
+      hint: "Copiar (Ctrl+C, Cmd+C no macOS) na grade de dados começa o texto separado por tabulações com uma linha de nomes de colunas. Copiar como CSV, JSON e as outras entradas Copiar como não mudam."
     grid_header_click_sorts:
       label: "Clicar no cabeçalho de uma coluna a ordena"
       hint: "Desligado: um clique no cabeçalho de uma coluna seleciona a coluna inteira e a seta na borda direita ordena. Ligado: o clique ordena a coluna; Shift+clique e Ctrl+clique continuam selecionando colunas."

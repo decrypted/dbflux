@@ -41,7 +41,9 @@ impl CsvExporter {
     }
 }
 
-pub(crate) fn value_to_csv_field(value: &Value) -> String {
+/// A value as one CSV field writes it, before quoting: empty for NULL, bytes
+/// as `\x` hex, dates in ISO form, arrays and documents as JSON.
+pub fn value_to_csv_field(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
         Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),

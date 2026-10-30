@@ -107,6 +107,10 @@ pub struct DataTableState {
     /// hosts that sort one column at a time never see it.
     then_sorts: Vec<SortState>,
 
+    /// Whether a plain copy starts with a line of column names. The host
+    /// sets it from its settings; off keeps the values-only TSV.
+    copy_column_names: bool,
+
     /// Whether a modifier click on a sort arrow adds a sort key. Off unless
     /// the host sorts by several keys; without it the click sorts as a plain
     /// click does.
@@ -243,6 +247,7 @@ impl DataTableState {
             sort: None,
             then_sorts: Vec::new(),
             multi_sort: false,
+            copy_column_names: false,
             sortable: true,
             viewport_size: Size::default(),
             selection: SelectionState::new(),
@@ -1094,12 +1099,24 @@ impl DataTableState {
     // --- Clipboard ---
 
     /// The selection as tab-separated text, with the values the grid shows:
-    /// pending inserts at their place and unsaved edits applied.
+    /// pending inserts at their place and unsaved edits applied, led by the
+    /// column names when [`Self::set_copy_column_names`] turned them on.
     pub fn copy_selection(&self) -> Option<String> {
         let visual_order = self.edit_buffer.compute_visual_order();
-        clipboard::copy_selection_with(&self.selection, |row, col| {
+        let header = self
+            .copy_column_names
+            .then_some(self.model.columns.as_slice());
+        clipboard::copy_selection_with(&self.selection, header, |row, col| {
             self.displayed_cell(&visual_order, row, col)
         })
+    }
+
+    pub fn copy_column_names(&self) -> bool {
+        self.copy_column_names
+    }
+
+    pub fn set_copy_column_names(&mut self, enabled: bool) {
+        self.copy_column_names = enabled;
     }
 
     /// The cell the grid shows at visual `row`: a pending insert's value, or

@@ -237,10 +237,36 @@ cell inside that area but outside the selection is empty in CSV and `null` in
 JSON. The copies follow what the grid shows: an unsaved edit is copied with
 its new value and an added row that is not saved yet at its place. In JSON,
 columns that share a name (`a.id` and `b.id` of a join) share one key, which
-takes the value of the last of them. Plain **Copy** (`Ctrl+c`) still copies
-tab-separated text without a header.
+takes the value of the last of them. Plain **Copy** (`Ctrl+c`) copies
+tab-separated text, also with unsaved edits and added rows, without a header
+unless **Include column names when copying** is on in Settings → General →
+Data grid, which starts it with a line of the copied columns' names.
 `Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
 the menu shows it next to the item.
+
+Below them the menu has three more extractors:
+
+- **Copy as SQL IN list** copies the selected values of one column as a list
+  for a `WHERE ... IN`, such as `('a', 'O''Brien')` or `(1, 2, 3)`, quoted the
+  way the connection's driver writes literals (ANSI quoting for a result
+  without a connection). A value selected more than once is listed once and
+  `NULL` is left out, since `IN (NULL)` matches nothing; a selection of NULLs
+  alone copies nothing and says so. With several columns selected it lists the
+  leftmost one. A collection's menu does not offer it.
+- **Copy as INSERT statements**, on a table, copies one `INSERT` per selected
+  row with the selected columns, written by the same driver generator as
+  **Copy as Query**. Each row gives its own values for those columns, even
+  where a cell inside the selected area is not itself selected, and a row
+  holding a value the driver cannot write is left out. It is not offered on
+  grouped rows or on a query builder join, whose columns are not all the
+  table's.
+- **Copy as Markdown table** copies the same rows and columns as Copy as CSV as
+  a Markdown table with a header row; `NULL` and unselected cells are empty,
+  bytes are written as `\x` hex and arrays and documents as JSON, and `|`,
+  `&`, `<` and line breaks inside values are escaped.
+
+All three copy what the grid shows, as Copy as CSV does: an unsaved edit with
+its new value and a row added in the grid and not saved yet at its place.
 
 ## Copy as Query
 

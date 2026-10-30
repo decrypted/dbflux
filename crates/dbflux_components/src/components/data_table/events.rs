@@ -68,6 +68,12 @@ pub enum ContextMenuAction {
     CopyAsCsv,
     /// Copy the selection as JSON, one object per row keyed by column name.
     CopyAsJson,
+    /// Copy the selected values of one column as a SQL `IN` list.
+    CopyAsSqlInList,
+    /// Copy one INSERT statement per selected row.
+    CopyAsInsertStatements,
+    /// Copy the selection as a Markdown table.
+    CopyAsMarkdown,
     /// Paste from clipboard into the selected cell.
     Paste,
     /// Start inline editing of the selected cell.

@@ -122,6 +122,8 @@ pub enum ContextMenuAction {
     RevertCell,
     /// Show the rows nearest to this row by its vector column.
     FindSimilarRows,
+    /// Size the column to its header and loaded values.
+    FitColumnWidth,
 }
 
 /// Events emitted by the DataTable component.

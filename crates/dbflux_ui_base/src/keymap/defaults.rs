@@ -713,6 +713,12 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("f10", Modifiers::shift()),
         Command::OpenContextMenu,
     );
+    // The column header menu, which the mouse opens with a right-click on
+    // the header: `m` is the menu of the cell, `Shift+m` of its column.
+    layer.bind(
+        KeyChord::new("m", Modifiers::shift()),
+        Command::OpenColumnMenu,
+    );
 
     layer
 }

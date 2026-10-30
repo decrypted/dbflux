@@ -1633,6 +1633,9 @@ document:
       order:
         title: 排序
         remove: 移除排序
+      column:
+        title: 列
+        fit_width: 适应宽度
       generate_sql:
         title: 生成 SQL
       toolbar:
@@ -4343,6 +4346,7 @@ settings:
       copy_selection_as_json: "将选区复制为 JSON"
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
+      open_column_menu: 打开列菜单
       open_pane_actions: 打开面板操作
       menu_up: 菜单上移
       menu_down: 菜单下移

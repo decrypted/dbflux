@@ -73,6 +73,14 @@ esa columna: ordenar ascendente o descendente, quitar el orden y todos los
 operadores de filtro, en una sola lista plana. El clic izquierdo en la
 cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic, `Cmd`+clic en macOS, la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada. Con **Hacer clic en la cabecera de una columna la ordena** activado (Settings > General > Data grid), un clic normal en la cabecera la ordena, como la flecha.
 
+`Shift+m` abre el mismo menú desde el teclado, para la columna de la celda
+seleccionada. El menú termina con una sección **Columna** de ajustes de vista,
+que cambian cómo la grilla muestra la columna y nunca la consulta. **Ajustar
+ancho** ajusta la columna a su cabecera y a sus valores cargados, hasta 640
+píxeles para que un valor JSON largo no saque el resto de la grilla de la
+pantalla; un doble clic en el borde de redimensionado, a la derecha de la
+cabecera, hace lo mismo.
+
 ## Panel de valor
 
 Haz clic derecho en una celda y elige **Ver valor**, o pulsa `v`, para abrir la

@@ -1633,6 +1633,9 @@ document:
       order:
         title: 정렬
         remove: 정렬 제거
+      column:
+        title: 열
+        fit_width: 너비 맞춤
       generate_sql:
         title: SQL 생성
       toolbar:
@@ -4343,6 +4346,7 @@ settings:
       copy_selection_as_json: "선택 영역을 JSON으로 복사"
       results_set_null: 셀을 NULL로 설정
       open_context_menu: 상황에 맞는 메뉴 열기
+      open_column_menu: 열 메뉴 열기
       open_pane_actions: 패널 작업 열기
       menu_up: 메뉴 위로
       menu_down: 메뉴 아래로

@@ -7,6 +7,8 @@ mod record;
 pub mod selection;
 mod state;
 mod table;
+#[cfg(test)]
+mod tests;
 mod theme;
 
 pub use annotation::HeaderAnnotation;

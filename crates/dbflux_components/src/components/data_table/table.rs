@@ -929,31 +929,13 @@ impl DataTable {
                                 }),
                         )
                     })
-                    // Resize handle: mouse-down starts the drag; move/up are
-                    // handled on the DataTable root div so the drag survives
-                    // the cursor leaving this 6px strip.
-                    .child(
-                        div()
-                            .id(("resize-handle", col_ix))
-                            .absolute()
-                            .right_0()
-                            .top_0()
-                            .bottom_0()
-                            .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
-                            .cursor_col_resize()
-                            .hover(|s| s.bg(ChromeColors::tint(theme).opacity(0.3)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                move |event: &MouseDownEvent, _window, cx| {
-                                    cx.stop_propagation();
-                                    if let Ok(mut drag) = resize_drag_for_down.lock() {
-                                        drag.col = Some(col_ix);
-                                        drag.start_x = event.position.x;
-                                        drag.original_width = width;
-                                    }
-                                },
-                            ),
-                    )
+                    .child(column_resize_handle(
+                        state_entity.clone(),
+                        resize_drag_for_down,
+                        col_ix,
+                        width,
+                        ChromeColors::tint(theme),
+                    ))
             })
             .collect();
 
@@ -1185,28 +1167,13 @@ impl DataTable {
                     )
                     .child(name_line)
                     .when_some(presence_line, |cell, line| cell.child(line))
-                    .child(
-                        div()
-                            .id(("resize-handle", col_ix))
-                            .absolute()
-                            .right_0()
-                            .top_0()
-                            .bottom_0()
-                            .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
-                            .cursor_col_resize()
-                            .hover(|handle| handle.bg(tint.opacity(0.3)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                move |event: &MouseDownEvent, _window, cx| {
-                                    cx.stop_propagation();
-                                    if let Ok(mut drag) = resize_drag_for_down.lock() {
-                                        drag.col = Some(col_ix);
-                                        drag.start_x = event.position.x;
-                                        drag.original_width = width;
-                                    }
-                                },
-                            ),
-                    )
+                    .child(column_resize_handle(
+                        self.state.clone(),
+                        resize_drag_for_down,
+                        col_ix,
+                        width,
+                        tint,
+                    ))
             })
             .collect::<Vec<_>>();
 
@@ -1723,6 +1690,51 @@ fn render_rows(
                 .into_any_element()
         })
         .collect()
+}
+
+/// The strip at a header's right edge that resizes its column.
+///
+/// A press starts a drag; the move and release are handled on the table root
+/// so the drag survives the cursor leaving the 6px strip. A double-click fits
+/// the column to its header and its loaded values instead, as in a database
+/// IDE's grid: the second press arrives with a click count of two and starts
+/// no drag, so the first press's drag (ended by its release) cannot fight the
+/// fitted width.
+fn column_resize_handle(
+    state: Entity<DataTableState>,
+    resize_drag: Arc<Mutex<ResizeDragState>>,
+    col_ix: usize,
+    width: f32,
+    tint: Hsla,
+) -> impl IntoElement {
+    div()
+        .id(("resize-handle", col_ix))
+        .debug_selector(move || format!("resize-handle-{col_ix}"))
+        .absolute()
+        .right_0()
+        .top_0()
+        .bottom_0()
+        .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
+        .cursor_col_resize()
+        .hover(|handle| handle.bg(tint.opacity(0.3)))
+        .on_mouse_down(
+            MouseButton::Left,
+            move |event: &MouseDownEvent, _window, cx| {
+                cx.stop_propagation();
+                if event.click_count >= 2 {
+                    if let Ok(mut drag) = resize_drag.lock() {
+                        drag.col = None;
+                    }
+                    state.update(cx, |state, cx| state.fit_column_width(col_ix, cx));
+                    return;
+                }
+                if let Ok(mut drag) = resize_drag.lock() {
+                    drag.col = Some(col_ix);
+                    drag.start_x = event.position.x;
+                    drag.original_width = width;
+                }
+            },
+        )
 }
 
 /// The sort control at the right edge of a column header: the current

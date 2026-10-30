@@ -21,6 +21,8 @@ use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelecti
 use crate::fonts;
 use crate::tokens::GridMetrics;
 
+mod fit;
+
 /// Grid face and glyph advances an auto-sized column width was estimated
 /// with. A change in any of them re-estimates the auto-sized columns.
 #[derive(Debug, Clone, PartialEq)]
@@ -346,24 +348,6 @@ impl DataTableState {
             return MIN_COLUMN_WIDTH;
         };
 
-        let cell_char = metrics.cell_char_advance;
-        let type_char = metrics.type_char_advance;
-        let padding = f32::from(CELL_PADDING_X) * 2.0;
-        let gap = f32::from(GridMetrics::HEADER_GAP);
-
-        let type_chars = column.type_name.chars().count();
-        let type_width = if type_chars == 0 {
-            0.0
-        } else {
-            gap + type_chars as f32 * type_char
-        };
-        // Two icons: a key column draws its key icon and, on a table that
-        // sorts, every header draws the sort control. The keys are not known
-        // yet when the widths are first worked out, so both are budgeted.
-        let icon_width = 2.0 * (gap + f32::from(GridMetrics::HEADER_ICON));
-        let header_width =
-            padding + column.title.chars().count() as f32 * cell_char + type_width + icon_width;
-
         let longest_value = model
             .rows
             .iter()
@@ -372,10 +356,41 @@ impl DataTableState {
             .map(|cell| cell.display_text().chars().count())
             .max()
             .unwrap_or(0);
-        let content_width = (padding + longest_value as f32 * cell_char + AUTO_WIDTH_SLACK)
-            .min(MAX_AUTO_COLUMN_WIDTH);
+        let content_width = Self::content_width(longest_value, metrics).min(MAX_AUTO_COLUMN_WIDTH);
 
-        header_width.max(content_width).max(MIN_COLUMN_WIDTH).ceil()
+        Self::header_width(column, metrics)
+            .max(content_width)
+            .max(MIN_COLUMN_WIDTH)
+            .ceil()
+    }
+
+    /// Width a header needs for its name, type label and a key or sort icon.
+    fn header_width(column: &super::model::ColumnSpec, metrics: &GridTextMetrics) -> f32 {
+        let padding = f32::from(CELL_PADDING_X) * 2.0;
+        let gap = f32::from(GridMetrics::HEADER_GAP);
+
+        let type_chars = column.type_name.chars().count();
+        let type_width = if type_chars == 0 {
+            0.0
+        } else {
+            gap + type_chars as f32 * metrics.type_char_advance
+        };
+        // Two icons: a key column draws its key icon and, on a table that
+        // sorts, every header draws the sort control. The keys are not known
+        // yet when the widths are first worked out, so both are budgeted.
+        let icon_width = 2.0 * (gap + f32::from(GridMetrics::HEADER_ICON));
+
+        padding
+            + column.title.chars().count() as f32 * metrics.cell_char_advance
+            + type_width
+            + icon_width
+    }
+
+    /// Width a cell needs for a value of `chars` characters.
+    fn content_width(chars: usize, metrics: &GridTextMetrics) -> f32 {
+        let padding = f32::from(CELL_PADDING_X) * 2.0;
+
+        padding + chars as f32 * metrics.cell_char_advance + AUTO_WIDTH_SLACK
     }
 
     fn calculate_offsets(widths: &[f32]) -> Vec<f32> {
@@ -636,6 +651,14 @@ impl DataTableState {
             self.column_offsets = Self::calculate_offsets(&self.column_widths);
             cx.notify();
         }
+    }
+
+    /// Distance from the first column's left edge to `col`'s, before any
+    /// horizontal scroll; `None` past the last column.
+    pub fn column_left(&self, col: usize) -> Option<f32> {
+        (col < self.column_widths.len())
+            .then(|| self.column_offsets.get(col).copied())
+            .flatten()
     }
 
     /// Width of a row: the row-number column plus every data column.

@@ -884,6 +884,13 @@ impl DataGridPanel {
                 }
                 true
             }
+            // Only the plain grid draws column headers: the document tree, the
+            // JSON page and the transposed record view have none to open from.
+            Command::OpenColumnMenu
+                if self.view_config.mode == crate::DataViewMode::Table && !self.record_mode() =>
+            {
+                self.open_column_menu_at_selection(window, cx)
+            }
             Command::ResultsCopyCell => {
                 self.handle_copy(window, cx);
                 true

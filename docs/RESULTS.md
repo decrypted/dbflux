@@ -68,6 +68,13 @@ Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
 list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does.
 
+`Shift+m` opens the same menu from the keyboard, for the column of the selected
+cell. The menu ends with a **Column** section of view settings, which change
+how the grid shows the column and never the query. **Fit width** sizes the
+column to its header and its loaded values, up to 640 pixels so one long JSON
+value does not push the rest of the grid off screen; a double-click on the
+resize edge at the header's right border does the same.
+
 ## Value panel
 
 Right-click a cell and choose **View Value**, or press `v`, to open the cell

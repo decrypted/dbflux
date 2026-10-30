@@ -1,0 +1,159 @@
+//! The column header menu's Column section and the keyboard path to it.
+
+use super::*;
+use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+use dbflux_components::components::data_table::ContextMenuAction;
+
+/// A query result with a short `id` column and a `note` column whose values
+/// are longer than the width a column opens with.
+fn host_wide_result(
+    cx: &mut TestAppContext,
+) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
+    let app_state = isolated_test_app_state(cx);
+    let (host, window) = host_document(
+        cx,
+        move |window, cx| {
+            cx.new(|cx| {
+                DataGridPanel::new_for_result(
+                    Arc::new(QueryResult::table(
+                        vec![key_column("id", false), key_column("note", false)],
+                        (1..=3)
+                            .map(|id| {
+                                vec![
+                                    dbflux_core::Value::Int(id),
+                                    dbflux_core::Value::Text("n".repeat(60)),
+                                ]
+                            })
+                            .collect(),
+                        None,
+                        Duration::ZERO,
+                    )),
+                    "SELECT id, note FROM notes".to_string(),
+                    None,
+                    app_state,
+                    window,
+                    cx,
+                )
+            })
+        },
+        |panel, cx| panel.active_context(cx),
+        DataGridPanel::dispatch_command,
+    );
+    let panel = window.update(|_, cx| host.read(cx).document.clone());
+
+    window.update(|window, cx| {
+        let table_state = table_state(&panel, cx);
+        table_state.update(cx, |state, cx| {
+            state.select_cell(
+                dbflux_components::components::data_table::selection::CellCoord::new(0, 1),
+                cx,
+            );
+        });
+        let focus_handle = table_state.read(cx).focus_handle().clone();
+        focus_handle.focus(window, cx);
+    });
+    window.run_until_parked();
+
+    (panel, window)
+}
+
+fn table_state(
+    panel: &gpui::Entity<DataGridPanel>,
+    cx: &gpui::App,
+) -> gpui::Entity<dbflux_components::components::data_table::DataTableState> {
+    panel
+        .read(cx)
+        .grid_table
+        .table_state
+        .clone()
+        .expect("the result builds a table")
+}
+
+/// `Shift+m` opens the column header menu of the active cell's column, and
+/// walking the menu with the keyboard reaches its Fit width entry, which
+/// sizes that column to its values. The walk goes through the same row list
+/// the menu dispatches on, so the rendered and the dispatched rows agree.
+#[gpui::test]
+fn shift_m_opens_the_column_menu_and_fit_width_fits_the_column(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let (panel, window) = host_wide_result(cx);
+
+    window.simulate_keystrokes("shift-m");
+    window.run_until_parked();
+
+    let menu = window.update(|_, cx| {
+        panel
+            .read(cx)
+            .context_menu
+            .as_ref()
+            .map(|menu| (menu.is_column_header, menu.col))
+    });
+    assert_eq!(menu, Some((true, 1)), "the menu of the `note` column opens");
+
+    let fit_is_last = window.update(|_, cx| {
+        panel
+            .read(cx)
+            .column_menu_items(1, cx)
+            .last()
+            .is_some_and(|item| item.action == ContextMenuAction::FitColumnWidth)
+    });
+    assert!(fit_is_last, "Fit width is the menu's last row");
+
+    let before = window.update(|_, cx| table_state(&panel, cx).read(cx).column_widths()[1]);
+
+    // Up from the first row wraps to the last one, Fit width.
+    window.simulate_keystrokes("up enter");
+    window.run_until_parked();
+
+    let after = window.update(|_, cx| table_state(&panel, cx).read(cx).column_widths()[1]);
+    assert!(
+        after > before,
+        "the 60-character values fit: {before} -> {after}"
+    );
+    assert!(
+        window.update(|_, cx| panel.read(cx).context_menu.is_none()),
+        "the menu closes"
+    );
+}
+
+/// `Shift+m` opens nothing where the grid draws no column headers: the
+/// transposed record view and the document tree.
+#[gpui::test]
+fn shift_m_is_ignored_without_column_headers(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let (panel, window) = host_wide_result(cx);
+
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| panel.set_record_mode(true, cx));
+    });
+    window.run_until_parked();
+    assert!(
+        window.update(|_, cx| panel.read(cx).record_mode()),
+        "the result offers the record view"
+    );
+
+    window.simulate_keystrokes("shift-m");
+    window.run_until_parked();
+    assert!(
+        window.update(|_, cx| panel.read(cx).context_menu.is_none()),
+        "the record view opens no column menu"
+    );
+
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_record_mode(false, cx);
+            panel.view_config.mode = crate::data_view::DataViewMode::Document;
+            cx.notify();
+        });
+        let focus_handle = table_state(&panel, cx).read(cx).focus_handle().clone();
+        focus_handle.focus(window, cx);
+    });
+    window.run_until_parked();
+
+    window.simulate_keystrokes("shift-m");
+    window.run_until_parked();
+    assert!(
+        window.update(|_, cx| panel.read(cx).context_menu.is_none()),
+        "the document view opens no column menu"
+    );
+}

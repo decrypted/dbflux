@@ -24,6 +24,11 @@ pub(super) const MIN_COLUMN_WIDTH: f32 = 50.0;
 /// column can still be dragged wider.
 pub(super) const MAX_AUTO_COLUMN_WIDTH: f32 = 240.0;
 
+/// Widest a column grows when the user asks it to fit its values. Wider than
+/// the opening width, since the user asked for this column, but a long JSON
+/// or text value is still cut so the column stays on screen.
+pub(super) const MAX_FIT_COLUMN_WIDTH: f32 = 640.0;
+
 /// Rows read to find a column's longest value when it opens.
 pub(super) const AUTO_WIDTH_SAMPLE_ROWS: usize = 200;
 

@@ -153,9 +153,25 @@ components:
     empty: No cell selected
     error:
       not_xml: Not an XML document
+    hex_cut: "Showing the first %{shown} of %{size}."
+    image:
+      copy: "Copy image"
+      decoding: "Decoding the %{format} image…"
+      incomplete: "This %{format} image is incomplete: the stored value ends before the image does, so it was probably cut short by a size limit. Showing the bytes instead."
+      invalid: "This value starts like a %{format} image but cannot be read: %{error}. Showing the bytes instead."
+      meta: "%{width} × %{height} · %{format} · %{size}"
+      save: "Save image as…"
+      save_title: "Save image"
+      too_many_bytes: "This %{format} image is %{size}, above the %{limit} image preview limit. Showing the bytes instead."
+      too_many_pixels: "This %{format} image is %{width} × %{height} pixels, above the %{limit}-megapixel preview limit. Showing the bytes instead."
+      too_much_memory: "Decoding this %{format} image needs more memory than the preview allows. Showing the bytes instead."
     read_only: Read-only
     revert: Revert
     title: Value
+    view:
+      hex: "Hex"
+      image: "Image"
+      text: "Text"
     wrap: Wrap
   data_table:
     record:
@@ -1682,6 +1698,11 @@ document:
         value_compact: "Compact the value"
         value_revert: "Revert the value"
         value_save: "Save the value"
+        value_view_image: "Show the value as an image"
+        value_view_hex: "Show the value as hex"
+        value_view_text: "Show the value as text"
+        value_save_image: "Save the image as a file…"
+        value_copy_image: "Copy the image"
         view_table_data: "Show Data"
         view_table_columns: "Show Columns"
         view_table_partitions: "Show Partitions"

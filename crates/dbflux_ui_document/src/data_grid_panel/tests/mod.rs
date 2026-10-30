@@ -702,6 +702,7 @@ mod reload_state;
 mod selection_totals;
 mod sources_and_keys;
 mod statement_outcome;
+mod value_panel_images;
 
 fn reload_columns(names: &[&str]) -> Vec<ColumnMeta> {
     names

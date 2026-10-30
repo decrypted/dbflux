@@ -1637,7 +1637,7 @@ impl DataGridPanel {
         }
     }
 
-    fn export_base_name(&self) -> String {
+    pub(super) fn export_base_name(&self) -> String {
         match &self.source {
             DataSource::Table { table, .. } => table.name.clone(),
             DataSource::Collection { collection, .. } => collection.name.clone(),
@@ -4523,7 +4523,7 @@ pub(super) fn record_export_audit(
     }
 }
 
-fn record_clipboard_audit(
+pub(super) fn record_clipboard_audit(
     audit_service: &dbflux_audit::AuditService,
     format_name: &str,
     byte_len: Option<usize>,

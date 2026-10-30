@@ -3920,6 +3920,7 @@ dependencies = [
  "anyhow",
  "arrow-array 59.3.0",
  "arrow-schema 59.3.0",
+ "base64 0.22.1",
  "chrono",
  "dbflux_app",
  "dbflux_audit",

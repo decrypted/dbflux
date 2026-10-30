@@ -140,6 +140,24 @@ analiza — con formato legible, compacto y ajuste de línea. Se puede editar al
 panel sigue la celda seleccionada al moverte por la cuadrícula, salvo mientras
 tenga un cambio sin guardar.
 
+Una celda binaria (`bytea`, `BLOB`, `varbinary` y similares) se abre como volcado
+hexadecimal, de solo lectura. Cuando sus bytes son una imagen PNG, JPEG, GIF,
+WebP o BMP, reconocida por los propios bytes y no por el nombre de la columna,
+el panel muestra la imagen, reducida para que quepa, con su tamaño en píxeles,
+su formato y su tamaño en bytes debajo. **Hex** cambia al volcado hexadecimal e
+**Imagen** vuelve a la imagen. **Guardar imagen como…** escribe los bytes
+guardados en un archivo y **Copiar imagen** pone la imagen en el portapapeles;
+ambas están también en la entrada Barra de herramientas del menú contextual
+de la grilla (`m`). Una celda de texto con una imagen en base64, sola o como URI
+`data:image/...;base64,`, se abre igual en la imagen, con **Texto** para volver
+al texto.
+
+Las imágenes de más de 32 MB o 32 megapíxeles no se decodifican, ni tampoco un
+valor que termina antes que su imagen, como uno recortado por un límite de
+tamaño: el panel indica el motivo encima del volcado hexadecimal. Las imágenes
+animadas muestran su primer fotograma y SVG no se dibuja. El volcado
+hexadecimal de un valor grande se detiene tras sus primeros 64 KB.
+
 ## Inspector de fila
 
 Pulsa `Ctrl+Space`, o haz clic derecho en una fila y elige **Inspeccionar

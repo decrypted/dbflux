@@ -4,6 +4,7 @@ mod config;
 mod edit;
 mod parameters;
 mod secrets;
+mod sso_refresh;
 
 pub use accounts::{
     AwsSsoAccount, list_sso_account_roles, list_sso_account_roles_blocking, list_sso_accounts,

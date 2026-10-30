@@ -231,7 +231,18 @@ roles for you to pick.
 
 ### The SSO login flow
 
-When a connection (or the Account/Role dropdowns) needs an SSO session, DBFlux
+The access token that `aws sso login` caches lives about an hour, while the
+refresh token cached with it for a profile that uses an `sso_session` lives much
+longer. When the access token has expired, DBFlux first renews it with that
+refresh token, as the AWS CLI and SDKs do, and writes it back to the same file
+in `~/.aws/sso/cache` (other entries and the file permissions are kept), so no
+browser opens. A login is needed only when there is no cached session, the
+refresh token or the client registration has expired or was revoked, or the
+renewal fails; and every time the access token expires for a profile that sets
+`sso_start_url` without an `sso_session`, because such logins cache no refresh
+token.
+
+When a connection (or the Account/Role dropdowns) needs an SSO login, DBFlux
 opens a login modal:
 
 - It **opens your browser automatically** to the verification URL.

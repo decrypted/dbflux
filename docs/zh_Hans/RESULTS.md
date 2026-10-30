@@ -121,6 +121,8 @@ JSON、XML 或纯文本显示值（根据内容检测，且仅在确实能解析
 - `y` — 复制选中的行。
 - `Ctrl+c`（`Cmd+c`）— 把选中的单元格复制到剪贴板。
 
+选中多个单元格时，按 `Enter`、`F2` 或双击其中一个单元格，会为所有选中单元格打开编辑器，状态栏会显示此次编辑将更改多少个单元格。提交的值会写入每个可以接受它的选中单元格，作为未保存的更改，保存和还原与其他编辑一样处理，一次撤销（`u` 或 `Ctrl+z`）即可撤回整个编辑。只读列中的单元格、标记为删除的行以及内联编辑器不编辑的值（JSON、较长或多行文本）会被跳过；从某列的允许值列表中选择的值只会写入具有相同列表的列。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/results/editing-dark.webp">
   <img src="../images/results/editing-light.webp" alt="customers 表中有一个已编辑但尚未保存的单元格，Save 与 Revert 按钮处于可用状态">

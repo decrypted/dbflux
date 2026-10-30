@@ -1764,6 +1764,7 @@ document:
         pending_changes:
           one: "%{count} 处待处理更改"
           many: "%{count} 处待处理更改"
+        multi_edit: "正在编辑 %{count} 个单元格"
         selection:
           cells: "%{count} 个单元格"
           sum: "总和 %{value}"

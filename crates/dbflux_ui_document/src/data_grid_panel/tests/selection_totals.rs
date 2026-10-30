@@ -18,7 +18,9 @@ fn column(name: &str, type_name: &str, kind: ColumnKind) -> ColumnMeta {
 }
 
 /// `amount` holds 10, 20, NULL and 5; `name` holds text.
-fn amounts_grid(cx: &mut TestAppContext) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
+pub(super) fn amounts_grid(
+    cx: &mut TestAppContext,
+) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
     cx.update(theme::init);
     let app_state = isolated_test_app_state(cx);
     let rows = [Some(10), Some(20), None, Some(5)]
@@ -56,7 +58,7 @@ fn amounts_grid(cx: &mut TestAppContext) -> (gpui::Entity<DataGridPanel>, &mut V
     (panel, window)
 }
 
-fn with_table(
+pub(super) fn with_table(
     panel: &gpui::Entity<DataGridPanel>,
     window: &mut VisualTestContext,
     change: impl FnOnce(

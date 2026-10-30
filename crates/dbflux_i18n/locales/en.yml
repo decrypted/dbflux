@@ -1764,6 +1764,7 @@ document:
         pending_changes:
           one: "%{count} pending change"
           many: "%{count} pending changes"
+        multi_edit: "Editing %{count} cells"
         selection:
           cells: "%{count} cells"
           sum: "Sum %{value}"

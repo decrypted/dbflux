@@ -27,6 +27,7 @@ use gpui_component::ActiveTheme;
 use std::fs::File;
 use std::io::BufWriter;
 
+mod copy_extractors;
 mod items;
 mod sections;
 pub(super) mod toolbar;
@@ -804,15 +805,18 @@ impl DataGridPanel {
 
         let base_items = match self.context_menu.as_ref() {
             Some(menu) if !is_column_header => self.with_find_similar_rows(
-                self.adapt_menu_items_for_documents(
-                    Self::build_context_menu_items(
-                        is_editable,
+                self.with_copy_extractors(
+                    self.adapt_menu_items_for_documents(
+                        Self::build_context_menu_items(
+                            is_editable,
+                            is_document_view,
+                            has_row_target,
+                            can_chart,
+                            inspect_row_enabled,
+                        ),
                         is_document_view,
-                        has_row_target,
-                        can_chart,
-                        inspect_row_enabled,
+                        cx,
                     ),
-                    is_document_view,
                     cx,
                 ),
                 menu,
@@ -1110,6 +1114,8 @@ impl DataGridPanel {
         let mut actions = vec![
             ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
             ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending),
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Descending),
             ContextMenuAction::RemoveOrdering,
         ];
         actions.extend(filter_items.into_iter().map(|(_, action)| action));
@@ -1551,7 +1557,29 @@ impl DataGridPanel {
         row_count: Option<usize>,
         cx: &mut Context<Self>,
     ) {
-        let format_name = format.name();
+        self.finish_named_clipboard_copy(export_result, buffer, format.name(), row_count, cx);
+    }
+
+    /// `finish_clipboard_copy` for text built outside the exporter, so the
+    /// copy extractors report and audit the same way.
+    fn finish_clipboard_text(
+        &mut self,
+        text: String,
+        format_name: &str,
+        row_count: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.finish_named_clipboard_copy(Ok(()), text.into_bytes(), format_name, row_count, cx);
+    }
+
+    fn finish_named_clipboard_copy(
+        &mut self,
+        export_result: Result<(), dbflux_export::ExportError>,
+        buffer: Vec<u8>,
+        format_name: &str,
+        row_count: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         let audit_service = self.app_state.read(cx).audit_service().clone();
 
         match export_result {
@@ -1772,15 +1800,18 @@ impl DataGridPanel {
             let can_chart = self.can_chart_from_context_menu(cx);
             let inspect_row_enabled = !self.is_grouped_result();
             let visible_items = self.with_find_similar_rows(
-                self.adapt_menu_items_for_documents(
-                    Self::build_context_menu_items(
-                        is_editable,
+                self.with_copy_extractors(
+                    self.adapt_menu_items_for_documents(
+                        Self::build_context_menu_items(
+                            is_editable,
+                            menu.is_document_view,
+                            has_row_target,
+                            can_chart,
+                            inspect_row_enabled,
+                        ),
                         menu.is_document_view,
-                        has_row_target,
-                        can_chart,
-                        inspect_row_enabled,
+                        cx,
                     ),
-                    menu.is_document_view,
                     cx,
                 ),
                 menu,
@@ -1943,6 +1974,9 @@ impl DataGridPanel {
             ContextMenuAction::CopyAsJson => {
                 self.copy_selection_with_format(ExportFormat::JsonPretty, window, cx)
             }
+            ContextMenuAction::CopyAsSqlInList => self.copy_selection_as_in_list(cx),
+            ContextMenuAction::CopyAsInsertStatements => self.copy_selection_as_inserts(cx),
+            ContextMenuAction::CopyAsMarkdown => self.copy_selection_as_markdown(cx),
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
             ContextMenuAction::ViewValue => {
@@ -2026,6 +2060,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::Order(direction) => {
                 self.handle_sort_request(menu.col, direction, cx);
+            }
+            ContextMenuAction::AddToSort(direction) => {
+                self.handle_add_sort_key(menu.col, direction, cx);
             }
             ContextMenuAction::RemoveOrdering => {
                 self.handle_sort_clear(cx);

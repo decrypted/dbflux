@@ -1601,6 +1601,9 @@ document:
         copy: Copy
         copy_as_csv: "Copy as CSV"
         copy_as_json: "Copy as JSON"
+        copy_as_sql_in_list: "Copy as SQL IN list"
+        copy_as_insert_statements: "Copy as INSERT statements"
+        copy_as_markdown: "Copy as Markdown table"
         view_document: View document
         add_document: Add document
         duplicate_document: Duplicate document
@@ -1637,6 +1640,7 @@ document:
       order:
         title: Order
         remove: Remove ordering
+        add_to_sort: "Add to sort: %{column}"
       generate_sql:
         title: Generate SQL
       toolbar:
@@ -4117,6 +4121,9 @@ settings:
     grid_pk_sort_desc:
       label: "Sort tables by primary key, newest first"
       hint: "Tables open ordered by their primary key descending, so the latest rows of an auto-increment key come first. Applies to tables opened after saving; a column header click still sorts as before."
+    grid_copy_column_names:
+      label: "Include column names when copying"
+      hint: "Copy (Ctrl+C) from the data grid starts the tab-separated text with a line of column names. Copy as CSV, JSON and the other Copy as entries are not affected."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."

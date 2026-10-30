@@ -1601,6 +1601,9 @@ document:
         copy: 复制
         copy_as_csv: "复制为 CSV"
         copy_as_json: "复制为 JSON"
+        copy_as_sql_in_list: "复制为 SQL IN 列表"
+        copy_as_insert_statements: "复制为 INSERT 语句"
+        copy_as_markdown: "复制为 Markdown 表格"
         view_document: 查看文档
         add_document: 添加文档
         duplicate_document: 复制文档
@@ -1637,6 +1640,7 @@ document:
       order:
         title: 排序
         remove: 移除排序
+        add_to_sort: "添加到排序：%{column}"
       generate_sql:
         title: 生成 SQL
       toolbar:
@@ -4117,6 +4121,9 @@ settings:
     grid_pk_sort_desc:
       label: "按主键排序表格，最新的在前"
       hint: "表格按主键降序打开，自增主键的最新行显示在最前面。适用于保存后打开的表格；点击列标题仍按原方式排序。"
+    grid_copy_column_names:
+      label: "复制时包含列名"
+      hint: "从数据网格复制（Ctrl+C）时，制表符分隔的文本以一行列名开头。复制为 CSV、JSON 及其他“复制为”项不受影响。"
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"

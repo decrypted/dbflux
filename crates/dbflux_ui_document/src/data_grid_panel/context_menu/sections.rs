@@ -130,6 +130,24 @@ impl DataGridPanel {
                 false,
             ),
             (
+                dbflux_i18n::t!(
+                    "document.data.context_menu.order.add_to_sort",
+                    column = format!("{} ASC", col_name)
+                ),
+                ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending),
+                AppIcon::ArrowUp,
+                false,
+            ),
+            (
+                dbflux_i18n::t!(
+                    "document.data.context_menu.order.add_to_sort",
+                    column = format!("{} DESC", col_name)
+                ),
+                ContextMenuAction::AddToSort(dbflux_core::SortDirection::Descending),
+                AppIcon::ArrowDown,
+                false,
+            ),
+            (
                 remove_ordering,
                 ContextMenuAction::RemoveOrdering,
                 AppIcon::X,
@@ -138,7 +156,7 @@ impl DataGridPanel {
         ];
 
         for (idx, (label, action, icon, is_danger)) in order_items.into_iter().enumerate() {
-            if idx == 2 {
+            if idx == 2 || matches!(action, ContextMenuAction::RemoveOrdering) {
                 rows.push(render_separator(cx).into_any_element());
             }
             rows.push(Self::column_menu_action_row(

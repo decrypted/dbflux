@@ -1601,6 +1601,9 @@ document:
         copy: 복사
         copy_as_csv: "CSV로 복사"
         copy_as_json: "JSON으로 복사"
+        copy_as_sql_in_list: "SQL IN 목록으로 복사"
+        copy_as_insert_statements: "INSERT 문으로 복사"
+        copy_as_markdown: "Markdown 표로 복사"
         view_document: 문서 보기
         add_document: 문서 추가
         duplicate_document: 문서 복제
@@ -1637,6 +1640,7 @@ document:
       order:
         title: 정렬
         remove: 정렬 제거
+        add_to_sort: "정렬에 추가: %{column}"
       generate_sql:
         title: SQL 생성
       toolbar:
@@ -4117,6 +4121,9 @@ settings:
     grid_pk_sort_desc:
       label: "기본 키 기준으로 최신 행부터 테이블 정렬"
       hint: "테이블을 기본 키 내림차순으로 열어 자동 증가 키의 최신 행이 먼저 표시됩니다. 저장한 이후에 여는 테이블에 적용됩니다. 열 머리글을 클릭하면 이전과 같이 정렬됩니다."
+    grid_copy_column_names:
+      label: "복사할 때 열 이름 포함"
+      hint: "데이터 그리드에서 복사(Ctrl+C)하면 탭으로 구분된 텍스트가 열 이름 한 줄로 시작합니다. CSV, JSON 등 다른 형식으로 복사 항목에는 영향을 주지 않습니다."
     vim_mode:
       label: "편집기에서 Vim 모드 사용"
       hint: "노멀 모드와 삽입 모드: h, j, k, l, Enter로 이동하고, i로 입력을 시작하고, Esc로 노멀 모드로 돌아가고, x로 문자를 삭제하고, u로 실행을 취소합니다. 저장하면 열려 있는 편집기에 적용됩니다."

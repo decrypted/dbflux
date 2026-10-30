@@ -405,7 +405,10 @@ impl DataGridPanel {
                 .local_sort_state
                 .map(|s| TableSortState::new(s.column_ix, s.direction));
             self.rebuild_table(sort, cx);
+            self.show_local_secondary_sort_keys(cx);
         }
+
+        self.sync_copy_column_names(cx);
 
         if std::mem::take(&mut self.pending.refresh) {
             if std::mem::take(&mut self.pending.refresh_keeps_edits) {

@@ -86,6 +86,7 @@ converted crate by crate and stays in English for now.
 |---------|---------|--------------|
 | **Show referenced-row labels in foreign-key cells** | Off | Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after you save; the row inspector always resolves references. |
 | **Sort tables by primary key, newest first** | Off | Tables open ordered by their primary key descending instead of ascending, so the latest rows of an auto-increment key come first. Clearing a column sort returns to this order. Applies to tables opened after you save. |
+| **Include column names when copying** | Off | Copy (`Ctrl+C`) from the data grid starts the tab-separated text with a line of the copied columns' names. Copy as CSV, JSON and the other Copy as entries are not affected. Applies to open grids when you save. |
 
 ### Startup & session
 

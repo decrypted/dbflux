@@ -1020,6 +1020,7 @@ impl DataGridPanel {
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
         self.rebuild_table(initial_sort, cx);
+        self.show_loaded_secondary_sort_keys(cx);
         // Read per page load: turning grid_fk_labels on and paginating
         // resolves without recreating the panel.
         if self.fk_labels_enabled(cx) {

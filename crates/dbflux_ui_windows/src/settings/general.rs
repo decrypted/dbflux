@@ -53,6 +53,7 @@ impl GeneralSection {
             current.table_alias_use_as != saved.table_alias_use_as,
             current.grid_fk_labels != saved.grid_fk_labels,
             current.grid_pk_sort_desc != saved.grid_pk_sort_desc,
+            current.grid_copy_column_names != saved.grid_copy_column_names,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
 
@@ -128,6 +129,7 @@ impl GeneralSection {
             GeneralFormRow::TableAliasUseAs,
             GeneralFormRow::GridFkLabels,
             GeneralFormRow::GridPkSortDesc,
+            GeneralFormRow::GridCopyColumnNames,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -284,6 +286,11 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::GridPkSortDesc) => {
                 self.gen_settings.grid_pk_sort_desc = !self.gen_settings.grid_pk_sort_desc;
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridCopyColumnNames) => {
+                self.gen_settings.grid_copy_column_names =
+                    !self.gen_settings.grid_copy_column_names;
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -1037,6 +1044,17 @@ impl GeneralSection {
                 self.gen_settings.grid_pk_sort_desc,
                 GeneralFormRow::GridPkSortDesc,
                 |this, value, _cx| this.gen_settings.grid_pk_sort_desc = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-copy-column-names",
+                dbflux_i18n::t!("settings.general.grid_copy_column_names.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.grid_copy_column_names.hint"
+                )),
+                self.gen_settings.grid_copy_column_names,
+                GeneralFormRow::GridCopyColumnNames,
+                |this, value, _cx| this.gen_settings.grid_copy_column_names = value,
                 cx,
             ));
 

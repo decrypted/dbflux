@@ -1601,6 +1601,9 @@ document:
         copy: Copiar
         copy_as_csv: "Copiar como CSV"
         copy_as_json: "Copiar como JSON"
+        copy_as_sql_in_list: "Copiar como lista IN de SQL"
+        copy_as_insert_statements: "Copiar como instruções INSERT"
+        copy_as_markdown: "Copiar como tabela Markdown"
         view_document: Ver documento
         add_document: Adicionar documento
         duplicate_document: Duplicar documento
@@ -1637,6 +1640,7 @@ document:
       order:
         title: Ordenar
         remove: Remover ordenação
+        add_to_sort: "Adicionar à ordenação: %{column}"
       generate_sql:
         title: Gerar SQL
       toolbar:
@@ -4117,6 +4121,9 @@ settings:
     grid_pk_sort_desc:
       label: "Ordenar tabelas pela chave primária, mais recentes primeiro"
       hint: "As tabelas abrem ordenadas pela chave primária em ordem decrescente, então as linhas mais recentes de uma chave autoincremental aparecem primeiro. Aplica-se às tabelas abertas após salvar; clicar em um cabeçalho de coluna continua ordenando como antes."
+    grid_copy_column_names:
+      label: "Incluir os nomes das colunas ao copiar"
+      hint: "Copiar (Ctrl+C) na grade de dados começa o texto separado por tabulações com uma linha de nomes de colunas. Copiar como CSV, JSON e as outras entradas Copiar como não mudam."
     vim_mode:
       label: "Modo Vim nos editores"
       hint: "Modos Normal e Insert: h, j, k, l e Enter movem, i insere, Esc volta ao Normal, x exclui um caractere, u desfaz. Aplicado aos editores abertos ao salvar."

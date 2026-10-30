@@ -42,6 +42,7 @@ pub(super) enum GeneralFormRow {
     TableAliasUseAs,
     GridFkLabels,
     GridPkSortDesc,
+    GridCopyColumnNames,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -1976,6 +1977,8 @@ mod tests {
             (
                 "grid-pk-sort-desc",
                 "settings.general.grid_pk_sort_desc.label",
+                "grid-copy-column-names",
+                "settings.general.grid_copy_column_names.label",
             ),
             ("restore-session", "settings.general.restore_session.label"),
             ("reopen-conns", "settings.general.reopen_connections.label"),

@@ -93,6 +93,7 @@ y permanece en English por ahora.
 | ---------------------------- | ------- | -------- |
 | **Mostrar el valor del registro referenciado en celdas de clave foránea** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
 | **Ordenar las tablas por clave primaria, lo más reciente primero** | Off | Las tablas se abren ordenadas por su clave primaria de forma descendente en lugar de ascendente, así las filas más recientes de una clave autoincremental aparecen primero. Al quitar el orden de una columna se vuelve a este orden. Se aplica a las tablas abiertas después de guardar. |
+| **Incluir los nombres de columna al copiar** | Off | Copiar (`Ctrl+C`) en la cuadrícula de datos empieza el texto separado por tabulaciones con una línea con los nombres de las columnas copiadas. Copiar como CSV, JSON y las demás entradas Copiar como no cambian. Se aplica a las cuadrículas abiertas al guardar. |
 
 ### Inicio y sesión
 

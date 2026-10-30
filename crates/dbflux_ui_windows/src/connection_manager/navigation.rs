@@ -668,6 +668,38 @@ impl FormFocus {
         }
     }
 
+    fn down_tunnel_or_proxy(
+        self,
+        mode: AccessTabMode,
+        ssh_state: SshNavState,
+        proxy_state: ProxyNavState,
+    ) -> Self {
+        let focus = self.normalize_access_focus();
+        let next = if mode == AccessTabMode::Proxy {
+            focus.down_proxy(proxy_state)
+        } else {
+            focus.down_ssh(ssh_state)
+        };
+
+        next.denormalize_access_focus()
+    }
+
+    fn up_tunnel_or_proxy(
+        self,
+        mode: AccessTabMode,
+        ssh_state: SshNavState,
+        proxy_state: ProxyNavState,
+    ) -> Self {
+        let focus = self.normalize_access_focus();
+        let next = if mode == AccessTabMode::Proxy {
+            focus.up_proxy(proxy_state)
+        } else {
+            focus.up_ssh(ssh_state)
+        };
+
+        next.denormalize_access_focus()
+    }
+
     pub(super) fn down_access(
         self,
         mode: AccessTabMode,
@@ -696,14 +728,16 @@ impl FormFocus {
                 Save => AccessMethod,
                 _ => AccessMethod,
             },
-            AccessTabMode::Ssh => self
-                .normalize_access_focus()
-                .down_ssh(ssh_state)
-                .denormalize_access_focus(),
-            AccessTabMode::Proxy => self
-                .normalize_access_focus()
-                .down_proxy(proxy_state)
-                .denormalize_access_focus(),
+            AccessTabMode::Ssh | AccessTabMode::Proxy => match self {
+                SsmAuthProfile => SsmAuthManage,
+                SsmAuthManage | SsmAuthLogin | SsmAuthRefresh => TestConnection,
+                // The optional auth profile row sits between the tunnel or
+                // proxy stops and the footer.
+                other => match other.down_tunnel_or_proxy(mode, ssh_state, proxy_state) {
+                    TestConnection => SsmAuthProfile,
+                    next => next,
+                },
+            },
         }
     }
 
@@ -735,14 +769,12 @@ impl FormFocus {
                 Save => TestConnection,
                 _ => Save,
             },
-            AccessTabMode::Ssh => self
-                .normalize_access_focus()
-                .up_ssh(ssh_state)
-                .denormalize_access_focus(),
-            AccessTabMode::Proxy => self
-                .normalize_access_focus()
-                .up_proxy(proxy_state)
-                .denormalize_access_focus(),
+            AccessTabMode::Ssh | AccessTabMode::Proxy => match self {
+                SsmAuthProfile => TestConnection.up_tunnel_or_proxy(mode, ssh_state, proxy_state),
+                SsmAuthManage | SsmAuthLogin | SsmAuthRefresh => SsmAuthProfile,
+                TestConnection => SsmAuthManage,
+                other => other.up_tunnel_or_proxy(mode, ssh_state, proxy_state),
+            },
         }
     }
 
@@ -765,14 +797,19 @@ impl FormFocus {
                 Save => TestConnection,
                 other => other,
             },
-            AccessTabMode::Ssh => self
-                .normalize_access_focus()
-                .left_ssh(ssh_state)
-                .denormalize_access_focus(),
-            AccessTabMode::Proxy => self
-                .normalize_access_focus()
-                .left_proxy(proxy_state)
-                .denormalize_access_focus(),
+            AccessTabMode::Ssh | AccessTabMode::Proxy => match self {
+                SsmAuthManage => SsmAuthProfile,
+                SsmAuthLogin => SsmAuthManage,
+                SsmAuthRefresh => SsmAuthLogin,
+                other if mode == AccessTabMode::Proxy => other
+                    .normalize_access_focus()
+                    .left_proxy(proxy_state)
+                    .denormalize_access_focus(),
+                other => other
+                    .normalize_access_focus()
+                    .left_ssh(ssh_state)
+                    .denormalize_access_focus(),
+            },
             AccessTabMode::Direct => match self {
                 SsmAuthManage => SsmAuthProfile,
                 SsmAuthLogin => SsmAuthManage,
@@ -802,14 +839,19 @@ impl FormFocus {
                 TestConnection => Save,
                 other => other,
             },
-            AccessTabMode::Ssh => self
-                .normalize_access_focus()
-                .right_ssh(ssh_state)
-                .denormalize_access_focus(),
-            AccessTabMode::Proxy => self
-                .normalize_access_focus()
-                .right_proxy(proxy_state)
-                .denormalize_access_focus(),
+            AccessTabMode::Ssh | AccessTabMode::Proxy => match self {
+                SsmAuthProfile => SsmAuthManage,
+                SsmAuthManage => SsmAuthLogin,
+                SsmAuthLogin => SsmAuthRefresh,
+                other if mode == AccessTabMode::Proxy => other
+                    .normalize_access_focus()
+                    .right_proxy(proxy_state)
+                    .denormalize_access_focus(),
+                other => other
+                    .normalize_access_focus()
+                    .right_ssh(ssh_state)
+                    .denormalize_access_focus(),
+            },
             AccessTabMode::Direct => match self {
                 SsmAuthProfile => SsmAuthManage,
                 SsmAuthManage => SsmAuthLogin,
@@ -1783,11 +1825,7 @@ impl ConnectionManagerWindow {
                 }
             }
             ActiveTab::Access => {
-                if (self.access.access_tab_mode == AccessTabMode::ManagedSsm
-                    || self.access.access_tab_mode == AccessTabMode::Direct)
-                    && !self.ssm_auth_login_enabled(cx)
-                    && next_focus == SsmAuthLogin
-                {
+                if next_focus == SsmAuthLogin && !self.ssm_auth_login_enabled(cx) {
                     next_focus = SsmAuthManage;
                 }
             }
@@ -1850,6 +1888,9 @@ impl ConnectionManagerWindow {
                             4 + tunnel_offset
                         }
                         TestSsh | SaveAsTunnel => 5 + tunnel_offset,
+                        SsmAuthProfile | SsmAuthManage | SsmAuthLogin | SsmAuthRefresh => {
+                            self.auth_profile.optional_section_index
+                        }
                         _ => 0,
                     }
                 }
@@ -1857,6 +1898,9 @@ impl ConnectionManagerWindow {
                     AccessMethod => 0,
                     ProxySelector | ProxyClear => 1,
                     ProxyEditInSettings => 2,
+                    SsmAuthProfile | SsmAuthManage | SsmAuthLogin | SsmAuthRefresh => {
+                        self.auth_profile.optional_section_index
+                    }
                     _ => 0,
                 },
             },
@@ -2127,8 +2171,6 @@ impl ConnectionManagerWindow {
         };
 
         if self.active_tab == ActiveTab::Access
-            && (self.access.access_tab_mode == AccessTabMode::ManagedSsm
-                || self.access.access_tab_mode == AccessTabMode::Direct)
             && self.form_focus == FormFocus::SsmAuthLogin
             && !self.ssm_auth_login_enabled(cx)
         {
@@ -2156,8 +2198,6 @@ impl ConnectionManagerWindow {
         };
 
         if self.active_tab == ActiveTab::Access
-            && (self.access.access_tab_mode == AccessTabMode::ManagedSsm
-                || self.access.access_tab_mode == AccessTabMode::Direct)
             && self.form_focus == FormFocus::SsmAuthLogin
             && !self.ssm_auth_login_enabled(cx)
         {
@@ -3072,6 +3112,162 @@ mod tests {
         assert_eq!(
             FormFocus::TestConnection.up_access(AccessTabMode::ManagedSsm, ssh_state, proxy_state),
             FormFocus::SsmAuthManage
+        );
+    }
+
+    /// Walks the Access ring down from the access method to Save and back up,
+    /// returning both orders.
+    fn access_ring(
+        mode: AccessTabMode,
+        ssh_state: SshNavState,
+        proxy_state: ProxyNavState,
+    ) -> (Vec<FormFocus>, Vec<FormFocus>) {
+        let mut down = vec![FormFocus::AccessMethod];
+        while *down.last().expect("ring start") != FormFocus::Save {
+            let next = down
+                .last()
+                .expect("ring stop")
+                .down_access(mode, ssh_state, proxy_state);
+            assert!(!down.contains(&next), "{mode:?} ring loops at {next:?}");
+            down.push(next);
+        }
+
+        let mut up = vec![FormFocus::Save];
+        while *up.last().expect("ring start") != FormFocus::AccessMethod {
+            let next = up
+                .last()
+                .expect("ring stop")
+                .up_access(mode, ssh_state, proxy_state);
+            assert!(!up.contains(&next), "{mode:?} ring loops at {next:?}");
+            up.push(next);
+        }
+        up.reverse();
+
+        (down, up)
+    }
+
+    #[test]
+    fn ssh_tunnel_ring_reaches_the_auth_profile_after_the_tunnel_stops() {
+        use FormFocus::*;
+
+        let (down, up) = access_ring(
+            AccessTabMode::Ssh,
+            ssh_enabled_with_tunnel_selected(),
+            proxy_state(false, false),
+        );
+
+        assert_eq!(
+            down,
+            vec![
+                AccessMethod,
+                SshEnabled,
+                SshTunnelSelector,
+                SshEditInSettings,
+                TestSsh,
+                SsmAuthProfile,
+                SsmAuthManage,
+                TestConnection,
+                Save,
+            ]
+        );
+        assert_eq!(up, down, "J and K walk the same ring");
+    }
+
+    #[test]
+    fn manual_and_disabled_ssh_rings_end_on_the_auth_profile() {
+        use FormFocus::*;
+
+        let (down, up) = access_ring(
+            AccessTabMode::Ssh,
+            ssh_enabled_no_tunnels(),
+            proxy_state(false, false),
+        );
+        let tail = [
+            TestSsh,
+            SaveAsTunnel,
+            SsmAuthProfile,
+            SsmAuthManage,
+            TestConnection,
+            Save,
+        ];
+        assert_eq!(&down[down.len() - tail.len()..], &tail);
+        // K skips Test SSH on the way up, as it did before the auth row.
+        assert_eq!(&up[up.len() - tail.len() + 1..], &tail[1..]);
+
+        let (down, up) = access_ring(
+            AccessTabMode::Ssh,
+            ssh_disabled(),
+            proxy_state(false, false),
+        );
+        assert_eq!(
+            down,
+            vec![
+                AccessMethod,
+                SshEnabled,
+                SsmAuthProfile,
+                SsmAuthManage,
+                TestConnection,
+                Save
+            ]
+        );
+        assert_eq!(up, down);
+    }
+
+    #[test]
+    fn proxy_rings_reach_the_auth_profile_after_the_proxy_stops() {
+        use FormFocus::*;
+
+        for (state, proxy_stops) in [
+            (proxy_state(false, false), vec![]),
+            (proxy_state(true, false), vec![ProxySelector]),
+            (
+                proxy_state(true, true),
+                vec![ProxySelector, ProxyEditInSettings],
+            ),
+        ] {
+            let (down, up) = access_ring(AccessTabMode::Proxy, ssh_disabled(), state);
+
+            let mut expected = vec![AccessMethod];
+            expected.extend(proxy_stops);
+            expected.extend([SsmAuthProfile, SsmAuthManage, TestConnection, Save]);
+            assert_eq!(down, expected);
+            assert_eq!(up, down);
+        }
+    }
+
+    #[test]
+    fn tunnel_and_proxy_modes_step_across_the_auth_actions() {
+        for mode in [AccessTabMode::Ssh, AccessTabMode::Proxy] {
+            let ssh_state = ssh_enabled_with_tunnel_selected();
+            let proxy_state = proxy_state(true, true);
+            let right = |focus: FormFocus| focus.right_access(mode, ssh_state, proxy_state);
+            let left = |focus: FormFocus| focus.left_access(mode, ssh_state, proxy_state);
+
+            assert_eq!(right(FormFocus::SsmAuthProfile), FormFocus::SsmAuthManage);
+            assert_eq!(right(FormFocus::SsmAuthManage), FormFocus::SsmAuthLogin);
+            assert_eq!(right(FormFocus::SsmAuthLogin), FormFocus::SsmAuthRefresh);
+            assert_eq!(left(FormFocus::SsmAuthRefresh), FormFocus::SsmAuthLogin);
+            assert_eq!(left(FormFocus::SsmAuthManage), FormFocus::SsmAuthProfile);
+            assert_eq!(left(FormFocus::Save), FormFocus::TestConnection);
+        }
+
+        assert_eq!(
+            FormFocus::SshTunnelSelector.right_access(
+                AccessTabMode::Ssh,
+                ssh_enabled_with_tunnel_selected(),
+                proxy_state(false, false),
+            ),
+            FormFocus::SshTunnelClear,
+            "the tunnel row keeps its own horizontal steps"
+        );
+        assert_eq!(
+            FormFocus::ProxySelector.right_access(
+                AccessTabMode::Proxy,
+                ssh_disabled(),
+                proxy_state(true, true),
+            ),
+            FormFocus::ProxyClear,
+            "the proxy row keeps its own horizontal steps"
         );
     }
 

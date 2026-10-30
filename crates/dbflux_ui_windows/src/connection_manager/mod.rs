@@ -410,6 +410,9 @@ struct AuthProfileState {
     auth_profile_action_message: Option<String>,
     pending_wizard_auth_profile_selection: bool,
     known_auth_profile_ids: HashSet<Uuid>,
+    /// Position of the optional picker among the Access tab sections in the
+    /// SSH tunnel and proxy modes, set at render (see `focus_scroll_index`).
+    optional_section_index: usize,
 }
 
 /// Per-connection settings and hooks tab widgets.
@@ -1087,6 +1090,7 @@ impl ConnectionManagerWindow {
                 auth_profile_login_in_progress: false,
                 auth_profile_action_message: None,
                 pending_wizard_auth_profile_selection: false,
+                optional_section_index: 0,
                 known_auth_profile_ids: app_state
                     .read(cx)
                     .list_auth_profiles()
@@ -5067,6 +5071,20 @@ mod keyboard_coverage_tests {
                 true,
             ),
             ("tab-access", ActiveTab::Access, AccessTabMode::Proxy, false),
+            // The optional auth profile picker follows the tunnel and proxy
+            // stops, so value sources can resolve through it in those modes.
+            (
+                "auth-open-settings",
+                ActiveTab::Access,
+                AccessTabMode::Ssh,
+                true,
+            ),
+            (
+                "auth-refresh-session",
+                ActiveTab::Access,
+                AccessTabMode::Proxy,
+                false,
+            ),
             (
                 "conn-pre-hook",
                 ActiveTab::Settings,

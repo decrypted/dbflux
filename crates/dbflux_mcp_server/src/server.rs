@@ -8,7 +8,7 @@ use std::sync::{Arc, mpsc};
 
 use dbflux_core::access::{AccessHandle, AccessKind, AccessManager};
 use dbflux_core::auth::SharedDynAuthProvider;
-use dbflux_core::secrecy::SecretString;
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::values::{CompositeValueResolver, ValueCache, ValueRef};
 use dbflux_core::{
     CancelToken, Connection, ConnectionOverrides, DetachedProcessHandle, DetachedProcessSender,
@@ -1200,20 +1200,79 @@ async fn record_hook_executions(
     }
 }
 
+/// The SSH tunnel profile a connection references, with its keyring secret.
+struct ResolvedSshTunnel {
+    id: uuid::Uuid,
+    config: dbflux_core::SshTunnelConfig,
+    secret: Option<SecretString>,
+}
+
 struct McpAccessManager {
+    ssh_tunnel: Option<Arc<ResolvedSshTunnel>>,
     #[cfg(feature = "aws")]
     ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>,
 }
 
 impl McpAccessManager {
     #[cfg(feature = "aws")]
-    fn new(ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>) -> Self {
-        Self { ssm_factory }
+    fn new(
+        ssh_tunnel: Option<ResolvedSshTunnel>,
+        ssm_factory: Option<Arc<dbflux_ssm::SsmTunnelFactory>>,
+    ) -> Self {
+        Self {
+            ssh_tunnel: ssh_tunnel.map(Arc::new),
+            ssm_factory,
+        }
     }
 
     #[cfg(not(feature = "aws"))]
-    fn new() -> Self {
-        Self {}
+    fn new(ssh_tunnel: Option<ResolvedSshTunnel>) -> Self {
+        Self {
+            ssh_tunnel: ssh_tunnel.map(Arc::new),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    async fn open_ssh(
+        &self,
+        ssh_tunnel_profile_id: &uuid::Uuid,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Result<AccessHandle, dbflux_core::DbError> {
+        let resolved = self
+            .ssh_tunnel
+            .as_ref()
+            .filter(|tunnel| tunnel.id == *ssh_tunnel_profile_id)
+            .cloned()
+            .ok_or_else(|| {
+                dbflux_core::DbError::connection_failed(format!(
+                    "SSH tunnel profile '{}' was not found; the MCP server reads tunnel \
+                     profiles when it starts, so restart it after adding or changing one",
+                    ssh_tunnel_profile_id
+                ))
+            })?;
+        let remote_host = remote_host.to_string();
+
+        // open_tunnel blocks on the connect, a handshake of up to 30 s and
+        // authentication, so it must not run on an async worker.
+        tokio::task::spawn_blocking(move || -> Result<AccessHandle, dbflux_core::DbError> {
+            let dbflux_ssh::OpenedSshTunnel { tunnel, .. } = dbflux_ssh::open_tunnel(
+                &resolved.config,
+                resolved
+                    .secret
+                    .as_ref()
+                    .map(|secret| secret.expose_secret()),
+                &remote_host,
+                remote_port,
+            )?;
+            let local_port = tunnel.local_port();
+
+            Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
+        })
+        .await
+        .map_err(|error| {
+            dbflux_core::DbError::connection_failed(format!("SSH tunnel task failed: {error}"))
+        })?
     }
 
     async fn open_managed(
@@ -1258,13 +1317,16 @@ impl AccessManager for McpAccessManager {
         &self,
         access_kind: &AccessKind,
         remote_host: &str,
-        _remote_port: u16,
+        remote_port: u16,
     ) -> Result<AccessHandle, dbflux_core::DbError> {
         match access_kind {
             AccessKind::Direct => Ok(AccessHandle::direct()),
-            AccessKind::Ssh { .. } => Err(dbflux_core::DbError::connection_failed(
-                "SSH tunnels are not supported by the MCP server access manager",
-            )),
+            AccessKind::Ssh {
+                ssh_tunnel_profile_id,
+            } => {
+                self.open_ssh(ssh_tunnel_profile_id, remote_host, remote_port)
+                    .await
+            }
             AccessKind::Proxy { .. } => Err(dbflux_core::DbError::connection_failed(
                 "Proxy tunnels are not supported by the MCP server access manager",
             )),
@@ -1632,7 +1694,23 @@ impl McpConnectionFactory {
             .as_ref()
             .and_then(|profile| profile.fields.get("profile_name").cloned());
 
+        let ssh_tunnel = match &profile.access_kind {
+            Some(AccessKind::Ssh {
+                ssh_tunnel_profile_id,
+            }) => self
+                .state
+                .ssh_tunnels
+                .get(ssh_tunnel_profile_id)
+                .map(|tunnel| ResolvedSshTunnel {
+                    id: tunnel.id,
+                    config: tunnel.config.clone(),
+                    secret: self.state.secret_manager.get_ssh_tunnel_secret(tunnel),
+                }),
+            _ => None,
+        };
+
         let access_manager: Arc<dyn AccessManager> = Arc::new(McpAccessManager::new(
+            ssh_tunnel,
             #[cfg(feature = "aws")]
             Some(Arc::new(dbflux_ssm::SsmTunnelFactory::new(
                 aws_profile_name,
@@ -2494,6 +2572,7 @@ mod tests {
             ),
             connection_setup_lock: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             detached_processes: Arc::new(crate::state::DetachedProcessRegistry::new()),
+            ssh_tunnels: Default::default(),
             secret_manager: Arc::new(dbflux_core::SecretManager::new(secret_store)),
             mcp_enabled_by_default: true,
             profile_store_path: None,
@@ -3666,6 +3745,105 @@ mod tests {
             Some("keyring-password"),
             "pipeline path must fall back to the keyring password when the \
              pipeline resolves none"
+        );
+    }
+
+    /// A connection behind an SSH tunnel profile used to fail with "SSH tunnels
+    /// are not supported by the MCP server access manager" before any network
+    /// call. It now dials the tunnel's SSH host; this listener stands in for an
+    /// SSH host that drops the connection, so the handshake fails there.
+    #[tokio::test]
+    async fn mcp_connection_factory_dials_the_ssh_tunnel_host() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let ssh_port = listener.local_addr().expect("listener address").port();
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let accepted = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                if listener.accept().is_ok() {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            false
+        });
+
+        let tunnel = dbflux_core::SshTunnelProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "ssh-host".to_string(),
+            config: dbflux_core::SshTunnelConfig {
+                host: "127.0.0.1".to_string(),
+                port: ssh_port,
+                user: "deploy".to_string(),
+                auth_method: dbflux_core::SshAuthMethod::PrivateKey { key_path: None },
+                ssh_config_host: None,
+            },
+            save_secret: false,
+        };
+
+        let driver = RecordingDriver::new(FakeDriver::new(DbKind::Postgres));
+        let driver_handle = Arc::new(driver.clone()) as Arc<dyn DbDriver>;
+        let mut profile = ConnectionProfile::new("tunneled-pg", DbConfig::default_postgres());
+        profile.access_kind = Some(AccessKind::Ssh {
+            ssh_tunnel_profile_id: tunnel.id,
+        });
+        let connection_id = profile.id.to_string();
+
+        let mut state = test_state_with_driver_and_store(
+            "postgres",
+            driver_handle,
+            profile,
+            Box::new(InMemorySecretStore::default()),
+        );
+        state.ssh_tunnels = Arc::new(HashMap::from([(tunnel.id, tunnel)]));
+
+        let error = match McpConnectionFactory::new(state)
+            .connect(&connection_id, None)
+            .await
+        {
+            Ok(_) => panic!("an SSH host that drops the connection cannot carry the tunnel"),
+            Err(error) => error,
+        };
+
+        assert!(
+            accepted.join().expect("listener thread"),
+            "the MCP server never dialed the SSH host"
+        );
+        assert!(
+            !error.contains("not supported") && !error.contains("was not found"),
+            "the tunnel was rejected before dialing: {error}"
+        );
+        assert!(driver.invocations().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ssh_access_without_its_tunnel_profile_names_the_profile() {
+        let missing = uuid::Uuid::new_v4();
+        #[cfg(feature = "aws")]
+        let manager = McpAccessManager::new(None, None);
+        #[cfg(not(feature = "aws"))]
+        let manager = McpAccessManager::new(None);
+
+        let error = match manager
+            .open(
+                &AccessKind::Ssh {
+                    ssh_tunnel_profile_id: missing,
+                },
+                "db.internal",
+                5432,
+            )
+            .await
+        {
+            Ok(_) => panic!("an unknown tunnel profile must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(
+            matches!(&error, DbError::ConnectionFailed(failure)
+                if failure.message.starts_with(&format!("SSH tunnel profile '{missing}' was not found;"))),
+            "unexpected error: {error:?}"
         );
     }
 

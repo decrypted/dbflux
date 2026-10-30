@@ -3203,6 +3203,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-ssm",
  "aws-sdk-sso",
+ "aws-sdk-ssooidc",
  "aws-sdk-sts",
  "chrono",
  "dbflux_core",

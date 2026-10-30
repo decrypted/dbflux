@@ -157,6 +157,9 @@ jobs:
             fi
             cp "$file" "dist/$name"
           done
+          # The whole changelog as of the tag, for readers who want more than this release's entries;
+          # listed in SHA256SUMS like the packages.
+          cp CHANGELOG.md dist/CHANGELOG.md
 
           (
             cd dist

@@ -52,9 +52,10 @@ jobs:
       version: ${{ needs.compute-version.outputs.version }}
       # `rc` packages under the stable identity (`dbflux`, "DBFlux", `dev.iperez.dbflux`) that the
       # version above gives the app at runtime, and, unlike `stable`, embeds no AppImage update
-      # information pointing at upstream's releases. stable and rc Windows builds need SignPath,
-      # which only upstream has, so Windows is off.
-      windows: false
+      # information pointing at upstream's releases. stable and rc Windows builds are signed via
+      # SignPath, which only upstream has, so the fork builds Windows unsigned.
+      windows: true
+      windows_signing: false
       channel: rc
       prerelease: true
       cache: true

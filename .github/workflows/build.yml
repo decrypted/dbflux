@@ -17,10 +17,17 @@ on:
         type: boolean
         default: false
       windows:
-        # Fork-only (decrypted/dbflux): stable and rc Windows builds need
-        # SignPath, which only upstream has, so the fork's builds turn the
-        # Windows job off.
+        # Fork-only (decrypted/dbflux): turns the Windows job off entirely.
         description: 'Build the Windows package'
+        required: false
+        type: boolean
+        default: true
+      windows_signing:
+        # Fork-only (decrypted/dbflux): stable and rc Windows builds are signed
+        # through SignPath, which only upstream has. The fork turns signing off
+        # and ships its Windows packages unsigned (SmartScreen warns on first
+        # launch); upstream's callers keep the default and sign as before.
+        description: 'Sign stable and rc Windows builds with SignPath'
         required: false
         type: boolean
         default: true
@@ -853,7 +860,7 @@ jobs:
           persist-credentials: false
 
       - name: Check Windows signing prerequisites
-        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        if: inputs.windows_signing && (inputs.channel == 'stable' || inputs.channel == 'rc')
         shell: pwsh
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -941,7 +948,7 @@ jobs:
       # The default SignPath configuration has a pe-file root, not a zip-file.
       # Raw uploads use the file's name as the artifact name, regardless of name.
       - name: Upload unsigned Windows executable
-        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        if: inputs.windows_signing && (inputs.channel == 'stable' || inputs.channel == 'rc')
         id: unsigned-executable
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -951,7 +958,7 @@ jobs:
           retention-days: 1
 
       - name: Sign Windows executable
-        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        if: inputs.windows_signing && (inputs.channel == 'stable' || inputs.channel == 'rc')
         uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092  # v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -965,7 +972,7 @@ jobs:
           skip-decompress: true
 
       - name: Verify signed Windows executable
-        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        if: inputs.windows_signing && (inputs.channel == 'stable' || inputs.channel == 'rc')
         shell: pwsh
         run: |
           $signature = Get-AuthenticodeSignature -FilePath signed-executable/dbflux.exe
@@ -1017,7 +1024,7 @@ jobs:
         run: Move-Item installer/output/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
 
       - name: Upload unsigned Windows installer
-        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        if: inputs.windows_signing && (inputs.channel == 'stable' || inputs.channel == 'rc')
         id: unsigned-installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1027,7 +1034,7 @@ jobs:
           retention-days: 1
 
       - name: Sign Windows installer
-        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        if: inputs.windows_signing && (inputs.channel == 'stable' || inputs.channel == 'rc')
         uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092  # v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -1041,7 +1048,7 @@ jobs:
           skip-decompress: true
 
       - name: Verify signed Windows installer
-        if: inputs.channel == 'stable' || inputs.channel == 'rc'
+        if: inputs.windows_signing && (inputs.channel == 'stable' || inputs.channel == 'rc')
         shell: pwsh
         run: |
           $signature = Get-AuthenticodeSignature -FilePath signed-installer/dbflux-windows-amd64-setup.exe

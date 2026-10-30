@@ -30,27 +30,46 @@ pub(super) fn in_list_text(values: &[Value], dialect: &dyn SqlDialect) -> Option
 
 /// One INSERT per row into `table`, for `columns`, through the driver's
 /// generator; rows holding a value the driver cannot write are skipped, as
-/// Copy as Query skips them.
+/// Copy as Query skips them. `expressions` marks, per row and column, a
+/// cell staged as a SQL expression, whose text is written unquoted as the
+/// save writes it; an empty slice marks none.
 pub(super) fn insert_statements(
     generator: &dyn QueryGenerator,
     table: &TableRef,
     columns: &[ColumnMeta],
     rows: &[Vec<Value>],
+    expressions: &[Vec<bool>],
 ) -> Vec<String> {
     rows.iter()
-        .filter(|values| {
+        .enumerate()
+        .filter(|(_, values)| {
             !values
                 .iter()
                 .any(|value| matches!(value, Value::Unsupported(_)))
         })
-        .filter_map(|values| {
+        .filter_map(|(row, values)| {
             let assignments = columns
                 .iter()
                 .zip(values)
-                .map(|(column, value)| ColumnAssignment {
-                    name: column.name.clone(),
-                    value: value.clone(),
-                    type_name: Some(column.type_name.clone()),
+                .enumerate()
+                .map(|(col, (column, value))| {
+                    let is_expression = expressions
+                        .get(row)
+                        .and_then(|marks| marks.get(col))
+                        .copied()
+                        .unwrap_or(false);
+                    match value {
+                        Value::Text(sql) if is_expression => ColumnAssignment::expression(
+                            column.name.clone(),
+                            sql.clone(),
+                            Some(column.type_name.clone()),
+                        ),
+                        value => ColumnAssignment::typed(
+                            column.name.clone(),
+                            value.clone(),
+                            column.type_name.clone(),
+                        ),
+                    }
                 })
                 .collect();
             let insert = RowInsert::with_typed_assignments(
@@ -251,7 +270,14 @@ impl DataGridPanel {
             return;
         };
 
-        let statements = insert_statements(generator, &table, &selected.columns, &selected.rows);
+        let expressions = self.selection_expressions(cx, &selected);
+        let statements = insert_statements(
+            generator,
+            &table,
+            &selected.columns,
+            &selected.rows,
+            &expressions,
+        );
         if statements.is_empty() {
             return;
         }
@@ -366,7 +392,7 @@ mod tests {
             vec![Value::Int(2), Value::Null],
         ];
 
-        let statements = insert_statements(&generator, &table, &columns, &rows);
+        let statements = insert_statements(&generator, &table, &columns, &rows, &[]);
 
         assert_eq!(
             statements,

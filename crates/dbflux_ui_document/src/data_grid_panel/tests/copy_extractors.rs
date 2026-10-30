@@ -538,3 +538,33 @@ fn a_collection_menu_offers_no_sql_in_list(cx: &mut TestAppContext) {
     assert!(!actions.contains(&Some(ContextMenuAction::CopyAsSqlInList)));
     assert!(actions.contains(&Some(ContextMenuAction::CopyAsMarkdown)));
 }
+
+/// A cell staged as a SQL expression is written into Copy as INSERT
+/// statements unquoted, as Save writes it, not as a string literal.
+#[gpui::test]
+fn copy_as_inserts_writes_a_staged_expression_unquoted(cx: &mut TestAppContext) {
+    use dbflux_components::components::data_table::model::CellValue;
+
+    let (panel, window) = users_table_panel(cx);
+    window.update(|_, app| {
+        let table_state = panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("table state");
+        table_state.update(app, |state, cx| {
+            state
+                .edit_buffer_mut()
+                .set_cell(0, 1, CellValue::expression("UPPER('ann')"));
+            cx.notify();
+        });
+    });
+
+    select_cells(&panel, window, (0, 0), (0, 1));
+    window.update(|_, app| panel.update(app, |panel, cx| panel.copy_selection_as_inserts(cx)));
+    assert_eq!(
+        clipboard_text(window),
+        "INSERT INTO \"public\".\"users\" (\"id\", \"name\") VALUES (1, UPPER('ann'));"
+    );
+}

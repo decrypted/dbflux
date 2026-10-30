@@ -1564,31 +1564,14 @@ impl DataGridPanel {
         mask_unselected: bool,
     ) -> Option<dbflux_core::QueryResult> {
         use dbflux_components::components::data_table::selection::CellCoord;
-        use std::collections::BTreeSet;
 
         let table_state = self.grid_table.table_state.as_ref()?;
         let state = table_state.read(cx);
         let selection = state.selection();
         let buffer = state.edit_buffer();
         let visual_order = buffer.compute_visual_order();
-        let ranges = selection.ranges();
-        if ranges.is_empty() {
-            return None;
-        }
-        let rows: BTreeSet<usize> = ranges
-            .iter()
-            .flat_map(|range| range.start.row..=range.end.row)
-            .filter(|&row| row < visual_order.len())
-            .collect();
-        // Columns in the order the grid shows them, as the plain copy does.
-        let mut cols: Vec<usize> = ranges
-            .iter()
-            .flat_map(|range| range.start.col..=range.end.col)
-            .filter(|&col| col < self.result.columns.len())
-            .collect::<BTreeSet<usize>>()
-            .into_iter()
-            .collect();
-        selection.sort_by_screen_order(&mut cols);
+        let (rows, cols) =
+            selection_grid(selection, visual_order.len(), self.result.columns.len())?;
 
         let columns = cols
             .iter()
@@ -1617,6 +1600,53 @@ impl DataGridPanel {
             None,
             std::time::Duration::ZERO,
         ))
+    }
+
+    /// For each row and column of `selected` (a [`Self::selection_values`]
+    /// result), whether the cell is staged as a SQL expression.
+    pub(in crate::data_grid_panel) fn selection_expressions(
+        &self,
+        cx: &App,
+        selected: &dbflux_core::QueryResult,
+    ) -> Vec<Vec<bool>> {
+        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
+
+        let Some(table_state) = self.grid_table.table_state.as_ref() else {
+            return Vec::new();
+        };
+        let state = table_state.read(cx);
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+        let Some((rows, cols)) = selection_grid(
+            state.selection(),
+            visual_order.len(),
+            self.result.columns.len(),
+        ) else {
+            return Vec::new();
+        };
+        if rows.len() != selected.rows.len() || cols.len() != selected.columns.len() {
+            return Vec::new();
+        }
+
+        rows.iter()
+            .map(|&row| {
+                cols.iter()
+                    .map(|&col| match visual_order.get(row).copied() {
+                        Some(VisualRowSource::Base(base_row)) => {
+                            buffer.is_cell_dirty(base_row, col)
+                                && buffer
+                                    .get_cell(base_row, col, &CellValue::null())
+                                    .is_expression()
+                        }
+                        Some(VisualRowSource::Insert(insert_idx)) => buffer
+                            .get_pending_insert_by_idx(insert_idx)
+                            .and_then(|cells| cells.get(col))
+                            .is_some_and(|cell| cell.is_expression()),
+                        None => false,
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     /// Every column of the given visual rows as the grid shows them, the way
@@ -4874,6 +4904,37 @@ async fn reference_display_columns(
     }
 
     display_columns
+}
+
+/// The visual rows (below `row_count`) and the columns (below `col_count`,
+/// in the order the grid shows them, as the plain copy takes them) that
+/// hold a selected cell; `None` with nothing selected.
+fn selection_grid(
+    selection: &dbflux_components::components::data_table::selection::SelectionState,
+    row_count: usize,
+    col_count: usize,
+) -> Option<(Vec<usize>, Vec<usize>)> {
+    use std::collections::BTreeSet;
+
+    let ranges = selection.ranges();
+    if ranges.is_empty() {
+        return None;
+    }
+    let rows: BTreeSet<usize> = ranges
+        .iter()
+        .flat_map(|range| range.start.row..=range.end.row)
+        .filter(|&row| row < row_count)
+        .collect();
+    let mut cols: Vec<usize> = ranges
+        .iter()
+        .flat_map(|range| range.start.col..=range.end.col)
+        .filter(|&col| col < col_count)
+        .collect::<BTreeSet<usize>>()
+        .into_iter()
+        .collect();
+    selection.sort_by_screen_order(&mut cols);
+
+    Some((rows.into_iter().collect(), cols))
 }
 
 /// The value the grid shows at visual `row`, `col`: a pending insert's

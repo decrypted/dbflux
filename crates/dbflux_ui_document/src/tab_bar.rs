@@ -314,11 +314,12 @@ impl TabBar {
         } else {
             theme.muted_foreground
         };
-        let title_element = if is_active {
-            document_tab_title(title.as_str(), true, cx)
-        } else {
-            document_tab_title(title.as_str(), false, cx).font_weight(FontWeight::NORMAL)
-        };
+        // One weight for every tab: a heavier active title is wider, so each
+        // activation would resize two tabs and shift every tab after them.
+        // The active tab stands out by its chip fill, strong text color and
+        // tinted icon instead.
+        let title_element =
+            document_tab_title(title.as_str(), is_active, cx).font_weight(FontWeight::NORMAL);
         let hover_group: SharedString = format!("tab-group-{}", id.0).into();
 
         document_tab(
@@ -380,34 +381,61 @@ impl TabBar {
             }),
         )
         .child(Icon::new(icon).size(TabMetrics::ICON).color(icon_color))
-        .child(div().flex_1().min_w_0().truncate().child(title_element))
-        // Dirty indicator: a tint diamond when the document has unsaved
-        // changes. Shows the change summary in a tooltip on hover.
-        .when(is_dirty, |el| {
-            let tooltip_text: SharedString = change_summary
-                .unwrap_or_else(|| dbflux_i18n::t!("document.tabs.unsaved_changes"))
-                .into();
+        .child(
+            div()
+                .debug_selector(|| format!("tab-title-{}", id.0))
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(title_element),
+        )
+        .child(Self::render_dirty_indicator(id, is_dirty, change_summary))
+        // A spinner and the close button take turns in one fixed slot, so a
+        // query starting or finishing does not resize the tab either.
+        .child(
+            div()
+                .debug_selector(|| format!("tab-action-{}", id.0))
+                .flex()
+                .flex_shrink_0()
+                .justify_center()
+                .w(TabMetrics::CLOSE_ICON)
+                .child(self.render_tab_action(
+                    id,
+                    is_executing,
+                    is_active,
+                    hover_group,
+                    &title,
+                    cx,
+                )),
+        )
+    }
 
-            el.child(
-                div()
-                    .id(ElementId::Name(format!("dirty-dot-{}", id.0).into()))
-                    .flex_shrink_0()
-                    .child(StatusIndicator::new(Status::Busy).compact())
-                    .tooltip(move |window, cx| {
-                        Tooltip::new(tooltip_text.clone()).build(window, cx)
-                    }),
-            )
-        })
-        // Spinner or close button. Inactive tabs show the close button only
-        // while hovered.
-        .child(self.render_tab_action(
-            id,
-            is_executing,
-            is_active,
-            hover_group,
-            &title,
-            cx,
-        ))
+    /// The tint diamond of a document with unsaved changes, with the change
+    /// summary as its tooltip.
+    ///
+    /// A clean tab keeps the diamond's slot with nothing drawn in it, so a
+    /// document turning dirty or being saved does not resize its tab and push
+    /// the tabs after it.
+    fn render_dirty_indicator(
+        id: DocumentId,
+        is_dirty: bool,
+        change_summary: Option<String>,
+    ) -> impl IntoElement {
+        let slot = div()
+            .id(ElementId::Name(format!("dirty-dot-{}", id.0).into()))
+            .debug_selector(|| format!("dirty-dot-{}", id.0))
+            .flex_shrink_0()
+            .child(StatusIndicator::new(Status::Busy).compact());
+
+        if !is_dirty {
+            return slot.invisible();
+        }
+
+        let tooltip_text: SharedString = change_summary
+            .unwrap_or_else(|| dbflux_i18n::t!("document.tabs.unsaved_changes"))
+            .into();
+
+        slot.tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
     }
 
     fn render_tab_action(
@@ -438,6 +466,9 @@ impl TabBar {
             .justify_center()
             .cursor_pointer()
             .hover(move |el| el.bg(hover))
+            // Inactive tabs show the button only while hovered. It is hidden
+            // rather than left out, so it keeps its slot and is not clickable
+            // while hidden.
             .when(!is_active, |el| {
                 el.invisible()
                     .group_hover(hover_group, |style| style.visible())
@@ -826,5 +857,363 @@ mod tab_icon_tests {
         assert_eq!(tab_icon(DocumentIcon::Collection), AppIcon::Box);
         assert_eq!(tab_icon(DocumentIcon::Redis), AppIcon::KeyRound);
         assert_eq!(tab_icon(DocumentIcon::SchemaViz), AppIcon::Layers);
+    }
+}
+
+/// A tab's width must not depend on whether it is active or hovered, or every
+/// tab switch moves the tabs after it.
+#[cfg(test)]
+mod tab_layout_tests {
+    use super::TabBar;
+    use crate::code::CodeDocument;
+    use crate::tab_manager::{Tab, TabManager};
+    use crate::types::DocumentId;
+    use dbflux_components::theme;
+    use dbflux_components::tokens::TabMetrics;
+    use dbflux_core::QueryLanguage;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{
+        AppContext as _, Bounds, DevicePixels, Entity, Font, FontId, FontMetrics, FontRun, GlyphId,
+        LineLayout, Modifiers, Pixels, PlatformTextSystem, RenderGlyphParams, ShapedGlyph,
+        ShapedRun, Size, TestAppContext, TestDispatcher, TextRenderingMode, VisualTestContext,
+        point, px, size,
+    };
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    const UNITS_PER_EM: f32 = 1000.;
+
+    thread_local! {
+        /// Every line `WeightedTextSystem` shapes, with the font id (the
+        /// weight) of each of its runs.
+        static SHAPED_LINES: RefCell<Vec<(String, FontId)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// The weights `prefix`-led lines were shaped in so far.
+    fn weights_shaped_for(prefix: &str) -> BTreeSet<usize> {
+        SHAPED_LINES.with(|lines| {
+            lines
+                .borrow()
+                .iter()
+                .filter(|(text, _)| text.starts_with(prefix))
+                .map(|(_, font_id)| font_id.0)
+                .collect()
+        })
+    }
+
+    /// Shapes every glyph with an advance that grows with the font weight, as
+    /// real fonts do. The default test text system gives all weights the same
+    /// advance, which would hide a width change caused by a weight change.
+    struct WeightedTextSystem;
+
+    impl WeightedTextSystem {
+        /// The font id is the weight, so `layout_line` can read it back.
+        fn advance_units(font_id: FontId) -> f32 {
+            400. + font_id.0 as f32 / 2.
+        }
+    }
+
+    impl PlatformTextSystem for WeightedTextSystem {
+        fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn all_font_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn font_id(&self, descriptor: &Font) -> anyhow::Result<FontId> {
+            Ok(FontId(descriptor.weight.0 as usize))
+        }
+
+        fn font_metrics(&self, _font_id: FontId) -> FontMetrics {
+            FontMetrics {
+                units_per_em: UNITS_PER_EM as u32,
+                ascent: 800.,
+                descent: -200.,
+                line_gap: 0.,
+                underline_position: -100.,
+                underline_thickness: 50.,
+                cap_height: 700.,
+                x_height: 500.,
+                bounding_box: Bounds {
+                    origin: point(0., -200.),
+                    size: size(1000., 1000.),
+                },
+            }
+        }
+
+        fn typographic_bounds(
+            &self,
+            font_id: FontId,
+            _glyph_id: GlyphId,
+        ) -> anyhow::Result<Bounds<f32>> {
+            Ok(Bounds {
+                origin: point(0., 0.),
+                size: size(Self::advance_units(font_id), 700.),
+            })
+        }
+
+        fn advance(&self, font_id: FontId, _glyph_id: GlyphId) -> anyhow::Result<Size<f32>> {
+            Ok(size(Self::advance_units(font_id), 0.))
+        }
+
+        fn glyph_for_char(&self, _font_id: FontId, ch: char) -> Option<GlyphId> {
+            Some(GlyphId(ch as u32))
+        }
+
+        fn glyph_raster_bounds(
+            &self,
+            _params: &RenderGlyphParams,
+        ) -> anyhow::Result<Bounds<DevicePixels>> {
+            Ok(Bounds::default())
+        }
+
+        fn rasterize_glyph(
+            &self,
+            _params: &RenderGlyphParams,
+            raster_bounds: Bounds<DevicePixels>,
+        ) -> anyhow::Result<(Size<DevicePixels>, Vec<u8>)> {
+            Ok((raster_bounds.size, Vec::new()))
+        }
+
+        fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
+            let mut position = px(0.);
+            let mut shaped_runs = Vec::new();
+            let mut run_start = 0;
+            for run in runs {
+                let run_end = (run_start + run.len).min(text.len());
+                SHAPED_LINES.with(|lines| {
+                    lines.borrow_mut().push((text.to_string(), run.font_id));
+                });
+                let advance = font_size * (Self::advance_units(run.font_id) / UNITS_PER_EM);
+                let mut glyphs = Vec::new();
+                for (ix, ch) in text.get(run_start..run_end).unwrap_or("").char_indices() {
+                    glyphs.push(ShapedGlyph {
+                        id: GlyphId(ch as u32),
+                        position: point(position, px(0.)),
+                        index: run_start + ix,
+                        is_emoji: false,
+                    });
+                    position += advance;
+                }
+                shaped_runs.push(ShapedRun {
+                    font_id: run.font_id,
+                    glyphs,
+                });
+                run_start = run_end;
+            }
+
+            LineLayout {
+                font_size,
+                width: position,
+                ascent: font_size * 0.8,
+                descent: font_size * 0.2,
+                runs: shaped_runs,
+                len: text.len(),
+            }
+        }
+
+        fn recommended_rendering_mode(
+            &self,
+            _font_id: FontId,
+            _font_size: Pixels,
+        ) -> TextRenderingMode {
+            TextRenderingMode::Grayscale
+        }
+    }
+
+    /// Short, medium and long titles; the long one is cut at the widest a tab
+    /// gets.
+    const TITLES: [&str; 3] = [
+        "Query 1.sql",
+        "f3base.api_call_log",
+        "f3base.balance_adjustments_by_operator_and_currency",
+    ];
+
+    struct Fixture {
+        manager: Entity<TabManager>,
+        tabs: Vec<DocumentId>,
+    }
+
+    fn weighted_text_cx() -> TestAppContext {
+        TestAppContext::build_with_text_system(
+            TestDispatcher::new(0),
+            None,
+            Arc::new(WeightedTextSystem),
+        )
+    }
+
+    /// Opens a tab bar with one code tab per title; the last one is active.
+    fn open_tab_bar(cx: &mut TestAppContext) -> (Fixture, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+        let manager = cx.update(|cx| cx.new(|_| TabManager::new()));
+
+        let (_bar, window) = cx.add_window_view({
+            let manager = manager.clone();
+            move |_, cx| TabBar::new(manager, cx)
+        });
+
+        let tabs = TITLES
+            .iter()
+            .map(|title| {
+                let app_state = app_state.clone();
+                let manager = manager.clone();
+                window.update(|window, cx| {
+                    let document = cx.new(|cx| {
+                        CodeDocument::new_with_language(
+                            app_state,
+                            None,
+                            QueryLanguage::Sql,
+                            window,
+                            cx,
+                        )
+                        .with_title((*title).to_string())
+                    });
+                    let document_id = document.read(cx).id();
+                    let pane = CodeDocument::into_pane(document, cx);
+                    manager.update(cx, |manager, cx| {
+                        manager.open(Tab::Pane(Box::new(pane)), cx)
+                    });
+                    document_id
+                })
+            })
+            .collect();
+
+        (Fixture { manager, tabs }, window)
+    }
+
+    /// Bounds of the element `{part}-{id}` of every tab, from a fresh frame.
+    fn bounds_of(
+        window: &mut VisualTestContext,
+        fixture: &Fixture,
+        part: &str,
+    ) -> Vec<Bounds<Pixels>> {
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        fixture
+            .tabs
+            .iter()
+            .map(|id| {
+                let selector: &'static str = Box::leak(format!("{part}-{}", id.0).into_boxed_str());
+                window
+                    .debug_bounds(selector)
+                    .unwrap_or_else(|| panic!("no element {selector} was drawn"))
+            })
+            .collect()
+    }
+
+    fn activate(window: &mut VisualTestContext, fixture: &Fixture, index: usize) {
+        let id = fixture.tabs[index];
+        let manager = fixture.manager.clone();
+        window.update(|_, cx| manager.update(cx, |manager, cx| manager.activate(id, cx)));
+        window.run_until_parked();
+    }
+
+    #[test]
+    fn activating_a_tab_keeps_every_tab_in_place() {
+        let mut cx = weighted_text_cx();
+        let (fixture, window) = open_tab_bar(&mut cx);
+
+        let initial = bounds_of(window, &fixture, "tab");
+
+        for index in 0..fixture.tabs.len() {
+            activate(window, &fixture, index);
+
+            assert_eq!(
+                bounds_of(window, &fixture, "tab"),
+                initial,
+                "activating tab {index} moved or resized a tab"
+            );
+        }
+    }
+
+    #[test]
+    fn hovering_a_tab_keeps_every_tab_in_place() {
+        let mut cx = weighted_text_cx();
+        let (fixture, window) = open_tab_bar(&mut cx);
+
+        let initial = bounds_of(window, &fixture, "tab");
+
+        for (index, tab) in initial.iter().enumerate() {
+            window.simulate_mouse_move(tab.center(), None, Modifiers::none());
+
+            assert_eq!(
+                bounds_of(window, &fixture, "tab"),
+                initial,
+                "hovering tab {index} moved or resized a tab"
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_title_is_cut_the_same_whether_its_tab_is_active_or_not() {
+        let mut cx = weighted_text_cx();
+        let (fixture, window) = open_tab_bar(&mut cx);
+        let long = TITLES.len() - 1;
+        let max_width = window
+            .update(|window, _| TabMetrics::DOCUMENT_TAB_MAX_WIDTH.to_pixels(window.rem_size()));
+
+        let active_tab = bounds_of(window, &fixture, "tab")[long];
+        let active_title = bounds_of(window, &fixture, "tab-title")[long];
+
+        activate(window, &fixture, 0);
+
+        let inactive_tab = bounds_of(window, &fixture, "tab")[long];
+        let inactive_title = bounds_of(window, &fixture, "tab-title")[long];
+
+        assert_eq!(
+            active_tab.size.width, max_width,
+            "the long title fills the widest tab"
+        );
+        assert_eq!(inactive_tab.size, active_tab.size);
+        assert_eq!(
+            inactive_title.size, active_title.size,
+            "the title gets the same room active or not"
+        );
+        // Same room and same glyph widths cut the title at the same character.
+        assert_eq!(
+            weights_shaped_for("f3base.balance").len(),
+            1,
+            "the long title was shaped in more than one weight"
+        );
+    }
+
+    /// Clean tabs keep the dirty diamond's slot, so a document turning dirty
+    /// does not widen its tab.
+    #[test]
+    fn every_tab_reserves_the_dirty_indicator_and_action_slots() {
+        let mut cx = weighted_text_cx();
+        let (fixture, window) = open_tab_bar(&mut cx);
+
+        for part in ["dirty-dot", "tab-action"] {
+            let slots = bounds_of(window, &fixture, part);
+            let width = slots[0].size.width;
+
+            assert!(width > px(0.), "{part} has no width on a clean tab");
+            assert!(
+                slots.iter().all(|slot| slot.size.width == width),
+                "{part} differs between tabs: {slots:?}"
+            );
+        }
     }
 }

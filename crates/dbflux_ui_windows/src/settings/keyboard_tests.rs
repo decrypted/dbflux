@@ -675,4 +675,45 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
             "{section:?}: {checked:?}"
         );
     }
+
+    // A confirmation dialog draws its own OK and Cancel buttons.
+    window.update(|window, cx| {
+        settings.update(cx, |settings, cx| {
+            settings.set_active_section(SettingsSectionId::SshTunnels, window, cx)
+        })
+    });
+    window.run_until_parked();
+    let ssh = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::SshTunnels(section) => section.clone(),
+        _ => unreachable!("the SSH tunnels section is open"),
+    });
+    let tunnel = dbflux_core::SshTunnelProfile {
+        id: uuid::Uuid::new_v4(),
+        name: "doomed".to_string(),
+        config: dbflux_core::SshTunnelConfig {
+            host: "bastion.example.com".to_string(),
+            port: 22,
+            user: "deploy".to_string(),
+            auth_method: dbflux_core::SshAuthMethod::PrivateKey { key_path: None },
+            ssh_config_host: None,
+        },
+        save_secret: false,
+    };
+    window.update(|_, cx| {
+        ssh.update(cx, |section, cx| {
+            section
+                .app_state
+                .update(cx, |state, _| state.add_ssh_tunnel(tunnel.clone()));
+            section.request_delete_tunnel(tunnel.id, cx);
+        })
+    });
+    window.run_until_parked();
+
+    let checked = Coverage::new(SETTINGS).assert_covered(&capture.frame(window));
+    for button in ["ok", "cancel"] {
+        assert!(
+            checked.iter().any(|id| id == button),
+            "the confirmation's {button} button is checked: {checked:?}"
+        );
+    }
 }

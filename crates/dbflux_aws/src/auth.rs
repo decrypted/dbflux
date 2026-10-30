@@ -34,6 +34,9 @@ use dbflux_core::{
 use crate::config::CachedAwsConfig;
 use crate::parameters::AwsSsmParameterProvider;
 use crate::secrets::AwsSecretsManagerProvider;
+use crate::sso_refresh::{
+    OidcSsoTokenRefresher, SsoRefreshRequest, SsoTokenRefresher, write_refreshed_cache_entry,
+};
 
 const SSO_EXPIRY_BUFFER_SECS: i64 = 300;
 const SSO_LOGIN_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -1117,7 +1120,12 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             return Ok(AuthSessionState::LoginRequired);
         };
 
-        validate_sso_session(&url)
+        Ok(validate_or_refresh_sso_session(
+            &sso_cache_dir(),
+            &url,
+            &OidcSsoTokenRefresher::default(),
+        )
+        .await)
     }
 
     async fn login(
@@ -2053,48 +2061,149 @@ fn resolve_sso_start_url(profile_name: &str, sso_start_url: &str) -> Option<Stri
 /// solely on the filename hash. This handles mismatches caused by trailing
 /// slashes — e.g. the profile stores `".../start/"` but the CLI created the
 /// cache file using `".../start"` (or vice versa).
+///
+/// Never refreshes: the login flow polls this while `aws sso login` writes
+/// the new token.
 #[allow(clippy::result_large_err)]
 pub(crate) fn validate_sso_session(sso_start_url: &str) -> Result<AuthSessionState, DbError> {
-    let normalized_url = sso_start_url.trim_end_matches('/');
+    Ok(read_sso_cache_state(&sso_cache_dir(), sso_start_url, Utc::now()).into_session_state())
+}
 
-    // First try the hash-based path (fast path, works when URL is exact match).
-    // Then fall back to scanning all cache files by startUrl content.
-    let contents = find_sso_cache_contents(normalized_url);
+/// Like [`validate_sso_session`], but an expired access token whose cache
+/// entry still holds a usable refresh token and client registration is
+/// renewed in place, the way the AWS CLI and SDKs do, instead of being
+/// reported as expired. The access token lives one hour while the refresh
+/// token lives for days, so without this every start after an hour would
+/// open the browser.
+async fn validate_or_refresh_sso_session(
+    cache_dir: &std::path::Path,
+    sso_start_url: &str,
+    refresher: &dyn SsoTokenRefresher,
+) -> AuthSessionState {
+    let now = Utc::now();
 
-    let contents = match contents {
-        Some(c) => c,
-        None => return Ok(AuthSessionState::LoginRequired),
+    let (path, entry) = match read_sso_cache_state(cache_dir, sso_start_url, now) {
+        SsoCacheState::Expired { path, entry } => (path, entry),
+        state => return state.into_session_state(),
     };
 
-    let parsed: serde_json::Value = match serde_json::from_str(&contents) {
+    let Some(request) = SsoRefreshRequest::from_cache_entry(&entry, now) else {
+        log::debug!(
+            "AWS SSO token for '{}' expired and cannot be refreshed",
+            sso_start_url
+        );
+        return AuthSessionState::Expired;
+    };
+
+    match refresher.refresh(request).await {
+        Ok(refreshed) => {
+            let expires_at = now + chrono::Duration::seconds(refreshed.expires_in_secs);
+
+            // A token that is not on disk is useless: the SDK reads the cache
+            // file when it resolves the role credentials.
+            if let Err(err) = write_refreshed_cache_entry(&path, &entry, &refreshed, expires_at) {
+                log::warn!(
+                    "Refreshed the AWS SSO token for '{}' but could not update '{}': {}",
+                    sso_start_url,
+                    path.display(),
+                    err
+                );
+                return AuthSessionState::Expired;
+            }
+
+            log::info!(
+                "Refreshed the AWS SSO access token for '{}' without a login",
+                sso_start_url
+            );
+
+            AuthSessionState::Valid {
+                expires_at: Some(expires_at),
+            }
+        }
+        Err(err) => {
+            log::info!(
+                "AWS SSO token refresh for '{}' failed, a login is required: {}",
+                sso_start_url,
+                err
+            );
+
+            // The CLI or a concurrent connect may have renewed the shared
+            // cache while this refresh was in flight.
+            read_sso_cache_state(cache_dir, sso_start_url, Utc::now()).into_session_state()
+        }
+    }
+}
+
+/// What the SSO cache holds for one start URL.
+enum SsoCacheState {
+    Missing,
+    Valid {
+        expires_at: DateTime<Utc>,
+    },
+    /// The access token is expired or within [`SSO_EXPIRY_BUFFER_SECS`] of it.
+    Expired {
+        path: PathBuf,
+        entry: serde_json::Value,
+    },
+}
+
+impl SsoCacheState {
+    fn into_session_state(self) -> AuthSessionState {
+        match self {
+            Self::Missing => AuthSessionState::LoginRequired,
+            Self::Valid { expires_at } => AuthSessionState::Valid {
+                expires_at: Some(expires_at),
+            },
+            Self::Expired { .. } => AuthSessionState::Expired,
+        }
+    }
+}
+
+fn read_sso_cache_state(
+    cache_dir: &std::path::Path,
+    sso_start_url: &str,
+    now: DateTime<Utc>,
+) -> SsoCacheState {
+    let normalized_url = sso_start_url.trim_end_matches('/');
+
+    match find_sso_cache_entry(cache_dir, normalized_url) {
+        Some((path, contents)) => sso_cache_state_from_contents(path, &contents, now),
+        None => SsoCacheState::Missing,
+    }
+}
+
+fn sso_cache_state_from_contents(
+    path: PathBuf,
+    contents: &str,
+    now: DateTime<Utc>,
+) -> SsoCacheState {
+    let entry: serde_json::Value = match serde_json::from_str(contents) {
         Ok(v) => v,
         Err(err) => {
-            log::warn!("Malformed SSO cache entry for '{}': {}", sso_start_url, err);
-            return Ok(AuthSessionState::LoginRequired);
+            log::warn!("Malformed SSO cache entry '{}': {}", path.display(), err);
+            return SsoCacheState::Missing;
         }
     };
 
-    let expires_at_str = match parsed.get("expiresAt").and_then(|v| v.as_str()) {
+    let expires_at_str = match entry.get("expiresAt").and_then(|v| v.as_str()) {
         Some(s) => s,
-        None => return Ok(AuthSessionState::LoginRequired),
+        None => return SsoCacheState::Missing,
     };
 
     let expires_at = match parse_sso_expiry(expires_at_str) {
         Some(dt) => dt,
         None => {
             log::warn!("Unparseable expiresAt in SSO cache: {}", expires_at_str);
-            return Ok(AuthSessionState::LoginRequired);
+            return SsoCacheState::Missing;
         }
     };
 
     let buffered_expiry = expires_at - chrono::Duration::seconds(SSO_EXPIRY_BUFFER_SECS);
 
-    if Utc::now() >= buffered_expiry {
-        Ok(AuthSessionState::Expired)
+    if now >= buffered_expiry {
+        SsoCacheState::Expired { path, entry }
     } else {
-        Ok(AuthSessionState::Valid {
-            expires_at: Some(expires_at),
-        })
+        SsoCacheState::Valid { expires_at }
     }
 }
 
@@ -2118,25 +2227,38 @@ async fn resolve_aws_credentials(profile: &AuthProfile) -> Result<ResolvedCreden
         region.as_deref().unwrap_or("<sdk default>")
     );
 
+    run_on_dedicated_thread(move || resolve_aws_credentials_blocking(profile_name, region))
+        .await
+        .unwrap_or_else(|| {
+            Err(DbError::ValueResolutionFailed(
+                "AWS credential resolution thread terminated unexpectedly".to_string(),
+            ))
+        })
+}
+
+/// Runs blocking work (usually a private Tokio runtime driving the AWS SDK)
+/// on its own OS thread. Returns `None` if the thread dies before answering.
+///
+/// The non-blocking poll yields to the executor between checks, so GPUI keeps
+/// processing events while the work runs.
+pub(crate) async fn run_on_dedicated_thread<T, F>(work: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
 
     std::thread::spawn(move || {
-        let _ = result_tx.send(resolve_aws_credentials_blocking(profile_name, region));
+        let _ = result_tx.send(work());
     });
 
-    // Non-blocking poll — yields to the executor between checks so GPUI
-    // can continue processing events while credentials are being resolved.
     loop {
         match result_rx.try_recv() {
-            Ok(result) => return result,
+            Ok(result) => return Some(result),
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 async_sleep(std::time::Duration::from_millis(50)).await;
             }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                return Err(DbError::ValueResolutionFailed(
-                    "AWS credential resolution thread terminated unexpectedly".to_string(),
-                ));
-            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => return None,
         }
     }
 }
@@ -2257,7 +2379,8 @@ fn sso_cache_dir() -> PathBuf {
         .join("cache")
 }
 
-/// Reads the SSO cache file for the given start URL.
+/// Finds the SSO cache file for the given start URL in `dir` and returns its
+/// path and contents.
 ///
 /// AWS CLI v2 uses two different cache filename schemes:
 /// - Legacy: the file is named `sha1(start_url)` (with or without trailing slash).
@@ -2270,9 +2393,8 @@ fn sso_cache_dir() -> PathBuf {
 /// recently modified one. Relying on the hash-derived filename causes stale
 /// hash-matched files to mask fresh session-keyed tokens, leaving the login
 /// polling loop spinning forever after a successful `aws sso login`.
-fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
-    let dir = sso_cache_dir();
-    let entries = match std::fs::read_dir(&dir) {
+fn find_sso_cache_entry(dir: &std::path::Path, normalized_url: &str) -> Option<(PathBuf, String)> {
+    let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return None,
     };
@@ -2315,7 +2437,7 @@ fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
 
     if let Some((_, path, contents)) = newest {
         log::debug!("SSO cache hit: {}", path.display());
-        return Some(contents);
+        return Some((path, contents));
     }
 
     log::debug!("SSO cache miss for URL: {}", normalized_url);
@@ -2758,30 +2880,8 @@ mod tests {
     /// Helper: validates SSO session from a raw JSON string, bypassing
     /// the filesystem cache path lookup.
     fn validate_sso_from_str(json: &str) -> AuthSessionState {
-        let parsed: serde_json::Value = match serde_json::from_str(json) {
-            Ok(v) => v,
-            Err(_) => return AuthSessionState::LoginRequired,
-        };
-
-        let expires_at_str = match parsed.get("expiresAt").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => return AuthSessionState::LoginRequired,
-        };
-
-        let expires_at = match parse_sso_expiry(expires_at_str) {
-            Some(dt) => dt,
-            None => return AuthSessionState::LoginRequired,
-        };
-
-        let buffered_expiry = expires_at - chrono::Duration::seconds(SSO_EXPIRY_BUFFER_SECS);
-
-        if Utc::now() >= buffered_expiry {
-            AuthSessionState::Expired
-        } else {
-            AuthSessionState::Valid {
-                expires_at: Some(expires_at),
-            }
-        }
+        sso_cache_state_from_contents(PathBuf::from("cache.json"), json, Utc::now())
+            .into_session_state()
     }
 
     // -------------------------------------------------------------------------
@@ -4361,6 +4461,430 @@ sso_region = us-east-1
                 ssm_request.contains("AmazonSSM.GetParameter"),
                 "{ssm_request}"
             );
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // SSO access token refresh (no live AWS calls)
+    // -------------------------------------------------------------------------
+
+    const REFRESH_START_URL: &str = "https://refresh-test.awsapps.com/start";
+
+    fn cli_timestamp(at: DateTime<Utc>) -> String {
+        at.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+    }
+
+    /// Writes an entry shaped like the one `aws sso login` writes for an
+    /// `sso-session`: the file is named after the session, not the start URL.
+    fn write_session_cache(
+        dir: &std::path::Path,
+        access_expires_at: DateTime<Utc>,
+        registration_expires_at: Option<DateTime<Utc>>,
+        refresh_token: Option<&str>,
+    ) -> PathBuf {
+        let mut entry = serde_json::json!({
+            "startUrl": REFRESH_START_URL,
+            "region": "eu-central-1",
+            "accessToken": "old-access",
+            "expiresAt": cli_timestamp(access_expires_at),
+            "clientId": "client-id",
+            "clientSecret": "client-secret",
+            // Stands in for keys a newer CLI may add; they must survive a refresh.
+            "futureCliKey": "kept",
+        });
+        if let Some(at) = registration_expires_at {
+            entry["registrationExpiresAt"] = serde_json::Value::String(cli_timestamp(at));
+        }
+        if let Some(token) = refresh_token {
+            entry["refreshToken"] = serde_json::Value::String(token.to_string());
+        }
+
+        let path = dir.join(format!(
+            "{}.json",
+            hex::encode(Sha1::digest("test-session".as_bytes()))
+        ));
+        std::fs::write(&path, serde_json::to_vec(&entry).unwrap()).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        path
+    }
+
+    fn read_cache_json(path: &std::path::Path) -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    struct MockRefresher {
+        response: Result<(&'static str, i64, Option<&'static str>), &'static str>,
+        calls: Mutex<Vec<[String; 4]>>,
+    }
+
+    impl MockRefresher {
+        fn returning(access_token: &'static str, expires_in_secs: i64) -> Self {
+            Self::with_response(Ok((access_token, expires_in_secs, None)))
+        }
+
+        fn with_response(
+            response: Result<(&'static str, i64, Option<&'static str>), &'static str>,
+        ) -> Self {
+            Self {
+                response,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<[String; 4]> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SsoTokenRefresher for MockRefresher {
+        async fn refresh(
+            &self,
+            request: SsoRefreshRequest,
+        ) -> Result<crate::sso_refresh::RefreshedSsoToken, String> {
+            self.calls.lock().unwrap().push([
+                request.region.clone(),
+                request.client_id.clone(),
+                request.client_secret.expose_secret().to_string(),
+                request.refresh_token.expose_secret().to_string(),
+            ]);
+
+            match self.response {
+                Ok((access_token, expires_in_secs, rotated)) => {
+                    Ok(crate::sso_refresh::RefreshedSsoToken {
+                        access_token: SecretString::from(access_token.to_string()),
+                        expires_in_secs,
+                        refresh_token: rotated.map(|token| SecretString::from(token.to_string())),
+                    })
+                }
+                Err(message) => Err(message.to_string()),
+            }
+        }
+    }
+
+    fn assert_valid_until(state: &AuthSessionState, expected: DateTime<Utc>) {
+        match state {
+            AuthSessionState::Valid {
+                expires_at: Some(expires_at),
+            } => {
+                let drift = (*expires_at - expected).num_seconds().abs();
+                assert!(drift <= 5, "expiry {expires_at} is not close to {expected}");
+            }
+            other => panic!("expected a valid session, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_access_token_is_refreshed_instead_of_requiring_a_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let path = write_session_cache(
+            dir.path(),
+            now - chrono::Duration::minutes(10),
+            Some(now + chrono::Duration::days(80)),
+            Some("refresh-1"),
+        );
+        let before = read_cache_json(&path);
+        let refresher = MockRefresher::returning("new-access", 3600);
+
+        let state =
+            validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+        assert_valid_until(&state, now + chrono::Duration::hours(1));
+        assert_eq!(
+            refresher.calls(),
+            vec![[
+                "eu-central-1".to_string(),
+                "client-id".to_string(),
+                "client-secret".to_string(),
+                "refresh-1".to_string(),
+            ]]
+        );
+
+        let after = read_cache_json(&path);
+        assert_eq!(after["accessToken"], "new-access");
+        let AuthSessionState::Valid {
+            expires_at: Some(expires_at),
+        } = state
+        else {
+            unreachable!()
+        };
+        assert_eq!(after["expiresAt"], cli_timestamp(expires_at));
+
+        let before = before.as_object().unwrap();
+        let after = after.as_object().unwrap();
+        assert_eq!(before.len(), after.len(), "{after:?}");
+        for (key, value) in before {
+            if key != "accessToken" && key != "expiresAt" {
+                assert_eq!(after.get(key), Some(value), "key {key} changed");
+            }
+        }
+
+        let files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(files.len(), 1, "temporary file left behind: {files:?}");
+
+        // The refreshed entry now serves the fast path.
+        let unused = MockRefresher::with_response(Err("must not be called"));
+        let again = validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &unused).await;
+        assert_valid_until(&again, expires_at);
+        assert!(unused.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn token_inside_the_expiry_buffer_is_refreshed() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        write_session_cache(
+            dir.path(),
+            now + chrono::Duration::seconds(SSO_EXPIRY_BUFFER_SECS / 2),
+            Some(now + chrono::Duration::days(80)),
+            Some("refresh-1"),
+        );
+        let refresher = MockRefresher::returning("new-access", 3600);
+
+        let state =
+            validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+        assert_valid_until(&state, now + chrono::Duration::hours(1));
+        assert_eq!(refresher.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rotated_refresh_token_replaces_the_cached_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let path = write_session_cache(
+            dir.path(),
+            now - chrono::Duration::hours(3),
+            Some(now + chrono::Duration::days(80)),
+            Some("refresh-1"),
+        );
+        let refresher = MockRefresher::with_response(Ok(("new-access", 3600, Some("refresh-2"))));
+
+        let state =
+            validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+        assert!(matches!(state, AuthSessionState::Valid { .. }), "{state:?}");
+        let after = read_cache_json(&path);
+        assert_eq!(after["refreshToken"], "refresh-2");
+        assert_eq!(after["clientSecret"], "client-secret");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn refresh_keeps_the_cache_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for mode in [0o600, 0o640] {
+            let dir = tempfile::tempdir().unwrap();
+            let now = Utc::now();
+            let path = write_session_cache(
+                dir.path(),
+                now - chrono::Duration::minutes(10),
+                Some(now + chrono::Duration::days(80)),
+                Some("refresh-1"),
+            );
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            let refresher = MockRefresher::returning("new-access", 3600);
+
+            let state =
+                validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+            assert!(matches!(state, AuthSessionState::Valid { .. }), "{state:?}");
+            assert_eq!(read_cache_json(&path)["accessToken"], "new-access");
+            let actual = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(actual, mode, "permissions changed to {actual:o}");
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_registration_still_requires_a_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let path = write_session_cache(
+            dir.path(),
+            now - chrono::Duration::minutes(10),
+            Some(now - chrono::Duration::days(1)),
+            Some("refresh-1"),
+        );
+        let before = std::fs::read(&path).unwrap();
+        let refresher = MockRefresher::returning("new-access", 3600);
+
+        let state =
+            validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+        assert!(matches!(state, AuthSessionState::Expired), "{state:?}");
+        assert!(refresher.calls().is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn legacy_entry_without_refresh_token_still_requires_a_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        write_session_cache(dir.path(), now - chrono::Duration::minutes(10), None, None);
+        let refresher = MockRefresher::returning("new-access", 3600);
+
+        let state =
+            validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+        assert!(matches!(state, AuthSessionState::Expired), "{state:?}");
+        assert!(refresher.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_falls_back_to_a_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let path = write_session_cache(
+            dir.path(),
+            now - chrono::Duration::minutes(10),
+            Some(now + chrono::Duration::days(80)),
+            Some("revoked"),
+        );
+        let before = std::fs::read(&path).unwrap();
+        let refresher = MockRefresher::with_response(Err("InvalidGrantException"));
+
+        let state =
+            validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+        assert!(matches!(state, AuthSessionState::Expired), "{state:?}");
+        assert_eq!(refresher.calls().len(), 1);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn valid_access_token_is_used_without_a_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let expires_at = now + chrono::Duration::minutes(40);
+        let path = write_session_cache(
+            dir.path(),
+            expires_at,
+            Some(now + chrono::Duration::days(80)),
+            Some("refresh-1"),
+        );
+        let before = std::fs::read(&path).unwrap();
+        let refresher = MockRefresher::returning("new-access", 3600);
+
+        let state =
+            validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+        assert_valid_until(&state, expires_at);
+        assert!(refresher.calls().is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn missing_cache_entry_requires_a_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let refresher = MockRefresher::returning("new-access", 3600);
+
+        let state =
+            validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+        assert!(
+            matches!(state, AuthSessionState::LoginRequired),
+            "{state:?}"
+        );
+        assert!(refresher.calls().is_empty());
+    }
+
+    /// Accepts one connection, reads the whole request and answers it with
+    /// `body` as JSON. Returns the request.
+    async fn serve_one_json_response(listener: tokio::net::TcpListener, body: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let accepted = tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
+            .await
+            .expect("the client never reached the endpoint");
+        let (mut stream, _) = accepted.expect("accept");
+
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut buffer).await.expect("read request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+
+            let text = String::from_utf8_lossy(&request);
+            if let Some(head_end) = text.find("\r\n\r\n") {
+                let content_length = text[..head_end]
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request.len() >= head_end + 4 + content_length {
+                    break;
+                }
+            }
+        }
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+        let _ = stream.shutdown().await;
+
+        String::from_utf8_lossy(&request).to_string()
+    }
+
+    #[test]
+    fn oidc_refresher_renews_the_cache_through_create_token() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(serve_one_json_response(
+                listener,
+                r#"{"accessToken":"new-access","expiresIn":3600,"refreshToken":"refresh-2","tokenType":"Bearer"}"#,
+            ));
+
+            let dir = tempfile::tempdir().unwrap();
+            let now = Utc::now();
+            let path = write_session_cache(
+                dir.path(),
+                now - chrono::Duration::minutes(10),
+                Some(now + chrono::Duration::days(80)),
+                Some("refresh-1"),
+            );
+
+            let refresher = OidcSsoTokenRefresher::with_endpoint_url(endpoint);
+            let state =
+                validate_or_refresh_sso_session(dir.path(), REFRESH_START_URL, &refresher).await;
+
+            let request = server.await.unwrap();
+            assert!(request.starts_with("POST /token "), "{request}");
+            assert!(request.contains(r#""grantType":"refresh_token""#), "{request}");
+            assert!(request.contains(r#""refreshToken":"refresh-1""#), "{request}");
+            assert!(request.contains(r#""clientId":"client-id""#), "{request}");
+
+            assert_valid_until(&state, now + chrono::Duration::hours(1));
+            let after = read_cache_json(&path);
+            assert_eq!(after["accessToken"], "new-access");
+            assert_eq!(after["refreshToken"], "refresh-2");
+            assert_eq!(after["startUrl"], REFRESH_START_URL);
         });
     }
 }

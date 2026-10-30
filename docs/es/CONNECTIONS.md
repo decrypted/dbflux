@@ -277,7 +277,18 @@ y roles para que elijas.
 
 ### El flujo de login SSO
 
-Cuando una conexión (o los desplegables Account/Role) necesita una sesión SSO,
+El access token que guarda `aws sso login` dura alrededor de una hora, mientras
+que el refresh token guardado con él para un perfil que usa `sso_session` dura
+mucho más. Cuando el access token ha expirado, DBFlux primero lo renueva con ese
+refresh token, como hacen el AWS CLI y los SDK, y lo escribe de vuelta en el
+mismo archivo de `~/.aws/sso/cache` (se conservan las demás entradas y los
+permisos del archivo), así que no se abre el navegador. Solo hace falta un login
+cuando no hay sesión en caché, el refresh token o el registro del cliente ha
+expirado o fue revocado, o la renovación falla; y cada vez que expira el access
+token de un perfil que define `sso_start_url` sin `sso_session`, porque esos
+logins no guardan refresh token.
+
+Cuando una conexión (o los desplegables Account/Role) necesita un login SSO,
 DBFlux abre un modal de login:
 
 - **Abre tu navegador automáticamente** en la URL de verificación.

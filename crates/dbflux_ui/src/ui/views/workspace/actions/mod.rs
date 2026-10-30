@@ -118,6 +118,7 @@ fn collection_document_presentation_for_connection(
 mod audit;
 mod charts_dashboards;
 mod connections;
+mod data_restore;
 mod delimited;
 mod documents;
 mod dump_analysis;

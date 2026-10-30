@@ -2298,6 +2298,13 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Records the open tabs once more for the next launch. Tab events write
+    /// the session as they happen, but a table tab's filter or sort changes
+    /// without one, so a graceful shutdown writes it a last time.
+    pub fn persist_session(&self, cx: &mut Context<Self>) {
+        self.write_session_manifest(cx);
+    }
+
     /// Flushes every open document that still has pending edits, as part of a
     /// graceful shutdown, and reports whether any flush is still outstanding.
     ///

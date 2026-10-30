@@ -3859,6 +3859,31 @@ pub(crate) fn delimited_record_count_status(
     }
 }
 
+/// Title of the notice a restored table or collection tab shows while its
+/// connection is not up.
+pub(crate) fn restored_tab_waiting_title() -> String {
+    dbflux_i18n::t!("document.data.restored.waiting_title")
+}
+
+/// Body of that notice when the tab's connection is closed.
+pub(crate) fn restored_tab_waiting_connection_message(profile: &str, object: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.restored.waiting_connection",
+        profile = profile,
+        object = object
+    )
+}
+
+/// Body of that notice when the connection is up but the tab's database,
+/// on a driver with one connection per database, is not open yet.
+pub(crate) fn restored_tab_waiting_database_message(database: &str, object: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.restored.waiting_database",
+        database = database,
+        object = object
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]

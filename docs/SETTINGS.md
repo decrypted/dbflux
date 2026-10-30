@@ -90,7 +90,7 @@ converted crate by crate and stays in English for now.
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| **Restore session on startup** | On | Reopen the tabs you had open last time. |
+| **Restore session on startup** | On | Reopen the tabs you had open last time. Table and collection tabs come back with the filter, row limit and sort they last loaded with; one whose connection is not open yet says so and loads its rows once the connection is up (with **Reopen last connections**, or when you connect). A tab of a connection you deleted is not reopened, and query results opened in a tab of their own are not restored. |
 | **Reopen last connections** | Off | Reconnect at startup to the connections that were open when you last quit, and to the ones your restored tabs use. Works whether or not the session is restored. |
 | **Default focus** | Sidebar | Where focus lands on launch (Sidebar or the last tab). |
 | **Max history entries** | 1000 | Query-history cap (minimum 10). |

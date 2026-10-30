@@ -630,4 +630,3 @@ fn sort_keys_label(keys: &[(String, SortDirection)]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
-

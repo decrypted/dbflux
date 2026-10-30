@@ -266,6 +266,8 @@ impl DataGridPanel {
             cx,
         );
 
+        self.default_order_by = order_by.clone();
+
         if order_by.is_empty() && !restored_keys {
             self.pending.rebuild = true;
             cx.notify();

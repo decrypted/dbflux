@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use super::column_layout::ColumnLayout;
+
 /// Coordinate of a cell in the table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CellCoord {
@@ -82,14 +86,24 @@ impl CellRange {
 /// The selected range is derived from these two points. Ctrl+click
 /// (Cmd+click on macOS) keeps earlier ranges in `extra`; the keyboard, Shift
 /// and drag act on the anchor/active range only.
+///
+/// Every coordinate is a model column, but a range spans the columns between
+/// its corners as the screen shows them: with reordered or hidden columns
+/// (`columns`), dragging from one header to another selects what lies
+/// between them on screen. [`Self::ranges`] hands such a range out as the
+/// runs of adjacent model columns it covers, so code reading cells by model
+/// index never sees a hidden column or one from outside the dragged area.
 #[derive(Debug, Clone, Default)]
 pub struct SelectionState {
     /// Current cursor position
     pub active: Option<CellCoord>,
     /// Anchor for range selection
     pub anchor: Option<CellCoord>,
-    /// Further ranges added with Ctrl+click, oldest first.
+    /// Further ranges added with Ctrl+click, oldest first. Their corners are
+    /// ordered by screen position, like [`Self::selected_range`].
     extra: Vec<CellRange>,
+    /// Screen order of the columns; `None` while it is the model's own.
+    columns: Option<Arc<ColumnLayout>>,
 }
 
 impl SelectionState {
@@ -101,6 +115,118 @@ impl SelectionState {
         self.active = None;
         self.anchor = None;
         self.extra.clear();
+    }
+
+    /// Sets the screen order ranges follow, `None` for the model's own. The
+    /// Ctrl+click ranges are dropped: their corners were ordered for the
+    /// previous screen.
+    pub fn set_column_layout(&mut self, columns: Option<Arc<ColumnLayout>>) {
+        self.columns = columns.filter(|layout| !layout.is_identity());
+        self.extra.clear();
+    }
+
+    /// Screen position of model column `col`, `None` while it is hidden.
+    pub fn view_position(&self, col: usize) -> Option<usize> {
+        match &self.columns {
+            Some(layout) => layout.view_position(col),
+            None => Some(col),
+        }
+    }
+
+    /// The model column at screen position `position`, for a grid of
+    /// `col_count` model columns.
+    fn model_column(&self, position: usize, col_count: usize) -> Option<usize> {
+        match &self.columns {
+            Some(layout) => layout.model_column(position),
+            None => (position < col_count).then_some(position),
+        }
+    }
+
+    /// The first and last column on screen, for a grid of `col_count` model
+    /// columns.
+    fn screen_edges(&self, col_count: usize) -> Option<(usize, usize)> {
+        let shown = match &self.columns {
+            Some(layout) => layout.visible_count().min(col_count),
+            None => col_count,
+        };
+        let last = shown.checked_sub(1)?;
+        Some((
+            self.model_column(0, col_count)?,
+            self.model_column(last, col_count)?,
+        ))
+    }
+
+    /// Orders `cols` (model columns) as the screen shows them, hidden ones
+    /// last, so text copied from the selection reads like the grid.
+    pub fn sort_by_screen_order(&self, cols: &mut [usize]) {
+        cols.sort_by_key(|col| (self.view_position(*col).unwrap_or(usize::MAX), *col));
+    }
+
+    /// The range between two cells, its corners ordered by screen position.
+    fn range_between(&self, a: CellCoord, b: CellCoord) -> CellRange {
+        let (Some(a_pos), Some(b_pos)) = (self.view_position(a.col), self.view_position(b.col))
+        else {
+            return CellRange::new(a, b);
+        };
+        let (left, right) = if a_pos <= b_pos {
+            (a.col, b.col)
+        } else {
+            (b.col, a.col)
+        };
+
+        CellRange {
+            start: CellCoord::new(a.row.min(b.row), left),
+            end: CellCoord::new(a.row.max(b.row), right),
+        }
+    }
+
+    /// Screen positions a range spans, `None` when a corner is hidden.
+    fn screen_span(&self, range: &CellRange) -> Option<(usize, usize)> {
+        Some((
+            self.view_position(range.start.col)?,
+            self.view_position(range.end.col)?,
+        ))
+    }
+
+    fn range_contains(&self, range: &CellRange, coord: CellCoord) -> bool {
+        if self.columns.is_none() {
+            return range.contains(coord);
+        }
+        let (Some((left, right)), Some(position)) =
+            (self.screen_span(range), self.view_position(coord.col))
+        else {
+            return false;
+        };
+
+        range.contains_row(coord.row) && left <= position && position <= right
+    }
+
+    /// A range as runs of adjacent model columns, for readers that walk
+    /// `start.col..=end.col`.
+    fn model_runs(&self, range: CellRange) -> Vec<CellRange> {
+        let Some(layout) = &self.columns else {
+            return vec![range];
+        };
+        let Some((left, right)) = self.screen_span(&range) else {
+            return Vec::new();
+        };
+
+        let mut cols: Vec<usize> = (left..=right)
+            .filter_map(|position| layout.model_column(position))
+            .collect();
+        cols.sort_unstable();
+
+        let mut runs: Vec<CellRange> = Vec::new();
+        for col in cols {
+            match runs.last_mut() {
+                Some(run) if run.end.col + 1 == col => run.end.col = col,
+                _ => runs.push(CellRange {
+                    start: CellCoord::new(range.start.row, col),
+                    end: CellCoord::new(range.end.row, col),
+                }),
+            }
+        }
+        runs
     }
 
     /// Drops the Ctrl+click ranges, keeping the anchor/active range.
@@ -131,13 +257,12 @@ impl SelectionState {
     /// Ctrl+click on a row number: keep what is selected and add the row, or
     /// deselect it when it is selected on its own already.
     pub fn toggle_row(&mut self, row: usize, col_count: usize) {
-        if col_count == 0 {
+        let Some((first, last)) = self.screen_edges(col_count) else {
             return;
-        }
-        self.toggle_range(CellRange::new(
-            CellCoord::new(row, 0),
-            CellCoord::new(row, col_count - 1),
-        ));
+        };
+        self.toggle_range(
+            self.range_between(CellCoord::new(row, first), CellCoord::new(row, last)),
+        );
     }
 
     /// Ctrl+click on a column header: keep what is selected and add the
@@ -146,10 +271,9 @@ impl SelectionState {
         if row_count == 0 {
             return;
         }
-        self.toggle_range(CellRange::new(
-            CellCoord::new(0, col),
-            CellCoord::new(row_count - 1, col),
-        ));
+        self.toggle_range(
+            self.range_between(CellCoord::new(0, col), CellCoord::new(row_count - 1, col)),
+        );
     }
 
     /// Adds `range` as the current range, or takes it out when it is
@@ -191,8 +315,45 @@ impl SelectionState {
     }
 
     /// Every selected range: the anchor/active one first, then the Ctrl+click
-    /// ones.
+    /// ones. With columns reordered or hidden on screen, each range comes as
+    /// the runs of adjacent model columns it covers on screen, so
+    /// `start.col..=end.col` of every returned range holds only selected,
+    /// shown columns.
     pub fn ranges(&self) -> Vec<CellRange> {
+        self.screen_ranges()
+            .into_iter()
+            .flat_map(|range| self.model_runs(range))
+            .collect()
+    }
+
+    /// Every row that holds a selected cell, ascending, below `row_count`.
+    pub fn selected_rows(&self, row_count: usize) -> Vec<usize> {
+        self.ranges()
+            .iter()
+            .flat_map(|range| range.start.row..=range.end.row.min(row_count.saturating_sub(1)))
+            .filter(|row| *row < row_count)
+            .collect::<std::collections::BTreeSet<usize>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Every shown column that holds a selected cell, below `col_count`, in
+    /// the order the screen shows them.
+    pub fn selected_columns(&self, col_count: usize) -> Vec<usize> {
+        let mut cols: Vec<usize> = self
+            .ranges()
+            .iter()
+            .flat_map(|range| range.start.col..=range.end.col)
+            .filter(|col| *col < col_count && self.view_position(*col).is_some())
+            .collect::<std::collections::BTreeSet<usize>>()
+            .into_iter()
+            .collect();
+        self.sort_by_screen_order(&mut cols);
+        cols
+    }
+
+    /// The ranges as selected on screen, corners ordered by screen position.
+    fn screen_ranges(&self) -> Vec<CellRange> {
         self.selected_range()
             .into_iter()
             .chain(self.extra.iter().copied())
@@ -207,10 +368,11 @@ impl SelectionState {
         self.active = Some(coord);
     }
 
-    /// Get the selected range (normalized so start <= end).
+    /// Get the selected range (normalized so start <= end, the columns by
+    /// screen position).
     pub fn selected_range(&self) -> Option<CellRange> {
         match (self.active, self.anchor) {
-            (Some(active), Some(anchor)) => Some(CellRange::new(anchor, active)),
+            (Some(active), Some(anchor)) => Some(self.range_between(anchor, active)),
             (Some(active), None) => Some(CellRange::single(active)),
             _ => None,
         }
@@ -218,23 +380,19 @@ impl SelectionState {
 
     /// Check if a cell is within the current selection.
     pub fn is_selected(&self, coord: CellCoord) -> bool {
-        self.selected_range()
-            .into_iter()
-            .chain(self.extra.iter().copied())
-            .any(|r| r.contains(coord))
+        self.screen_ranges()
+            .iter()
+            .any(|r| self.range_contains(r, coord))
     }
 
-    /// Check if an entire row is selected (all columns from 0 to col_count-1).
+    /// Check if an entire row is selected (every column on screen).
     pub fn is_full_row_selected(&self, row: usize, col_count: usize) -> bool {
-        self.selected_range()
-            .into_iter()
-            .chain(self.extra.iter().copied())
-            .any(|r| {
-                r.start.row <= row
-                    && row <= r.end.row
-                    && r.start.col == 0
-                    && r.end.col == col_count.saturating_sub(1)
-            })
+        let Some((first, last)) = self.screen_edges(col_count) else {
+            return false;
+        };
+        self.screen_ranges().iter().any(|r| {
+            r.start.row <= row && row <= r.end.row && r.start.col == first && r.end.col == last
+        })
     }
 
     /// Select an entire row.
@@ -243,11 +401,11 @@ impl SelectionState {
     /// and the value panel stay at the left edge; the anchor takes the last
     /// column to span the row.
     pub fn select_row(&mut self, row: usize, col_count: usize) {
-        if col_count == 0 {
+        let Some((first, last)) = self.screen_edges(col_count) else {
             return;
-        }
-        self.anchor = Some(CellCoord::new(row, col_count - 1));
-        self.active = Some(CellCoord::new(row, 0));
+        };
+        self.anchor = Some(CellCoord::new(row, last));
+        self.active = Some(CellCoord::new(row, first));
         self.extra.clear();
     }
 
@@ -257,12 +415,12 @@ impl SelectionState {
     /// so a range started on a cell becomes full rows, as a Shift+click on a
     /// row number does in a grid. Without an anchor, `row` alone is selected.
     pub fn extend_to_row(&mut self, row: usize, col_count: usize) {
-        if col_count == 0 {
+        let Some((first, last)) = self.screen_edges(col_count) else {
             return;
-        }
+        };
         let anchor_row = self.anchor.map_or(row, |anchor| anchor.row);
-        self.anchor = Some(CellCoord::new(anchor_row, col_count - 1));
-        self.active = Some(CellCoord::new(row, 0));
+        self.anchor = Some(CellCoord::new(anchor_row, last));
+        self.active = Some(CellCoord::new(row, first));
     }
 
     /// Select an entire column.
@@ -293,22 +451,22 @@ impl SelectionState {
 
     /// Check if an entire column is selected (all rows).
     pub fn is_full_column_selected(&self, col: usize, row_count: usize) -> bool {
-        self.ranges().iter().any(|r| {
-            r.start.col <= col
-                && col <= r.end.col
-                && r.start.row == 0
+        self.screen_ranges().iter().any(|r| {
+            r.start.row == 0
                 && r.end.row == row_count.saturating_sub(1)
+                && self.range_contains(r, CellCoord::new(0, col))
         })
     }
 
     /// Select all cells in the table.
     pub fn select_all(&mut self, row_count: usize, col_count: usize) {
-        if row_count == 0 || col_count == 0 {
+        let edges = self.screen_edges(col_count);
+        let (Some((first, last)), false) = (edges, row_count == 0) else {
             self.clear();
             return;
-        }
-        self.anchor = Some(CellCoord::new(0, 0));
-        self.active = Some(CellCoord::new(row_count - 1, col_count - 1));
+        };
+        self.anchor = Some(CellCoord::new(0, first));
+        self.active = Some(CellCoord::new(row_count - 1, last));
         self.extra.clear();
     }
 }
@@ -375,6 +533,78 @@ mod tests {
         sel.select_cell(CellCoord::new(0, 0));
         assert_eq!(sel.ranges().len(), 1);
         assert!(!sel.is_full_row_selected(4, 3));
+    }
+
+    /// With columns reordered and one hidden, a range spans what lies
+    /// between its corners on screen, and `ranges` hands it out as runs of
+    /// model columns without the hidden one.
+    #[test]
+    fn ranges_follow_the_screen_order_of_columns() {
+        // Model columns 0..5; screen shows 3, 0, 4, 1 and hides 2.
+        let mut layout = ColumnLayout::identity(5);
+        assert!(layout.move_to(3, 0));
+        assert!(layout.move_to(4, 1));
+        assert!(layout.hide(2));
+        assert_eq!(layout.visible_columns(), &[3, 0, 4, 1]);
+
+        let mut sel = SelectionState::new();
+        sel.set_column_layout(Some(Arc::new(layout)));
+
+        // Drag from the first screen column (model 3) to the third (model 4).
+        sel.select_cell(CellCoord::new(0, 3));
+        sel.extend_to(CellCoord::new(1, 4));
+        assert!(
+            sel.is_selected(CellCoord::new(1, 0)),
+            "model 0 lies between"
+        );
+        assert!(
+            !sel.is_selected(CellCoord::new(1, 1)),
+            "model 1 is right of it"
+        );
+        assert!(!sel.is_selected(CellCoord::new(1, 2)), "model 2 is hidden");
+
+        let runs: Vec<(usize, usize)> = sel
+            .ranges()
+            .iter()
+            .map(|range| (range.start.col, range.end.col))
+            .collect();
+        assert_eq!(runs, [(0, 0), (3, 4)]);
+
+        // A whole row is the screen's first to last column, with the
+        // cursor in the first one on screen.
+        sel.select_row(2, 5);
+        assert_eq!(sel.active, Some(CellCoord::new(2, 3)));
+        assert_eq!(sel.anchor, Some(CellCoord::new(2, 1)));
+        assert!(sel.is_full_row_selected(2, 5));
+        assert!(!sel.is_selected(CellCoord::new(2, 2)));
+
+        let mut cols = vec![0, 1, 2, 3, 4];
+        sel.sort_by_screen_order(&mut cols);
+        assert_eq!(cols, [3, 0, 4, 1, 2]);
+    }
+
+    /// The rows and columns an export of the selection takes: rows in
+    /// result order, columns in screen order without the hidden one, and
+    /// nothing at or past the grid's edge.
+    #[test]
+    fn selected_rows_and_columns_follow_the_screen() {
+        let mut layout = ColumnLayout::identity(5);
+        assert!(layout.move_to(3, 0));
+        assert!(layout.move_to(4, 1));
+        assert!(layout.hide(2));
+
+        let mut sel = SelectionState::new();
+        assert!(sel.selected_rows(10).is_empty());
+        assert!(sel.selected_columns(5).is_empty());
+
+        sel.set_column_layout(Some(Arc::new(layout)));
+        sel.select_cell(CellCoord::new(4, 4));
+        sel.extend_to(CellCoord::new(2, 3));
+        sel.toggle_cell(CellCoord::new(7, 1));
+
+        assert_eq!(sel.selected_rows(10), [2, 3, 4, 7]);
+        assert_eq!(sel.selected_columns(5), [3, 0, 4, 1]);
+        assert_eq!(sel.selected_rows(4), [2, 3], "rows past the grid drop");
     }
 
     #[test]

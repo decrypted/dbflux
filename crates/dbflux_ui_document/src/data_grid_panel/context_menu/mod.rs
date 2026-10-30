@@ -27,6 +27,7 @@ use gpui_component::ActiveTheme;
 use std::fs::File;
 use std::io::BufWriter;
 
+mod columns;
 mod copy_extractors;
 mod items;
 mod sections;
@@ -137,10 +138,12 @@ pub(super) fn place_context_menu(
 
 /// One row of the data grid's export menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ExportMenuEntry {
-    /// Write the loaded rows to a file in this format.
+pub(crate) enum ExportMenuEntry {
+    /// A Rows, Columns or CSV choice; the format rows below follow it.
+    Option(super::export_options::ExportOptionRow),
+    /// Write the chosen rows and columns to a file in this format.
     Save(ExportFormat),
-    /// Put the loaded rows on the clipboard in this format.
+    /// Put the chosen rows and columns on the clipboard in this format.
     Copy(ExportFormat),
     /// Page through the whole table and stream it to a file in this format.
     SaveAll(dbflux_transfer::FileFormat),
@@ -221,7 +224,7 @@ impl DataGridPanel {
             return;
         };
 
-        let (row, col, cell_x, horizontal_offset) = {
+        let (row, col, cell_x) = {
             let ts = table_state.read(cx);
 
             let (row, col) = ts
@@ -230,12 +233,11 @@ impl DataGridPanel {
                 .map(|c| (c.row, c.col))
                 .unwrap_or((0, 0));
 
-            let widths = ts.column_widths();
+            // Left edge of the cell's column as the screen draws it, scroll
+            // and pinned columns included.
+            let cell_x = ts.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH);
 
-            // Calculate cell x position: sum of column widths up to col
-            let cell_x: f32 = widths.iter().take(col).sum();
-
-            (row, col, cell_x, ts.horizontal_offset())
+            (row, col, cell_x)
         };
 
         // Calculate position in window coordinates:
@@ -243,7 +245,7 @@ impl DataGridPanel {
         // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
         let toolbar_height = px(36.0); // Approximate toolbar height
         let position = Point {
-            x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(cell_x) - horizontal_offset + px(20.0),
+            x: self.panel_origin.x + cell_x + px(20.0),
             y: self.panel_origin.y
                 + toolbar_height
                 + fonts::grid_header_height(cx)
@@ -746,6 +748,7 @@ impl DataGridPanel {
             .unwrap_or(false);
 
         if self.context_menu.is_some()
+            || self.column_chooser.is_some()
             || self.chrome.export_menu_open
             || self.collection.history_open
         {
@@ -1123,6 +1126,11 @@ impl DataGridPanel {
             ContextMenuAction::RemoveOrdering,
         ];
         actions.extend(filter_items.into_iter().map(|(_, action)| action));
+        actions.extend(
+            self.column_menu_items(menu.col, cx)
+                .into_iter()
+                .map(|item| item.action),
+        );
 
         match cmd {
             Command::MenuDown => {
@@ -1229,8 +1237,15 @@ impl DataGridPanel {
             return;
         }
 
+        self.load_export_options(cx);
         self.chrome.export_menu_open = true;
-        self.chrome.export_menu_selected = 0;
+        // The keyboard starts on the first format, so Ctrl+E Enter still
+        // saves at once; the options sit above it.
+        self.chrome.export_menu_selected = self
+            .export_menu_entries()
+            .iter()
+            .position(|entry| !matches!(entry, ExportMenuEntry::Option(_)))
+            .unwrap_or(0);
         self.focus.export_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
@@ -1245,26 +1260,29 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// The rows of the export menu, in the order it draws them: a save row
-    /// per format, a copy row per format, then, when the whole table can be
-    /// read again, an export-all row per streaming format.
-    pub(super) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
-        let formats = dbflux_export::available_formats(&self.result.shape);
-        let export_all_formats: &[dbflux_transfer::FileFormat] = if self.can_export_all_rows() {
-            &dbflux_transfer::FileFormat::ALL
-        } else {
-            &[]
-        };
+    /// The rows of the export menu, in the order it draws them: the option
+    /// rows, then a save row and a copy row per format, or, when the Rows
+    /// option is All rows, an export-all row per streaming format.
+    pub(crate) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
+        let options = self
+            .export_option_rows()
+            .into_iter()
+            .map(ExportMenuEntry::Option);
 
-        formats
-            .iter()
-            .map(|&format| ExportMenuEntry::Save(format))
+        if self.exports_all_rows() {
+            return options
+                .chain(
+                    dbflux_transfer::FileFormat::ALL
+                        .iter()
+                        .map(|&format| ExportMenuEntry::SaveAll(format)),
+                )
+                .collect();
+        }
+
+        let formats = dbflux_export::available_formats(&self.result.shape);
+        options
+            .chain(formats.iter().map(|&format| ExportMenuEntry::Save(format)))
             .chain(formats.iter().map(|&format| ExportMenuEntry::Copy(format)))
-            .chain(
-                export_all_formats
-                    .iter()
-                    .map(|&format| ExportMenuEntry::SaveAll(format)),
-            )
             .collect()
     }
 
@@ -1278,6 +1296,12 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> bool {
         let entries = self.export_menu_entries();
+
+        if let Some(&entry) = entries.get(self.chrome.export_menu_selected)
+            && let Some(handled) = self.dispatch_export_option_command(entry, cmd, cx)
+        {
+            return handled;
+        }
 
         match cmd {
             Command::MenuDown | Command::SelectNext => {
@@ -1315,6 +1339,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         match entry {
+            ExportMenuEntry::Option(row) => self.activate_export_option(row, cx),
             ExportMenuEntry::Save(format) => self.export_with_format(format, window, cx),
             ExportMenuEntry::Copy(format) => self.copy_to_clipboard_with_format(format, window, cx),
             ExportMenuEntry::SaveAll(format) => self.export_all_rows(format, window, cx),
@@ -1331,8 +1356,8 @@ impl DataGridPanel {
             self.close_export_menu(window, cx);
         }
 
-        let result = self.result.clone();
-        let loaded_rows = loaded_row_count(&result);
+        let (result, scope_label) = self.export_menu_payload(cx);
+        let csv_options = self.export_menu_csv_options();
         let base_name = self.export_base_name();
         let extension = format.extension();
         let suggested_name = format!("{}.{}", base_name, extension);
@@ -1400,15 +1425,15 @@ impl DataGridPanel {
             let export_result = (|| {
                 let file = File::create(&target_path)?;
                 let mut writer = BufWriter::new(file);
-                dbflux_export::export(&result, format, &mut writer)?;
+                dbflux_export::export_with_csv_options(&result, format, csv_options, &mut writer)?;
                 Ok::<_, dbflux_export::ExportError>(())
             })();
 
             let path_text = target_path.display().to_string();
-            let (message, is_error) = match (&export_result, loaded_rows) {
-                (Ok(()), Some(count)) if used_fallback => (
-                    crate::labels::context_menu_export_native_picker_fallback_rows_toast(
-                        count, &path_text,
+            let (message, is_error) = match (&export_result, scope_label.as_deref()) {
+                (Ok(()), Some(scope)) if used_fallback => (
+                    crate::labels::context_menu_export_native_picker_fallback_scope_toast(
+                        scope, &path_text,
                     ),
                     false,
                 ),
@@ -1416,8 +1441,8 @@ impl DataGridPanel {
                     crate::labels::context_menu_export_native_picker_fallback_toast(&path_text),
                     false,
                 ),
-                (Ok(()), Some(count)) => (
-                    crate::labels::context_menu_export_exported_rows_toast(count, &path_text),
+                (Ok(()), Some(scope)) => (
+                    crate::labels::context_menu_export_exported_scope_toast(scope, &path_text),
                     false,
                 ),
                 (Ok(()), None) => (
@@ -1474,10 +1499,30 @@ impl DataGridPanel {
             return;
         }
 
+        let (result, scope_label) = self.export_menu_payload(cx);
         let mut buffer: Vec<u8> = Vec::new();
-        let export_result = dbflux_export::export(&self.result, format, &mut buffer);
-        let row_count = loaded_row_count(&self.result);
+        let export_result = dbflux_export::export_with_csv_options(
+            &result,
+            format,
+            self.export_menu_csv_options(),
+            &mut buffer,
+        );
+        let byte_len = buffer.len();
+        let row_count = scope_label.is_some().then_some(result.rows.len());
         self.finish_clipboard_copy(export_result, buffer, format, row_count, cx);
+
+        // The shared copy report words a row count; the menu states the rows
+        // and columns it chose instead.
+        if let Some(scope) = scope_label
+            && let Some(toast) = self.pending.toast.as_mut()
+            && !toast.is_error
+        {
+            toast.message = crate::labels::context_menu_clipboard_copied_scope_toast(
+                &scope,
+                format.name(),
+                byte_len,
+            );
+        }
     }
 
     /// Context menu Copy as CSV / Copy as JSON: the selected cells through the
@@ -1518,7 +1563,6 @@ impl DataGridPanel {
         cx: &App,
         mask_unselected: bool,
     ) -> Option<dbflux_core::QueryResult> {
-        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
         use dbflux_components::components::data_table::selection::CellCoord;
         use std::collections::BTreeSet;
 
@@ -1536,37 +1580,22 @@ impl DataGridPanel {
             .flat_map(|range| range.start.row..=range.end.row)
             .filter(|&row| row < visual_order.len())
             .collect();
-        let cols: BTreeSet<usize> = ranges
+        // Columns in the order the grid shows them, as the plain copy does.
+        let mut cols: Vec<usize> = ranges
             .iter()
             .flat_map(|range| range.start.col..=range.end.col)
             .filter(|&col| col < self.result.columns.len())
+            .collect::<BTreeSet<usize>>()
+            .into_iter()
             .collect();
+        selection.sort_by_screen_order(&mut cols);
 
         let columns = cols
             .iter()
             .filter_map(|&col| self.result.columns.get(col).cloned())
             .collect();
-        let shown_value = |row: usize, col: usize| -> Value {
-            match visual_order.get(row).copied() {
-                Some(VisualRowSource::Base(base_row)) if buffer.is_cell_dirty(base_row, col) => {
-                    let null = CellValue::null();
-                    buffer.get_cell(base_row, col, &null).to_value()
-                }
-                Some(VisualRowSource::Base(base_row)) => self
-                    .result
-                    .rows
-                    .get(base_row)
-                    .and_then(|values| values.get(col))
-                    .cloned()
-                    .unwrap_or(Value::Null),
-                Some(VisualRowSource::Insert(insert_idx)) => buffer
-                    .get_pending_insert_by_idx(insert_idx)
-                    .and_then(|cells| cells.get(col))
-                    .map(CellValue::to_value)
-                    .unwrap_or(Value::Null),
-                None => Value::Null,
-            }
-        };
+        let shown_value =
+            |row: usize, col: usize| shown_value(&self.result, buffer, &visual_order, row, col);
         let rows = rows
             .iter()
             .map(|&row| {
@@ -1588,6 +1617,31 @@ impl DataGridPanel {
             None,
             std::time::Duration::ZERO,
         ))
+    }
+
+    /// Every column of the given visual rows as the grid shows them, the way
+    /// [`Self::selection_result`] reads its cells.
+    pub(in crate::data_grid_panel) fn shown_row_values(
+        &self,
+        visual_rows: &[usize],
+        cx: &App,
+    ) -> Vec<Vec<Value>> {
+        let Some(table_state) = self.grid_table.table_state.as_ref() else {
+            return Vec::new();
+        };
+        let buffer = table_state.read(cx).edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+        let col_count = self.result.columns.len();
+
+        visual_rows
+            .iter()
+            .filter(|&&row| row < visual_order.len())
+            .map(|&row| {
+                (0..col_count)
+                    .map(|col| shown_value(&self.result, buffer, &visual_order, row, col))
+                    .collect()
+            })
+            .collect()
     }
 
     /// Writes an export to the clipboard and reports it: the toast, and the
@@ -2130,6 +2184,20 @@ impl DataGridPanel {
             }
             ContextMenuAction::FindSimilarRows => {
                 self.find_similar_rows_at(menu.row, menu.col, cx);
+            }
+            // The chooser takes the keyboard, so focus stays with it rather
+            // than going back to the grid.
+            ContextMenuAction::ChooseColumns => {
+                self.open_column_chooser(menu.position, window, cx);
+                return;
+            }
+            ContextMenuAction::FitColumnWidth
+            | ContextMenuAction::HideColumn
+            | ContextMenuAction::MoveColumnLeft
+            | ContextMenuAction::MoveColumnRight
+            | ContextMenuAction::PinColumn
+            | ContextMenuAction::UnpinColumn => {
+                self.handle_column_menu_action(action, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {
                 let query = self.chart_host_current_query(cx);
@@ -4500,15 +4568,6 @@ impl DataGridPanel {
     }
 }
 
-/// How many rows an export of the loaded result writes, or `None` for a text
-/// or binary payload, which has no rows to count.
-fn loaded_row_count(result: &dbflux_core::QueryResult) -> Option<usize> {
-    let is_payload =
-        result.rows.is_empty() && (result.text_body.is_some() || result.raw_bytes.is_some());
-
-    (!is_payload).then_some(result.rows.len())
-}
-
 pub(super) fn record_export_audit(
     audit_service: &dbflux_audit::AuditService,
     format_name: &str,
@@ -4767,6 +4826,37 @@ async fn reference_display_columns(
     }
 
     display_columns
+}
+
+/// The value the grid shows at visual `row`, `col`: a pending insert's
+/// value, an unsaved edit, or the loaded value of `result`.
+fn shown_value(
+    result: &dbflux_core::QueryResult,
+    buffer: &dbflux_components::components::data_table::model::EditBuffer,
+    visual_order: &[dbflux_components::components::data_table::model::VisualRowSource],
+    row: usize,
+    col: usize,
+) -> Value {
+    use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
+
+    match visual_order.get(row).copied() {
+        Some(VisualRowSource::Base(base_row)) if buffer.is_cell_dirty(base_row, col) => {
+            let null = CellValue::null();
+            buffer.get_cell(base_row, col, &null).to_value()
+        }
+        Some(VisualRowSource::Base(base_row)) => result
+            .rows
+            .get(base_row)
+            .and_then(|values| values.get(col))
+            .cloned()
+            .unwrap_or(Value::Null),
+        Some(VisualRowSource::Insert(insert_idx)) => buffer
+            .get_pending_insert_by_idx(insert_idx)
+            .and_then(|cells| cells.get(col))
+            .map(CellValue::to_value)
+            .unwrap_or(Value::Null),
+        None => Value::Null,
+    }
 }
 
 #[cfg(test)]

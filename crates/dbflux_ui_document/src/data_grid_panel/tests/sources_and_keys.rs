@@ -311,9 +311,10 @@ fn ctrl_e_opens_an_export_menu_driven_by_the_menu_keys(cx: &mut TestAppContext) 
     );
     assert_eq!(context(window), ContextId::Results);
 
-    // Up from the first entry wraps to the last copy entry, which puts
-    // the compact JSON on the clipboard.
-    window.simulate_keystrokes("ctrl-e k enter");
+    // The menu opens on the first format, below the option rows: five
+    // steps down is the last copy entry, which puts the compact JSON on
+    // the clipboard.
+    window.simulate_keystrokes("ctrl-e j j j j j enter");
     window.run_until_parked();
     let copied = window
         .update(|_, cx| cx.read_from_clipboard())

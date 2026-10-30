@@ -20,6 +20,9 @@ pub struct SegmentedItem {
     pub id: SharedString,
     pub label: SharedString,
     pub icon: Option<AppIcon>,
+    /// Drawn dimmed and ignores clicks, for an option that does not apply
+    /// right now; the owner says why next to the control.
+    pub disabled: bool,
 }
 
 impl SegmentedItem {
@@ -28,7 +31,14 @@ impl SegmentedItem {
             id: id.into(),
             label: label.into(),
             icon: None,
+            disabled: false,
         }
+    }
+
+    /// Dims the segment and ignores clicks on it.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 
     /// Draws `icon` before the label.
@@ -172,9 +182,12 @@ impl RenderOnce for SegmentedControl {
             let is_active = item.id == active_id;
             let is_focused = focused_id.as_ref() == Some(&item.id);
             let segment_id = segmented_item_id(group.as_deref(), item.id.as_ref());
+            let enabled = !item.disabled;
 
             let thumb = if is_active {
                 Chamfer::new(ChamferCut::KEYCAP).fill(theme.secondary)
+            } else if item.disabled {
+                Chamfer::new(ChamferCut::KEYCAP)
             } else {
                 Chamfer::new(ChamferCut::KEYCAP)
                     .fill_hover(theme.accent)
@@ -205,8 +218,10 @@ impl RenderOnce for SegmentedControl {
                         } else {
                             Toggled::False
                         })
-                        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
-                            on_accessible_select(&accessible_id, window, cx);
+                        .when(enabled, |segment| {
+                            segment.on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+                                on_accessible_select(&accessible_id, window, cx);
+                            })
                         })
                 })
                 .relative()
@@ -216,7 +231,11 @@ impl RenderOnce for SegmentedControl {
                 .gap(Fields::SEGMENT_GAP)
                 .h(Fields::SEGMENT_HEIGHT)
                 .px(Fields::SEGMENT_PADDING_X)
-                .cursor_pointer()
+                .when(enabled, |this| this.cursor_pointer())
+                .when(item.disabled, |this| {
+                    this.aria_disabled(true)
+                        .opacity(crate::tokens::MenuMetrics::DISABLED_OPACITY)
+                })
                 .text_color(text_color)
                 .child(thumb)
                 .when_some(item.icon, |this, icon| {
@@ -224,8 +243,10 @@ impl RenderOnce for SegmentedControl {
                 })
                 .child(item.label)
                 .when(is_focused, |this| this.child(focus_underline(tint)))
-                .on_click(move |_, window, cx| {
-                    on_select(&clicked_id, window, cx);
+                .when(enabled, |this| {
+                    this.on_click(move |_, window, cx| {
+                        on_select(&clicked_id, window, cx);
+                    })
                 })
                 .into_any_element()
         });
@@ -456,6 +477,66 @@ mod tests {
 
         let light = node_named("segmented-theme-light");
         assert_eq!(light.toggled(), Some(Toggled::False));
+    }
+
+    struct SegmentsWithDisabled;
+
+    impl Render for SegmentsWithDisabled {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                SegmentedControl::new(
+                    vec![
+                        SegmentedItem::new("selected", "Selected").disabled(true),
+                        SegmentedItem::new("loaded", "Loaded"),
+                    ],
+                    "loaded",
+                    |_, _, _| {},
+                )
+                .group("rows"),
+            )
+        }
+    }
+
+    /// A disabled segment stays in the radio group, marked disabled, and
+    /// offers no click, so neither the pointer nor automation can pick it.
+    #[gpui::test]
+    fn a_disabled_segment_is_marked_and_not_clickable(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (_view, window) = cx.add_window_view(move |window, _cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            SegmentsWithDisabled
+        });
+        window.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+        let node_named = |id: &str| {
+            let (_, node) = frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .unwrap_or_else(|| panic!("{id} is in the frame"));
+            frame
+                .accessibility_node(node)
+                .unwrap_or_else(|| panic!("{id} is an accessible node"))
+                .clone()
+        };
+
+        let selected = node_named("segmented-rows-selected");
+        assert_eq!(selected.role(), Role::RadioButton);
+        assert!(selected.is_disabled());
+        assert!(!selected.supports_action(AccessibleAction::Click));
+
+        let loaded = node_named("segmented-rows-loaded");
+        assert!(!loaded.is_disabled());
+        assert!(loaded.supports_action(AccessibleAction::Click));
     }
 
     #[test]

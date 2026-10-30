@@ -10,7 +10,7 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 
 use dbflux_core::{ColumnKind, ColumnMeta, TransferColumn, Value};
-use dbflux_export::{CsvStreamWriter, JsonStreamWriter};
+use dbflux_export::{CsvOptions, CsvStreamWriter, JsonStreamWriter};
 
 use crate::pipeline::TransferReport;
 use crate::pipeline::{RowChunk, RowSink, TableMappingMode, TransferError, TransferOutcome};
@@ -75,6 +75,8 @@ pub struct FileSink {
     /// JSON rows that are one `Value::Document` are written as that
     /// document. CSV ignores it: its header is fixed.
     whole_documents: bool,
+    /// Header row and delimiter of a CSV file; JSON ignores them.
+    csv_options: CsvOptions,
 }
 
 impl FileSink {
@@ -94,6 +96,7 @@ impl FileSink {
             writer: None,
             rows_written: 0,
             whole_documents: false,
+            csv_options: CsvOptions::default(),
         }
     }
 
@@ -117,6 +120,14 @@ impl FileSink {
     /// own fields, so a field the first page lacked still reaches the file.
     pub fn writing_whole_documents(mut self) -> Self {
         self.whole_documents = true;
+        self
+    }
+
+    /// Writes a CSV file with these options instead of a header row and
+    /// commas. An import reads the export folder's files back by header, so
+    /// only a single-file export the user configured should change them.
+    pub fn with_csv_options(mut self, options: CsvOptions) -> Self {
+        self.csv_options = options;
         self
     }
 
@@ -185,7 +196,10 @@ impl RowSink for FileSink {
         let writer = BufWriter::new(file);
 
         let mut stream = match self.format {
-            FileFormat::Csv => StreamWriter::Csv(Box::new(CsvStreamWriter::new(writer))),
+            FileFormat::Csv => StreamWriter::Csv(Box::new(CsvStreamWriter::with_options(
+                writer,
+                self.csv_options,
+            ))),
             FileFormat::Json => StreamWriter::Json(JsonStreamWriter::new(writer)),
         };
 
@@ -291,6 +305,30 @@ mod tests {
         assert!(path.exists());
         let contents = std::fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "id,name\n1,Alice\n2,Bob\n");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn csv_options_drop_the_header_and_change_the_delimiter() {
+        let dir = temp_dir("csv_options");
+        let path = dir.join("users.csv");
+        let columns = vec![column("id"), column("name")];
+        let mut sink = FileSink::to_file(&path, FileFormat::Csv).with_csv_options(CsvOptions {
+            include_header: false,
+            delimiter: dbflux_export::CsvDelimiter::Tab,
+        });
+
+        sink.begin(&columns, TableMappingMode::Existing).unwrap();
+        sink.write_chunk(&RowChunk(vec![vec![
+            Value::Int(1),
+            Value::Text("Alice".to_string()),
+        ]]))
+        .unwrap();
+        sink.finish().unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "1\tAlice\n");
 
         std::fs::remove_dir_all(&dir).ok();
     }

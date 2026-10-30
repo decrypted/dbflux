@@ -9,7 +9,7 @@ use std::io::Write;
 use thiserror::Error;
 
 pub use binary::{BinaryExportMode, BinaryExporter};
-pub use csv::{CsvExporter, value_to_csv_field};
+pub use csv::{CsvDelimiter, CsvExporter, CsvOptions, value_to_csv_field};
 pub use json::JsonExporter;
 pub use streaming::{CsvStreamWriter, JsonStreamWriter};
 pub use text::TextExporter;
@@ -91,8 +91,19 @@ pub fn export(
     format: ExportFormat,
     writer: &mut dyn Write,
 ) -> Result<(), ExportError> {
+    export_with_csv_options(result, format, CsvOptions::default(), writer)
+}
+
+/// [`export`] with the CSV header and delimiter chosen by the caller. The
+/// options only change CSV output; every other format ignores them.
+pub fn export_with_csv_options(
+    result: &QueryResult,
+    format: ExportFormat,
+    csv: CsvOptions,
+    writer: &mut dyn Write,
+) -> Result<(), ExportError> {
     match format {
-        ExportFormat::Csv => CsvExporter.export(result, writer),
+        ExportFormat::Csv => CsvExporter.export_with_options(result, csv, writer),
         ExportFormat::JsonPretty => JsonExporter { pretty: true }.export(result, writer),
         ExportFormat::JsonCompact => JsonExporter { pretty: false }.export(result, writer),
         ExportFormat::Text => TextExporter.export(result, writer),

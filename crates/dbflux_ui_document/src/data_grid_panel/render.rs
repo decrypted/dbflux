@@ -335,6 +335,9 @@ impl Render for DataGridPanel {
             .when_some(self.context_menu.as_ref(), |d, menu| {
                 d.child(self.render_context_menu(menu, st.is_editable, cx))
             })
+            .when_some(self.column_chooser.as_ref(), |d, chooser| {
+                d.child(self.render_column_chooser(chooser, cx))
+            })
             .when(self.chrome.export_menu_open, |d| {
                 d.child(self.render_export_backdrop(cx))
             })
@@ -1053,6 +1056,10 @@ impl DataGridPanel {
 
 /// Width of the footer's export menu.
 const EXPORT_MENU_WIDTH: Pixels = px(220.0);
+
+/// Width of the export menu with its Rows, Columns and CSV options: room for
+/// a label and three segments in the longer translations.
+const EXPORT_MENU_OPTIONS_WIDTH: Pixels = px(360.0);
 
 /// Height of the chart above the grid in the Both view (P2Series). (330 px)
 const BOTH_CHART_HEIGHT: Pixels = px(330.0);
@@ -3945,6 +3952,9 @@ impl DataGridPanel {
         let selected = self.chrome.export_menu_selected;
         let mut items: Vec<AnyElement> = Vec::with_capacity(entries.len() + 5);
         let mut section_start = 0;
+        let has_options = entries
+            .iter()
+            .any(|entry| matches!(entry, ExportMenuEntry::Option(_)));
 
         for (index, &entry) in entries.iter().enumerate() {
             let starts_section = entries.get(index.wrapping_sub(1)).is_none_or(|previous| {
@@ -3955,11 +3965,17 @@ impl DataGridPanel {
                 if index > 0 {
                     items.push(render_separator(cx).into_any_element());
                 }
-                items.push(
-                    render_menu_header(&MenuItem::header(export_menu_section_title(entry)), cx)
-                        .into_any_element(),
-                );
+                let title = match entry {
+                    ExportMenuEntry::Option(_) => self.export_options_title(cx),
+                    _ => export_menu_section_title(entry),
+                };
+                items.push(render_menu_header(&MenuItem::header(title), cx).into_any_element());
                 section_start = index;
+            }
+
+            if let ExportMenuEntry::Option(row) = entry {
+                items.push(self.render_export_option_row(index, row, index == selected, cx));
+                continue;
             }
 
             items.push(self.render_export_menu_row(
@@ -3978,7 +3994,11 @@ impl DataGridPanel {
                 .bottom_full()
                 .right_0()
                 .mb(Spacing::XS)
-                .w(EXPORT_MENU_WIDTH)
+                .w(if has_options {
+                    EXPORT_MENU_OPTIONS_WIDTH
+                } else {
+                    EXPORT_MENU_WIDTH
+                })
                 .occlude()
                 .track_focus(&self.focus.export_menu_focus)
                 // The grid reports the ContextMenu context while the menu is
@@ -4011,6 +4031,9 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (id, label, icon) = match entry {
+            ExportMenuEntry::Option(row) => {
+                return self.render_export_option_row(index, row, selected, cx);
+            }
             ExportMenuEntry::Save(format) => (
                 "export-save",
                 crate::labels::export_format_label(format),
@@ -4092,14 +4115,18 @@ impl DataGridPanel {
 /// header where the section changes.
 fn export_menu_section(entry: ExportMenuEntry) -> u8 {
     match entry {
-        ExportMenuEntry::Save(_) => 0,
-        ExportMenuEntry::Copy(_) => 1,
-        ExportMenuEntry::SaveAll(_) => 2,
+        ExportMenuEntry::Option(_) => 0,
+        ExportMenuEntry::Save(_) => 1,
+        ExportMenuEntry::Copy(_) => 2,
+        ExportMenuEntry::SaveAll(_) => 3,
     }
 }
 
+/// The caption of a format section. The option rows have their own, which
+/// states the scope (`DataGridPanel::export_options_title`).
 fn export_menu_section_title(entry: ExportMenuEntry) -> String {
     match entry {
+        ExportMenuEntry::Option(_) => String::new(),
         ExportMenuEntry::Save(_) => dbflux_i18n::t!("document.data.grid.export.save_as_file"),
         ExportMenuEntry::Copy(_) => dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard"),
         ExportMenuEntry::SaveAll(_) => dbflux_i18n::t!("document.data.grid.export.export_all_rows"),
@@ -4322,9 +4349,9 @@ mod tests {
         let copy_en = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "en");
         let copy_es = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "es");
 
-        assert_eq!(save_en, "Save loaded rows as file");
+        assert_eq!(save_en, "Save as file");
         assert_ne!(save_en, save_es);
-        assert_eq!(copy_en, "Copy loaded rows to clipboard");
+        assert_eq!(copy_en, "Copy to clipboard");
         assert_ne!(copy_en, copy_es);
     }
 }

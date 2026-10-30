@@ -2,10 +2,13 @@ mod builder;
 mod cell_expressions;
 mod chart;
 mod chrome;
+mod column_chooser;
+mod column_layout_store;
 pub(crate) mod context_menu;
 mod document_view;
 mod documents;
 mod export_all;
+pub(crate) mod export_options;
 mod facets;
 pub(crate) mod filter_bar;
 mod fk_display;
@@ -755,6 +758,9 @@ struct ChromeState {
     export_menu_open: bool,
     /// Highlighted row of the export menu, an index into `export_menu_entries`.
     export_menu_selected: usize,
+    /// The export menu's Rows, Columns and CSV choices, read from the store
+    /// each time the menu opens.
+    export_options: export_options::ExportOptions,
     result_view_mode: ResultViewMode,
     /// When `true`, the result area shows the active row as a vertical
     /// name/value record instead of the grid.
@@ -912,6 +918,8 @@ pub struct DataGridPanel {
     nearest: nearest_neighbors::NearestNeighborsUi,
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
+    /// The Columns chooser, while it is open.
+    column_chooser: Option<column_chooser::ColumnChooser>,
     is_active_tab: bool,
     /// The hosting document hands this grid's side panels (the chart stats
     /// rail) to the workspace through `side_panels`, so the grid does not
@@ -1507,6 +1515,7 @@ impl DataGridPanel {
                 is_maximized: false,
                 export_menu_open: false,
                 export_menu_selected: 0,
+                export_options: export_options::ExportOptions::default(),
                 result_view_mode,
                 record_mode: false,
                 derived_json: None,
@@ -1556,6 +1565,7 @@ impl DataGridPanel {
             nearest,
             view_config,
             context_menu: None,
+            column_chooser: None,
             is_active_tab: true,
             side_panels_hosted: false,
             pending: PendingActions::default(),

@@ -370,7 +370,18 @@ fn open_collection(
     (panel, window)
 }
 
+/// Picks All rows in the export menu's Rows option, which turns its format
+/// rows into the export-all ones.
+fn choose_all_rows(panel: &Entity<DataGridPanel>, window: &mut VisualTestContext) {
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_export_rows(crate::data_grid_panel::export_options::ExportRows::All, cx)
+        })
+    });
+}
+
 fn offers_export_all(panel: &Entity<DataGridPanel>, window: &mut VisualTestContext) -> bool {
+    choose_all_rows(panel, window);
     let entries = window.update(|_, cx| panel.read(cx).export_menu_entries());
     entries.contains(&ExportMenuEntry::SaveAll(FileFormat::Csv))
         && entries.contains(&ExportMenuEntry::SaveAll(FileFormat::Json))
@@ -471,9 +482,17 @@ fn export_all_rows_writes_every_row_of_the_table_to_one_file(cx: &mut TestAppCon
 
     let entries = window.update(|_, cx| panel.read(cx).export_menu_entries());
     assert!(
+        entries.contains(&ExportMenuEntry::Save(dbflux_export::ExportFormat::Csv))
+            && !entries.contains(&ExportMenuEntry::SaveAll(FileFormat::Csv)),
+        "the menu starts on the loaded rows, got {entries:?}"
+    );
+    choose_all_rows(&panel, window);
+    let entries = window.update(|_, cx| panel.read(cx).export_menu_entries());
+    assert!(
         entries.contains(&ExportMenuEntry::SaveAll(FileFormat::Csv))
-            && entries.contains(&ExportMenuEntry::SaveAll(FileFormat::Json)),
-        "a table grid offers Export all rows, got {entries:?}"
+            && entries.contains(&ExportMenuEntry::SaveAll(FileFormat::Json))
+            && !entries.contains(&ExportMenuEntry::Copy(dbflux_export::ExportFormat::Csv)),
+        "All rows offers the export-all formats and no clipboard, got {entries:?}"
     );
 
     let grid_browses = reads.browse_count();
@@ -603,6 +622,7 @@ fn export_all_rows_as_json_keeps_fields_that_appear_after_the_first_page(cx: &mu
         last_toast_title(window),
         Some(crate::labels::export_all_rows_exported_toast(
             TABLE_ROWS as u64,
+            None,
             &target.display().to_string(),
         )),
         "nothing was dropped, so no warning follows the success toast"
@@ -771,4 +791,49 @@ fn export_all_rows_is_not_offered_for_a_query_result(cx: &mut TestAppContext) {
     );
     assert!(entries.contains(&ExportMenuEntry::Save(dbflux_export::ExportFormat::Csv)));
     assert!(!window.update(|_, cx| panel.read(cx).can_export_all_rows()));
+}
+
+/// All rows follows the Columns and CSV options too: with `id` hidden and
+/// the header row off, every row is streamed with only `name`.
+#[gpui::test]
+fn export_all_rows_writes_the_visible_columns_without_a_header(cx: &mut TestAppContext) {
+    use crate::data_grid_panel::export_options::ExportOptionRow;
+
+    init_test_runtime(cx);
+    let dir = scratch_dir("visible");
+    let target = dir.join("users.csv");
+    let reads: Arc<Reads> = Arc::default();
+    let (app_state, profile_id) = app_state_saving_to(target.clone(), reads.clone(), cx);
+    let (panel, window) = open_table(app_state.clone(), profile_id, cx);
+
+    window.update(|_, cx| {
+        let table = panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table grid has a table");
+        table.update(cx, |state, cx| assert!(state.hide_column(0, cx)));
+        panel.update(cx, |panel, cx| {
+            panel.activate_export_option(ExportOptionRow::CsvHeader, cx)
+        });
+    });
+    choose_all_rows(&panel, window);
+    export_all_csv(&panel, window);
+
+    let contents = std::fs::read_to_string(&target).expect("the export wrote the file");
+    let lines: Vec<&str> = contents.lines().collect();
+    assert_eq!(lines.len() as i64, TABLE_ROWS, "no header row");
+    assert_eq!(lines.first(), Some(&"user 0"));
+    assert_eq!(lines.last(), Some(&"user 2344"));
+
+    assert_eq!(
+        last_toast_title(window),
+        Some(crate::labels::export_all_rows_exported_toast(
+            TABLE_ROWS as u64,
+            Some(1),
+            &target.display().to_string(),
+        ))
+    );
+    std::fs::remove_dir_all(&dir).ok();
 }

@@ -95,6 +95,45 @@ ordena en memoria. En una tabla que sigue en su orden por defecto (su clave
 primaria), la primera clave añadida sustituye ese orden, porque las filas
 ordenadas primero por la clave primaria no dejan empates que otra columna pueda
 ordenar; quitar el orden vuelve al orden por defecto.
+`Shift+m` abre el mismo menú desde el teclado, para la columna de la celda
+seleccionada. El menú termina con una sección **Columna** de ajustes de vista,
+que cambian cómo la grilla muestra la columna y nunca la consulta. **Ajustar
+ancho** ajusta la columna a su cabecera y a sus valores cargados, hasta 640
+píxeles para que un valor JSON largo no saque el resto de la grilla de la
+pantalla; un doble clic en el borde de redimensionado, a la derecha de la
+cabecera, hace lo mismo.
+
+**Ocultar columna** quita la columna de la pantalla, y **Columnas…** lista todas
+las columnas con una marca en las visibles: `Enter`, `Space` o un clic muestra u
+oculta la columna resaltada mientras la lista sigue abierta, **Mostrar todas las
+columnas** devuelve todas las ocultas, y `Escape` la cierra. **Mover a la
+izquierda** y **Mover a la derecha** mueven la columna un lugar; arrastrar una
+cabecera sobre otra mueve su columna a ese lugar.
+
+**Fijar columna** mantiene la columna en el borde izquierdo, justo después de
+los números de fila, mientras la grilla se desplaza en horizontal, como un panel
+inmovilizado: fija `id` y `created_at` para tenerlas a la vista en una tabla de
+logs ancha. Las columnas fijadas van al principio de la grilla en el orden en
+que se fijaron y muestran un alfiler en su cabecera; **Soltar columna** deja que
+la columna vuelva a desplazarse, como la primera de las demás. Seleccionar,
+editar, ordenar, redimensionar y los números de fila funcionan igual en las
+columnas fijadas. Mover a la izquierda y Mover a la derecha se quedan en su lado
+del borde de las fijadas; arrastrar una cabecera a través de él fija o suelta su
+columna. Las columnas fijadas ocupan como mucho dos tercios del ancho de la
+grilla, para que las demás siempre tengan sitio: en una grilla estrecha, las
+fijadas que no caben se desplazan con las demás hasta que vuelva a haber ancho.
+
+La consulta sigue leyendo todas las columnas (una tabla sigue ejecutando
+`SELECT *`); para dejar una columna fuera de la consulta misma, usa la
+proyección del constructor de consultas. Copiar, Copiar como CSV y Copiar como
+JSON siguen la pantalla: las columnas visibles, en el orden en que la grilla las
+muestra. Copiar fila, Copiar como consulta y Exportar usan la fila completa en
+el orden propio del resultado, columnas ocultas incluidas. Una tabla recuerda su
+disposición para su conexión, base de datos, esquema y tabla, al cerrarla y al
+reiniciar DBFlux; volver a poner todas las columnas en el orden propio de la
+tabla, todas visibles, la olvida. Un resultado de consulta conserva su
+disposición mientras su pestaña está abierta. Una grilla de documentos mantiene
+el orden de sus campos y solo ofrece Ajustar ancho.
 
 ## Panel de valor
 
@@ -402,17 +441,45 @@ resultado e incluyen:
 - **Text**
 - **Binary** (para resultados con forma binaria)
 
-Las secciones **Guardar filas cargadas como archivo** y **Copiar filas cargadas
-al portapapeles** del menú escriben las filas que tiene la cuadrícula, que en una
-tabla son la página actual, y el aviso indica cuántas filas fueron al archivo o
-al portapapeles.
+La parte superior del menú elige qué se exporta, y los formatos de **Guardar
+como archivo** y **Copiar al portapapeles** que hay debajo siguen esa elección:
 
-Cuando la cuadrícula muestra una tabla o una colección leída página a página, el
-menú añade **Exportar todas las filas a un archivo**, en CSV o en JSON con un
-objeto por línea. Vuelve a leer la tabla o la colección completa con el filtro,
-el orden y la selección de columnas actuales de la cuadrícula, una página a la
-vez, y la escribe en el único archivo que elijas, de modo que los datos nunca
-tienen que caber en memoria. Una tabla mostrada mediante el constructor de
+- **Filas**: **Seleccionadas** escribe las filas que tienen una celda
+  seleccionada tal como las muestra la cuadrícula, con las ediciones y filas
+  añadidas sin guardar, como Copiar como CSV; **Cargadas** las filas que tiene la cuadrícula (en una tabla, la
+  página actual) y **Todas** todas las filas de la tabla o la colección (ver más
+  abajo; solo se ofrece donde la cuadrícula puede volver a leerla página a
+  página). **Seleccionadas** está desactivada, con el motivo bajo la fila, hasta
+  que se selecciona una celda.
+- **Columnas**: **Visibles**, la opción por defecto, escribe las columnas
+  mostradas en el orden en que las muestra la cuadrícula, así que las columnas
+  ocultas se omiten y las movidas o fijadas conservan su lugar. **Todas**
+  escribe todas las columnas en el orden del resultado, incluidas las ocultas.
+  **Seleccionadas** escribe las columnas mostradas que tienen una celda
+  seleccionada, en el orden de la pantalla. Filas seleccionadas con columnas
+  seleccionadas escriben las celdas de un rango seleccionado con sus valores;
+  con varios rangos de `Ctrl`+clic, todas las filas y columnas que abarcan.
+- **Incluir fila de encabezado (nombres de columna)**, activada por defecto, y
+  **Separador** (coma, punto y coma o tabulador) se aplican al CSV guardado o
+  copiado desde este menú y a Exportar todas las filas en CSV. No cambian Copiar
+  como CSV del menú contextual.
+
+El título sobre las opciones indica qué escriben los formatos, por ejemplo
+"Exportar 12 filas seleccionadas, 4 columnas", y el aviso tras guardar o copiar
+indica las mismas filas y columnas con la ruta o el número de bytes. El menú se
+abre en el primer formato, así que `Ctrl+e` `Enter` sigue guardando de
+inmediato. `k` o `Arriba` sube a las opciones; `Enter`, `Derecha` o `l` en una
+fila de opción pasa a su siguiente valor, saltando los que no se aplican, o
+marca la casilla del encabezado, y un clic elige un valor directamente. Tus
+elecciones se guardan para todas las cuadrículas, no por tabla, y entre
+reinicios.
+
+Con **Filas** en **Todas**, el menú ofrece **Exportar todas las filas a un
+archivo**, en CSV o en JSON con un objeto por línea. Vuelve a leer la tabla o la
+colección completa con el filtro, el orden y la selección de columnas actuales
+de la cuadrícula, una página a la vez, escribe las columnas que elige la opción
+**Columnas** y la escribe en el único archivo que elijas, de modo que los datos
+nunca tienen que caber en memoria. Una tabla mostrada mediante el constructor de
 consultas o un filtro relacional se lee con esa misma consulta, desde su
 desplazamiento y hasta su límite cuando lo define. La exportación se ejecuta
 como una tarea en el panel de tareas, que muestra su progreso y permite

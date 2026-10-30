@@ -126,6 +126,8 @@ pub enum Command {
     ReviewChanges,
     // Context menu
     OpenContextMenu,
+    /// Opens the column header menu of the active cell's column.
+    OpenColumnMenu,
     /// Opens the menu of the focused pane's actions (its toolbar buttons and
     /// other pointer-only controls).
     OpenPaneActions,
@@ -447,6 +449,7 @@ impl Command {
             Command::ToggleCellExpression => "Edit cell as SQL expression",
             Command::ReviewChanges => "Review changes",
             Command::OpenContextMenu => "Open context menu",
+            Command::OpenColumnMenu => "Open column menu",
             Command::OpenPaneActions => "Open pane actions",
             Command::MenuUp => "Menu up",
             Command::MenuDown => "Menu down",
@@ -657,6 +660,7 @@ impl Command {
             Command::ToggleCellExpression => "toggle_cell_expression",
             Command::ReviewChanges => "review_changes",
             Command::OpenContextMenu => "open_context_menu",
+            Command::OpenColumnMenu => "open_column_menu",
             Command::OpenPaneActions => "open_pane_actions",
             Command::MenuUp => "menu_up",
             Command::MenuDown => "menu_down",
@@ -884,6 +888,7 @@ impl Command {
             Command::ToggleCellExpression,
             Command::ReviewChanges,
             Command::OpenContextMenu,
+            Command::OpenColumnMenu,
             Command::OpenPaneActions,
             Command::MenuUp,
             Command::MenuDown,
@@ -1086,6 +1091,7 @@ impl Command {
             | Command::ToggleCellExpression
             | Command::ReviewChanges
             | Command::OpenContextMenu
+            | Command::OpenColumnMenu
             | Command::MenuUp
             | Command::MenuDown
             | Command::MenuSelect

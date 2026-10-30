@@ -45,9 +45,10 @@ pub fn copy_row(model: &TableModel, row: usize) -> Option<String> {
 /// Copy the current selection to clipboard format (TSV).
 ///
 /// With several ranges (Ctrl+click), the text covers every row that holds a
-/// selected cell and every column that does, in table order; a cell outside
-/// the selection inside that grid is left empty. For one range this is the
-/// range itself.
+/// selected cell and every column that does, the columns in the order the
+/// grid shows them; a cell outside the selection inside that grid is left
+/// empty. For one range this is the range itself. A hidden column is never
+/// part of a selection, so it is never copied.
 pub fn copy_selection(model: &TableModel, selection: &SelectionState) -> Option<String> {
     copy_selection_with(selection, None, |row, col| model.cell(row, col))
 }
@@ -79,10 +80,13 @@ pub fn copy_selection_with<'a>(
         .iter()
         .flat_map(|range| range.start.row..=range.end.row)
         .collect();
-    let cols: std::collections::BTreeSet<usize> = ranges
+    let mut cols: Vec<usize> = ranges
         .iter()
         .flat_map(|range| range.start.col..=range.end.col)
+        .collect::<std::collections::BTreeSet<usize>>()
+        .into_iter()
         .collect();
+    selection.sort_by_screen_order(&mut cols);
 
     let mut lines = Vec::with_capacity(rows.len() + 1);
     if let Some(columns) = header {

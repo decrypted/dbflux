@@ -117,7 +117,23 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ),
         // Every row of the table menu and its submenus.
         ("context-menu.*", KeyboardPath::Command(Command::MenuSelect)),
+        // The Columns chooser, opened from the column menu (`Shift+m`):
+        // Enter or Space toggles the highlighted row.
+        (
+            "column-chooser-*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
         ("export-menu.*", KeyboardPath::Command(Command::MenuSelect)),
+        // The export menu's option rows: Enter on the highlighted row steps
+        // its Rows, Columns or Delimiter choice, or ticks the header row.
+        (
+            "export-option-*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
+        (
+            "segmented-export-*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
         (
             "export-trigger",
             KeyboardPath::Command(Command::ExportResults),

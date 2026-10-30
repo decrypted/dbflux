@@ -788,6 +788,10 @@ impl DataGridPanel {
             return self.open_change_review(window, cx);
         }
 
+        if self.column_chooser.is_some() {
+            return self.dispatch_column_chooser_command(cmd, window, cx);
+        }
+
         // Handle context menu commands when menu is open
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);
@@ -994,6 +998,13 @@ impl DataGridPanel {
                     self.open_context_menu_at_selection(window, cx);
                 }
                 true
+            }
+            // Only the plain grid draws column headers: the document tree, the
+            // JSON page and the transposed record view have none to open from.
+            Command::OpenColumnMenu
+                if self.view_config.mode == crate::DataViewMode::Table && !self.record_mode() =>
+            {
+                self.open_column_menu_at_selection(window, cx)
             }
             Command::ResultsCopyCell => {
                 self.handle_copy(window, cx);

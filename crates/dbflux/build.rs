@@ -20,11 +20,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// the stamp watches the sources of every workspace crate the binary links
 /// instead: a change that relinks the binary almost always touches one of
 /// these. Changes it misses, such as an environment variable that only a
-/// dependency's build script reads, relink with the previous stamp. Watching
-/// them keeps a no-op build a no-op, where an always-dirty build script would
-/// relink the binary (a thin-LTO link in release) on every `cargo build`. A new
-/// top-level directory that a crate embeds with `include_bytes!` belongs on
-/// this list.
+/// dependency's build script reads, relink with the previous stamp.
+///
+/// The cost is coarse: cargo checks the modification time of every file under
+/// these directories on each build, and a change to any of them reruns this
+/// script and relinks the binary (a thin-LTO link in release), including files
+/// that are not compiled, such as a README, an editor swap file or an insta
+/// `.snap.new`. An unchanged tree still skips the relink, which an
+/// always-dirty build script would not. A new top-level directory that a crate
+/// embeds with `include_bytes!` belongs on this list.
 const STAMPED_INPUTS: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
@@ -68,8 +72,14 @@ fn main() {
     drop(script);
 }
 
+/// `SOURCE_DATE_EPOCH` values at or below this (1980-01-01 00:00 UTC) are
+/// placeholders rather than the date of the source: nixpkgs exports exactly
+/// this value for every build that does not set its own. Such a build shows
+/// no stamp instead of a 1980 build date.
+const NO_REAL_SOURCE_DATE: u64 = 315_532_800;
+
 /// Passes the build time and the commit to the binary as `DBFLUX_BUILD_UNIX_TIME`
-/// and `DBFLUX_BUILD_GIT_SHA` (empty when the tree is not a git checkout).
+/// and `DBFLUX_BUILD_GIT_SHA`, each empty when there is no value to show.
 fn emit_build_stamp(workspace_root: &Path) {
     for input in STAMPED_INPUTS {
         watch_if_present(&workspace_root.join(input));
@@ -78,10 +88,16 @@ fn emit_build_stamp(workspace_root: &Path) {
     // Reproducible builds pin the time through this variable, so honoring it
     // keeps such a binary byte-identical across rebuilds.
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
-    let built_at = env::var("SOURCE_DATE_EPOCH")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or_else(unix_time_now);
+    let built_at = match env::var("SOURCE_DATE_EPOCH") {
+        Ok(value) => value
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|&epoch| epoch > NO_REAL_SOURCE_DATE),
+        Err(_) => Some(unix_time_now()),
+    };
+    // An empty value tells the binary there is no stamp to show.
+    let built_at = built_at.map(|epoch| epoch.to_string()).unwrap_or_default();
     println!("cargo:rustc-env=DBFLUX_BUILD_UNIX_TIME={built_at}");
 
     let git_sha = git_short_sha(workspace_root).unwrap_or_default();

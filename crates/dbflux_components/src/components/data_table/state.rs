@@ -17,9 +17,13 @@ use super::theme::{
     AUTO_WIDTH_SAMPLE_ROWS, AUTO_WIDTH_SLACK, CELL_PADDING_X, MAX_AUTO_COLUMN_WIDTH,
     MIN_COLUMN_WIDTH, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
 };
+use super::totals::{self, SelectionTotals, TotalsCache};
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 use crate::fonts;
 use crate::tokens::GridMetrics;
+
+mod autoscroll;
+mod multi_edit;
 
 /// Grid face and glyph advances an auto-sized column width was estimated
 /// with. A change in any of them re-estimates the auto-sized columns.
@@ -119,9 +123,21 @@ pub struct DataTableState {
     /// other cells extends the selection to them.
     drag_selecting: bool,
 
+    /// Pointer of the running drag selection and the task scrolling the
+    /// grid while it is held past an edge of the body.
+    drag_autoscroll: Option<autoscroll::DragAutoscroll>,
+
     // --- Edit Mode ---
     /// Cell currently being edited (inline editor is open).
     editing_cell: Option<CellCoord>,
+
+    /// Every cell the open editor writes to when committed, the edited one
+    /// first; empty unless the edit started on a selection of several cells.
+    edit_targets: Vec<CellCoord>,
+
+    /// The selection a plain press on one of its cells collapsed, kept so
+    /// the second press of a double-click can bring it back for the edit.
+    selection_before_press: Option<(CellCoord, SelectionState)>,
 
     /// Input state for the inline cell editor.
     cell_input: Option<Entity<InputState>>,
@@ -186,6 +202,10 @@ pub struct DataTableState {
     /// Facts drawn under each column header, indexed like the model's
     /// columns. Empty, or all `None`, keeps the header one line tall.
     header_annotations: Vec<Option<HeaderAnnotation>>,
+
+    /// Totals of the selected cells, dropped whenever the table notifies.
+    selection_totals: TotalsCache,
+    _totals_invalidation: Subscription,
 }
 
 impl DataTableState {
@@ -202,6 +222,9 @@ impl DataTableState {
 
         let mut edit_buffer = EditBuffer::new();
         edit_buffer.set_base_row_count(row_count);
+
+        let totals_invalidation =
+            cx.observe_self(|this: &mut Self, _cx| this.selection_totals.invalidate());
 
         Self {
             model,
@@ -222,7 +245,10 @@ impl DataTableState {
             horizontal_scroll_handle: ScrollHandle::new(),
             horizontal_offset: px(0.0),
             drag_selecting: false,
+            drag_autoscroll: None,
             editing_cell: None,
+            edit_targets: Vec::new(),
+            selection_before_press: None,
             cell_input: None,
             enum_dropdown: None,
             _editing_subs: Vec::new(),
@@ -238,6 +264,8 @@ impl DataTableState {
             enum_options: std::collections::HashMap::new(),
             document: None,
             header_annotations: Vec::new(),
+            selection_totals: TotalsCache::default(),
+            _totals_invalidation: totals_invalidation,
         }
     }
 
@@ -799,6 +827,7 @@ impl DataTableState {
 
     pub fn end_drag_select(&mut self) {
         self.drag_selecting = false;
+        self.drag_autoscroll = None;
     }
 
     /// Selection change for a primary click on a row number: the whole row,
@@ -848,6 +877,15 @@ impl DataTableState {
         if self.editing_cell.is_some() {
             self.stop_editing(true, cx);
         }
+    }
+
+    /// Count, sum, average, minimum and maximum of the selected cells as the
+    /// grid shows them, for a host's status bar. `None` while fewer than two
+    /// cells are selected.
+    pub fn selection_totals(&self) -> Option<SelectionTotals> {
+        self.selection_totals.get_or_compute(|| {
+            totals::selection_totals(&self.model, &self.edit_buffer, &self.selection)
+        })
     }
 
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
@@ -1314,6 +1352,8 @@ impl DataTableState {
     ) -> bool {
         use super::model::{ColumnKind, VisualRowSource};
 
+        self.edit_targets.clear();
+
         if self.document.is_some() && self.is_nested_cell(coord) {
             cx.emit(DataTableEvent::StepIntoRequested {
                 row: coord.row,
@@ -1437,10 +1477,15 @@ impl DataTableState {
             // be silently discarded.
             self._editing_subs.clear();
 
+            // Captured for the same reason as `coord`: the dismissal may have
+            // closed the editor, and with it the targets, by now.
+            let targets = self.multi_edit_targets(coord);
+            let targets_for_selection = targets.clone();
             self._editing_subs.push(cx.subscribe(
                 &dropdown,
                 move |this, _dropdown, event: &DropdownSelectionChanged, cx| {
                     let value = event.item.value.to_string();
+                    this.edit_targets = targets_for_selection.clone();
                     this.apply_enum_selection_at(coord, &value, cx);
                 },
             ));
@@ -1453,6 +1498,7 @@ impl DataTableState {
             ));
 
             self.editing_cell = Some(coord);
+            self.edit_targets = targets;
             self.enum_dropdown = Some(dropdown);
             self.cell_input = None;
             self.scroll_to_cell(coord.row, coord.col);
@@ -1483,6 +1529,7 @@ impl DataTableState {
         );
 
         self.editing_cell = Some(coord);
+        self.edit_targets = self.multi_edit_targets(coord);
         self.cell_input = Some(input);
         self.enum_dropdown = None;
         self.scroll_to_cell(coord.row, coord.col);
@@ -1516,7 +1563,7 @@ impl DataTableState {
             super::model::CellValue::text(value)
         };
 
-        self.stage_cell_value(coord.row, coord.col, cell_value);
+        self.stage_edit_value(coord, cell_value);
 
         cx.notify();
     }
@@ -1682,15 +1729,12 @@ impl DataTableState {
             if let Some(input) = self.cell_input.take() {
                 let value_str = input.read(cx).value().to_string();
 
-                self.stage_cell_value(
-                    coord.row,
-                    coord.col,
-                    super::model::CellValue::text(&value_str),
-                );
+                self.stage_edit_value(coord, super::model::CellValue::text(&value_str));
             }
         } else {
             self.cell_input = None;
         }
+        self.edit_targets.clear();
 
         // The input and dropdown these watch are gone; they are re-subscribed
         // when the next edit starts.

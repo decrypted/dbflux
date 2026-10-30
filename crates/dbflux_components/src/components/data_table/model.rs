@@ -830,6 +830,10 @@ pub enum EditAction {
         old_value: CellValue,
         new_value: CellValue,
     },
+    /// Several actions undone and redone as one step, such as one value
+    /// written to every cell of a selection. Held in the order they were
+    /// applied on the undo stack and in reverse on the redo stack.
+    Group(Vec<EditAction>),
 }
 
 /// Buffer for tracking local edits before committing to the database.
@@ -858,6 +862,10 @@ pub struct EditBuffer {
 
     /// Redo stack: actions that were undone and can be redone.
     redo_stack: Vec<EditAction>,
+
+    /// Undo stack length when an undo group opened; see
+    /// [`Self::begin_undo_group`].
+    group_start: Option<usize>,
 }
 
 impl EditBuffer {
@@ -868,11 +876,37 @@ impl EditBuffer {
     /// Push an action to the undo stack, enforcing the max history limit.
     fn push_undo(&mut self, action: EditAction) {
         self.undo_stack.push(action);
-        // Trim oldest entries if over limit
-        if self.undo_stack.len() > MAX_UNDO_HISTORY {
+        // Trim oldest entries if over limit. An open group trims when it
+        // closes: trimming now would shift the index it starts at.
+        if self.group_start.is_none() && self.undo_stack.len() > MAX_UNDO_HISTORY {
             self.undo_stack.remove(0);
         }
         self.redo_stack.clear();
+    }
+
+    /// Start collecting the actions that follow into one undo step, until
+    /// [`Self::end_undo_group`].
+    pub fn begin_undo_group(&mut self) {
+        if self.group_start.is_none() {
+            self.group_start = Some(self.undo_stack.len());
+        }
+    }
+
+    /// Close the group [`Self::begin_undo_group`] opened. A group of one
+    /// action stays that action; an empty one leaves no step.
+    pub fn end_undo_group(&mut self) {
+        let Some(start) = self.group_start.take() else {
+            return;
+        };
+        let actions = self.undo_stack.split_off(start.min(self.undo_stack.len()));
+        if actions.len() > 1 {
+            self.undo_stack.push(EditAction::Group(actions));
+        } else {
+            self.undo_stack.extend(actions);
+        }
+        while self.undo_stack.len() > MAX_UNDO_HISTORY {
+            self.undo_stack.remove(0);
+        }
     }
 
     /// Get the display value for a cell, checking the buffer first.
@@ -1589,6 +1623,19 @@ impl EditBuffer {
                     new_value,
                 });
             }
+
+            EditAction::Group(actions) => {
+                // Undo the members one by one, last first, then fold the redo
+                // entries they left back into one.
+                let count = actions.len();
+                self.undo_stack.extend(actions);
+                for _ in 0..count {
+                    self.undo();
+                }
+                let start = self.redo_stack.len().saturating_sub(count);
+                let undone = self.redo_stack.split_off(start);
+                self.redo_stack.push(EditAction::Group(undone));
+            }
         }
 
         true
@@ -1703,6 +1750,17 @@ impl EditBuffer {
                     old_value,
                     new_value,
                 });
+            }
+
+            EditAction::Group(actions) => {
+                let count = actions.len();
+                self.redo_stack.extend(actions);
+                for _ in 0..count {
+                    self.redo();
+                }
+                let start = self.undo_stack.len().saturating_sub(count);
+                let redone = self.undo_stack.split_off(start);
+                self.undo_stack.push(EditAction::Group(redone));
             }
         }
 

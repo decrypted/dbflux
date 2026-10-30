@@ -694,9 +694,11 @@ mod facets;
 mod first_page_order;
 mod fk_label_identity;
 mod fk_navigation;
+mod multi_edit;
 mod multi_sort;
 mod reload_pending_edits;
 mod reload_state;
+mod selection_totals;
 mod sources_and_keys;
 mod statement_outcome;
 

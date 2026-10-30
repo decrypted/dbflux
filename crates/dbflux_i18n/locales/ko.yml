@@ -203,6 +203,8 @@ components:
       env: "DBFlux가 연결할 때마다 환경 변수 %{name}에서 읽습니다. DBFlux는 값을 저장하지 않습니다."
       dotenv: "DBFlux가 연결할 때마다 %{path}의 %{key}에서 읽습니다. 파일은 본인만 읽을 수 있어야 합니다."
       dotenv_missing_key: "경로 뒤에 키를 추가하세요: ~/path/to/file.env#KEY"
+      whole_value: "값 전체를 사용합니다. RDS가 관리하는 시크릿처럼 JSON 시크릿이라면 #키를 붙여 한 필드만 사용하세요. 예: #password"
+      json_key: "JSON 값의 %{key} 필드를 사용합니다."
   file_picker:
     browse: "찾아보기…"
   column_projection:

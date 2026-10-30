@@ -203,6 +203,8 @@ components:
       env: "Read from the environment variable %{name} each time DBFlux connects. DBFlux does not store the value."
       dotenv: "Read from %{key} in %{path} each time DBFlux connects. The file must be readable only by you."
       dotenv_missing_key: "Add the key after the path: ~/path/to/file.env#KEY"
+      whole_value: "Uses the whole value. For a JSON secret, such as one RDS manages, add #key to use one field, for example #password."
+      json_key: "Uses the %{key} field of the JSON value."
   file_picker:
     browse: "Browse…"
   column_projection:

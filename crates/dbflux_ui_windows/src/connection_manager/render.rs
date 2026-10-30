@@ -630,6 +630,10 @@ impl ConnectionManagerWindow {
 
                     let selector_focused = show_focus && self.form_focus == selector_focus;
                     let input_focused = show_focus && self.form_focus == input_focus;
+                    let help_text = selector
+                        .read(cx)
+                        .source_hint(&input_state.read(cx).value(), cx)
+                        .or_else(|| field_def.help.clone());
 
                     let show_all_databases = (field_def.id == "database"
                         && self
@@ -693,7 +697,7 @@ impl ConnectionManagerWindow {
                         field_def.label.clone(),
                         field_def.required && field_enabled,
                         control,
-                        field_def.help.clone(),
+                        help_text,
                         cx,
                     )
                     .into_any_element();
@@ -1185,6 +1189,11 @@ impl ConnectionManagerWindow {
 
         let selector_focused = show_focus && self.form_focus == FormFocus::HostValueSource;
         let input_focused = show_focus && self.form_focus == FormFocus::Host;
+        let help_text = self
+            .form
+            .host_value_source_selector
+            .read(cx)
+            .source_hint(&primary_input.read(cx).value(), cx);
         let port_focused = show_focus && self.form_focus == FormFocus::Port;
 
         let control = layout::inline_controls()
@@ -1237,7 +1246,7 @@ impl ConnectionManagerWindow {
             primary_label,
             primary_required && primary_enabled,
             control,
-            None::<&str>,
+            help_text,
             cx,
         )
         .into_any_element()

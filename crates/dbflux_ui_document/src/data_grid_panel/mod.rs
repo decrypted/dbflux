@@ -884,6 +884,11 @@ pub struct DataGridPanel {
     /// The read behind the rows on screen: a table or collection browse, or
     /// a builder SELECT. "Export all rows" pages through it again.
     last_replayable_read: Option<dbflux_transfer::ReplayableRead>,
+    /// The order a table opens in when nobody picked one: its primary key, in
+    /// the direction the settings asked for when the order was computed. The
+    /// session leaves a sort equal to it unsaved, so the tab follows the
+    /// setting on the next launch.
+    default_order_by: Vec<OrderByColumn>,
     /// The neighbor bar's controls and the search in flight.
     nearest: nearest_neighbors::NearestNeighborsUi,
     view_config: super::data_view::DataViewConfig,
@@ -990,6 +995,7 @@ impl DataGridPanel {
         let pk_order =
             Self::get_primary_key_columns(&app_state, profile_id, database.as_deref(), &table, cx);
         let pk_columns: Vec<String> = pk_order.iter().map(|c| c.column.name.clone()).collect();
+        let default_order_by = pk_order.clone();
         let order_by = match view {
             Some(view) if !view.order_by.is_empty() => view.order_by.clone(),
             _ => pk_order,
@@ -1007,6 +1013,7 @@ impl DataGridPanel {
 
         let mut panel =
             Self::new_internal(source, app_state.clone(), pk_columns.clone(), window, cx);
+        panel.default_order_by = default_order_by;
         if let Some(view) = view {
             panel.apply_session_view(view, window, cx);
         }
@@ -1498,6 +1505,7 @@ impl DataGridPanel {
             pk_requery_pending: false,
             nearest_neighbors: None,
             last_replayable_read: None,
+            default_order_by: Vec::new(),
             nearest,
             view_config,
             context_menu: None,

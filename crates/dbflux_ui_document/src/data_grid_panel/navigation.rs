@@ -208,6 +208,7 @@ impl DataGridPanel {
                 Some(filter_value.to_string())
             };
 
+            self.default_order_by = pk_order.clone();
             self.source = DataSource::Table {
                 profile_id,
                 database: database.clone(),

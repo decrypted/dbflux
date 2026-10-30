@@ -13,7 +13,8 @@ pub struct TableSessionView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     /// Empty when the rows were in their default (primary-key) order, so a
-    /// key that changes later is not pinned by an old session.
+    /// key, or a default direction, that changes later is not pinned by an
+    /// old session.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub order_by: Vec<OrderByColumn>,
 }
@@ -86,21 +87,10 @@ impl DataGridPanel {
             return None;
         };
 
-        let key_order: Vec<OrderByColumn> = self
-            .pk_columns
-            .iter()
-            .map(|column| OrderByColumn::asc(column.as_str()))
-            .collect();
-        let order_by = if request.order_by == key_order {
-            Vec::new()
-        } else {
-            request.order_by.clone()
-        };
-
         Some(TableSessionView {
             filter: request.filter.clone(),
             limit: Some(request.pagination.limit()),
-            order_by,
+            order_by: session_order_by(&request.order_by, &self.default_order_by),
         })
     }
 
@@ -123,5 +113,58 @@ impl DataGridPanel {
                 input.set_value(limit.to_string(), window, cx)
             });
         }
+    }
+}
+
+/// The sort a session saves for a read in `applied` order: none when it is
+/// the table's default order, which is computed again on the next launch.
+fn session_order_by(
+    applied: &[OrderByColumn],
+    default_order: &[OrderByColumn],
+) -> Vec<OrderByColumn> {
+    if applied == default_order {
+        Vec::new()
+    } else {
+        applied.to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_order_by;
+    use dbflux_core::OrderByColumn;
+
+    #[test]
+    fn the_default_order_is_not_saved_in_either_direction() {
+        let ascending = vec![OrderByColumn::asc("id")];
+        let descending = vec![OrderByColumn::desc("id")];
+
+        assert!(session_order_by(&ascending, &ascending).is_empty());
+        assert!(
+            session_order_by(&descending, &descending).is_empty(),
+            "a table opened newest first saves no sort, so the next launch follows the setting"
+        );
+    }
+
+    #[test]
+    fn a_sort_that_differs_from_the_default_is_saved() {
+        let ascending = vec![OrderByColumn::asc("id")];
+        let descending = vec![OrderByColumn::desc("id")];
+
+        assert_eq!(session_order_by(&ascending, &descending), ascending);
+        assert_eq!(session_order_by(&descending, &ascending), descending);
+        assert_eq!(
+            session_order_by(&[OrderByColumn::desc("created_at")], &ascending),
+            vec![OrderByColumn::desc("created_at")]
+        );
+    }
+
+    #[test]
+    fn without_a_known_default_only_an_unordered_read_saves_no_sort() {
+        assert!(session_order_by(&[], &[]).is_empty());
+        assert_eq!(
+            session_order_by(&[OrderByColumn::asc("id")], &[]),
+            vec![OrderByColumn::asc("id")]
+        );
     }
 }

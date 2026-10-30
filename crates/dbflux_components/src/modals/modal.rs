@@ -864,15 +864,28 @@ impl RenderOnce for Modal {
     }
 }
 
-/// The title, the extra header content and the free space after them, which
-/// a double click on toggles the owner's maximized state when it asked for
-/// one. The header buttons stay outside, so a double click on them is two
-/// presses of the button only.
+/// The title, the extra header content and the free space after them. A
+/// double click on the title or the free space calls `on_double_click`, when
+/// the owner asked for it. Clicks on the extra content (buttons) stay there:
+/// a double click on a button is two presses of that button, and the header
+/// actions and the close button sit outside the bar altogether.
 fn title_bar(
     title: impl IntoElement,
     extra: Option<AnyElement>,
     on_double_click: Option<TitleDoubleClickHandler>,
 ) -> AnyElement {
+    let catches_clicks = on_double_click.is_some();
+    let extra = extra.map(|extra| {
+        div()
+            .flex()
+            .items_center()
+            .when(catches_clicks, |extra| {
+                // A button's click bubbles to the bar's own click handler.
+                extra.on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            })
+            .child(extra)
+    });
+
     let bar = div()
         .flex()
         .flex_1()
@@ -1012,6 +1025,88 @@ mod tests {
     }
 
     type Log = Arc<Mutex<Vec<&'static str>>>;
+
+    /// A modal with a title bar that maximizes and a button as extra header
+    /// content, logging what each click reached.
+    struct TitleBarHarness {
+        log: Log,
+    }
+
+    impl Render for TitleBarHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let toggles = self.log.clone();
+            let presses = self.log.clone();
+
+            div().size_full().child(
+                Modal::new("Edit raw_result (TEXT · JSON)")
+                    .on_close(|_, _| {})
+                    .header_extra(
+                        crate::controls::Button::new("extra-button", "Generate")
+                            .on_click(move |_, _, _| presses.lock().expect("log").push("press")),
+                    )
+                    .on_title_double_click(move |_, _| {
+                        toggles.lock().expect("log").push("toggle");
+                    })
+                    .child(div().h(px(200.0))),
+            )
+        }
+    }
+
+    fn double_click(window: &mut VisualTestContext, position: gpui::Point<Pixels>) {
+        for click_count in [1, 2] {
+            window.simulate_event(gpui::MouseDownEvent {
+                position,
+                modifiers: Modifiers::default(),
+                button: gpui::MouseButton::Left,
+                click_count,
+                first_mouse: false,
+            });
+            window.simulate_event(gpui::MouseUpEvent {
+                position,
+                modifiers: Modifiers::default(),
+                button: gpui::MouseButton::Left,
+                click_count,
+            });
+        }
+        window.run_until_parked();
+    }
+
+    /// A double click on the title calls the handler once; one on a button
+    /// in the title bar presses the button twice and leaves the handler
+    /// alone.
+    #[gpui::test]
+    fn a_double_click_on_the_title_reaches_the_handler_but_not_from_a_button(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+
+        let log: Log = Arc::default();
+        let capture = Arc::new(FrameCapture::default());
+        let observer = capture.clone();
+        let harness_log = log.clone();
+        let (_view, window) = cx.add_window_view(move |window, _cx| {
+            window.observe_frames(&observer);
+            TitleBarHarness { log: harness_log }
+        });
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        let button = capture
+            .bounds_of("extra-button")
+            .expect("the button is drawn");
+        double_click(window, button.center());
+        assert_eq!(*log.lock().expect("log"), vec!["press", "press"]);
+
+        log.lock().expect("log").clear();
+        let bar = capture
+            .bounds_of(super::MODAL_TITLE_BAR_ID)
+            .expect("the title bar is drawn");
+        double_click(
+            window,
+            point(bar.origin.x + bar.size.height / 2.0, bar.center().y),
+        );
+        assert_eq!(*log.lock().expect("log"), vec!["toggle"]);
+    }
 
     /// The dialog's close button draws only an icon, so it announces the
     /// action it performs.

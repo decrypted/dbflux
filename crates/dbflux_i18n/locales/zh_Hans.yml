@@ -5235,6 +5235,8 @@ sidebar:
     edit_reconnect_later: 稍后
     connection_already_pending: 连接已在等待中
     startup_needs_password: "'%{name}' 未保存密码，因此启动时未连接。请连接并输入密码。"
+    startup_needs_passwords: "%{names} 未保存密码，因此启动时未连接。请逐个连接并输入密码。"
+    startup_needs_passphrase: "'%{name}' 的 SSH 隧道需要未保存的密码短语，因此启动时未连接。请连接并输入密码短语。"
     operation_started_elsewhere: 操作已由其他线程启动
     background_task_limit: 后台任务运行过多，请稍候
     connection_cancelled_by_hook: 连接被 Hook 取消

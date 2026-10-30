@@ -62,7 +62,10 @@ segundo plano cada vez que se inicia, igual que al hacer clic en la conexión: s
 aplican los túneles SSH, los proxies, los hooks y los secretos del llavero, y una
 conexión fallida muestra su error habitual. Una conexión cuya contraseña no está
 guardada no se conecta al iniciar; en su lugar queda marcada como fallida, y
-**Reintentar** pide la contraseña. El menú de la conexión en la barra lateral (clic
+**Reintentar** pide la contraseña. Lo mismo ocurre con una conexión cuyo túnel SSH
+necesita una frase de contraseña de la clave que no está guardada: **Reintentar**
+pide la frase. Un solo aviso nombra todas las conexiones que no se conectaron
+porque su contraseña no está guardada. El menú de la conexión en la barra lateral (clic
 derecho, o el botón `…` de la fila) tiene el mismo interruptor, con una marca de
 verificación mientras está activado.
 

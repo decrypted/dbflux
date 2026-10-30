@@ -760,6 +760,7 @@ impl DataTable {
     ) -> impl IntoElement {
         let model = state.model();
         let sort = state.sort();
+        let sortable = state.is_sortable();
         let font_size = fonts::grid_font_size(cx);
         let type_font_size = fonts::grid_type_font_size(cx);
         let column_widths = state.column_widths();
@@ -875,13 +876,15 @@ impl DataTable {
                             )
                         },
                     )
-                    .child(header_sort_control(
-                        state_entity.clone(),
-                        col_ix,
-                        sort_direction,
-                        ChromeColors::tint(theme),
-                        theme.muted_foreground,
-                    ))
+                    .when(sortable, |header| {
+                        header.child(header_sort_control(
+                            state_entity.clone(),
+                            col_ix,
+                            sort_direction,
+                            ChromeColors::tint(theme),
+                            theme.muted_foreground,
+                        ))
+                    })
                     // An annotated header pins the name line to the top and
                     // draws the facts along the bottom, so columns with and
                     // without facts keep their names on the same line.
@@ -961,6 +964,7 @@ impl DataTable {
         let column_widths = state.column_widths();
         let h_offset = state.horizontal_offset();
         let sort = state.sort();
+        let sortable = state.is_sortable();
         let tint = ChromeColors::tint(theme);
         let strong = ChromeColors::strong(theme);
         let muted = theme.muted_foreground;
@@ -1063,13 +1067,15 @@ impl DataTable {
                             .text_color(muted)
                             .child(SharedString::from(col_spec.type_name.to_string())),
                     )
-                    .child(header_sort_control(
-                        state_for_sort.clone(),
-                        col_ix,
-                        sort_direction,
-                        tint,
-                        muted,
-                    ));
+                    .when(sortable, |header| {
+                        header.child(header_sort_control(
+                            state_for_sort.clone(),
+                            col_ix,
+                            sort_direction,
+                            tint,
+                            muted,
+                        ))
+                    });
 
                 let presence_line = presence.map(|ratio| {
                     let clamped = ratio.clamp(0.0, 1.0);
@@ -1714,13 +1720,12 @@ fn header_sort_control(
         .flex_shrink_0()
         .ml_auto()
         .cursor_pointer()
-        .on_mouse_down(
-            MouseButton::Left,
-            move |_event: &MouseDownEvent, _window, cx| {
-                cx.stop_propagation();
-                state.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
-            },
-        )
+        // Stopping the click keeps the header's own click from selecting the
+        // column as well.
+        .on_click(move |_event: &ClickEvent, _window, cx| {
+            cx.stop_propagation();
+            state.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
+        })
         .child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
 }
 

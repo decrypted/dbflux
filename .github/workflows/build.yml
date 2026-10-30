@@ -25,6 +25,14 @@ on:
         required: false
         type: boolean
         default: false
+      extra_features:
+        # Empty for upstream's release and nightly runs. The fork build passes
+        # `no-update-check`, since its versions do not match the upstream
+        # releases the update check compares against.
+        description: 'Comma-separated cargo features added to FEATURES on every platform'
+        required: false
+        type: string
+        default: ''
     secrets:
       GPG_PRIVATE_KEY:
         required: true
@@ -42,7 +50,7 @@ on:
         required: false
 
 env:
-  FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
+  FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws${{ inputs.extra_features != '' && format(',{0}', inputs.extra_features) || '' }}"
 
 permissions:
   contents: read

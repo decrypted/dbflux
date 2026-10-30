@@ -51,4 +51,7 @@ jobs:
       channel: nightly
       prerelease: true
       cache: true
+      # Fork versions never match an upstream release, so an update check
+      # could only report false updates.
+      extra_features: no-update-check
     secrets: inherit

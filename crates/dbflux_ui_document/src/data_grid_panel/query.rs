@@ -231,9 +231,12 @@ impl DataGridPanel {
         pagination: Pagination,
         order_by: Vec<OrderByColumn>,
         total_rows: Option<u64>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Any page read ends the wait: a sort or filter chosen meanwhile reads
+        // the first page itself.
+        self.first_page_awaits_pk = None;
         let filter_value = self.filter_bar.filter_input.read(cx).value();
         let filter = if filter_value.trim().is_empty() {
             None
@@ -286,7 +289,7 @@ impl DataGridPanel {
                     pagination.clone(),
                     order_by.clone(),
                     filter_text.clone(),
-                    _window,
+                    window,
                     cx,
                 ) {
                     // The visual query applies its result through the

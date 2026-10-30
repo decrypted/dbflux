@@ -166,6 +166,7 @@ impl DataGridPanel {
     pub(super) fn render_column_chooser(
         &self,
         chooser: &ColumnChooser,
+        viewport: Size<Pixels>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let rows = self.column_chooser_rows(cx);
@@ -261,13 +262,12 @@ impl DataGridPanel {
         let row_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT);
         let height = row_height * (items.len() as f32) + MenuMetrics::PADDING_Y * 2.0;
         // The chooser hangs where the menu that opened it was, in window
-        // coordinates; the overlay lays it out inside the panel.
-        let click = Point {
-            x: chooser.position.x - self.panel_origin.x,
-            y: chooser.position.y - self.panel_origin.y,
-        };
-        let placement =
-            super::context_menu::place_context_menu(click, CHOOSER_WIDTH, height, self.panel_size);
+        // coordinates, kept inside the window.
+        let placement = super::context_menu::tree::place_menu(
+            chooser.position,
+            size(CHOOSER_WIDTH, height),
+            viewport,
+        );
 
         deferred(
             div()
@@ -298,25 +298,29 @@ impl DataGridPanel {
                     cx.listener(|this, _, window, cx| this.close_column_chooser(window, cx)),
                 )
                 .child(
-                    menu_frame(cx)
-                        .id("column-chooser")
-                        .absolute()
-                        .left(placement.origin.x)
-                        .top(placement.origin.y)
-                        .w(CHOOSER_WIDTH)
-                        .occlude()
+                    anchored()
+                        .position(placement.origin)
+                        .snap_to_window_with_margin(super::context_menu::tree::MENU_EDGE_GAP)
                         .child(
-                            div()
-                                .id("column-chooser-rows")
-                                .flex()
-                                .flex_col()
-                                .max_h(
-                                    (self.panel_size.height - MenuMetrics::PADDING_Y * 2.0)
-                                        .max(row_height * 4.0),
-                                )
-                                .overflow_y_scroll()
-                                .track_scroll(&chooser.scroll_handle)
-                                .children(items),
+                            menu_frame(cx)
+                                .id("column-chooser")
+                                .debug_selector(|| "column-chooser".to_string())
+                                .w(CHOOSER_WIDTH)
+                                .occlude()
+                                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                                .child(
+                                    div()
+                                        .id("column-chooser-rows")
+                                        .flex()
+                                        .flex_col()
+                                        .max_h(
+                                            (placement.max_height - MenuMetrics::PADDING_Y * 2.0)
+                                                .max(px(0.0)),
+                                        )
+                                        .overflow_y_scroll()
+                                        .track_scroll(&chooser.scroll_handle)
+                                        .children(items),
+                                ),
                         ),
                 ),
         )

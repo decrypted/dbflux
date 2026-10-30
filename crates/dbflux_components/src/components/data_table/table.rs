@@ -1777,9 +1777,7 @@ fn render_rows(
 
                             let modifiers = event.modifiers();
 
-                            // A quick second Alt+click filters again rather
-                            // than opening the editor.
-                            if event.click_count() == 2 && !modifiers.alt {
+                            if event.click_count() == 2 {
                                 state_for_click.update(cx, |state, cx| {
                                     // A Ctrl+double-click on the cell selected
                                     // on its own took it out on the first press.
@@ -1800,6 +1798,12 @@ fn render_rows(
                                 state_for_click.update(cx, |state, cx| {
                                     state.click_cell(coord, modifiers, cx);
                                 });
+                            }
+                        })
+                        .on_aux_click({
+                            let state = state_entity.clone();
+                            move |event: &ClickEvent, window, cx| {
+                                request_filter_on_middle_click(&state, coord, event, window, cx);
                             }
                         })
                         .on_mouse_down(
@@ -2243,15 +2247,42 @@ fn column_resize_handle(
         )
 }
 
+/// A middle-click on a cell (the grid's or the record view's): select it and
+/// ask the host to add it to the filter, excluding its value with Shift. It
+/// stands in for Alt+click, which window managers that move windows with
+/// Alt+drag never deliver.
+pub(super) fn request_filter_on_middle_click(
+    state: &Entity<DataTableState>,
+    coord: super::selection::CellCoord,
+    event: &ClickEvent,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if !event.is_middle_click() {
+        return;
+    }
+    let exclude = event.modifiers().shift;
+    state.update(cx, |state, cx| {
+        state.focus(window, cx);
+        state.select_cell(coord, cx);
+        cx.emit(DataTableEvent::AddToFilterRequested {
+            row: coord.row,
+            col: coord.col,
+            exclude,
+        });
+    });
+}
+
 /// The sort control at the right edge of a column header: the current
 /// direction, or a faint up/down arrow while the column is not sorted. A click
 /// cycles the sort and stops there, so it does not reach the header, whose
 /// click selects the column.
 ///
-/// Alt+click adds the column as the next sort key instead, as in DataGrip:
-/// Shift and Ctrl/Cmd already extend and toggle the column selection on the
-/// header, so they would read as selection gestures here. With several keys
-/// the arrow carries the column's place among them.
+/// Shift+click adds the column as the next sort key instead, as in DataGrip.
+/// The arrow stops its click, so Shift here never reaches the header, where
+/// Shift+click extends the column selection. Alt is left alone: window
+/// managers that move windows with Alt+drag swallow Alt+click. With several
+/// keys the arrow carries the column's place among them.
 fn header_sort_control(
     state: Entity<DataTableState>,
     col_ix: usize,
@@ -2275,10 +2306,10 @@ fn header_sort_control(
         .ml_auto()
         .cursor_pointer()
         // Stopping the click keeps the header's own click from selecting the
-        // column as well. Alt adds the column as the next sort key.
+        // column as well. Shift adds the column as the next sort key.
         .on_click(move |event: &ClickEvent, _window, cx| {
             cx.stop_propagation();
-            let adds_key = event.modifiers().alt;
+            let adds_key = event.modifiers().shift;
             state.update(cx, |state, cx| {
                 if adds_key {
                     state.cycle_sort_key(col_ix, cx);
@@ -2633,12 +2664,12 @@ mod tests {
         });
     }
 
-    /// Alt+click on a second sort arrow adds that column as the next sort
+    /// Shift+click on a second sort arrow adds that column as the next sort
     /// key and numbers both headers; a plain click goes back to one key.
-    /// Without multi-sort the host sorts one column, so Alt+click replaces
-    /// the sort like a plain click.
+    /// Without multi-sort the host sorts one column, so Shift+click replaces
+    /// the sort like a plain click. Alt+click adds no key.
     #[gpui::test]
-    fn alt_click_on_a_sort_arrow_adds_a_sort_key(cx: &mut TestAppContext) {
+    fn shift_click_on_a_sort_arrow_adds_a_sort_key(cx: &mut TestAppContext) {
         cx.update(crate::theme::init);
 
         let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
@@ -2652,6 +2683,7 @@ mod tests {
         });
         visual.run_until_parked();
         let state = state_holder.borrow().clone().expect("state entity");
+        let shift = gpui::Modifiers::shift();
         let alt = gpui::Modifiers {
             alt: true,
             ..gpui::Modifiers::default()
@@ -2665,12 +2697,12 @@ mod tests {
         };
 
         click_arrow(&mut *visual, "header-sort-0", gpui::Modifiers::default());
-        click_arrow(&mut *visual, "header-sort-1", alt);
+        click_arrow(&mut *visual, "header-sort-1", shift);
         visual.update(|_, cx| {
             assert_eq!(
                 state.read(cx).sort_keys(),
                 vec![SortState::ascending(1)],
-                "multi-sort is off, so Alt+click replaces the sort"
+                "multi-sort is off, so Shift+click replaces the sort"
             );
         });
 
@@ -2682,6 +2714,21 @@ mod tests {
         });
         visual.run_until_parked();
         click_arrow(&mut *visual, "header-sort-1", alt);
+        visual.update(|_, cx| {
+            assert_eq!(
+                state.read(cx).sort_keys(),
+                vec![SortState::ascending(1)],
+                "Alt+click cycles the arrow like a plain click and adds no key"
+            );
+        });
+
+        visual.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.set_sort(Some(SortState::ascending(0)), cx)
+            });
+        });
+        visual.run_until_parked();
+        click_arrow(&mut *visual, "header-sort-1", shift);
         visual.update(|_, cx| {
             assert_eq!(
                 state.read(cx).sort_keys(),
@@ -2704,10 +2751,11 @@ mod tests {
         assert!(visual.debug_bounds("header-sort-rank-1").is_none());
     }
 
-    /// With the header click set to sort, Alt+click on a header adds its
-    /// column as the next sort key, as Alt+click on the sort arrow does.
+    /// With the header click set to sort, Alt+click on a header sorts by
+    /// its column alone like a plain click; adding a key is the arrow's
+    /// Shift+click.
     #[gpui::test]
-    fn alt_click_on_a_sorting_header_adds_a_sort_key(cx: &mut TestAppContext) {
+    fn alt_click_on_a_sorting_header_sorts_like_a_plain_click(cx: &mut TestAppContext) {
         cx.update(crate::theme::init);
         cx.update(|cx| super::super::set_header_click_sorts(cx, true));
 
@@ -2741,10 +2789,7 @@ mod tests {
         visual.run_until_parked();
         visual.update(|_, cx| {
             let state = state.read(cx);
-            assert_eq!(
-                state.sort_keys(),
-                vec![SortState::ascending(0), SortState::ascending(1)]
-            );
+            assert_eq!(state.sort_keys(), vec![SortState::ascending(1)]);
             assert!(state.selection().is_empty(), "the click sorts, not selects");
         });
     }
@@ -3377,11 +3422,11 @@ mod tests {
         assert_eq!(fx.range(), CellRange::single(CellCoord::new(4, 0)));
     }
 
-    /// Alt+press on a cell selects it and asks the host to filter by it, once
-    /// per press: the release does not ask again, and no drag starts, so
-    /// moving to another cell with the button held selects nothing more.
+    /// A middle-click on a cell selects it and asks the host to filter by
+    /// it, once per click; Shift asks to exclude the value. An Alt+press is
+    /// a plain press: it selects and asks nothing.
     #[gpui::test]
-    fn an_alt_press_filters_by_the_cell_without_dragging(cx: &mut TestAppContext) {
+    fn a_middle_click_asks_to_filter_by_the_cell(cx: &mut TestAppContext) {
         use super::super::selection::{CellCoord, CellRange};
 
         let mut fx = DragFixture::new(cx);
@@ -3390,39 +3435,46 @@ mod tests {
         let requests_for_sub = requests.clone();
         fx.visual.update(|_, cx| {
             cx.subscribe(&state, move |_, event: &DataTableEvent, _| {
-                if let DataTableEvent::AddToFilterRequested { row, col } = event {
-                    requests_for_sub.borrow_mut().push((*row, *col));
+                if let DataTableEvent::AddToFilterRequested { row, col, exclude } = event {
+                    requests_for_sub.borrow_mut().push((*row, *col, *exclude));
                 }
             })
             .detach();
         });
+        let none = gpui::Modifiers::default();
+
+        let (cell, other) = (fx.cell(2, 1), fx.cell(4, 0));
+        fx.visual
+            .simulate_mouse_down(cell, MouseButton::Middle, none);
+        fx.visual.simulate_mouse_up(cell, MouseButton::Middle, none);
+        fx.visual.run_until_parked();
+        assert_eq!(*requests.borrow(), vec![(2, 1, false)], "one request");
+        assert_eq!(
+            fx.range(),
+            CellRange::single(CellCoord::new(2, 1)),
+            "the filtered cell is the one selected"
+        );
+
+        let shift = gpui::Modifiers::shift();
+        fx.visual
+            .simulate_mouse_down(other, MouseButton::Middle, shift);
+        fx.visual
+            .simulate_mouse_up(other, MouseButton::Middle, shift);
+        fx.visual.run_until_parked();
+        assert_eq!(
+            requests.borrow().last(),
+            Some(&(4, 0, true)),
+            "Shift excludes"
+        );
+
         let alt = gpui::Modifiers {
             alt: true,
             ..gpui::Modifiers::default()
         };
-
-        let (cell, other) = (fx.cell(2, 1), fx.cell(4, 0));
-        fx.visual.simulate_mouse_down(cell, MouseButton::Left, alt);
-        fx.visual.simulate_mouse_move(other, MouseButton::Left, alt);
-        fx.visual.simulate_mouse_up(other, MouseButton::Left, alt);
+        fx.visual.simulate_click(cell, alt);
         fx.visual.run_until_parked();
-
-        assert_eq!(
-            *requests.borrow(),
-            vec![(2, 1)],
-            "one request, for the pressed cell"
-        );
-        assert_eq!(
-            fx.range(),
-            CellRange::single(CellCoord::new(2, 1)),
-            "no drag"
-        );
-
-        // A plain click afterwards neither filters nor keeps the Alt cell.
-        fx.visual.simulate_click(other, gpui::Modifiers::default());
-        fx.visual.run_until_parked();
-        assert_eq!(requests.borrow().len(), 1);
-        assert_eq!(fx.range(), CellRange::single(CellCoord::new(4, 0)));
+        assert_eq!(requests.borrow().len(), 2, "Alt+click does not filter");
+        assert_eq!(fx.range(), CellRange::single(CellCoord::new(2, 1)));
     }
 
     /// A Ctrl+press that takes a cell out starts no drag: a jitter inside the

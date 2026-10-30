@@ -110,7 +110,7 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ),
         // The table menu of the column carries Order ascending / descending
         // and Add to sort: the keyboard path of the header's sort arrow and
-        // of Alt+click on it.
+        // of Shift+click on it.
         (
             "header-sort-*",
             KeyboardPath::Command(Command::OpenContextMenu),
@@ -190,6 +190,13 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ("footer-load-all-rows", KeyboardPath::Menu("load-all-rows")),
         ("toggle-maximize", KeyboardPath::Menu("maximize")),
         ("hide-panel", KeyboardPath::Menu("hide")),
+        // The edit bar's `+` and `−`: the add-row key, and the Delete key,
+        // which marks every row with a selected cell as `−` does.
+        ("add-row-btn", KeyboardPath::Command(Command::ResultsAddRow)),
+        (
+            "delete-rows-btn",
+            KeyboardPath::Command(Command::ResultsDeleteRow),
+        ),
         ("undo-btn", KeyboardPath::Command(Command::Undo)),
         ("redo-btn", KeyboardPath::Command(Command::Redo)),
         ("review-btn", KeyboardPath::Command(Command::ReviewChanges)),

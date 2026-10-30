@@ -162,15 +162,7 @@ fn plain_copy_adds_column_names_when_the_setting_is_on(cx: &mut TestAppContext) 
 fn a_query_result_menu_offers_the_extractors_without_inserts(cx: &mut TestAppContext) {
     let (panel, _app_state, window) = people_panel(cx);
 
-    let actions: Vec<Option<ContextMenuAction>> = window.update(|_, app| {
-        let items = DataGridPanel::build_context_menu_items(false, false, true, false, true);
-        panel
-            .read(app)
-            .with_copy_extractors(items, app)
-            .iter()
-            .map(|item| item.action)
-            .collect()
-    });
+    let actions = copy_as_actions(&panel, window);
 
     let json = actions
         .iter()
@@ -297,17 +289,22 @@ fn users_table_panel(
     (panel, window)
 }
 
-fn menu_actions(
+/// The rows of the Copy as submenu, in order.
+fn copy_as_actions(
     panel: &gpui::Entity<DataGridPanel>,
     window: &mut VisualTestContext,
 ) -> Vec<Option<ContextMenuAction>> {
     window.update(|_, app| {
-        let items = DataGridPanel::build_context_menu_items(false, false, true, false, true);
         panel
             .read(app)
-            .with_copy_extractors(items, app)
-            .iter()
-            .map(|item| item.action)
+            .copy_as_entries(app)
+            .into_iter()
+            .map(|entry| match entry.target {
+                crate::data_grid_panel::context_menu::tree::MenuTarget::Action(action) => {
+                    Some(action)
+                }
+                _ => None,
+            })
             .collect()
     })
 }
@@ -367,7 +364,7 @@ fn insert_row_after_the_first(panel: &gpui::Entity<DataGridPanel>, window: &mut 
 fn copy_as_inserts_writes_the_selected_columns_and_skips_unwritable_rows(cx: &mut TestAppContext) {
     let (panel, window) = users_table_panel(cx);
     assert!(
-        menu_actions(&panel, window).contains(&Some(ContextMenuAction::CopyAsInsertStatements))
+        copy_as_actions(&panel, window).contains(&Some(ContextMenuAction::CopyAsInsertStatements))
     );
 
     select_columns(&panel, window, 0, 1);
@@ -405,7 +402,7 @@ fn copy_as_inserts_is_not_offered_on_grouped_or_joined_builder_rows(cx: &mut Tes
                 panel.builder.current_visual_spec = Some(spec)
             });
         });
-        menu_actions(&panel, window).contains(&Some(ContextMenuAction::CopyAsInsertStatements))
+        copy_as_actions(&panel, window).contains(&Some(ContextMenuAction::CopyAsInsertStatements))
     };
 
     assert!(!offers_inserts(window, make_grouped_spec()), "grouped rows");
@@ -534,7 +531,7 @@ fn a_collection_menu_offers_no_sql_in_list(cx: &mut TestAppContext) {
         panel
     });
 
-    let actions = menu_actions(&panel, window);
+    let actions = copy_as_actions(&panel, window);
     assert!(!actions.contains(&Some(ContextMenuAction::CopyAsSqlInList)));
     assert!(actions.contains(&Some(ContextMenuAction::CopyAsMarkdown)));
 }

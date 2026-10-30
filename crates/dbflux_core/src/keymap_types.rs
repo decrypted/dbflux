@@ -118,6 +118,9 @@ pub enum Command {
     FindSimilarRows,
     /// Copies the grid selection as JSON, as the context menu's Copy as JSON.
     CopySelectionAsJson,
+    /// Narrows a table's WHERE filter to the selected cells' values, as the
+    /// context menu's Add to filter.
+    AddToFilter,
     ResultsSetNull,
     /// Edits the active cell as a SQL expression, or flips the open inline
     /// editor between a value and an expression.
@@ -445,6 +448,7 @@ impl Command {
             Command::ToggleRowInspector => "Toggle row inspector",
             Command::FindSimilarRows => "Find similar rows",
             Command::CopySelectionAsJson => "Copy selection as JSON",
+            Command::AddToFilter => "Add selection to filter",
             Command::ResultsSetNull => "Set cell to NULL",
             Command::ToggleCellExpression => "Edit cell as SQL expression",
             Command::ReviewChanges => "Review changes",
@@ -656,6 +660,7 @@ impl Command {
             Command::ToggleRowInspector => "toggle_row_inspector",
             Command::FindSimilarRows => "find_similar_rows",
             Command::CopySelectionAsJson => "copy_selection_as_json",
+            Command::AddToFilter => "add_to_filter",
             Command::ResultsSetNull => "results_set_null",
             Command::ToggleCellExpression => "toggle_cell_expression",
             Command::ReviewChanges => "review_changes",
@@ -884,6 +889,7 @@ impl Command {
             Command::ToggleRowInspector,
             Command::FindSimilarRows,
             Command::CopySelectionAsJson,
+            Command::AddToFilter,
             Command::ResultsSetNull,
             Command::ToggleCellExpression,
             Command::ReviewChanges,
@@ -1087,6 +1093,7 @@ impl Command {
             | Command::ToggleRowInspector
             | Command::FindSimilarRows
             | Command::CopySelectionAsJson
+            | Command::AddToFilter
             | Command::ResultsSetNull
             | Command::ToggleCellExpression
             | Command::ReviewChanges

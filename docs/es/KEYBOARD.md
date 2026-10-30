@@ -420,10 +420,12 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `Shift+s` | Buscar las filas más cercanas a la fila seleccionada por su columna vectorial, en una tabla con una columna `vector` de `pgvector` (también en el menú contextual de la fila) |
 | `Esc` | Salir de las filas similares y volver a la página de la tabla |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
-| `Ctrl+Alt+c` / `Cmd+Alt+c` | Copiar la selección como JSON, como **Copiar como JSON** del menú contextual (resultados de tabla) |
+| `Ctrl+Alt+c` / `Cmd+Alt+c` | Copiar la selección como JSON, como **Copiar como ▸ JSON** del menú contextual (resultados de tabla) |
+| `=` | Añadir los valores de las celdas seleccionadas al filtro WHERE de una tabla, una condición por columna (`columna = valor`, o `columna IN (...)` para varias celdas de una columna), como **Añadir al filtro** del menú contextual y un clic central en una celda |
+| `Delete` | Marcar para eliminar cada fila que tenga una celda seleccionada, como el **−** de la barra de edición |
 | `Ctrl+Alt+s` / `Cmd+Alt+s` | Revisar las sentencias que Guardar ejecutará para los cambios pendientes (resultados de tabla) |
 | `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
-| `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, mostrar otra vista del resultado, los botones del panel de valor y del inspector de fila, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
+| `m` (o `Shift+F10`)                           | Abrir menú contextual, agrupado en los submenús Copiar como, Establecer valor, Filtro, Ordenar, Columna, Fila y Más; `Enter` o `Right` abren un submenú (Más contiene Generar SQL, un nivel más), `Left` o `Escape` vuelven atrás. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, mostrar otra vista del resultado, los botones del panel de valor y del inspector de fila, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
 | `Shift+m` | Abrir el menú de la cabecera de la columna de la celda seleccionada, como un clic derecho en su cabecera: orden, filtro y la sección Columna. Solo en la cuadrícula, que tiene cabeceras de columna; la vista de registro y el árbol de documentos lo ignoran |
 
 Una pestaña de inspector de instancia también toma estas teclas: `m` abre el
@@ -448,9 +450,12 @@ filtro resaltado, `Shift+Delete` lo quita y `Escape` cierra la lista; su última
 fila borra el historial de la tabla. Ver [Historial de
 filtros](RESULTS.md#historial-de-filtros).
 
-El submenú Filtro del menú contextual de una celda (`m`) es el equivalente de
-teclado de `Alt`+clic en una celda: sus entradas añaden el valor de la celda al
-filtro de la tabla como condición `AND`. Ver [Filtrar por una
+`=` y las entradas Añadir al filtro y Filtro del menú contextual son los
+equivalentes de teclado de un clic central en una celda (`Shift`+clic central
+excluye el valor): añaden el valor de la celda al filtro de la tabla como
+condición `AND`. Añadir una clave de orden, `Shift`+clic en la flecha de una
+cabecera, es **Ordenar ▸ Añadir al orden** en el menú de la celda y **Añadir al
+orden** en el menú de la cabecera. Ver [Filtrar por una
 celda](RESULTS.md#filtrar-por-una-celda).
 
 Cuando los resultados no tienen menú contextual propio, `m` abre en su lugar el

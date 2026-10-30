@@ -1,6 +1,6 @@
 use super::utils::{extract_pk_columns, value_to_json};
 use super::{
-    ContextMenuItem, DataGridEvent, DataGridPanel, DataSource, EditState, PendingDeleteConfirm,
+    DataGridEvent, DataGridPanel, DataSource, EditState, PendingDeleteConfirm,
     PendingDocumentPreview, PendingModalOpen, PendingToast, SqlGenerateKind, TableContextMenu,
 };
 use dbflux_app::keymap::{Command, ContextId};
@@ -27,12 +27,15 @@ use gpui_component::ActiveTheme;
 use std::fs::File;
 use std::io::BufWriter;
 
+mod add_to_filter;
+mod build;
 mod columns;
 mod copy_extractors;
 mod items;
 mod sections;
 pub(super) mod toolbar;
-use sections::MenuRowCursor;
+pub(super) mod tree;
+pub(in crate::data_grid_panel) use sections::action_shortcut;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilterBackend {
@@ -40,101 +43,12 @@ enum FilterBackend {
     Mongo,
 }
 
-/// Gap kept between the context menu and the panel edge.
-const CONTEXT_MENU_EDGE_GAP: Pixels = Spacing::XS;
-
-/// Width of the widest submenu (the filter list). A menu whose right edge
-/// leaves less than this to the panel edge opens its submenus to the left,
-/// provided the left side has the room.
-const SUBMENU_MAX_WIDTH: Pixels = px(280.0);
-
 /// Width of the cell context menu (AppByzMenu).
 const CONTEXT_MENU_WIDTH: Pixels = px(270.0);
 
 /// Width of the menu opened from a column header, which lists every filter
 /// operator inline.
 const COLUMN_HEADER_MENU_WIDTH: Pixels = px(300.0);
-
-/// How far a submenu overlaps the menu it hangs off (the menu width less the
-/// row inset and the offset in `sections.rs`), so the room it needs is its
-/// width less this.
-const SUBMENU_OVERLAP: Pixels = px(8.0); // guardrail-allow: derived from the menu width and submenu offset, not a spacing step
-
-/// Which member of the Filter / Order / Generate SQL / Copy as SQL group
-/// carries the separator that opens it. The four read as one group
-/// (IslMenu), so only the first one present gets it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct QueryGroupSeparators {
-    pub(super) filter: bool,
-    pub(super) order: bool,
-    pub(super) generate_sql: bool,
-    pub(super) copy_query: bool,
-}
-
-impl QueryGroupSeparators {
-    pub(super) fn new(
-        has_filter: bool,
-        has_order: bool,
-        has_generate_sql: bool,
-        has_copy_query: bool,
-    ) -> Self {
-        Self {
-            filter: has_filter,
-            order: has_order && !has_filter,
-            generate_sql: has_generate_sql && !has_filter && !has_order,
-            copy_query: has_copy_query && !has_filter && !has_order && !has_generate_sql,
-        }
-    }
-}
-
-/// Where a context menu goes, in panel coordinates.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct ContextMenuPlacement {
-    pub(super) origin: Point<Pixels>,
-    pub(super) submenus_open_left: bool,
-}
-
-/// Keep the menu inside the panel.
-///
-/// The click stays the anchor: the menu is shifted left when it would run
-/// past the right edge and up when it would run past the bottom, and never
-/// past the top-left gap. Submenus open to the right unless the widest one
-/// would not fit there but would fit on the left; in a panel too narrow for
-/// either they stay on the right, where at least their start is visible. A
-/// panel that has not been measured yet reports a zero size;
-/// clamping against it would pin every menu into the corner, so an unmeasured
-/// panel leaves the click alone.
-pub(super) fn place_context_menu(
-    click: Point<Pixels>,
-    menu_width: Pixels,
-    menu_height: Pixels,
-    panel: Size<Pixels>,
-) -> ContextMenuPlacement {
-    if panel.width <= menu_width || panel.height <= menu_height {
-        return ContextMenuPlacement {
-            origin: click,
-            submenus_open_left: false,
-        };
-    }
-
-    let x = click
-        .x
-        .min(panel.width - menu_width - CONTEXT_MENU_EDGE_GAP)
-        .max(CONTEXT_MENU_EDGE_GAP);
-    let y = if click.y + menu_height + CONTEXT_MENU_EDGE_GAP > panel.height {
-        (panel.height - menu_height - CONTEXT_MENU_EDGE_GAP).max(CONTEXT_MENU_EDGE_GAP)
-    } else {
-        click.y
-    };
-
-    let fits_right = x + menu_width - SUBMENU_OVERLAP + SUBMENU_MAX_WIDTH <= panel.width;
-    let fits_left = x + SUBMENU_OVERLAP >= SUBMENU_MAX_WIDTH;
-
-    ContextMenuPlacement {
-        origin: Point { x, y },
-        submenus_open_left: !fits_right && fits_left,
-    }
-}
 
 /// One row of the data grid's export menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,21 +167,8 @@ impl DataGridPanel {
         };
 
         self.context_menu = Some(TableContextMenu {
-            row,
-            col,
-            position,
-            sql_submenu_open: false,
-            copy_query_submenu_open: false,
-            filter_submenu_open: false,
-            order_submenu_open: false,
-            toolbar_submenu_open: false,
-            selected_index: 0,
-            submenu_selected_index: 0,
-            is_document_view: false,
-            is_column_header: false,
-            doc_field_path: None,
-            doc_field_value: None,
             row_actions: self.menu_row_actions(),
+            ..TableContextMenu::new(row, col, position)
         });
 
         // Focus the context menu to receive keyboard events
@@ -286,21 +187,8 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         self.context_menu = Some(TableContextMenu {
-            row: doc_index,
-            col: 0,
-            position,
-            sql_submenu_open: false,
-            copy_query_submenu_open: false,
-            filter_submenu_open: false,
-            order_submenu_open: false,
-            toolbar_submenu_open: false,
-            selected_index: 0,
-            submenu_selected_index: 0,
             is_document_view: true,
-            is_column_header: false,
-            doc_field_path: None,
-            doc_field_value: None,
-            row_actions: Vec::new(),
+            ..TableContextMenu::new(doc_index, 0, position)
         });
 
         self.focus.context_menu_focus.focus(window, cx);
@@ -353,21 +241,10 @@ impl DataGridPanel {
         };
 
         self.context_menu = Some(TableContextMenu {
-            row: doc_index,
-            col: 0,
-            position,
-            sql_submenu_open: false,
-            copy_query_submenu_open: false,
-            filter_submenu_open: false,
-            order_submenu_open: false,
-            toolbar_submenu_open: false,
-            selected_index: 0,
-            submenu_selected_index: 0,
             is_document_view: true,
-            is_column_header: false,
             doc_field_path: field_path,
             doc_field_value: field_value,
-            row_actions: Vec::new(),
+            ..TableContextMenu::new(doc_index, 0, position)
         });
 
         self.focus.context_menu_focus.focus(window, cx);
@@ -658,7 +535,10 @@ impl DataGridPanel {
             format!("{} IS NOT NULL", col_name),
             ContextMenuAction::FilterIsNotNull,
         ));
-        items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
+        items.push((
+            dbflux_i18n::t!("document.data.context_menu.toolbar.clear_filter"),
+            ContextMenuAction::RemoveFilter,
+        ));
 
         let count = items.len();
         (col_name, count, items, value_ops_count)
@@ -695,7 +575,10 @@ impl DataGridPanel {
             format!("{} IS NOT NULL", field),
             ContextMenuAction::FilterIsNotNull,
         ));
-        items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
+        items.push((
+            dbflux_i18n::t!("document.data.context_menu.toolbar.clear_filter"),
+            ContextMenuAction::RemoveFilter,
+        ));
 
         let count = items.len();
         (field, count, items, value_ops_count)
@@ -760,418 +643,6 @@ impl DataGridPanel {
         }
     }
 
-    /// Handles commands when the context menu is open.
-    pub(super) fn dispatch_menu_command(
-        &mut self,
-        cmd: Command,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let is_editable = self.check_is_editable(cx);
-        let backend = self.filter_backend(cx);
-        let is_document_view = self
-            .context_menu
-            .as_ref()
-            .map(|m| m.is_document_view)
-            .unwrap_or(false);
-        let is_column_header = self
-            .context_menu
-            .as_ref()
-            .map(|m| m.is_column_header)
-            .unwrap_or(false);
-        if is_column_header {
-            return self.dispatch_column_header_menu_command(cmd, backend, window, cx);
-        }
-        let has_row_target = self
-            .context_menu
-            .as_ref()
-            .map(|m| self.has_context_menu_row_target(m.row, m.is_document_view, cx))
-            .unwrap_or(false);
-
-        // Must match `render_context_menu`, so the keyboard walks the same
-        // item list the menu draws.
-        let table_queries = self.offers_table_query_actions();
-        let has_filter = table_queries && self.has_filter_submenu(backend, is_document_view, cx);
-        let has_order =
-            table_queries && matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
-        let has_generate_sql = table_queries && !is_document_view && !is_column_header;
-        let has_copy_query = table_queries && !is_column_header && self.has_copy_query_support();
-        let can_chart = !is_column_header && self.can_chart_from_context_menu(cx);
-
-        // Layout:
-        //   [base items]
-        //   [sep] [Filter]? [Order]? [GenSQL]? [CopyQuery]?  (one group; the
-        //                                                    separator opens it)
-        //   [sep + row_action...]?    (if row_actions non-empty)
-        //   [sep + Toolbar]?          (if the grid shows any toolbar button)
-        let inspect_row_enabled = !self.is_grouped_result();
-
-        let base_items = match self.context_menu.as_ref() {
-            Some(menu) if !is_column_header => self.with_edit_as_expression(
-                self.with_find_similar_rows(
-                    self.with_copy_extractors(
-                        self.adapt_menu_items_for_documents(
-                            Self::build_context_menu_items(
-                                is_editable,
-                                is_document_view,
-                                has_row_target,
-                                can_chart,
-                                inspect_row_enabled,
-                            ),
-                            is_document_view,
-                            cx,
-                        ),
-                        cx,
-                    ),
-                    menu,
-                    has_row_target,
-                    cx,
-                ),
-                menu,
-                cx,
-            ),
-            _ => Vec::new(),
-        };
-        let base_count = base_items.len();
-
-        let separators =
-            QueryGroupSeparators::new(has_filter, has_order, has_generate_sql, has_copy_query);
-
-        let slots = |present: bool, with_separator: bool| -> usize {
-            usize::from(present) + usize::from(with_separator)
-        };
-
-        let filter_slots = slots(has_filter, separators.filter);
-        let after_filter = base_count + filter_slots;
-        let after_filter_order = after_filter + slots(has_order, separators.order);
-        let after_gen_sql = after_filter_order + slots(has_generate_sql, separators.generate_sql);
-        let after_copy_query = after_gen_sql + slots(has_copy_query, separators.copy_query);
-
-        // RowActions: sep(1) + N action items
-        let row_action_count = if is_column_header {
-            0
-        } else {
-            self.context_menu
-                .as_ref()
-                .map(|m| m.row_actions.len())
-                .unwrap_or(0)
-        };
-        let row_actions_slots = if row_action_count > 0 {
-            1 + row_action_count
-        } else {
-            0
-        };
-        let row_actions_start = after_copy_query; // index of the separator
-        let after_row_actions = after_copy_query + row_actions_slots;
-
-        // Toolbar: sep(1) + trigger(1), when the grid shows any button.
-        let toolbar_actions = if is_column_header {
-            Vec::new()
-        } else {
-            self.toolbar_actions(cx)
-        };
-        let toolbar_trigger_idx = (!toolbar_actions.is_empty()).then_some(after_row_actions + 1);
-        let total_count = after_row_actions + if toolbar_actions.is_empty() { 0 } else { 2 };
-
-        let filter_trigger_idx = has_filter.then_some(base_count + usize::from(separators.filter));
-        let order_trigger_idx = has_order.then_some(after_filter + usize::from(separators.order));
-        let gen_sql_trigger_idx =
-            has_generate_sql.then_some(after_filter_order + usize::from(separators.generate_sql));
-        let copy_query_trigger_idx =
-            has_copy_query.then_some(after_gen_sql + usize::from(separators.copy_query));
-
-        let any_submenu_open = self
-            .context_menu
-            .as_ref()
-            .is_some_and(|m| m.any_submenu_open());
-
-        let filter_submenu_actions: Vec<ContextMenuAction> = self
-            .context_menu
-            .as_ref()
-            .filter(|m| m.filter_submenu_open)
-            .map(|m| {
-                let (_, _, items, _) = self.build_filter_items(m, backend, cx);
-                items.into_iter().map(|(_, action)| action).collect()
-            })
-            .unwrap_or_default();
-
-        // Determine count of items in the active submenu
-        let active_submenu_count = if let Some(menu) = &self.context_menu {
-            if menu.filter_submenu_open {
-                filter_submenu_actions.len()
-            } else if menu.order_submenu_open {
-                3 // ASC, DESC, Remove
-            } else if menu.sql_submenu_open {
-                4 // SELECT WHERE, INSERT, UPDATE, DELETE
-            } else if menu.copy_query_submenu_open {
-                3 // INSERT, UPDATE, DELETE
-            } else if menu.toolbar_submenu_open {
-                toolbar_actions.len()
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-
-        let is_separator = |idx: usize| -> bool {
-            if idx < base_count {
-                return base_items.get(idx).map(|i| i.is_separator).unwrap_or(false);
-            }
-
-            let group_separator = (separators.filter && idx == base_count)
-                || (separators.order && idx == after_filter)
-                || (separators.generate_sql && idx == after_filter_order)
-                || (separators.copy_query && idx == after_gen_sql);
-
-            if group_separator {
-                return true;
-            }
-
-            // Row actions separator
-            if row_action_count > 0 && idx == row_actions_start {
-                return true;
-            }
-
-            // Toolbar separator
-            if toolbar_trigger_idx.is_some() && idx == after_row_actions {
-                return true;
-            }
-
-            false
-        };
-
-        match cmd {
-            Command::MenuDown => {
-                if let Some(ref mut menu) = self.context_menu {
-                    if any_submenu_open {
-                        menu.submenu_selected_index =
-                            (menu.submenu_selected_index + 1) % active_submenu_count;
-                    } else {
-                        menu.selected_index = (menu.selected_index + 1) % total_count;
-                        while is_separator(menu.selected_index) {
-                            menu.selected_index = (menu.selected_index + 1) % total_count;
-                        }
-                    }
-                    cx.notify();
-                }
-                true
-            }
-            Command::MenuUp => {
-                if let Some(ref mut menu) = self.context_menu {
-                    if any_submenu_open {
-                        menu.submenu_selected_index = if menu.submenu_selected_index == 0 {
-                            active_submenu_count - 1
-                        } else {
-                            menu.submenu_selected_index - 1
-                        };
-                    } else {
-                        menu.selected_index = if menu.selected_index == 0 {
-                            total_count - 1
-                        } else {
-                            menu.selected_index - 1
-                        };
-                        while is_separator(menu.selected_index) && menu.selected_index > 0 {
-                            menu.selected_index -= 1;
-                        }
-                    }
-                    cx.notify();
-                }
-                true
-            }
-            Command::MenuSelect => {
-                // Check if the selected item is a row action before borrowing
-                // context_menu mutably, since emitting RowActionRequested needs
-                // self.context_menu = None and self.collect_row_values which
-                // cannot coexist with a live &mut borrow of the menu.
-                let pending_row_action: Option<(
-                    usize,
-                    Point<Pixels>,
-                    dbflux_core::InspectorRowAction,
-                )> = self.context_menu.as_ref().and_then(|menu| {
-                    if row_action_count > 0
-                        && menu.selected_index > row_actions_start
-                        && menu.selected_index <= row_actions_start + row_action_count
-                    {
-                        let action_idx = menu.selected_index - row_actions_start - 1;
-                        menu.row_actions
-                            .get(action_idx)
-                            .cloned()
-                            .map(|a| (menu.row, menu.position, a))
-                    } else {
-                        None
-                    }
-                });
-
-                let pending_toolbar_action = self
-                    .context_menu
-                    .as_ref()
-                    .filter(|menu| menu.toolbar_submenu_open)
-                    .and_then(|menu| toolbar_actions.get(menu.submenu_selected_index).copied());
-
-                if let Some(action) = pending_toolbar_action {
-                    self.run_toolbar_action_from_menu(action, window, cx);
-                } else if let Some((row, position, action)) = pending_row_action {
-                    let row_values = self.collect_row_values(row, cx);
-                    self.context_menu = None;
-                    self.restore_focus_after_context_menu(false, window, cx);
-                    cx.emit(DataGridEvent::RowActionRequested {
-                        row,
-                        action_id: action.id,
-                        action_label: action.label,
-                        is_destructive: action.is_destructive,
-                        row_values,
-                        position,
-                    });
-                    cx.notify();
-                } else if let Some(ref mut menu) = self.context_menu {
-                    if menu.filter_submenu_open {
-                        if let Some(action) = filter_submenu_actions
-                            .get(menu.submenu_selected_index)
-                            .copied()
-                        {
-                            self.handle_context_menu_action(action, window, cx);
-                        }
-                    } else if menu.order_submenu_open {
-                        let action = match menu.submenu_selected_index {
-                            0 => ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
-                            1 => ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
-                            _ => ContextMenuAction::RemoveOrdering,
-                        };
-                        self.handle_context_menu_action(action, window, cx);
-                    } else if menu.sql_submenu_open {
-                        let action = match menu.submenu_selected_index {
-                            0 => ContextMenuAction::GenerateSelectWhere,
-                            1 => ContextMenuAction::GenerateInsert,
-                            2 => ContextMenuAction::GenerateUpdate,
-                            _ => ContextMenuAction::GenerateDelete,
-                        };
-                        self.handle_context_menu_action(action, window, cx);
-                    } else if menu.copy_query_submenu_open {
-                        let action = match menu.submenu_selected_index {
-                            0 => ContextMenuAction::CopyAsInsert,
-                            1 => ContextMenuAction::CopyAsUpdate,
-                            _ => ContextMenuAction::CopyAsDelete,
-                        };
-                        self.handle_context_menu_action(action, window, cx);
-                    } else if filter_trigger_idx == Some(menu.selected_index) {
-                        menu.close_submenus();
-                        menu.filter_submenu_open = true;
-                        menu.submenu_selected_index = 0;
-                        cx.notify();
-                    } else if order_trigger_idx == Some(menu.selected_index) {
-                        menu.close_submenus();
-                        menu.order_submenu_open = true;
-                        menu.submenu_selected_index = 0;
-                        cx.notify();
-                    } else if gen_sql_trigger_idx == Some(menu.selected_index) {
-                        menu.close_submenus();
-                        menu.sql_submenu_open = true;
-                        menu.submenu_selected_index = 0;
-                        cx.notify();
-                    } else if copy_query_trigger_idx == Some(menu.selected_index) {
-                        menu.close_submenus();
-                        menu.copy_query_submenu_open = true;
-                        menu.submenu_selected_index = 0;
-                        cx.notify();
-                    } else if toolbar_trigger_idx == Some(menu.selected_index) {
-                        menu.close_submenus();
-                        menu.toolbar_submenu_open = true;
-                        menu.submenu_selected_index = 0;
-                        cx.notify();
-                    } else if menu.selected_index < base_count
-                        && let Some(item) = base_items.get(menu.selected_index)
-                        && !item.disabled
-                        && let Some(action) = item.action
-                    {
-                        self.handle_context_menu_action(action, window, cx);
-                    }
-                }
-                true
-            }
-            Command::MenuBack | Command::Cancel => {
-                if let Some(ref mut menu) = self.context_menu {
-                    if menu.any_submenu_open() {
-                        menu.close_submenus();
-                        cx.notify();
-                    } else {
-                        let is_document_view = menu.is_document_view;
-                        self.context_menu = None;
-                        self.restore_focus_after_context_menu(is_document_view, window, cx);
-                        cx.notify();
-                    }
-                }
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn dispatch_column_header_menu_command(
-        &mut self,
-        cmd: Command,
-        backend: Option<FilterBackend>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(menu) = self.context_menu.as_ref() else {
-            return false;
-        };
-        let (_, _, filter_items, _) = self.build_filter_items(menu, backend, cx);
-        let mut actions = vec![
-            ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
-            ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
-            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending),
-            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Descending),
-            ContextMenuAction::RemoveOrdering,
-        ];
-        actions.extend(filter_items.into_iter().map(|(_, action)| action));
-        actions.extend(
-            self.column_menu_items(menu.col, cx)
-                .into_iter()
-                .map(|item| item.action),
-        );
-
-        match cmd {
-            Command::MenuDown => {
-                if let Some(menu) = self.context_menu.as_mut() {
-                    menu.selected_index = (menu.selected_index + 1) % actions.len();
-                    cx.notify();
-                }
-                true
-            }
-            Command::MenuUp => {
-                if let Some(menu) = self.context_menu.as_mut() {
-                    menu.selected_index = if menu.selected_index == 0 {
-                        actions.len() - 1
-                    } else {
-                        menu.selected_index - 1
-                    };
-                    cx.notify();
-                }
-                true
-            }
-            Command::MenuSelect => {
-                let selected = self
-                    .context_menu
-                    .as_ref()
-                    .map(|menu| menu.selected_index)
-                    .unwrap_or(0);
-                if let Some(action) = actions.get(selected).copied() {
-                    self.handle_context_menu_action(action, window, cx);
-                }
-                true
-            }
-            Command::MenuBack | Command::Cancel => {
-                self.context_menu = None;
-                self.restore_focus_after_context_menu(false, window, cx);
-                cx.notify();
-                true
-            }
-            _ => false,
-        }
-    }
-
     fn has_context_menu_row_target(&self, row: usize, is_document_view: bool, cx: &App) -> bool {
         if is_document_view {
             return self
@@ -1197,6 +668,7 @@ impl DataGridPanel {
                 | ContextMenuAction::GenerateId(_)
                 | ContextMenuAction::EditInModal
                 | ContextMenuAction::ViewValue
+                | ContextMenuAction::AddToFilter
                 | ContextMenuAction::SetDefault
                 | ContextMenuAction::SetNull
                 | ContextMenuAction::UnsetField
@@ -1289,6 +761,16 @@ impl DataGridPanel {
     /// Handles the context-menu keys while the export menu is open: move,
     /// run the highlighted row, or close. Every other command is refused, as
     /// the cell menu refuses them.
+    /// Keeps the highlighted export row in view in a menu that scrolls.
+    fn scroll_export_selection_into_view(&self, entries: &[ExportMenuEntry]) {
+        self.focus
+            .export_menu_scroll
+            .scroll_to_item(super::render::export_menu_child_index(
+                entries,
+                self.chrome.export_menu_selected,
+            ));
+    }
+
     pub(super) fn dispatch_export_menu_command(
         &mut self,
         cmd: Command,
@@ -1307,12 +789,14 @@ impl DataGridPanel {
             Command::MenuDown | Command::SelectNext => {
                 self.chrome.export_menu_selected =
                     step_export_selection(&entries, self.chrome.export_menu_selected, true);
+                self.scroll_export_selection_into_view(&entries);
                 cx.notify();
                 true
             }
             Command::MenuUp | Command::SelectPrev => {
                 self.chrome.export_menu_selected =
                     step_export_selection(&entries, self.chrome.export_menu_selected, false);
+                self.scroll_export_selection_into_view(&entries);
                 cx.notify();
                 true
             }
@@ -1768,37 +1252,6 @@ impl DataGridPanel {
         }
     }
 
-    pub(super) fn build_context_menu_items(
-        is_editable: bool,
-        is_document_view: bool,
-        has_row_target: bool,
-        can_chart: bool,
-        inspect_row_enabled: bool,
-    ) -> Vec<ContextMenuItem> {
-        items::build_context_menu_items(
-            is_editable,
-            is_document_view,
-            has_row_target,
-            can_chart,
-            inspect_row_enabled,
-        )
-    }
-
-    /// Returns the total number of navigable items in the context menu.
-    /// This includes all visible items plus the Generate SQL trigger (for table view).
-    #[allow(dead_code)]
-    pub(super) fn context_menu_item_count(is_editable: bool, is_document_view: bool) -> usize {
-        let base_items =
-            Self::build_context_menu_items(is_editable, is_document_view, true, false, true);
-        let base_count = base_items.iter().filter(|i| !i.is_separator).count();
-        // Add 1 for Generate SQL only in table view
-        if is_document_view {
-            base_count
-        } else {
-            base_count + 1
-        }
-    }
-
     pub(super) fn render_delete_confirm_modal(
         &self,
         _theme: &gpui_component::theme::Theme,
@@ -1844,230 +1297,6 @@ impl DataGridPanel {
             .width(px(420.0))
             .body(Text::body(description))
             .footer(footer)
-    }
-
-    /// Header row of the cell menu: the column and row it acts on, with the
-    /// column's key icon (PK in the warning color, FK in the info color) when
-    /// the table metadata marks it as a key.
-    fn render_cell_menu_header(
-        &self,
-        menu: &TableContextMenu,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let theme = cx.theme();
-        let column_name = self
-            .result
-            .columns
-            .get(menu.col)
-            .map(|column| column.name.clone())
-            .unwrap_or_default();
-
-        let label = dbflux_i18n::t!(
-            "document.data.context_menu.header",
-            column = column_name,
-            row = menu.row + 1
-        );
-
-        let table_state = self
-            .grid_table
-            .table_state
-            .as_ref()
-            .map(|table| table.read(cx));
-        let is_primary_key =
-            table_state.is_some_and(|state| state.pk_columns().contains(&menu.col));
-        let is_foreign_key =
-            table_state.is_some_and(|state| state.fk_columns().contains(&menu.col));
-
-        let header = MenuItem::header(label);
-        let header = if is_primary_key {
-            header
-                .icon(AppIcon::KeyRound)
-                .header_icon_color(theme.warning)
-        } else if is_foreign_key {
-            header.icon(AppIcon::Cable).header_icon_color(theme.info)
-        } else {
-            header.icon(AppIcon::Columns)
-        };
-
-        render_menu_header(&header, cx).into_any_element()
-    }
-
-    pub(super) fn render_context_menu(
-        &self,
-        menu: &TableContextMenu,
-        is_editable: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let menu_width = if menu.is_column_header {
-            COLUMN_HEADER_MENU_WIDTH
-        } else {
-            CONTEXT_MENU_WIDTH
-        };
-
-        // Convert window coordinates to panel-relative coordinates
-        let click = Point {
-            x: menu.position.x - self.panel_origin.x,
-            y: menu.position.y - self.panel_origin.y,
-        };
-        // The horizontal position decides which side the submenus open on,
-        // and the items need to know that before they are built; the
-        // vertical position needs the item count, so it is settled after.
-        let submenus_open_left =
-            place_context_menu(click, menu_width, px(0.0), self.panel_size).submenus_open_left;
-
-        let selected_index = menu.selected_index;
-        let is_document_view = menu.is_document_view;
-        let backend = self.filter_backend(cx);
-        let mut detail_rows = 0usize;
-        let menu_items = if menu.is_column_header {
-            self.render_column_header_menu_items(menu, backend, cx)
-        } else {
-            let has_row_target =
-                self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
-            let can_chart = self.can_chart_from_context_menu(cx);
-            let inspect_row_enabled = !self.is_grouped_result();
-            let visible_items = self.with_edit_as_expression(
-                self.with_find_similar_rows(
-                    self.with_copy_extractors(
-                        self.adapt_menu_items_for_documents(
-                            Self::build_context_menu_items(
-                                is_editable,
-                                menu.is_document_view,
-                                has_row_target,
-                                can_chart,
-                                inspect_row_enabled,
-                            ),
-                            menu.is_document_view,
-                            cx,
-                        ),
-                        cx,
-                    ),
-                    menu,
-                    has_row_target,
-                    cx,
-                ),
-                menu,
-                cx,
-            );
-            detail_rows = visible_items
-                .iter()
-                .filter(|item| item.detail.is_some())
-                .count();
-            let mut menu_items: Vec<AnyElement> = Vec::new();
-            let mut visual_index = 0usize;
-
-            if has_row_target && !is_document_view {
-                menu_items.push(self.render_cell_menu_header(menu, cx));
-            }
-
-            Self::render_menu_item_rows(
-                selected_index,
-                &visible_items,
-                &mut menu_items,
-                &mut visual_index,
-                cx,
-            );
-
-            let table_queries = self.offers_table_query_actions();
-            let has_filter =
-                table_queries && self.has_filter_submenu(backend, is_document_view, cx);
-            let has_order =
-                table_queries && matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
-            let separators = QueryGroupSeparators::new(
-                has_filter,
-                has_order,
-                table_queries && !is_document_view,
-                self.has_copy_query_support(),
-            );
-
-            self.render_filter_submenu_section(
-                menu,
-                submenus_open_left,
-                backend,
-                has_filter,
-                selected_index,
-                &mut menu_items,
-                &mut visual_index,
-                cx,
-            );
-            self.render_order_submenu_section(
-                menu,
-                submenus_open_left,
-                has_order,
-                separators.order,
-                MenuRowCursor {
-                    rows: &mut menu_items,
-                    visual_index: &mut visual_index,
-                    selected_index,
-                },
-                cx,
-            );
-            Self::render_generate_sql_submenu_section(
-                is_document_view || !table_queries,
-                separators.generate_sql,
-                menu,
-                submenus_open_left,
-                MenuRowCursor {
-                    rows: &mut menu_items,
-                    visual_index: &mut visual_index,
-                    selected_index,
-                },
-                cx,
-            );
-
-            self.render_copy_query_submenu_section(
-                menu,
-                submenus_open_left,
-                separators.copy_query,
-                MenuRowCursor {
-                    rows: &mut menu_items,
-                    visual_index: &mut visual_index,
-                    selected_index,
-                },
-                cx,
-            );
-
-            Self::render_row_actions_section(
-                menu,
-                selected_index,
-                &mut menu_items,
-                &mut visual_index,
-                cx,
-            );
-
-            let toolbar_actions = self.toolbar_actions(cx);
-            self.render_toolbar_submenu_section(
-                menu,
-                &toolbar_actions,
-                submenus_open_left,
-                MenuRowCursor {
-                    rows: &mut menu_items,
-                    visual_index: &mut visual_index,
-                    selected_index,
-                },
-                cx,
-            );
-            menu_items
-        };
-
-        // Separators are shorter than rows, so this over-estimates a little;
-        // a menu placed a few pixels higher than necessary is harmless. Rows
-        // with a detail line are taller.
-        let row_height = dbflux_components::fonts::ui_px(cx, MenuMetrics::ROW_HEIGHT);
-        let detail_extra =
-            dbflux_components::fonts::ui_px(cx, MenuMetrics::DETAIL_ROW_HEIGHT) - row_height;
-        let menu_height = row_height * menu_items.len() as f32
-            + detail_extra * detail_rows as f32
-            + MenuMetrics::PADDING_Y * 2.0;
-        let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
-
-        self.render_context_menu_overlay(
-            placement.origin.x,
-            placement.origin.y,
-            menu_width,
-            menu_items,
-            cx,
-        )
     }
 
     pub(super) fn handle_context_menu_action(
@@ -2123,6 +1352,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::ViewValue => {
                 self.request_value_panel(menu.row, menu.col, cx);
+            }
+            ContextMenuAction::AddToFilter => {
+                self.add_selection_to_filter(false, window, cx);
             }
             ContextMenuAction::EditInModal => {
                 if menu.is_document_view {
@@ -2982,95 +2214,6 @@ impl DataGridPanel {
         });
     }
 
-    /// Adds "Find similar rows" to the row actions when the table has a
-    /// vector column and the menu is on a row of the grid. The entry names
-    /// the column and K it reads, or, disabled, why it cannot run from this
-    /// row.
-    pub(in crate::data_grid_panel) fn with_find_similar_rows(
-        &self,
-        mut items: Vec<ContextMenuItem>,
-        menu: &TableContextMenu,
-        has_row_target: bool,
-        cx: &Context<Self>,
-    ) -> Vec<ContextMenuItem> {
-        if menu.is_document_view || !has_row_target || !self.can_find_similar_rows(menu.col, cx) {
-            return items;
-        }
-
-        let position_of =
-            |action: ContextMenuAction| items.iter().position(|item| item.action == Some(action));
-        let position = position_of(ContextMenuAction::InspectRow)
-            .map(|index| index + 1)
-            .or_else(|| position_of(ContextMenuAction::DuplicateRow))
-            .or_else(|| position_of(ContextMenuAction::AddRow).map(|index| index + 1))
-            .or_else(|| position_of(ContextMenuAction::ViewValue).map(|index| index + 1))
-            .unwrap_or(items.len());
-
-        let block = self.similar_rows_block(menu.row, menu.col, cx);
-        let detail = match &block {
-            Some(block) => Some(block.menu_reason()),
-            None => self.similar_rows_menu_detail(menu.col, cx),
-        };
-
-        items.insert(
-            position,
-            ContextMenuItem {
-                label: dbflux_i18n::t!("document.data.context_menu.item.find_similar_rows").into(),
-                action: Some(ContextMenuAction::FindSimilarRows),
-                icon: Some(AppIcon::ChartScatter),
-                is_separator: false,
-                is_danger: false,
-                detail: detail.map(Into::into),
-                disabled: block.is_some(),
-            },
-        );
-        items
-    }
-
-    /// In a document grid the column-default entry has no meaning: it becomes
-    /// "Unset field", and "Revert change" follows "Set NULL".
-    fn adapt_menu_items_for_documents(
-        &self,
-        items: Vec<ContextMenuItem>,
-        is_document_view: bool,
-        cx: &App,
-    ) -> Vec<ContextMenuItem> {
-        if is_document_view || !self.commits_document_patches(cx) {
-            return items;
-        }
-
-        let mut adapted = Vec::with_capacity(items.len() + 1);
-
-        for item in items {
-            match item.action {
-                Some(ContextMenuAction::SetDefault) => adapted.push(ContextMenuItem {
-                    label: dbflux_i18n::t!("document.collection.menu.unset_field").into(),
-                    action: Some(ContextMenuAction::UnsetField),
-                    icon: Some(AppIcon::CircleX),
-                    is_separator: false,
-                    is_danger: false,
-                    detail: None,
-                    disabled: false,
-                }),
-                Some(ContextMenuAction::SetNull) => {
-                    adapted.push(item);
-                    adapted.push(ContextMenuItem {
-                        label: dbflux_i18n::t!("document.collection.menu.revert_change").into(),
-                        action: Some(ContextMenuAction::RevertCell),
-                        icon: Some(AppIcon::RotateCcw),
-                        is_separator: false,
-                        is_danger: false,
-                        detail: None,
-                        disabled: false,
-                    });
-                }
-                _ => adapted.push(item),
-            }
-        }
-
-        adapted
-    }
-
     /// Stages the removal of a document field (`$unset` on commit).
     pub(super) fn handle_unset_field(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
         let Some(table_state) = &self.grid_table.table_state else {
@@ -3697,6 +2840,48 @@ impl DataGridPanel {
         });
     }
 
+    /// Rows (visual) that hold a selected cell, ascending.
+    pub(in crate::data_grid_panel) fn selected_visual_rows(&self, cx: &App) -> Vec<usize> {
+        let Some(table_state) = &self.grid_table.table_state else {
+            return Vec::new();
+        };
+        let state = table_state.read(cx);
+        let row_count = state.edit_buffer().compute_visual_order().len();
+        state.selection().selected_rows(row_count)
+    }
+
+    /// Marks every row with a selected cell for delete (the `−` button of
+    /// the edit bar and the Delete key), or `fallback` when no cell is
+    /// selected. Rows already marked stay as they are. Returns how many
+    /// rows it went through.
+    pub(in crate::data_grid_panel) fn delete_selected_rows(
+        &mut self,
+        fallback: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        let mut rows = self.selected_visual_rows(cx);
+        if rows.is_empty() {
+            rows.extend(fallback);
+        }
+
+        // From the bottom up: dropping an unsaved row moves the rows below
+        // it up by one, which would shift every later index.
+        for &row in rows.iter().rev() {
+            let already_marked = self.grid_table.table_state.as_ref().is_some_and(|state| {
+                let buffer = state.read(cx).edit_buffer();
+                matches!(
+                    buffer.visual_row_source(row),
+                    Some(dbflux_components::components::data_table::model::VisualRowSource::Base(base))
+                        if buffer.is_pending_delete(base)
+                )
+            });
+            if !already_marked {
+                self.handle_delete_row(row, cx);
+            }
+        }
+        rows.len()
+    }
+
     pub(super) fn handle_delete_row(&mut self, row: usize, cx: &mut Context<Self>) {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
@@ -3772,7 +2957,12 @@ impl DataGridPanel {
     /// Narrows the WHERE filter with `expr` and reloads. The current filter
     /// is kept as an `AND` term, in parentheses when it has a top-level `OR`;
     /// a condition it already holds is not added again and reads nothing.
-    fn apply_filter_expression(&mut self, expr: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::data_grid_panel) fn apply_filter_expression(
+        &mut self,
+        expr: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let current = self.filter_bar.filter_input.read(cx).value().to_string();
 
         let Some(new_filter) = super::filter_bar::and_filter(&current, expr) else {
@@ -3780,50 +2970,6 @@ impl DataGridPanel {
         };
 
         self.replace_filter_and_reload(&new_filter, window, cx);
-    }
-
-    /// Alt+click on a cell: narrows the WHERE filter of a table to the
-    /// cell's value (`col = value`, or `col IS NULL`), as Filter by value's
-    /// `=` entry does. Other sources have no WHERE to narrow; a value with no
-    /// literal form (binary, JSON, nested) only gets a hint.
-    pub(in crate::data_grid_panel) fn add_cell_to_filter(
-        &mut self,
-        visual_row: usize,
-        col: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.source.is_table()
-            || !self.filter_input_visible()
-            || self.neighbor_bar_search().is_some()
-        {
-            return;
-        }
-
-        let Some(value) = self.resolve_cell_value(visual_row, col, cx) else {
-            return;
-        };
-
-        let expr = match value {
-            Value::Null => self.sql_is_null_expr(col, false, cx),
-            Value::Bytes(_)
-            | Value::Json(_)
-            | Value::Array(_)
-            | Value::Document(_)
-            | Value::Unsupported(_) => {
-                Toast::info(dbflux_i18n::t!(
-                    "document.data.grid.filter.value_not_filterable"
-                ))
-                .meta_right(now_hms())
-                .push(cx);
-                return;
-            }
-            _ => self.sql_value_filter_expr(visual_row, col, FilterOperator::Eq, cx),
-        };
-
-        if let Some(expr) = expr {
-            self.apply_filter_expression(&expr, window, cx);
-        }
     }
 
     fn handle_filter_by_value(
@@ -4969,265 +4115,4 @@ fn shown_value(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::DataGridPanel;
-    use super::QueryGroupSeparators;
-    use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
-    use super::{ExportMenuEntry, step_export_selection};
-    use dbflux_export::ExportFormat;
-    use gpui::{Pixels, Point, Size, px};
-
-    /// The binary copy row cannot run, so the menu keys pass over it in both
-    /// directions and wrap at the ends.
-    #[test]
-    fn export_selection_wraps_and_skips_the_binary_copy_row() {
-        let entries = [
-            ExportMenuEntry::Save(ExportFormat::Binary),
-            ExportMenuEntry::Save(ExportFormat::Hex),
-            ExportMenuEntry::Copy(ExportFormat::Binary),
-            ExportMenuEntry::Copy(ExportFormat::Hex),
-        ];
-
-        assert_eq!(step_export_selection(&entries, 1, true), 3);
-        assert_eq!(step_export_selection(&entries, 3, false), 1);
-        assert_eq!(step_export_selection(&entries, 3, true), 0);
-        assert_eq!(step_export_selection(&entries, 0, false), 3);
-        assert_eq!(step_export_selection(&[], 0, true), 0);
-    }
-
-    fn panel() -> Size<Pixels> {
-        Size {
-            width: px(1000.0),
-            height: px(600.0),
-        }
-    }
-
-    #[test]
-    fn query_group_has_one_separator_before_its_first_member() {
-        assert_eq!(
-            QueryGroupSeparators::new(true, true, true, true),
-            QueryGroupSeparators {
-                filter: true,
-                order: false,
-                generate_sql: false,
-                copy_query: false,
-            }
-        );
-
-        assert_eq!(
-            QueryGroupSeparators::new(false, false, true, true),
-            QueryGroupSeparators {
-                filter: false,
-                order: false,
-                generate_sql: true,
-                copy_query: false,
-            }
-        );
-
-        assert_eq!(
-            QueryGroupSeparators::new(false, false, false, true),
-            QueryGroupSeparators {
-                filter: false,
-                order: false,
-                generate_sql: false,
-                copy_query: true,
-            }
-        );
-    }
-
-    #[test]
-    fn a_menu_that_fits_stays_at_the_click_and_opens_submenus_to_the_right() {
-        let click = Point {
-            x: px(100.0),
-            y: px(100.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-        assert_eq!(placed.origin, click);
-        assert!(!placed.submenus_open_left);
-    }
-
-    #[test]
-    fn a_menu_near_the_right_edge_is_shifted_in_and_opens_submenus_to_the_left() {
-        let click = Point {
-            x: px(950.0),
-            y: px(100.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-        assert_eq!(
-            placed.origin.x,
-            px(1000.0) - px(180.0) - CONTEXT_MENU_EDGE_GAP
-        );
-        assert_eq!(placed.origin.y, click.y);
-        assert!(placed.submenus_open_left);
-    }
-
-    #[test]
-    fn submenus_open_left_as_soon_as_the_widest_one_would_not_fit() {
-        let click = Point {
-            x: px(1000.0) - px(180.0) + SUBMENU_OVERLAP - SUBMENU_MAX_WIDTH + px(1.0),
-            y: px(100.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-        assert_eq!(placed.origin.x, click.x, "the menu itself still fits");
-        assert!(placed.submenus_open_left);
-    }
-
-    /// A panel too narrow for a submenu on either side keeps them on the
-    /// right: a submenu pushed off the left edge would be invisible, one
-    /// hanging past the right edge is at least partly usable.
-    #[test]
-    fn a_narrow_panel_keeps_submenus_on_the_right() {
-        let narrow = Size {
-            width: px(400.0),
-            height: px(600.0),
-        };
-        let click = Point {
-            x: px(20.0),
-            y: px(100.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), narrow);
-        assert_eq!(placed.origin, click);
-        assert!(!placed.submenus_open_left);
-    }
-
-    #[test]
-    fn a_menu_near_the_bottom_is_moved_up_to_fit() {
-        let click = Point {
-            x: px(100.0),
-            y: px(500.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-        assert_eq!(placed.origin.x, click.x);
-        assert_eq!(
-            placed.origin.y,
-            px(600.0) - px(300.0) - CONTEXT_MENU_EDGE_GAP
-        );
-    }
-
-    #[test]
-    fn an_unmeasured_panel_leaves_the_click_alone() {
-        let click = Point {
-            x: px(950.0),
-            y: px(500.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), Size::default());
-        assert_eq!(placed.origin, click);
-        assert!(!placed.submenus_open_left);
-    }
-
-    fn labels(items: &[super::ContextMenuItem]) -> Vec<String> {
-        items
-            .iter()
-            .filter(|item| !item.is_separator)
-            .map(|item| item.label.to_string())
-            .collect()
-    }
-
-    fn item_label(key: &str) -> String {
-        dbflux_i18n::t!(key)
-    }
-
-    #[test]
-    fn empty_table_menu_keeps_insert_actions_but_hides_row_actions() {
-        let items = DataGridPanel::build_context_menu_items(true, false, false, false, true);
-        let labels = labels(&items);
-
-        assert!(labels.contains(&item_label("document.data.context_menu.item.add_row")));
-        assert!(!labels.contains(&item_label("document.data.context_menu.item.edit")));
-        assert!(!labels.contains(&item_label("document.data.context_menu.item.edit_in_modal")));
-        assert!(!labels.contains(&item_label("document.data.context_menu.item.duplicate_row")));
-        assert!(!labels.contains(&item_label("document.data.context_menu.item.delete_row")));
-    }
-
-    #[test]
-    fn non_editable_table_menu_stays_unchanged_without_row_target() {
-        let items = DataGridPanel::build_context_menu_items(false, false, false, false, true);
-
-        assert_eq!(
-            labels(&items),
-            vec![
-                item_label("document.data.context_menu.item.copy"),
-                item_label("document.data.context_menu.item.copy_as_csv"),
-                item_label("document.data.context_menu.item.copy_as_json"),
-            ]
-        );
-    }
-
-    /// The value panel is a reader as much as an editor, so a read-only
-    /// result still offers it — but only over an actual row.
-    #[test]
-    fn non_editable_table_menu_offers_view_value_over_a_row() {
-        let with_row = labels(&DataGridPanel::build_context_menu_items(
-            false, false, true, false, true,
-        ));
-        assert!(with_row.contains(&item_label("document.data.context_menu.item.view_value")));
-
-        let without_row = labels(&DataGridPanel::build_context_menu_items(
-            false, false, false, false, true,
-        ));
-        assert!(!without_row.contains(&item_label("document.data.context_menu.item.view_value")));
-    }
-
-    #[test]
-    fn editable_table_menu_with_row_target_keeps_row_actions() {
-        let items = DataGridPanel::build_context_menu_items(true, false, true, false, true);
-        let labels = labels(&items);
-
-        assert!(labels.contains(&item_label("document.data.context_menu.item.edit")));
-        assert!(labels.contains(&item_label("document.data.context_menu.item.edit_in_modal")));
-        assert!(labels.contains(&item_label("document.data.context_menu.item.add_row")));
-        assert!(labels.contains(&item_label("document.data.context_menu.item.duplicate_row")));
-        assert!(labels.contains(&item_label("document.data.context_menu.item.delete_row")));
-    }
-
-    #[test]
-    fn chart_this_query_absent_when_can_chart_false() {
-        // can_chart = false: item must NOT appear regardless of other flags.
-        let table_items = DataGridPanel::build_context_menu_items(false, false, false, false, true);
-        let chart_label = item_label("document.data.context_menu.item.chart_this_query");
-        assert!(!labels(&table_items).contains(&chart_label));
-
-        let editable_items =
-            DataGridPanel::build_context_menu_items(true, false, true, false, true);
-        assert!(!labels(&editable_items).contains(&chart_label));
-    }
-
-    #[test]
-    fn chart_this_query_present_only_when_can_chart_true() {
-        // can_chart = true: item must appear.
-        let items = DataGridPanel::build_context_menu_items(false, false, false, true, true);
-        assert!(labels(&items).contains(&item_label(
-            "document.data.context_menu.item.chart_this_query"
-        )));
-    }
-
-    #[test]
-    fn chart_this_query_absent_in_document_view_regardless_of_can_chart() {
-        // Document-view menu never shows Chart this query because the source is never
-        // a QueryResult when is_document_view is true.
-        let doc_items = DataGridPanel::build_context_menu_items(false, true, false, true, true);
-        assert!(!labels(&doc_items).contains(&item_label(
-            "document.data.context_menu.item.chart_this_query"
-        )));
-    }
-
-    #[test]
-    fn inspect_row_hidden_when_inspect_row_disabled() {
-        let items_with_target =
-            DataGridPanel::build_context_menu_items(true, false, true, false, false);
-        assert!(
-            !labels(&items_with_target)
-                .contains(&item_label("document.data.context_menu.item.inspect_row")),
-            "Inspect Row must not appear when inspect_row_enabled=false"
-        );
-    }
-
-    #[test]
-    fn inspect_row_present_when_enabled_and_has_target() {
-        let items = DataGridPanel::build_context_menu_items(true, false, true, false, true);
-        assert!(
-            labels(&items).contains(&item_label("document.data.context_menu.item.inspect_row")),
-            "Inspect Row must appear when inspect_row_enabled=true and has_row_target=true"
-        );
-    }
-}
+mod tests;

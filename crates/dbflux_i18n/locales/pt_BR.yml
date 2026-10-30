@@ -1651,7 +1651,7 @@ document:
         delete_document: Excluir documento
         paste: Colar
         edit: Editar
-        edit_in_modal: Editar em janela…
+        edit_in_modal: "Editar no editor…"
         edit_as_expression: "Editar como expressão SQL…"
         generate_id: "Gerar %{kind}"
         set_default: Definir como padrão
@@ -1660,6 +1660,7 @@ document:
         inspect_row: Inspecionar linha
         find_similar_rows: Encontrar linhas semelhantes
         view_value: Ver valor
+        add_to_filter: "Adicionar ao filtro"
         duplicate_row: Duplicar linha
         delete_row: Excluir linha
         chart_this_query: Criar gráfico desta consulta
@@ -1695,6 +1696,25 @@ document:
         move_right: Mover para a direita
         chooser_title: Colunas
         show_all: Mostrar todas as colunas
+      copy_as:
+        title: "Copiar como"
+        csv: "CSV"
+        json: "JSON"
+        sql_in_list: "Lista SQL IN"
+        insert_statements: "Instruções INSERT"
+        markdown: "Tabela Markdown"
+      set_value:
+        title: "Definir valor"
+        to_null: "NULL"
+        to_default: "DEFAULT"
+      sort:
+        title: "Ordenar"
+        ascending: "Crescente"
+        descending: "Decrescente"
+      row:
+        title: "Linha"
+      more:
+        title: "Mais"
       generate_sql:
         title: Gerar SQL
       toolbar:
@@ -1776,6 +1796,11 @@ document:
           update_failed: "Falha ao atualizar o documento: %{error}"
     grid:
       edit_bar:
+        add_row: "Adicionar linha"
+        delete_rows: "Excluir as linhas selecionadas"
+        with_shortcut: "%{action} (%{shortcut})"
+        add_row_disabled: "Este resultado não aceita linhas novas"
+        delete_rows_no_selection: "Selecione uma célula em cada linha a excluir"
         review: "Revisar"
         clean: Nenhuma alteração não salva
         dirty:
@@ -4476,6 +4501,7 @@ settings:
       toggle_row_inspector: Alternar inspetor de linha
       find_similar_rows: Encontrar linhas semelhantes
       copy_selection_as_json: "Copiar a seleção como JSON"
+      add_to_filter: "Adicionar a seleção ao filtro"
       results_set_null: Definir célula como NULL
       toggle_cell_expression: "Editar célula como expressão SQL"
       review_changes: "Revisar alterações"

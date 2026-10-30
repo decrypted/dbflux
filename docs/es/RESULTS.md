@@ -48,6 +48,27 @@ Cuando el panel de resultados tiene el foco:
 - `f` enfoca la toolbar; `/` enfoca la búsqueda/filtro.
 - `z` alterna el colapso del panel.
 - `m` (o `Shift+F10`) abre el menú contextual de fila/celda.
+- `=` añade los valores de las celdas seleccionadas al filtro `WHERE` de una
+  tabla (ver [Filtrar por una celda](#filtrar-por-una-celda)).
+
+El menú contextual de la celda (`m`, `Shift+F10` o clic derecho) está agrupado
+para que quepa en pantalla. Arriba están **Copiar**, **Copiar como ▸** (CSV,
+JSON, lista SQL IN, sentencias INSERT, tabla Markdown y, en una tabla, la fila
+como query), **Ver valor** y **Añadir al filtro**. Después, la edición:
+**Editar**, **Editar en el editor…**, **Editar como expresión SQL…**, **Pegar**
+y **Establecer valor ▸** (NULL, DEFAULT y los identificadores que admite la
+columna). Luego **Filtro ▸**, **Ordenar ▸**, **Columna ▸** (ocultar, mover,
+fijar, ajustar ancho, Columnas…) y **Fila ▸** (inspeccionar, añadir, duplicar,
+las acciones de fila de la conexión y, al final y aparte, Eliminar fila). Al
+final, **Más ▸** (Generar SQL ▸, Graficar esta consulta, Buscar filas
+similares) y **Barra de herramientas ▸**. Cada parte muestra solo lo que aplica
+a la celda, y cada fila conserva su atajo. `Up` / `Down` recorren el menú,
+`Enter` o `Right` ejecutan una fila o abren su submenú, y `Left` o `Escape`
+vuelven atrás. Un menú abierto cerca del borde inferior o derecho de la ventana
+se abre hacia arriba o se desplaza a la izquierda, los submenús se abren del
+lado con espacio, y un menú más alto que la ventana se desplaza manteniendo
+visible la fila resaltada; el menú de la cabecera de columna y el de exportar
+caben en la ventana del mismo modo.
 
 Con el ratón, un clic selecciona una celda y `Shift`+clic, o pulsar y arrastrar, selecciona el rango hasta otra celda. Un clic en un número de fila selecciona la fila entera, y `Shift`+clic en otro número de fila selecciona todas las filas intermedias. `Ctrl`+clic (`Cmd`+clic en macOS) en una celda o un número de fila la añade a la selección, o la quita cuando está seleccionada sola; al copiar varios rangos se copian las filas y columnas que abarcan, con las celdas fuera de la selección vacías. Los rangos añadidos sirven para copiar: borrar, duplicar, guardar y las demás acciones de fila actúan sobre la fila del cursor, un clic derecho selecciona la celda bajo el puntero y la vista de registro trata `Ctrl`+clic como un clic normal. Al arrastrar más allá de un borde de la cuadrícula, esta se desplaza en esa dirección, más deprisa cuanto más lejos esté el puntero, y el rango sigue creciendo hasta soltar el botón o volver con el puntero.
 
@@ -75,19 +96,18 @@ esa columna: ordenar ascendente o descendente, quitar el orden y todos los
 operadores de filtro, en una sola lista plana. El clic izquierdo en la
 cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic, `Cmd`+clic en macOS, la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada. Con **Hacer clic en la cabecera de una columna la ordena** activado (Settings > General > Data grid), un clic normal en la cabecera la ordena, como la flecha.
 
-Para ordenar por varias columnas, haz `Alt`+clic en la flecha de otra columna:
-pasa a ser la siguiente clave de orden, ascendente, y otro `Alt`+clic la vuelve
-descendente y después la quita del orden. Con más de una clave, cada cabecera
+Para ordenar por varias columnas, haz `Shift`+clic en la flecha de otra columna:
+pasa a ser la siguiente clave de orden, ascendente, y otro `Shift`+clic la vuelve
+descendente y después la quita del orden. La flecha se queda con el clic, así
+que `Shift`+clic en ella nunca amplía la selección de columnas como lo hace
+`Shift`+clic en el resto de la cabecera. Con más de una clave, cada cabecera
 ordenada muestra su posición (1, 2, 3) junto a la flecha, y las filas que
 empatan en la primera clave se ordenan por la segunda, y así sucesivamente. Un
 clic normal en cualquier flecha vuelve a ordenar solo por esa columna, en la
 dirección que ya tenía si era clave. Una tabla cuya clave primaria tiene varias
 columnas se abre ordenada por todas ellas, así que sus columnas clave muestran 1
-y 2 desde el principio. Algunos escritorios Linux (KDE Plasma, por ejemplo)
-usan `Alt`+clic para mover ventanas; ahí **Añadir al orden** del menú de la
-columna hace lo mismo, o se puede cambiar el modificador del gestor de
-ventanas. El menú
-de la columna ofrece lo mismo con **Añadir al orden: columna ASC** y **Añadir
+y 2 desde el principio. El menú de la columna, y **Ordenar ▸** del menú de la
+celda, ofrecen lo mismo con **Añadir al orden: columna ASC** y **Añadir
 al orden: columna DESC**, que también cambian la dirección de una columna que ya
 es clave, y **Quitar orden** elimina todas las claves. Una tabla envía todas las
 claves a la base de datos en un único `ORDER BY`; un resultado de consulta se
@@ -226,20 +246,25 @@ schema](QUERY_BUILDER.md#autocompletado-consciente-del-schema)).
 
 El submenú **Filtro** del menú contextual de una celda (`m`, o clic derecho)
 reduce el filtro al valor de la celda con `=`, `<>`, `<`, `>`, `LIKE`, `IS NULL`
-y los demás operadores que admite el tipo de la columna. `Alt`+clic en una celda
-hace lo mismo con `=` en un solo paso (`IS NULL` para una celda NULL) y
-selecciona la celda. Ambos conservan el filtro actual como término `AND`, entre
-paréntesis cuando tiene un `OR` de primer nivel, así que `status = 500` pasa a
-`status = 500 AND "method" = 'getbets'`, y una condición que el filtro ya
-contiene no se añade dos veces. Los valores binarios, JSON y anidados no se
-pueden añadir así. Algunos gestores de ventanas de Linux usan `Alt`+arrastrar
-para mover ventanas; un `Alt`+clic sin mover el puntero sigue funcionando.
+y los demás operadores que admite el tipo de la columna, y su última entrada
+limpia el filtro. Un clic central en una celda hace lo mismo con `=` en un solo
+paso (`IS NULL` para una celda NULL) y selecciona la celda; con `Shift`, el clic
+central excluye el valor (`<>`, o `IS NOT NULL` para una celda NULL).
+
+`=`, o **Añadir al filtro** arriba del menú de la celda, añade las celdas
+seleccionadas: una condición por columna seleccionada, con sus valores como
+`columna = valor`, o como `columna IN (...)` cuando hay varias celdas de esa
+columna, cada valor una vez. Todas las vías conservan el filtro actual como
+término `AND`, entre paréntesis cuando tiene un `OR` de primer nivel, así que
+`status = 500` pasa a `status = 500 AND "method" = 'getbets'`, y una condición
+que el filtro ya contiene no se añade dos veces. Los valores binarios, JSON y
+anidados no se pueden añadir así.
 
 ### Deshacer un filtro
 
 Cada filtro `WHERE` nuevo con el que se lee una tabla es un paso de Deshacer y
 Rehacer del grid, se aplique como se aplique (`Enter`, una entrada del
-historial, `Alt`+clic, el submenú Filtro, limpiar el filtro). Con el foco en el
+historial, un clic central o `=`, el submenú Filtro, limpiar el filtro). Con el foco en el
 grid, Deshacer primero revierte las ediciones de celdas hechas desde la última
 lectura de la tabla, de la más reciente a la más antigua, y después vuelve a
 poner el filtro anterior y lee la tabla con él desde la primera página; Rehacer
@@ -321,9 +346,18 @@ En el data grid:
 
 - `o` — añadir una fila.
 - `x` — eliminar la fila seleccionada.
+- `Delete` — marcar para eliminar cada fila que tenga una celda seleccionada.
 - `r` — renombrar / editar (según el contexto).
 - `y` — copiar la fila seleccionada.
 - `Ctrl+c` (`Cmd+c`) — copiar la(s) celda(s) seleccionada(s) al portapapeles.
+
+La barra de edición de una tabla editable empieza con **+** y **−**, como en un
+IDE de bases de datos: **+** añade una fila debajo de la activa, como `o`, y
+**−** marca para eliminar cada fila que tenga una celda seleccionada, como
+`Delete`; Guardar las elimina, tras la confirmación de siempre. **−** está
+desactivado mientras no hay ninguna celda seleccionada, **+** en una tabla que
+no admite filas nuevas, y ambos en las filas similares; sus tooltips muestran
+el atajo, o el motivo por el que están desactivados.
 
 Con varias celdas seleccionadas, `Enter`, `F2` o un doble clic en una de ellas abre el editor para todas, y la barra de estado indica cuántas celdas cambiará la edición. El valor que confirmas se escribe en cada celda seleccionada del mismo tipo de columna que lo admita, como cambios sin guardar que Guardar y Revertir tratan igual que cualquier otra edición, y un solo deshacer (`u` o `Ctrl+z`) revierte la edición entera. Se omiten las celdas de columnas de solo lectura, las filas marcadas para eliminar y los valores que el editor en línea no edita (JSON, texto largo o de varias líneas), y también las columnas de clave cuando la selección abarca varias filas, porque un mismo valor en la clave de cada fila nunca podría guardarse; un valor elegido de la lista de valores permitidos de una columna solo va a columnas con la misma lista.
 
@@ -396,7 +430,7 @@ Desde la revisión, **Guardar** (o `Enter`) ejecuta esas sentencias, sin la conf
 
 Una celda puede recibir un identificador nuevo que genera DBFlux y se escribe como un valor normal, así que funciona con cualquier base de datos: **UUID v4** (aleatorio), **UUID v7** (ordenado por tiempo), **KSUID** (27 caracteres, ordenable por segundo) y **ULID** (26 caracteres, ordenable por milisegundo).
 
-- El menú contextual de la celda tiene una entrada **Generar …** por cada tipo que la columna puede guardar. En una celda de una selección mayor, cada celda seleccionada recibe su propio valor nuevo, nunca una copia, y un solo deshacer los revierte todos.
+- **Establecer valor ▸** del menú contextual de la celda tiene una entrada por cada tipo que la columna puede guardar. En una celda de una selección mayor, cada celda seleccionada recibe su propio valor nuevo, nunca una copia, y un solo deshacer los revierte todos.
 - En una columna que parece un identificador (un tipo `uuid`, una clave, una columna de texto del tamaño de uno de los tipos o un nombre como `user_id`), la lista bajo el editor en línea ofrece primero los tipos, con los UUID arriba; `Abajo` / `Arriba` escriben un valor nuevo en el editor. Al confirmarlo sobre una selección de varias celdas, cada celda vuelve a recibir su propio valor.
 - El diálogo del editor de celdas muestra un botón **Generar …** por tipo.
 
@@ -439,8 +473,8 @@ conservan el tipo de columna correcto, así que graficar sigue funcionando.
 
 ## Copiar como CSV o JSON
 
-El menú contextual de un resultado de tabla tiene **Copiar como CSV** y
-**Copiar como JSON** debajo de **Copiar**. Copian la selección, sea un rango o
+El submenú **Copiar como ▸** del menú contextual de un resultado de tabla,
+debajo de **Copiar**, empieza con **CSV** y **JSON**. Copian la selección, sea un rango o
 varios elegidos con `Ctrl`+clic, con el mismo exportador que **Copiar filas
 cargadas al portapapeles**: el CSV empieza con una fila de cabecera con los
 nombres de las columnas, y el JSON es un array con un objeto por fila, con las
@@ -458,7 +492,7 @@ nombres de las columnas copiadas.
 `Ctrl+Alt+c` (`Cmd+Alt+c` en macOS) ejecuta **Copiar como JSON** desde el
 teclado; el menú lo muestra junto a la entrada.
 
-Debajo, el menú tiene tres extractores más:
+Debajo, el submenú tiene tres extractores más:
 
 - **Copiar como lista IN de SQL** copia los valores seleccionados de una
   columna como lista para un `WHERE ... IN`, por ejemplo `('a', 'O''Brien')` o
@@ -486,10 +520,11 @@ sin guardar con su valor nuevo y una fila añadida aún sin guardar, en su lugar
 
 ## Copiar como query
 
-El menú contextual de resultados incluye **Copy as Query**, que genera una
+El submenú **Copiar como ▸** termina con la fila como query (INSERT, UPDATE o
+DELETE, bajo un título que nombra el lenguaje de la conexión), que genera una
 sentencia de mutación específica del driver (o un envelope, para drivers no SQL)
 a partir de la fila seleccionada usando el generador de queries propio del
-driver.
+driver. El menú de la vista de documentos lo conserva como submenú propio.
 
 ## Exportar
 

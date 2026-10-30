@@ -1651,7 +1651,7 @@ document:
         delete_document: 문서 삭제
         paste: 붙여넣기
         edit: 편집
-        edit_in_modal: 모달에서 편집…
+        edit_in_modal: "편집기에서 편집…"
         edit_as_expression: "SQL 식으로 편집…"
         generate_id: "%{kind} 생성"
         set_default: 기본값으로 설정
@@ -1660,6 +1660,7 @@ document:
         inspect_row: 행 검사
         find_similar_rows: 유사한 행 찾기
         view_value: 값 보기
+        add_to_filter: "필터에 추가"
         duplicate_row: 행 복제
         delete_row: 행 삭제
         chart_this_query: 이 쿼리로 차트 만들기
@@ -1695,6 +1696,25 @@ document:
         move_right: 오른쪽으로 이동
         chooser_title: 열
         show_all: 모든 열 표시
+      copy_as:
+        title: "다른 형식으로 복사"
+        csv: "CSV"
+        json: "JSON"
+        sql_in_list: "SQL IN 목록"
+        insert_statements: "INSERT 문"
+        markdown: "Markdown 표"
+      set_value:
+        title: "값 설정"
+        to_null: "NULL"
+        to_default: "DEFAULT"
+      sort:
+        title: "정렬"
+        ascending: "오름차순"
+        descending: "내림차순"
+      row:
+        title: "행"
+      more:
+        title: "더 보기"
       generate_sql:
         title: SQL 생성
       toolbar:
@@ -1776,6 +1796,11 @@ document:
           update_failed: "문서를 업데이트하지 못했습니다: %{error}"
     grid:
       edit_bar:
+        add_row: "행 추가"
+        delete_rows: "선택한 행 삭제"
+        with_shortcut: "%{action} (%{shortcut})"
+        add_row_disabled: "이 결과에는 새 행을 추가할 수 없습니다"
+        delete_rows_no_selection: "삭제할 각 행에서 셀을 선택하세요"
         review: "검토"
         clean: 저장하지 않은 변경 사항 없음
         dirty:
@@ -4476,6 +4501,7 @@ settings:
       toggle_row_inspector: 행 검사기 전환
       find_similar_rows: 유사한 행 찾기
       copy_selection_as_json: "선택 영역을 JSON으로 복사"
+      add_to_filter: "선택 영역을 필터에 추가"
       results_set_null: 셀을 NULL로 설정
       toggle_cell_expression: "셀을 SQL 식으로 편집"
       review_changes: "변경 사항 검토"

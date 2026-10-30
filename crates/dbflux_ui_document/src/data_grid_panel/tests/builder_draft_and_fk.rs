@@ -148,52 +148,6 @@ fn context_menu_row_actions_field_stores_provider_actions() {
     );
 }
 
-#[test]
-fn context_menu_row_actions_keyboard_nav_index_range() {
-    // Verify that the index range for row actions is calculated correctly.
-    // With: base_count=1 (only Copy), no filter/order/gen_sql/copy_query,
-    // and 2 row actions:
-    //   idx 0: Copy
-    //   idx 1: separator (row actions)
-    //   idx 2: Kill Connection
-    //   idx 3: Cancel Query
-    // total_count = 1 + (1+2) = 4
-    // row_actions_start = 1 (after_copy_query = 1)
-    // Action at selected_index=2: action_idx = 2 - 1 - 1 = 0 → "kill"
-    // Action at selected_index=3: action_idx = 3 - 1 - 1 = 1 → "cancel"
-
-    let row_action_count = 2usize;
-    let row_actions_start = 1usize; // after_copy_query when no optional sections
-    let total_count = row_actions_start + 1 + row_action_count;
-
-    assert_eq!(
-        total_count, 4,
-        "total_count should include separator + 2 actions"
-    );
-
-    // selected_index=2 maps to action_idx=0
-    let selected = 2usize;
-    let in_range = selected > row_actions_start && selected <= row_actions_start + row_action_count;
-    assert!(in_range, "index 2 should be in the row action range");
-    let action_idx = selected - row_actions_start - 1;
-    assert_eq!(action_idx, 0, "index 2 → action slot 0");
-
-    // selected_index=3 maps to action_idx=1
-    let selected = 3usize;
-    let in_range = selected > row_actions_start && selected <= row_actions_start + row_action_count;
-    assert!(in_range, "index 3 should be in the row action range");
-    let action_idx = selected - row_actions_start - 1;
-    assert_eq!(action_idx, 1, "index 3 → action slot 1");
-
-    // The separator itself (index 1) should not be in range
-    let selected = 1usize;
-    let in_range = selected > row_actions_start && selected <= row_actions_start + row_action_count;
-    assert!(
-        !in_range,
-        "separator index should not be in the action range"
-    );
-}
-
 #[gpui::test]
 fn apply_builder_draft_spec_sets_filter_input_hidden(cx: &mut TestAppContext) {
     init_test_runtime(cx);

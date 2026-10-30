@@ -30,7 +30,8 @@ use dbflux_components::primitives::{
 };
 use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::{
-    ChromeColors, Fields, FontSizes, Heights, Radii, ResultMetrics, Spacing, TableViewMetrics, ui,
+    ChromeColors, Fields, FontSizes, Heights, MenuMetrics, Radii, ResultMetrics, Spacing,
+    TableViewMetrics, ui,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
@@ -70,6 +71,7 @@ struct RenderState {
     content_mode: DataGridContentMode,
     shows_content_controls: bool,
     is_editable: bool,
+    is_insertable: bool,
     dirty_count: usize,
     can_undo: bool,
     can_redo: bool,
@@ -96,6 +98,10 @@ struct EditControls {
     dirty_count: usize,
     can_undo: bool,
     can_redo: bool,
+    /// The table takes new rows (the `+` button).
+    can_insert: bool,
+    /// Rows holding a selected cell, which the `−` button marks for delete.
+    selected_rows: usize,
     /// The rows are similar rows: every action is drawn disabled and the
     /// status says why.
     neighbors: bool,
@@ -237,6 +243,8 @@ impl Render for DataGridPanel {
         self.flush_aggregate_json(window, cx);
         self.ensure_table_view_controls(window, cx);
         let st = self.derive_render_state(cx);
+        let viewport = window.viewport_size();
+        self.viewport_size = viewport;
 
         // The Columns and Partitions views of a table replace the filter row,
         // the grid and the status bar; the header with the tabs stays.
@@ -274,10 +282,12 @@ impl Render for DataGridPanel {
                 st.show_data_toolbar && !st.document_collection && !table_side_view,
                 |d| {
                     let neighbors = self.nearest_neighbors.is_some();
-                    let edit_controls = st.show_edit_toolbar.then_some(EditControls {
+                    let edit_controls = st.show_edit_toolbar.then(|| EditControls {
                         dirty_count: if neighbors { 0 } else { st.dirty_count },
                         can_undo: st.can_undo && !neighbors,
                         can_redo: st.can_redo && !neighbors,
+                        can_insert: st.is_insertable && !neighbors,
+                        selected_rows: self.selected_visual_rows(cx).len(),
                         neighbors,
                     });
 
@@ -333,10 +343,10 @@ impl Render for DataGridPanel {
                 ))
             })
             .when_some(self.context_menu.as_ref(), |d, menu| {
-                d.child(self.render_context_menu(menu, st.is_editable, cx))
+                d.child(self.render_context_menu(menu, viewport, cx))
             })
             .when_some(self.column_chooser.as_ref(), |d, chooser| {
-                d.child(self.render_column_chooser(chooser, cx))
+                d.child(self.render_column_chooser(chooser, viewport, cx))
             })
             .when(self.chrome.export_menu_open, |d| {
                 d.child(self.render_export_backdrop(cx))
@@ -392,8 +402,8 @@ impl DataGridPanel {
             self.step_filter(redo, window, cx);
         }
 
-        if let Some((row, col)) = self.pending.filter_cell.take() {
-            self.add_cell_to_filter(row, col, window, cx);
+        if let Some((row, col, exclude)) = self.pending.filter_cell.take() {
+            self.add_cells_to_filter(&[(row, col)], exclude, window, cx);
         }
 
         if let Some(requery) = self.pending.requery.take() {
@@ -566,7 +576,7 @@ impl DataGridPanel {
         let shows_table_content = matches!(content_mode, DataGridContentMode::Table);
         let shows_content_controls = has_data || shows_table_content;
 
-        let (is_editable, dirty_count, can_undo, can_redo) = self
+        let (is_editable, is_insertable, dirty_count, can_undo, can_redo) = self
             .grid_table
             .table_state
             .as_ref()
@@ -581,12 +591,13 @@ impl DataGridPanel {
 
                 (
                     state.is_editable(),
+                    state.is_insertable(),
                     total_count,
                     buffer.can_undo(),
                     buffer.can_redo(),
                 )
             })
-            .unwrap_or((false, 0, false, false));
+            .unwrap_or((false, false, 0, false, false));
         // Undo and Redo also step the filters once the edits run out.
         let can_undo = can_undo || self.can_step_filter(false);
         let can_redo = can_redo || self.can_step_filter(true);
@@ -640,6 +651,7 @@ impl DataGridPanel {
             content_mode,
             shows_content_controls,
             is_editable,
+            is_insertable,
             dirty_count,
             can_undo,
             can_redo,
@@ -661,7 +673,6 @@ impl DataGridPanel {
             move |bounds, _, cx| {
                 this_entity.update(cx, |this, _cx| {
                     this.panel_origin = bounds.origin;
-                    this.panel_size = bounds.size;
                 });
             },
             |_, _, _, _| {},
@@ -1529,9 +1540,9 @@ impl DataGridPanel {
             )
     }
 
-    /// Right side of the header of an editable table: the unsaved-changes
-    /// status, a divider, undo and redo, then Save (primary while there are
-    /// changes) and Revert.
+    /// Right side of the header of an editable table: `+` and `−` for rows,
+    /// the unsaved-changes status, a divider, undo and redo, then Save
+    /// (primary while there are changes) and Revert.
     fn render_edit_controls(
         &self,
         controls: EditControls,
@@ -1569,6 +1580,14 @@ impl DataGridPanel {
             .flex_shrink_0()
             .items_center()
             .gap(TableViewMetrics::HEADER_GAP)
+            .child(self.render_row_buttons(controls, cx))
+            .child(
+                div()
+                    .w(px(1.0))
+                    .h(TableViewMetrics::DIVIDER_HEIGHT)
+                    .mx(TableViewMetrics::HEADER_DIVIDER_MARGIN_X)
+                    .bg(theme.border),
+            )
             .child(
                 div()
                     .flex()
@@ -1672,6 +1691,82 @@ impl DataGridPanel {
                     window.focus(&this.focus_handle, cx);
                 })),
             )
+    }
+
+    /// The `+` (add a row, as `o` or Add row does) and `−` (mark every row
+    /// with a selected cell for delete, as the Delete key does) buttons of
+    /// the edit bar. A disabled one says why in its tooltip.
+    fn render_row_buttons(&self, controls: EditControls, cx: &mut Context<Self>) -> Div {
+        use super::context_menu::action_shortcut;
+        use dbflux_components::components::data_table::ContextMenuAction;
+
+        let with_shortcut = |label: String, action| match action_shortcut(action, cx) {
+            Some(shortcut) => dbflux_i18n::t!(
+                "document.data.grid.edit_bar.with_shortcut",
+                action = label,
+                shortcut = shortcut
+            ),
+            None => label,
+        };
+
+        let add_label = dbflux_i18n::t!("document.data.grid.edit_bar.add_row");
+        let add_tooltip = if controls.can_insert {
+            with_shortcut(add_label.clone(), ContextMenuAction::AddRow)
+        } else if controls.neighbors {
+            dbflux_i18n::t!("document.data.grid.nearest.read_only")
+        } else {
+            dbflux_i18n::t!("document.data.grid.edit_bar.add_row_disabled")
+        };
+
+        let delete_label = dbflux_i18n::t!("document.data.grid.edit_bar.delete_rows");
+        let can_delete = !controls.neighbors && controls.selected_rows > 0;
+        let delete_tooltip = if controls.neighbors {
+            dbflux_i18n::t!("document.data.grid.nearest.read_only")
+        } else if controls.selected_rows == 0 {
+            dbflux_i18n::t!("document.data.grid.edit_bar.delete_rows_no_selection")
+        } else {
+            with_shortcut(delete_label.clone(), ContextMenuAction::DeleteRow)
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .child(
+                Button::new("add-row-btn", add_label)
+                    .icon(AppIcon::Plus)
+                    .icon_only()
+                    .tooltip(add_tooltip)
+                    .disabled(!controls.can_insert)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.add_row_from_edit_bar(cx);
+                        window.focus(&this.focus_handle, cx);
+                    })),
+            )
+            .child(
+                Button::new("delete-rows-btn", delete_label)
+                    .icon(AppIcon::Minus)
+                    .icon_only()
+                    .tooltip(delete_tooltip)
+                    .disabled(!can_delete)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.delete_selected_rows(None, cx);
+                        window.focus(&this.focus_handle, cx);
+                    })),
+            )
+    }
+
+    /// The `+` button: a new row below the active one, or at the top with
+    /// nothing selected, as the Add row key does.
+    pub(super) fn add_row_from_edit_bar(&mut self, cx: &mut Context<Self>) {
+        let row = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active)
+            .map_or(0, |cell| cell.row);
+        self.handle_add_row(row, false, cx);
     }
 
     /// Undo (`undo == true`) or redo one step of the staged edits, dropping
@@ -4057,38 +4152,64 @@ impl DataGridPanel {
             ));
         }
 
-        deferred(
-            menu_frame(cx)
-                .id("export-menu")
-                .absolute()
-                .bottom_full()
-                .right_0()
-                .mb(Spacing::XS)
-                .w(if has_options {
-                    EXPORT_MENU_OPTIONS_WIDTH
-                } else {
-                    EXPORT_MENU_WIDTH
-                })
-                .occlude()
-                .track_focus(&self.focus.export_menu_focus)
-                // The grid reports the ContextMenu context while the menu is
-                // open, so the menu keys arrive here first.
-                .on_action(cx.listener(
-                    |this, action: &dbflux_ui_base::keymap::RunCommand, window, cx| {
-                        let handled =
-                            dbflux_ui_base::keymap::run_command(action).is_some_and(|command| {
-                                this.dispatch_export_menu_command(command, window, cx)
-                            });
+        let max_rows_height = (self.viewport_size.height
+            - super::context_menu::tree::MENU_EDGE_GAP * 2.0
+            - MenuMetrics::PADDING_Y * 2.0)
+            .max(px(0.0));
 
-                        if !handled {
-                            cx.propagate();
-                        }
-                    },
-                ))
-                .children(items),
+        // The menu opens upwards from the button's right edge; `anchored`
+        // keeps it inside the window, and a window too short for it gets a
+        // scrolling list instead of rows cut off at the top.
+        div().absolute().top_0().right_0().child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::BottomRight)
+                    .offset(point(px(0.0), -Spacing::XS))
+                    .snap_to_window_with_margin(super::context_menu::tree::MENU_EDGE_GAP)
+                    .child(
+                        menu_frame(cx)
+                            .id("export-menu")
+                            .debug_selector(|| "export-menu".to_string())
+                            .w(if has_options {
+                                EXPORT_MENU_OPTIONS_WIDTH
+                            } else {
+                                EXPORT_MENU_WIDTH
+                            })
+                            .occlude()
+                            .track_focus(&self.focus.export_menu_focus)
+                            // The grid reports the ContextMenu context while
+                            // the menu is open, so the menu keys arrive here
+                            // first.
+                            .on_action(cx.listener(
+                                |this, action: &dbflux_ui_base::keymap::RunCommand, window, cx| {
+                                    let handled = dbflux_ui_base::keymap::run_command(action)
+                                        .is_some_and(|command| {
+                                            this.dispatch_export_menu_command(command, window, cx)
+                                        });
+
+                                    if !handled {
+                                        cx.propagate();
+                                    }
+                                },
+                            ))
+                            // The backdrop closes the menu on a wheel; one over
+                            // a scrolling menu scrolls it instead.
+                            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                            .child(
+                                div()
+                                    .id("export-menu-rows")
+                                    .flex()
+                                    .flex_col()
+                                    .max_h(max_rows_height)
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.focus.export_menu_scroll)
+                                    .children(items),
+                            ),
+                    ),
+            )
+            // Above the backdrop, which shares the deferred layer.
+            .with_priority(2),
         )
-        // Above the backdrop, which shares the deferred layer.
-        .with_priority(2)
     }
 
     /// One export menu row. Hovering it highlights it, as the menu keys do.
@@ -4183,6 +4304,28 @@ impl DataGridPanel {
 
 /// The export menu section an entry is drawn in, so the menu can start a
 /// header where the section changes.
+/// Where the export menu row of `entries[index]` sits among the menu's
+/// drawn rows, which put a caption (and, after the first, a separator)
+/// before each section.
+pub(super) fn export_menu_child_index(entries: &[ExportMenuEntry], index: usize) -> usize {
+    let sections_started = entries
+        .iter()
+        .take(index + 1)
+        .enumerate()
+        .filter(|(position, entry)| {
+            entries
+                .get(position.wrapping_sub(1))
+                .is_none_or(|previous| {
+                    export_menu_section(*previous) != export_menu_section(**entry)
+                })
+        })
+        .count();
+
+    // Each section adds its caption, and every section but the first a
+    // separator before it.
+    index + sections_started * 2 - usize::from(sections_started > 0)
+}
+
 fn export_menu_section(entry: ExportMenuEntry) -> u8 {
     match entry {
         ExportMenuEntry::Option(_) => 0,

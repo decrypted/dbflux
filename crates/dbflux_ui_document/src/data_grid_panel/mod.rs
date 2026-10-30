@@ -444,20 +444,12 @@ struct TableContextMenu {
     col: usize,
     /// Screen position where the menu should appear.
     position: Point<Pixels>,
-    /// Whether the SQL generation submenu is open.
-    sql_submenu_open: bool,
-    /// Whether the "Copy as Query" submenu is open.
-    copy_query_submenu_open: bool,
-    /// Whether the "Filter" submenu is open.
-    filter_submenu_open: bool,
-    /// Whether the "Order" submenu is open.
-    order_submenu_open: bool,
-    /// Whether the "Toolbar" submenu (the results toolbar buttons) is open.
-    toolbar_submenu_open: bool,
-    /// Currently selected menu item index (for keyboard navigation).
-    selected_index: usize,
-    /// Selected index within the active submenu.
-    submenu_selected_index: usize,
+    /// The highlighted row of each open level, from the menu inwards: every
+    /// index but the last names an open submenu, the last is the row the
+    /// menu keys act on. Indices count every node of the level's
+    /// `context_menu::tree`, headers and separators included, and are
+    /// brought back onto a row whenever the tree is walked.
+    path: Vec<usize>,
     /// Whether this is a document view context menu (different items shown).
     is_document_view: bool,
     /// Whether this menu was opened by right-clicking a column header, which
@@ -465,43 +457,26 @@ struct TableContextMenu {
     is_column_header: bool,
     doc_field_path: Option<Vec<String>>,
     doc_field_value: Option<dbflux_components::components::document_tree::NodeValue>,
-    /// Driver-supplied row-level actions (e.g. Kill, Cancel). When non-empty,
-    /// these appear at the bottom of the menu after a separator. Selecting one
-    /// emits `DataGridEvent::RowActionRequested`.
+    /// Driver-supplied row-level actions (e.g. Kill, Cancel), listed in the
+    /// Row submenu. Selecting one emits `DataGridEvent::RowActionRequested`.
     row_actions: Vec<dbflux_core::InspectorRowAction>,
 }
 
 impl TableContextMenu {
-    fn any_submenu_open(&self) -> bool {
-        self.sql_submenu_open
-            || self.copy_query_submenu_open
-            || self.filter_submenu_open
-            || self.order_submenu_open
-            || self.toolbar_submenu_open
+    /// A closed menu over the cell at `row`, `col` of the grid.
+    fn new(row: usize, col: usize, position: Point<Pixels>) -> Self {
+        Self {
+            row,
+            col,
+            position,
+            path: vec![0],
+            is_document_view: false,
+            is_column_header: false,
+            doc_field_path: None,
+            doc_field_value: None,
+            row_actions: Vec::new(),
+        }
     }
-
-    /// Hovering a plain item closes whatever submenu was open, as native
-    /// menus do.
-    fn close_submenus(&mut self) {
-        self.sql_submenu_open = false;
-        self.copy_query_submenu_open = false;
-        self.filter_submenu_open = false;
-        self.order_submenu_open = false;
-        self.toolbar_submenu_open = false;
-    }
-}
-
-/// A single item in the context menu.
-struct ContextMenuItem {
-    label: SharedString,
-    action: Option<ContextMenuAction>,
-    icon: Option<dbflux_components::icons::AppIcon>,
-    is_separator: bool,
-    is_danger: bool,
-    /// A muted second line under the label.
-    detail: Option<SharedString>,
-    /// Drawn but not activatable; `detail` says why.
-    disabled: bool,
 }
 
 /// Kind of SQL statement to generate from row data.
@@ -553,8 +528,9 @@ struct PendingActions {
     /// Save was asked for while "Review changes before saving" is on. The
     /// review opens at render because focusing it needs a `Window`.
     change_review: bool,
-    /// Cell (visual row, column) an Alt+click asked to add to the filter.
-    filter_cell: Option<(usize, usize)>,
+    /// Cell (visual row, column) a middle-click asked to add to the
+    /// filter, and whether to exclude its value (Shift) rather than match it.
+    filter_cell: Option<(usize, usize, bool)>,
     /// Undo (`false`) or Redo (`true`) the table's edit history had no step
     /// for, to try on the filters.
     filter_undo_step: Option<bool>,
@@ -753,9 +729,16 @@ struct FocusState {
     edit_state: EditState,
     switching_input: bool,
     context_menu_focus: FocusHandle,
+    /// Scroll position of each level of the open context menu (the menu,
+    /// a submenu, a nested submenu): a level taller than the window scrolls,
+    /// and the menu keys keep the highlighted row in view.
+    context_menu_scroll: [ScrollHandle; 3],
     /// Holds the keyboard while the export menu is open, so the menu keys
     /// reach the menu rather than the table under it.
     export_menu_focus: FocusHandle,
+    /// Scroll position of the export menu, which scrolls when the window is
+    /// too short for it.
+    export_menu_scroll: ScrollHandle,
     /// Holds the keyboard while a document collection's query history menu
     /// is open.
     history_menu_focus: FocusHandle,
@@ -905,8 +888,9 @@ pub struct DataGridPanel {
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
     panel_origin: Point<Pixels>,
-    /// Panel size from the same canvas; the context menu is kept inside it.
-    panel_size: Size<Pixels>,
+    /// The window's size at the last render, which the export menu is kept
+    /// inside.
+    viewport_size: Size<Pixels>,
     /// A table-details fetch for the primary key is in flight. Until it
     /// answers, the grid is read-only for want of a key it may well have, so
     /// the "no primary key" banner waits rather than flashing on every open.
@@ -1529,7 +1513,9 @@ impl DataGridPanel {
                 edit_state: EditState::default(),
                 switching_input: false,
                 context_menu_focus,
+                context_menu_scroll: std::array::from_fn(|_| ScrollHandle::new()),
                 export_menu_focus: cx.focus_handle(),
+                export_menu_scroll: ScrollHandle::new(),
                 history_menu_focus: cx.focus_handle(),
                 side_island: None,
                 _side_island_blur: None,
@@ -1579,7 +1565,7 @@ impl DataGridPanel {
             runner,
             focus_handle,
             panel_origin: Point::default(),
-            panel_size: Size::default(),
+            viewport_size: Size::default(),
             pk_details_pending: false,
             first_page_awaits_pk: None,
             pk_requery_pending: false,

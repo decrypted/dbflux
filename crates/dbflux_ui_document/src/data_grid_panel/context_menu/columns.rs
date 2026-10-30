@@ -1,12 +1,11 @@
-//! The Column section at the bottom of the column header menu.
+//! The Column section of the column header menu and the cell menu's
+//! Column submenu.
 //!
 //! Its entries change how the grid shows a column, never the query behind
 //! it, so they act on the table state alone.
 
-use super::sections::MenuRowCursor;
 use super::{DataGridEvent, DataGridPanel, TableContextMenu};
 use dbflux_components::components::data_table::ContextMenuAction;
-use dbflux_components::composites::{MenuItem, render_menu_header, render_separator};
 use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use gpui::*;
@@ -109,44 +108,6 @@ impl DataGridPanel {
         items
     }
 
-    /// Appends the Column section to the column header menu: a separator, its
-    /// heading and one row per entry, numbered on from the menu's earlier
-    /// rows so the keyboard walks them in the same order.
-    pub(super) fn push_column_menu_rows(
-        &self,
-        menu: &TableContextMenu,
-        cursor: MenuRowCursor<'_>,
-        cx: &mut Context<Self>,
-    ) {
-        let items = self.column_menu_items(menu.col, cx);
-        if items.is_empty() {
-            return;
-        }
-
-        cursor.rows.push(render_separator(cx).into_any_element());
-        cursor.rows.push(
-            render_menu_header(
-                &MenuItem::header(dbflux_i18n::t!("document.data.context_menu.column.title"))
-                    .icon(AppIcon::Columns),
-                cx,
-            )
-            .into_any_element(),
-        );
-
-        for item in items {
-            cursor.rows.push(Self::column_menu_action_row(
-                item.label,
-                item.action,
-                item.icon,
-                false,
-                *cursor.visual_index,
-                cursor.selected_index,
-                cx,
-            ));
-            *cursor.visual_index += 1;
-        }
-    }
-
     /// Runs a Column section entry on the column at model index `col`.
     pub(super) fn handle_column_menu_action(
         &mut self,
@@ -218,21 +179,8 @@ impl DataGridPanel {
         };
 
         self.context_menu = Some(TableContextMenu {
-            row,
-            col,
-            position,
-            sql_submenu_open: false,
-            copy_query_submenu_open: false,
-            filter_submenu_open: false,
-            order_submenu_open: false,
-            toolbar_submenu_open: false,
-            selected_index: 0,
-            submenu_selected_index: 0,
-            is_document_view: false,
             is_column_header: true,
-            doc_field_path: None,
-            doc_field_value: None,
-            row_actions: Vec::new(),
+            ..TableContextMenu::new(row, col, position)
         });
 
         self.focus.context_menu_focus.focus(window, cx);

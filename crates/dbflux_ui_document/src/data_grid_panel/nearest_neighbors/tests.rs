@@ -433,10 +433,7 @@ fn menu_offers_find_similar(panel: &Entity<DataGridPanel>, window: &mut VisualTe
         panel.update(app, |panel, cx| {
             panel.open_context_menu_at_selection(window, cx);
             let menu = panel.context_menu.take().expect("the row menu opens");
-            panel
-                .with_find_similar_rows(Vec::new(), &menu, true, cx)
-                .iter()
-                .any(|item| item.action == Some(ContextMenuAction::FindSimilarRows))
+            panel.find_similar_entry(&menu, true, cx).is_some()
         })
     })
 }
@@ -950,69 +947,55 @@ fn back_to_table_restores_the_filter_row(cx: &mut TestAppContext) {
     });
 }
 
-fn menu_item(action: ContextMenuAction) -> crate::data_grid_panel::ContextMenuItem {
-    crate::data_grid_panel::ContextMenuItem {
-        label: format!("{action:?}").into(),
-        action: Some(action),
-        icon: None,
-        is_separator: false,
-        is_danger: false,
-        detail: None,
-        disabled: false,
-    }
-}
-
-/// The row menu as the grid builds it, with "Find similar rows" added.
+/// The row menu as the grid builds it.
 fn row_menu(
     panel: &Entity<DataGridPanel>,
     window: &mut VisualTestContext,
-) -> Vec<crate::data_grid_panel::ContextMenuItem> {
+) -> Vec<crate::data_grid_panel::context_menu::tree::MenuNode> {
     window.update(|window, app| {
         panel.update(app, |panel, cx| {
             panel.open_context_menu_at_selection(window, cx);
             let menu = panel.context_menu.take().expect("the row menu opens");
-            let base = vec![
-                menu_item(ContextMenuAction::Copy),
-                menu_item(ContextMenuAction::ViewValue),
-                menu_item(ContextMenuAction::Paste),
-                menu_item(ContextMenuAction::AddRow),
-                menu_item(ContextMenuAction::InspectRow),
-                menu_item(ContextMenuAction::DuplicateRow),
-                menu_item(ContextMenuAction::DeleteRow),
-            ];
-            panel.with_find_similar_rows(base, &menu, true, cx)
+            panel.context_menu_tree(&menu, cx)
         })
     })
 }
 
+/// The "Find similar rows" row: the id of the submenu it is in, its detail
+/// line and whether it is disabled.
 fn find_similar_entry(
-    items: &[crate::data_grid_panel::ContextMenuItem],
-) -> (usize, Option<String>, bool) {
-    let (index, item) = items
+    nodes: &[crate::data_grid_panel::context_menu::tree::MenuNode],
+) -> (String, Option<String>, bool) {
+    use crate::data_grid_panel::context_menu::tree::{MenuNode, MenuTarget};
+
+    nodes
         .iter()
-        .enumerate()
-        .find(|(_, item)| item.action == Some(ContextMenuAction::FindSimilarRows))
-        .expect("the menu offers Find similar rows");
-    (
-        index,
-        item.detail.as_ref().map(|detail| detail.to_string()),
-        item.disabled,
-    )
+        .find_map(|node| match node {
+            MenuNode::Submenu(submenu) => submenu.children.iter().find_map(|child| match child {
+                MenuNode::Entry(entry)
+                    if entry.target == MenuTarget::Action(ContextMenuAction::FindSimilarRows) =>
+                {
+                    Some((
+                        submenu.id.to_string(),
+                        entry.detail.as_ref().map(|detail| detail.to_string()),
+                        entry.disabled,
+                    ))
+                }
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("the menu offers Find similar rows")
 }
 
 #[gpui::test]
-fn find_similar_rows_sits_with_the_row_actions_and_names_what_it_reads(cx: &mut TestAppContext) {
+fn find_similar_rows_sits_in_more_and_names_what_it_reads(cx: &mut TestAppContext) {
     let (panel, _, _, window) = open_table(true, cx);
     select_second_row(&panel, window);
 
-    let items = row_menu(&panel, window);
-    let (index, detail, disabled) = find_similar_entry(&items);
+    let (submenu, detail, disabled) = find_similar_entry(&row_menu(&panel, window));
 
-    assert_eq!(
-        items.get(index - 1).and_then(|item| item.action),
-        Some(ContextMenuAction::InspectRow),
-        "right after Inspect row"
-    );
+    assert_eq!(submenu, "more");
     assert_eq!(detail.as_deref(), Some("by embedding · nearest 10"));
     assert!(!disabled);
 }

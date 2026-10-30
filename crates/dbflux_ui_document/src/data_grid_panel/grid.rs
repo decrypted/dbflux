@@ -450,21 +450,9 @@ impl DataGridPanel {
                         };
 
                         this.context_menu = Some(TableContextMenu {
-                            row: *row,
-                            col: *col,
-                            position: *position,
-                            sql_submenu_open: false,
-                            copy_query_submenu_open: false,
-                            filter_submenu_open: false,
-                            order_submenu_open: false,
-                            toolbar_submenu_open: false,
-                            selected_index: 0,
-                            submenu_selected_index: 0,
-                            is_document_view: false,
                             is_column_header: *is_column_header,
-                            doc_field_path: None,
-                            doc_field_value: None,
                             row_actions,
+                            ..TableContextMenu::new(*row, *col, *position)
                         });
                         this.pending.context_menu_focus = true;
                         cx.emit(DataGridEvent::Focused);
@@ -472,7 +460,7 @@ impl DataGridPanel {
                     }
                     // Keyboard-triggered row operations
                     DataTableEvent::DeleteRowRequested(row) => {
-                        this.handle_delete_row(*row, cx);
+                        this.delete_selected_rows(Some(*row), cx);
                     }
                     DataTableEvent::AddRowRequested(row) => {
                         this.handle_add_row(*row, false, cx);
@@ -488,8 +476,8 @@ impl DataGridPanel {
                         this.pending.filter_undo_step = Some(*redo);
                         cx.notify();
                     }
-                    DataTableEvent::AddToFilterRequested { row, col } => {
-                        this.pending.filter_cell = Some((*row, *col));
+                    DataTableEvent::AddToFilterRequested { row, col, exclude } => {
+                        this.pending.filter_cell = Some((*row, *col, *exclude));
                         cx.notify();
                     }
                     DataTableEvent::CopyRowRequested(row) => {

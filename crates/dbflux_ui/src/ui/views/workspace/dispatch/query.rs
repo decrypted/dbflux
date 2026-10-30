@@ -135,12 +135,13 @@ impl Workspace {
             }
 
             // Unclaimed outside a table grid, so the key propagates.
-            Command::CopySelectionAsJson | Command::ReviewChanges | Command::OpenColumnMenu => {
-                Some(
-                    self.tab_manager
-                        .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
-                )
-            }
+            Command::CopySelectionAsJson
+            | Command::AddToFilter
+            | Command::ReviewChanges
+            | Command::OpenColumnMenu => Some(
+                self.tab_manager
+                    .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
+            ),
 
             // Row operations - handled via GPUI actions in DataTable
             Command::ResultsDeleteRow

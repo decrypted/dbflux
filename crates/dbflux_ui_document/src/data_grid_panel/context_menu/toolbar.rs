@@ -5,7 +5,7 @@
 //! that moment. Each entry runs exactly what its button runs; the entries a
 //! key binding also reaches show that shortcut.
 
-use super::sections::{MenuRowCursor, submenu_flyout, submenu_frame};
+use super::tree::{MenuEntry, MenuTarget};
 use crate::DataViewMode;
 use crate::chart::keyboard::step_time_range;
 use crate::data_grid_panel::documents::CollectionTab;
@@ -18,14 +18,10 @@ use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::AxisPill;
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::components::value_format::ValueFormat;
-use dbflux_components::composites::{MenuItem, menu_row, render_separator};
 use dbflux_components::icons::AppIcon;
 use dbflux_ui_base::keymap::{chord_display_parts, effective_keymap};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-
-/// Width of the Toolbar flyout, sized to its longest label.
-const TOOLBAR_SUBMENU_WIDTH: Pixels = px(240.0);
 
 /// A button of the results toolbar or header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,7 +290,7 @@ impl ToolbarAction {
     }
 
     /// The shortcut shown on the row, from the effective keymap.
-    fn shortcut(self) -> Option<SharedString> {
+    pub(super) fn shortcut(self) -> Option<SharedString> {
         let command = self.command()?;
 
         effective_keymap()
@@ -1006,122 +1002,19 @@ impl DataGridPanel {
         self.run_toolbar_action(action, window, cx);
     }
 
-    /// Renders the separator and the Toolbar trigger at the end of the table's
-    /// menu and, while it is open, the flyout listing `actions`.
-    pub(super) fn render_toolbar_submenu_section(
-        &self,
-        menu: &super::TableContextMenu,
-        actions: &[ToolbarAction],
-        submenus_open_left: bool,
-        cursor: MenuRowCursor<'_>,
-        cx: &mut Context<Self>,
-    ) {
-        if actions.is_empty() {
-            return;
-        }
-
-        let MenuRowCursor {
-            rows: menu_items,
-            visual_index,
-            selected_index,
-        } = cursor;
-
-        menu_items.push(render_separator(cx).into_any_element());
-        *visual_index += 1;
-
-        let toolbar_index = *visual_index;
-        let submenu_open = menu.toolbar_submenu_open;
-        let submenu_selected_index = menu.submenu_selected_index;
-
-        let trigger = MenuItem::new(dbflux_i18n::t!("document.data.context_menu.toolbar.title"))
-            .icon(AppIcon::Settings)
-            .submenu();
-
-        let flyout = submenu_open.then(|| {
-            let rows: Vec<AnyElement> = actions
-                .iter()
-                .enumerate()
-                .map(|(index, &action)| {
-                    self.render_toolbar_action_row(
-                        index,
-                        action,
-                        index == submenu_selected_index,
-                        cx,
-                    )
-                })
-                .collect();
-
-            submenu_flyout(TOOLBAR_SUBMENU_WIDTH, cx).children(rows)
-        });
-
-        menu_items.push(
-            menu_row(
-                "toolbar-trigger",
-                &trigger,
-                selected_index == toolbar_index || submenu_open,
-                cx,
-            )
-            .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                // Hovering opens the submenu, as native menus do; the flyout
-                // is a child of this row, so moving into it keeps bubbling
-                // here and the guard leaves it open.
-                if let Some(ref mut menu) = this.context_menu
-                    && !(menu.selected_index == toolbar_index && menu.toolbar_submenu_open)
-                {
-                    menu.selected_index = toolbar_index;
-                    menu.close_submenus();
-                    menu.toolbar_submenu_open = true;
-                    menu.submenu_selected_index = 0;
-                    cx.notify();
-                }
-            }))
-            .on_click(cx.listener(|this, _, _, cx| {
-                if let Some(ref mut menu) = this.context_menu {
-                    let open = !menu.toolbar_submenu_open;
-                    menu.close_submenus();
-                    menu.toolbar_submenu_open = open;
-                    menu.submenu_selected_index = 0;
-                    cx.notify();
-                }
-            }))
-            .when_some(flyout, |row: Stateful<Div>, flyout| {
-                row.child(submenu_frame(submenus_open_left, flyout))
+    /// The Toolbar submenu's rows: one per button the grid shows now.
+    pub(super) fn toolbar_menu_entries(&self, cx: &App) -> Vec<MenuEntry> {
+        self.toolbar_actions(cx)
+            .into_iter()
+            .map(|action| {
+                MenuEntry::new(
+                    format!("toolbar-action-{}", action.id()),
+                    self.toolbar_action_label(action),
+                    action.icon(),
+                    MenuTarget::Toolbar(action),
+                )
             })
-            .into_any_element(),
-        );
-        *visual_index += 1;
-    }
-
-    fn render_toolbar_action_row(
-        &self,
-        index: usize,
-        action: ToolbarAction,
-        selected: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let mut item = MenuItem::new(self.toolbar_action_label(action)).icon(action.icon());
-        if let Some(shortcut) = action.shortcut() {
-            item = item.shortcut(shortcut);
-        }
-
-        menu_row(
-            SharedString::from(format!("toolbar-action-{}", action.id())),
-            &item,
-            selected,
-            cx,
-        )
-        .on_mouse_move(cx.listener(move |this, _, _, cx| {
-            if let Some(ref mut menu) = this.context_menu
-                && menu.submenu_selected_index != index
-            {
-                menu.submenu_selected_index = index;
-                cx.notify();
-            }
-        }))
-        .on_click(cx.listener(move |this, _, window, cx| {
-            this.run_toolbar_action_from_menu(action, window, cx);
-        }))
-        .into_any_element()
+            .collect()
     }
 }
 

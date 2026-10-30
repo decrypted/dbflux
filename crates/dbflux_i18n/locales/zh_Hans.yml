@@ -1651,7 +1651,7 @@ document:
         delete_document: 删除文档
         paste: 粘贴
         edit: 编辑
-        edit_in_modal: 在弹窗中编辑…
+        edit_in_modal: "在编辑器中编辑…"
         edit_as_expression: "作为 SQL 表达式编辑…"
         generate_id: "生成 %{kind}"
         set_default: 设为默认值
@@ -1660,6 +1660,7 @@ document:
         inspect_row: 检查行
         find_similar_rows: 查找相似行
         view_value: 查看值
+        add_to_filter: "添加到筛选"
         duplicate_row: 复制行
         delete_row: 删除行
         chart_this_query: 将此查询制作成图表
@@ -1695,6 +1696,25 @@ document:
         move_right: 右移
         chooser_title: 列
         show_all: 显示所有列
+      copy_as:
+        title: "复制为"
+        csv: "CSV"
+        json: "JSON"
+        sql_in_list: "SQL IN 列表"
+        insert_statements: "INSERT 语句"
+        markdown: "Markdown 表格"
+      set_value:
+        title: "设置值"
+        to_null: "NULL"
+        to_default: "DEFAULT"
+      sort:
+        title: "排序"
+        ascending: "升序"
+        descending: "降序"
+      row:
+        title: "行"
+      more:
+        title: "更多"
       generate_sql:
         title: 生成 SQL
       toolbar:
@@ -1776,6 +1796,11 @@ document:
           update_failed: "更新文档失败：%{error}"
     grid:
       edit_bar:
+        add_row: "添加行"
+        delete_rows: "删除所选行"
+        with_shortcut: "%{action}（%{shortcut}）"
+        add_row_disabled: "此结果不能添加新行"
+        delete_rows_no_selection: "请在要删除的每一行中选择一个单元格"
         review: "查看"
         clean: 无未保存的更改
         dirty:
@@ -4476,6 +4501,7 @@ settings:
       toggle_row_inspector: 切换行检查器
       find_similar_rows: 查找相似行
       copy_selection_as_json: "将选区复制为 JSON"
+      add_to_filter: "将选区添加到筛选"
       results_set_null: 将单元格设为 NULL
       toggle_cell_expression: "将单元格作为 SQL 表达式编辑"
       review_changes: "查看更改"

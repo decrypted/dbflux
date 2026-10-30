@@ -88,6 +88,9 @@ pub enum ContextMenuAction {
     EditInModal,
     /// Show the selected cell in the value panel.
     ViewValue,
+    /// Narrow the WHERE filter to the selected cells' values (`column =
+    /// value`, several values of one column as `IN`).
+    AddToFilter,
     /// Set the cell to its column's default value.
     SetDefault,
     /// Set the cell to NULL.
@@ -198,9 +201,14 @@ pub enum DataTableEvent {
     /// table is read-only: the host may step a history of its own.
     HistoryStepRequested { redo: bool },
 
-    /// Alt+click on a cell: the host narrows its filter to the cell's value.
-    /// The table only selects the cell; a host that cannot filter ignores it.
-    AddToFilterRequested { row: usize, col: usize },
+    /// Middle-click on a cell: the host narrows its filter to the cell's
+    /// value, or with `exclude` (Shift) to every other value. The table only
+    /// selects the cell; a host that cannot filter ignores it.
+    AddToFilterRequested {
+        row: usize,
+        col: usize,
+        exclude: bool,
+    },
 
     /// Request to copy the entire row as CSV (YY).
     CopyRowRequested(usize),

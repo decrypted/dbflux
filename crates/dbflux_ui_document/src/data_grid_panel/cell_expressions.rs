@@ -4,14 +4,12 @@
 
 use std::collections::HashMap;
 
-use dbflux_components::components::data_table::ContextMenuAction;
 use dbflux_components::components::data_table::model::{CellValue, ColumnSpec};
 use dbflux_components::components::data_table::selection::CellCoord;
-use dbflux_components::icons::AppIcon;
 use dbflux_core::{ColumnAssignment, ColumnInfo};
 use gpui::{App, Context, Window};
 
-use super::{ContextMenuItem, DataGridPanel, DataSource, TableContextMenu};
+use super::{DataGridPanel, DataSource};
 
 impl DataGridPanel {
     /// The expressions offered per result column, keyed by column index, for
@@ -55,50 +53,6 @@ impl DataGridPanel {
                     .map(|suggestions| (index, suggestions))
             })
             .collect()
-    }
-
-    /// Adds "Edit as SQL expression…" after "Edit" when the cell under the
-    /// menu can hold an expression, and after it the identifiers the cell
-    /// can be given.
-    pub(super) fn with_edit_as_expression(
-        &self,
-        mut items: Vec<ContextMenuItem>,
-        menu: &TableContextMenu,
-        cx: &App,
-    ) -> Vec<ContextMenuItem> {
-        let accepts = self
-            .grid_table
-            .table_state
-            .as_ref()
-            .is_some_and(|state| state.read(cx).accepts_cell_expressions(menu.col));
-        let Some(position) = items
-            .iter()
-            .position(|item| item.action == Some(ContextMenuAction::Edit))
-        else {
-            return items;
-        };
-
-        let ids = self.generate_id_items(menu, cx);
-        let ids_at = position + 1;
-        items.splice(ids_at..ids_at, ids);
-
-        if accepts && !menu.is_document_view {
-            items.insert(
-                position + 1,
-                ContextMenuItem {
-                    label: dbflux_i18n::t!("document.data.context_menu.item.edit_as_expression")
-                        .into(),
-                    action: Some(ContextMenuAction::EditAsExpression),
-                    icon: Some(AppIcon::Code),
-                    is_separator: false,
-                    is_danger: false,
-                    detail: None,
-                    disabled: false,
-                },
-            );
-        }
-
-        items
     }
 
     /// Opens the inline editor on the cell as a SQL expression; on a cell of

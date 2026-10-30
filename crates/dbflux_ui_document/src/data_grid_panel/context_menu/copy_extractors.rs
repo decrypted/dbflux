@@ -2,9 +2,7 @@
 //! Markdown table: text built from the selection for pasting elsewhere, next
 //! to Copy as CSV and Copy as JSON, which go through the exporter instead.
 
-use super::super::{ContextMenuItem, DataGridPanel, DataSource};
-use dbflux_components::components::data_table::ContextMenuAction;
-use dbflux_components::icons::AppIcon;
+use super::super::{DataGridPanel, DataSource};
 use dbflux_core::{
     ColumnAssignment, ColumnMeta, DefaultSqlDialect, MutationRequest, QueryGenerator,
     QueryLanguage, QueryResult, RowInsert, SqlDialect, TableRef, Value,
@@ -148,59 +146,7 @@ fn markdown_cell(text: &str) -> String {
         .replace(['\n', '\r'], "<br>")
 }
 
-fn copy_item(label: String, action: ContextMenuAction, icon: AppIcon) -> ContextMenuItem {
-    ContextMenuItem {
-        label: label.into(),
-        action: Some(action),
-        icon: Some(icon),
-        is_separator: false,
-        is_danger: false,
-        detail: None,
-        disabled: false,
-    }
-}
-
 impl DataGridPanel {
-    /// Puts the extractors after Copy as JSON, so every "Copy as" entry sits
-    /// together; a menu without Copy as JSON (the document view) gets none.
-    pub(in crate::data_grid_panel) fn with_copy_extractors(
-        &self,
-        mut items: Vec<ContextMenuItem>,
-        cx: &App,
-    ) -> Vec<ContextMenuItem> {
-        let Some(json_index) = items
-            .iter()
-            .position(|item| item.action == Some(ContextMenuAction::CopyAsJson))
-        else {
-            return items;
-        };
-
-        let mut extractors = Vec::new();
-        if self.offers_copy_as_in_list(cx) {
-            extractors.push(copy_item(
-                dbflux_i18n::t!("document.data.context_menu.item.copy_as_sql_in_list"),
-                ContextMenuAction::CopyAsSqlInList,
-                AppIcon::Parentheses,
-            ));
-        }
-        if self.offers_copy_as_inserts(cx) {
-            extractors.push(copy_item(
-                dbflux_i18n::t!("document.data.context_menu.item.copy_as_insert_statements"),
-                ContextMenuAction::CopyAsInsertStatements,
-                AppIcon::Database,
-            ));
-        }
-        extractors.push(copy_item(
-            dbflux_i18n::t!("document.data.context_menu.item.copy_as_markdown"),
-            ContextMenuAction::CopyAsMarkdown,
-            AppIcon::Table,
-        ));
-
-        let insert_at = json_index + 1;
-        items.splice(insert_at..insert_at, extractors);
-        items
-    }
-
     /// Carries Settings > General > Include column names when copying to the
     /// table, which owns Ctrl+C but cannot read settings itself. Run on every
     /// render, so a saved change applies to open grids at once.

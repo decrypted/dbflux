@@ -375,6 +375,7 @@ fn render_fields(
 
             let state_for_click = state_entity.clone();
             let state_for_context = state_entity.clone();
+            let state_for_filter = state_entity.clone();
 
             div()
                 .id(("record-field", col_ix))
@@ -420,6 +421,14 @@ fn render_fields(
                             state_for_click.update(cx, |state, cx| {
                                 state.click_cell(coord, modifiers, cx);
                             });
+                        })
+                        .on_aux_click({
+                            let state = state_for_filter.clone();
+                            move |event: &ClickEvent, window, cx| {
+                                super::table::request_filter_on_middle_click(
+                                    &state, coord, event, window, cx,
+                                );
+                            }
                         })
                         .on_mouse_down(
                             MouseButton::Right,

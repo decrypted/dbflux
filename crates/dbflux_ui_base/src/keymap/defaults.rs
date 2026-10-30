@@ -683,6 +683,9 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("s", Modifiers::shift()),
         Command::FindSimilarRows,
     );
+    // `=` as in the condition it adds: the selected cells' values go into
+    // the table's WHERE filter, as a middle-click on a cell adds one.
+    layer.bind(KeyChord::new("=", Modifiers::none()), Command::AddToFilter);
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
     // GPUI reports cmd vs ctrl on separate modifier fields, so binding only

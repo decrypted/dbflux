@@ -99,9 +99,9 @@ fn m_reaches_the_row_actions_and_escape_cancels_the_confirmation(cx: &mut TestAp
         "the inspector takes the table keys"
     );
 
-    // Up from the first row wraps to the Toolbar trigger, then to the last
-    // row action above it.
-    for keys in ["j", "m", "k", "k", "enter"] {
+    // Up from the first row wraps to the Toolbar trigger, then More, then
+    // Row, which holds the row actions; Up in it wraps to the last one.
+    for keys in ["j", "m", "k", "k", "k", "l", "k", "enter"] {
         window.simulate_keystrokes(keys);
         window.run_until_parked();
     }

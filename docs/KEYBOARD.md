@@ -402,10 +402,12 @@ A read-only delete does not change the clipboard.
 | `Shift+s` | Find the rows nearest to the selected row by its vector column, on a table with a `pgvector` `vector` column (also in the row context menu) |
 | `Esc` | Leave similar rows and return to the table page |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
-| `Ctrl+Alt+c` / `Cmd+Alt+c` | Copy the selection as JSON, as the context menu's **Copy as JSON** does (table results) |
+| `Ctrl+Alt+c` / `Cmd+Alt+c` | Copy the selection as JSON, as the context menu's **Copy as ▸ JSON** does (table results) |
+| `=` | Add the selected cells' values to a table's WHERE filter, one condition per column (`column = value`, or `column IN (...)` for several cells of a column), as the context menu's **Add to filter** and a middle-click on a cell do |
+| `Delete` | Mark every row that holds a selected cell for deletion, as the edit bar's **−** does |
 | `Ctrl+Alt+s` / `Cmd+Alt+s` | Review the statements Save will run for the staged changes (table results) |
 | `z` | Maximize the results of a query document over the editor, or restore the split |
-| `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, show another view of the result, the value panel's and row inspector's buttons, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
+| `m` (or `Shift+F10`) | Open context menu, grouped into Copy as, Set value, Filter, Sort, Column, Row and More submenus; `Enter` or `Right` opens a submenu (More holds Generate SQL, one level further), `Left` or `Escape` steps back. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, show another view of the result, the value panel's and row inspector's buttons, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
 | `Shift+m` | Open the column header menu of the selected cell's column, as a right-click on its header does: order, filter and the Column section. Only in the grid, which has column headers; the record view and the document tree ignore it |
 
 An instance inspector tab takes these keys too: `m` opens the context menu of
@@ -426,9 +428,12 @@ Toolbar submenu opens it too. While it is open, typing narrows the list, `Up` /
 removes it and `Escape` closes the list; its last row clears the table's history.
 See [Filter history](RESULTS.md#filter-history).
 
-The Filter submenu of a cell's context menu (`m`) is the keyboard counterpart of
-`Alt`+click on a cell: its entries add the cell's value to the table's filter as
-an `AND` condition. See [Filtering by a cell](RESULTS.md#filtering-by-a-cell).
+`=` and the context menu's Add to filter and Filter submenu are the keyboard
+counterparts of a middle-click on a cell (`Shift`+middle-click excludes the
+value): they add the cell's value to the table's filter as an `AND` condition.
+Adding a sort key, `Shift`+click on a header's sort arrow, is **Sort ▸ Add to
+sort** in the cell menu and **Add to sort** in the column header menu. See
+[Filtering by a cell](RESULTS.md#filtering-by-a-cell).
 
 When the results offer no context menu of their own, `m` opens the pane actions
 menu instead, the same one the command palette's **Open pane actions** shows.

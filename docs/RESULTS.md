@@ -45,6 +45,25 @@ When the results panel has focus:
 - `f` focuses the toolbar; `/` focuses the search/filter.
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
+- `=` adds the selected cells' values to a table's `WHERE` filter (see
+  [Filtering by a cell](#filtering-by-a-cell)).
+
+The cell's context menu (`m`, `Shift+F10` or a right click) is grouped so it
+fits on screen. On top are **Copy**, **Copy as ▸** (CSV, JSON, SQL IN list,
+INSERT statements, Markdown table and, on a table, the row as a query),
+**View value** and **Add to filter**. Then the editing entries: **Edit**,
+**Edit in editor…**, **Edit as SQL expression…**, **Paste** and **Set value ▸**
+(NULL, DEFAULT and the identifiers the column can take). Then **Filter ▸**,
+**Sort ▸**, **Column ▸** (hide, move, pin, fit width, Columns…) and **Row ▸**
+(inspect, add, duplicate, the connection's own row actions, and Delete row on
+its own at the end). Last come **More ▸** (Generate SQL ▸, Chart this query,
+Find similar rows) and **Toolbar ▸**. Each part shows only what applies to the
+cell, and each row keeps its shortcut. `Up` / `Down` move through the menu,
+`Enter` or `Right` runs a row or opens its submenu, and `Left` or `Escape`
+steps back out. A menu opened near the bottom or the right edge of the window
+opens upwards or is shifted left, submenus open on the side with room, and a
+menu taller than the window scrolls, keeping the highlighted row in view; the
+column header menu and the export menu fit the window the same way.
 
 With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. The extra ranges are for copying: delete, duplicate, save and the other row actions act on the row of the cursor, a right-click selects the cell under the pointer, and the record view treats `Ctrl`+click as a plain click. Dragging past an edge of the grid scrolls it that way, faster the further out the pointer is, and keeps extending the range until the button is released or the pointer comes back.
 
@@ -68,19 +87,20 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does, and `Alt`+click on the header adds a sort key as on the arrow.
+list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does.
 
-To sort by several columns, `Alt`+click the arrow of another column: it becomes
-the next sort key, ascending, and a further `Alt`+click turns it descending and
-then takes it out of the sort. With more than one key, each sorted header shows
+To sort by several columns, `Shift`+click the arrow of another column: it becomes
+the next sort key, ascending, and a further `Shift`+click turns it descending and
+then takes it out of the sort. The arrow takes the click for itself, so
+`Shift`+click on the arrow never extends the column selection the way
+`Shift`+click on the rest of the header does. With more than one key, each sorted header shows
 its place (1, 2, 3) next to the arrow, and rows that tie on the first key are
 ordered by the second, and so on. A plain click on any arrow sorts by that
 column alone again, in the direction it already had when it was a key. A table
 whose primary key has several columns opens sorted by all of them, so its key
-columns show 1 and 2 from the start. Some Linux desktops (KDE Plasma, for one)
-take `Alt`+click for moving windows; there the column menu's **Add to sort**
-does the same, or the window manager's modifier can be changed. The column menu offers the same as **Add to sort: column
-ASC** and **Add to sort: column DESC**, which also change the direction of a
+columns show 1 and 2 from the start. The column menu, and the cell menu's
+**Sort ▸**, offer the same as **Add to sort: column ASC** and **Add to sort:
+column DESC**, which also change the direction of a
 column that is already a key, and **Remove ordering** drops every key. A table
 sends all keys to the database as one `ORDER BY`; a query result is sorted in
 memory. On a table still in its default order (its primary key), the first
@@ -205,19 +225,24 @@ builder — see [Schema-aware autocomplete](QUERY_BUILDER.md#schema-aware-autoco
 
 The **Filter** submenu of a cell's context menu (`m`, or a right click) narrows
 the filter to the cell's value with `=`, `<>`, `<`, `>`, `LIKE`, `IS NULL` and
-the other operators the column's type allows. `Alt`+click on a cell does the
-same with `=` in one step (`IS NULL` for a NULL cell) and selects the cell. Both
-keep the current filter as an `AND` term, in parentheses when it has a top-level
-`OR`, so `status = 500` becomes `status = 500 AND "method" = 'getbets'`, and a
-condition the filter already holds is not added twice. Binary, JSON and nested
-values cannot be added this way. Some Linux window managers use `Alt`+drag to
-move windows; a plain `Alt`+click without moving the pointer still works.
+the other operators the column's type allows, and its last entry clears the
+filter. A middle-click on a cell does the same with `=` in one step (`IS NULL`
+for a NULL cell) and selects the cell; `Shift` with the middle-click excludes
+the value instead (`<>`, or `IS NOT NULL` for a NULL cell).
+
+`=`, or **Add to filter** at the top of the cell menu, adds the selected cells:
+one condition per selected column, the column's values as `column = value`, or
+as `column IN (...)` when several cells of it are selected, each value once.
+Every way keeps the current filter as an `AND` term, in parentheses when it has
+a top-level `OR`, so `status = 500` becomes `status = 500 AND "method" =
+'getbets'`, and a condition the filter already holds is not added twice.
+Binary, JSON and nested values cannot be added this way.
 
 ### Undoing a filter
 
 Every new `WHERE` filter a table is read with is a step of the grid's Undo and
-Redo, whichever way it was applied (`Enter`, a history entry, `Alt`+click, the
-Filter submenu, clearing the filter). With the grid focused, Undo first takes
+Redo, whichever way it was applied (`Enter`, a history entry, a middle-click
+or `=`, the Filter submenu, clearing the filter). With the grid focused, Undo first takes
 back the cell edits made since the table was last read, newest first, and then
 puts the previous filter back and reads the table with it from the first page;
 Redo goes forward the same way. While the `WHERE` field has the keyboard, Undo
@@ -293,9 +318,17 @@ In the data grid:
 
 - `o` — add a row.
 - `x` — delete the selected row.
+- `Delete` — mark every row that holds a selected cell for deletion.
 - `r` — rename / edit (context-dependent).
 - `y` — copy the selected row.
 - `Ctrl+c` (`Cmd+c`) — copy the selected cell(s) to the clipboard.
+
+The edit bar of an editable table starts with **+** and **−**, as in a
+database IDE: **+** adds a row below the active one, as `o` does, and **−**
+marks every row that holds a selected cell for deletion, as `Delete` does; Save
+deletes them, after the usual confirmation. **−** is disabled while no cell is
+selected, **+** on a table that takes no new rows, and both on similar rows;
+their tooltips give the shortcut, or the reason they are disabled.
 
 With several cells selected, `Enter`, `F2` or a double-click on one of them opens the editor for all of them, and the status bar says how many cells the edit will change. The value you commit is written to every selected cell of the same column type that can take it, as unsaved changes that Save and Revert handle like any other edit, and one undo (`u` or `Ctrl+z`) takes the whole edit back. Cells in read-only columns, rows marked for deletion and values the inline editor does not edit (JSON, long or multi-line text) are skipped, and so are key columns when the selection spans several rows, since one value in every row's key could never be saved; a value picked from a column's list of allowed values goes only to columns with the same list.
 
@@ -365,7 +398,7 @@ From the review, **Save** (or `Enter`) runs those statements, without the separa
 
 A cell can be given a new identifier generated by DBFlux and written as an ordinary value, so it works with every database: **UUID v4** (random), **UUID v7** (time-ordered), **KSUID** (27 characters, sortable by second) and **ULID** (26 characters, sortable by millisecond).
 
-- The cell's context menu has a **Generate …** entry for each kind the column can store. On a cell of a larger selection, every selected cell gets its own new value, never a copy, and one undo takes them all back.
+- The cell's context menu has an entry in **Set value ▸** for each kind the column can store. On a cell of a larger selection, every selected cell gets its own new value, never a copy, and one undo takes them all back.
 - For a column that looks like an identifier (a `uuid` type, a key, a text column sized for one of the kinds, or a name such as `user_id`), the list under the inline editor offers the kinds first, UUIDs on top; `Down` / `Up` write a new value into the editor. Committing it over a multi-cell selection again gives each cell its own value.
 - The cell editor dialog shows a **Generate …** button per kind.
 
@@ -405,8 +438,8 @@ the correct column kind, so charting still works.
 
 ## Copy as CSV or JSON
 
-The context menu of a table result has **Copy as CSV** and **Copy as JSON**
-below **Copy**. They copy the selection, whether one range or several picked
+The **Copy as ▸** submenu of a table result's context menu, below **Copy**,
+starts with **CSV** and **JSON**. They copy the selection, whether one range or several picked
 with `Ctrl`+click, through the same exporter as **Copy loaded rows to
 clipboard**: CSV starts with a header row of the column names, and JSON is an
 array with one object per row, keyed by column name, with numbers, booleans and
@@ -422,7 +455,7 @@ Data grid, which starts it with a line of the copied columns' names.
 `Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
 the menu shows it next to the item.
 
-Below them the menu has three more extractors:
+Below them the submenu has three more extractors:
 
 - **Copy as SQL IN list** copies the selected values of one column as a list
   for a `WHERE ... IN`, such as `('a', 'O''Brien')` or `(1, 2, 3)`, quoted the
@@ -448,9 +481,11 @@ its new value and a row added in the grid and not saved yet at its place.
 
 ## Copy as Query
 
-The result context menu includes **Copy as Query**, which generates a
+The **Copy as ▸** submenu ends with the row as a query (INSERT, UPDATE or
+DELETE, under a caption naming the connection's language), which generates a
 driver-specific mutation statement (or envelope, for non-SQL drivers) from the
-selected row using the driver's own query generator.
+selected row using the driver's own query generator. The document view's menu
+keeps it as a submenu of its own.
 
 ## Exporting
 

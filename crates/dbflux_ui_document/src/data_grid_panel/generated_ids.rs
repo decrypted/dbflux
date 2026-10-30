@@ -10,7 +10,8 @@ use dbflux_components::icons::AppIcon;
 use dbflux_core::{ColumnInfo, GeneratedIdKind, looks_like_id_column};
 use gpui::{App, Context};
 
-use super::{ContextMenuItem, DataGridPanel, DataSource, TableContextMenu};
+use super::context_menu::tree::MenuEntry;
+use super::{DataGridPanel, DataSource, TableContextMenu};
 
 impl DataGridPanel {
     /// The identifier kinds each result column can store as text, keyed by
@@ -56,13 +57,9 @@ impl DataGridPanel {
             .collect()
     }
 
-    /// One "Generate …" entry per identifier kind the cell under the menu
-    /// can take.
-    pub(super) fn generate_id_items(
-        &self,
-        menu: &TableContextMenu,
-        cx: &App,
-    ) -> Vec<ContextMenuItem> {
+    /// One Set value entry per identifier kind the cell under the menu can
+    /// take, named by the kind alone (`UUID v7`).
+    pub(super) fn generate_id_entries(&self, menu: &TableContextMenu, cx: &App) -> Vec<MenuEntry> {
         if menu.is_document_view {
             return Vec::new();
         }
@@ -74,18 +71,13 @@ impl DataGridPanel {
             .read(cx)
             .generated_id_kinds(menu.col)
             .iter()
-            .map(|&kind| ContextMenuItem {
-                label: dbflux_i18n::t!(
-                    "document.data.context_menu.item.generate_id",
-                    kind = kind.label()
+            .map(|&kind| {
+                MenuEntry::action(
+                    format!("generate-id-{kind:?}").to_lowercase(),
+                    kind.label(),
+                    AppIcon::KeyRound,
+                    ContextMenuAction::GenerateId(kind),
                 )
-                .into(),
-                action: Some(ContextMenuAction::GenerateId(kind)),
-                icon: Some(AppIcon::KeyRound),
-                is_separator: false,
-                is_danger: false,
-                detail: None,
-                disabled: false,
             })
             .collect()
     }

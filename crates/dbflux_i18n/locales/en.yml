@@ -1651,7 +1651,7 @@ document:
         delete_document: Delete document
         paste: Paste
         edit: Edit
-        edit_in_modal: Edit in modal…
+        edit_in_modal: "Edit in editor…"
         edit_as_expression: "Edit as SQL expression…"
         generate_id: "Generate %{kind}"
         set_default: Set to default
@@ -1660,6 +1660,7 @@ document:
         inspect_row: Inspect row
         find_similar_rows: Find similar rows
         view_value: View value
+        add_to_filter: "Add to filter"
         duplicate_row: Duplicate row
         delete_row: Delete row
         chart_this_query: Chart this query
@@ -1695,6 +1696,25 @@ document:
         move_right: Move right
         chooser_title: Columns
         show_all: Show all columns
+      copy_as:
+        title: "Copy as"
+        csv: "CSV"
+        json: "JSON"
+        sql_in_list: "SQL IN list"
+        insert_statements: "INSERT statements"
+        markdown: "Markdown table"
+      set_value:
+        title: "Set value"
+        to_null: "NULL"
+        to_default: "DEFAULT"
+      sort:
+        title: "Sort"
+        ascending: "Ascending"
+        descending: "Descending"
+      row:
+        title: "Row"
+      more:
+        title: "More"
       generate_sql:
         title: Generate SQL
       toolbar:
@@ -1776,6 +1796,11 @@ document:
           update_failed: "Failed to update document: %{error}"
     grid:
       edit_bar:
+        add_row: "Add row"
+        delete_rows: "Delete selected rows"
+        with_shortcut: "%{action} (%{shortcut})"
+        add_row_disabled: "This result takes no new rows"
+        delete_rows_no_selection: "Select a cell in each row to delete"
         review: "Review"
         clean: No unsaved changes
         dirty:
@@ -4476,6 +4501,7 @@ settings:
       toggle_row_inspector: Toggle row inspector
       find_similar_rows: Find similar rows
       copy_selection_as_json: "Copy selection as JSON"
+      add_to_filter: "Add selection to filter"
       results_set_null: Set cell to NULL
       toggle_cell_expression: "Edit cell as SQL expression"
       review_changes: "Review changes"

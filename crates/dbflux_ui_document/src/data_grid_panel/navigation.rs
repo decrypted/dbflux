@@ -1022,6 +1022,12 @@ impl DataGridPanel {
                 );
                 true
             }
+            // The document tree does not drive the grid selection the
+            // filter reads; elsewhere the key propagates when the grid has
+            // no WHERE filter to add to.
+            Command::AddToFilter if self.view_config.mode != crate::DataViewMode::Document => {
+                self.add_selection_to_filter(false, window, cx)
+            }
             Command::CycleDocumentView => {
                 self.toggle_view_mode(cx);
                 true

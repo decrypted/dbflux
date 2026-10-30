@@ -830,13 +830,14 @@ impl DataTable {
                     .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.focus(window, cx);
-                            state.click_column(col_ix, event.modifiers(), cx);
+                            state.click_header(col_ix, event.modifiers(), cx);
                         });
                     })
                     // Right-click opens the menu scoped to this column: its
                     // ordering and filtering in one flat list. Left click
-                    // selects the column, as in a database IDE's grid; the
-                    // sort control at the right edge sorts.
+                    // selects the column, as in a database IDE's grid, or
+                    // sorts it with the header click set to sort; the sort
+                    // control at the right edge always sorts.
                     .on_mouse_down(MouseButton::Right, {
                         let state_for_menu = state_entity.clone();
                         move |event: &MouseDownEvent, window, cx| {
@@ -1163,7 +1164,7 @@ impl DataTable {
                     .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.focus(window, cx);
-                            state.click_column(col_ix, event.modifiers(), cx);
+                            state.click_header(col_ix, event.modifiers(), cx);
                         });
                     })
                     .on_mouse_down(
@@ -1932,6 +1933,63 @@ mod tests {
                     .is_full_column_selected(0, row_count)
             );
             assert!(state.read(cx).sort().is_none());
+        });
+    }
+
+    /// With Settings > General > Data grid > Column header click sorts on, a
+    /// plain header click cycles the sort (in both header renderings) while
+    /// Shift+click still selects; a table that does not sort still selects.
+    #[gpui::test]
+    fn the_header_click_setting_sorts_on_a_plain_click(cx: &mut TestAppContext) {
+        cx.update(|cx| super::super::set_header_click_sorts(cx, true));
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        for document in [false, true] {
+            let (state, visual) = header_table(cx, document, true);
+            let first = element_center(visual, "header-col-0").expect("header 0 drawn");
+            let second = element_center(visual, "header-col-1").expect("header 1 drawn");
+
+            visual.simulate_click(first, gpui::Modifiers::default());
+            visual.run_until_parked();
+            visual.update(|_, cx| {
+                let state = state.read(cx);
+                assert_eq!(
+                    state.sort().map(|sort| sort.column_ix),
+                    Some(0),
+                    "{document}"
+                );
+                assert!(state.selection().is_empty(), "{document}");
+            });
+
+            visual.simulate_click(second, shift);
+            visual.run_until_parked();
+            let row_count = visual.update(|_, cx| state.read(cx).row_count());
+            visual.update(|_, cx| {
+                let state = state.read(cx);
+                assert!(
+                    state.selection().is_full_column_selected(1, row_count),
+                    "{document}"
+                );
+                assert_eq!(
+                    state.sort().map(|sort| sort.column_ix),
+                    Some(0),
+                    "{document}"
+                );
+            });
+        }
+
+        let (state, visual) = header_table(cx, false, false);
+        let first = element_center(visual, "header-col-0").expect("header drawn");
+        visual.simulate_click(first, gpui::Modifiers::default());
+        visual.run_until_parked();
+        let row_count = visual.update(|_, cx| state.read(cx).row_count());
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert!(state.sort().is_none());
+            assert!(state.selection().is_full_column_selected(0, row_count));
         });
     }
 

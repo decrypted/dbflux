@@ -51,6 +51,36 @@ pub enum ModelSwap {
     ResetCursor,
 }
 
+/// What a primary click on a column header does, from Settings > General >
+/// Data grid: select the column (the default), or sort it as the header did
+/// before column selection. Published by the app so the table, which has no
+/// access to the settings, can follow them.
+///
+/// Absent means select: component tests that never publish it keep the
+/// default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeaderClickSetting {
+    pub sorts: bool,
+}
+
+impl gpui::Global for HeaderClickSetting {}
+
+/// Publishes whether a header click sorts.
+pub fn set_header_click_sorts(cx: &mut App, sorts: bool) {
+    if header_click_sorts(cx) == sorts && cx.has_global::<HeaderClickSetting>() {
+        return;
+    }
+
+    cx.set_global(HeaderClickSetting { sorts });
+}
+
+/// Whether a header click sorts, as last published with
+/// [`set_header_click_sorts`].
+pub fn header_click_sorts(cx: &App) -> bool {
+    cx.try_global::<HeaderClickSetting>()
+        .is_some_and(|setting| setting.sorts)
+}
+
 /// Main state for the DataTable component.
 pub struct DataTableState {
     /// The data model (Arc to avoid cloning).
@@ -778,6 +808,19 @@ impl DataTableState {
         }
         cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
+    }
+
+    /// A primary click on a column header. It selects the column (see
+    /// [`Self::click_column`]); with the header click set to sort, a plain
+    /// click on a table that sorts cycles the sort instead, while Shift and
+    /// Ctrl (Cmd on macOS) still select.
+    pub fn click_header(&mut self, col: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        let plain = !modifiers.shift && !modifiers.secondary();
+        if plain && self.sortable && header_click_sorts(cx) {
+            self.cycle_sort(col, cx);
+        } else {
+            self.click_column(col, modifiers, cx);
+        }
     }
 
     /// Selection change for a primary click on a column header: the whole
@@ -3370,14 +3413,14 @@ mod tests {
 
     #[test]
     fn column_width_scales_with_the_grid_font_size() {
-        let model = model_with_values("title", &["a fairly long medium value"]);
+        let model = model_with_values("title", &["medium value text"]);
 
         let default_width =
             super::DataTableState::initial_column_width(&model, 0, &default_metrics());
         let larger_width =
             super::DataTableState::initial_column_width(&model, 0, &metrics_at(18.0));
 
-        let value_chars = "a fairly long medium value".chars().count() as f32;
+        let value_chars = "medium value text".chars().count() as f32;
         let expected_growth = value_chars * (18.0 - 12.5) * 0.6;
 
         assert!(

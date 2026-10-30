@@ -153,9 +153,25 @@ components:
     empty: Ninguna celda seleccionada
     error:
       not_xml: No es un documento XML
+    hex_cut: "Se muestran los primeros %{shown} de %{size}."
+    image:
+      copy: "Copiar imagen"
+      decoding: "Decodificando la imagen %{format}…"
+      incomplete: "Esta imagen %{format} está incompleta: el valor guardado termina antes que la imagen, así que probablemente lo recortó un límite de tamaño. Se muestran los bytes."
+      invalid: "Este valor empieza como una imagen %{format}, pero no se puede leer: %{error}. Se muestran los bytes."
+      meta: "%{width} × %{height} · %{format} · %{size}"
+      save: "Guardar imagen como…"
+      save_title: "Guardar imagen"
+      too_many_bytes: "Esta imagen %{format} ocupa %{size}, más que el límite de vista previa de imágenes de %{limit}. Se muestran los bytes."
+      too_many_pixels: "Esta imagen %{format} mide %{width} × %{height} píxeles, más que el límite de vista previa de %{limit} megapíxeles. Se muestran los bytes."
+      too_much_memory: "Decodificar esta imagen %{format} necesita más memoria de la que permite la vista previa. Se muestran los bytes."
     read_only: Solo lectura
     revert: Revertir
     title: Valor
+    view:
+      hex: "Hex"
+      image: "Imagen"
+      text: "Texto"
     wrap: Ajuste de línea
   data_table:
     record:
@@ -1657,6 +1673,11 @@ document:
         value_compact: "Compactar el valor"
         value_revert: "Revertir el valor"
         value_save: "Guardar el valor"
+        value_view_image: "Mostrar el valor como imagen"
+        value_view_hex: "Mostrar el valor en hexadecimal"
+        value_view_text: "Mostrar el valor como texto"
+        value_save_image: "Guardar la imagen en un archivo…"
+        value_copy_image: "Copiar la imagen"
         view_table_data: "Mostrar Datos"
         view_table_columns: "Mostrar Columnas"
         view_table_partitions: "Mostrar Particiones"

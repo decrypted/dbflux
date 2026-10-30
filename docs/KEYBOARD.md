@@ -638,7 +638,7 @@ panel, row inspector, document panel or query builder beside it.
 | `Enter` | Edit the value (value panel) |
 | `Escape` | Stop editing the value, or go back to the grid |
 | `Ctrl+h` | Go back to the grid |
-| `m` (or `Shift+F10`) | Open the grid's context menu. Its Toolbar entry lists the buttons of the open panel: in the value panel the other formats, word wrap, Format, Compact and, once the value changed, Revert and Save; in the row inspector Pin or Unpin, and Go to referenced row while it lists outgoing foreign-key references, or while the cursor sits on a foreign-key cell |
+| `m` (or `Shift+F10`) | Open the grid's context menu. Its Toolbar entry lists the buttons of the open panel: in the value panel the other formats, word wrap, Format, Compact and, once the value changed, Revert and Save, and for a value holding an image Image or Hex (Text for base64), Save image as and Copy image; in the row inspector Pin or Unpin, and Go to referenced row while it lists outgoing foreign-key references, or while the cursor sits on a foreign-key cell |
 
 **Go to referenced row** opens the row that a foreign key of the inspected
 row points to, as clicking a REFERENCES entry of the inspector does: it

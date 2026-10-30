@@ -4054,7 +4054,7 @@ fn format_inspector_float(value: f64) -> String {
     }
 }
 
-fn format_hex_dump(data: &[u8]) -> String {
+pub(super) fn format_hex_dump(data: &[u8]) -> String {
     const BYTES_PER_LINE: usize = 16;
 
     let mut lines = Vec::new();

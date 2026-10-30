@@ -153,9 +153,25 @@ components:
     empty: 未选择单元格
     error:
       not_xml: 不是 XML 文档
+    hex_cut: "仅显示 %{size} 中的前 %{shown}。"
+    image:
+      copy: "复制图片"
+      decoding: "正在解码 %{format} 图片…"
+      incomplete: "此 %{format} 图片不完整：存储的值在图片结束之前就已结束，很可能被大小限制截断。改为显示字节。"
+      invalid: "此值看起来是 %{format} 图片，但无法读取：%{error}。改为显示字节。"
+      meta: "%{width} × %{height} · %{format} · %{size}"
+      save: "图片另存为…"
+      save_title: "保存图片"
+      too_many_bytes: "此 %{format} 图片大小为 %{size}，超过 %{limit} 的图片预览上限。改为显示字节。"
+      too_many_pixels: "此 %{format} 图片为 %{width} × %{height} 像素，超过 %{limit} 百万像素的预览上限。改为显示字节。"
+      too_much_memory: "解码此 %{format} 图片所需的内存超过预览允许的上限。改为显示字节。"
     read_only: 只读
     revert: 还原
     title: 值
+    view:
+      hex: "十六进制"
+      image: "图片"
+      text: "文本"
     wrap: 自动换行
   data_table:
     record:
@@ -1657,6 +1673,11 @@ document:
         value_compact: "压缩值"
         value_revert: "还原值"
         value_save: "保存值"
+        value_view_image: "以图片显示值"
+        value_view_hex: "以十六进制显示值"
+        value_view_text: "以文本显示值"
+        value_save_image: "将图片保存为文件…"
+        value_copy_image: "复制图片"
         view_table_data: "显示数据"
         view_table_columns: "显示列"
         view_table_partitions: "显示分区"

@@ -40,6 +40,7 @@ fuzzy-matcher.workspace = true
 anyhow = { workspace = true }
 rfd.workspace = true
 image.workspace = true
+base64.workspace = true
 dbflux_mcp = { workspace = true, optional = true }
 dbflux_policy = { workspace = true, optional = true }
 

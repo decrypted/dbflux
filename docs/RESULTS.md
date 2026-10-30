@@ -75,6 +75,21 @@ pretty-print, compact and word wrap. You can edit there: **Save** commits the
 row directly, **Revert** discards the edit. The panel follows the selected cell
 as you move through the grid, except while it holds an unsaved change.
 
+A binary cell (`bytea`, `BLOB`, `varbinary` and the like) opens as a hex dump,
+read-only. When its bytes are a PNG, JPEG, GIF, WebP or BMP image, recognized
+from the bytes themselves and not from the column name, the panel shows the
+picture instead, scaled down to fit, with its pixel size, format and byte size
+under it. **Hex** switches to the hex dump and **Image** back. **Save image
+as…** writes the stored bytes to a file and **Copy image** puts the image on the
+clipboard; both are also Toolbar entries of the grid's context menu (`m`). A text
+cell holding an image as base64, bare or as a `data:image/...;base64,` URI,
+opens on the picture the same way, with **Text** to switch back to the text.
+
+Images above 32 MB or 32 megapixels are not decoded, and neither is a value that
+ends before its image does, as one cut short by a size limit would: the panel
+says why above the hex dump. Animated images show their first frame, and SVG is
+not drawn. The hex dump of a large value stops after its first 64 KB.
+
 ## Row inspector
 
 Press `Ctrl+Space`, or right-click a row and choose **Inspect Row**, to open

@@ -121,11 +121,14 @@ impl SelectionState {
 
     /// Ctrl+click on a cell: keep what is selected and start a new range
     /// there, or, when the cell is selected on its own already, deselect it.
-    pub fn toggle_cell(&mut self, coord: CellCoord) {
+    ///
+    /// Returns whether the cell was added, so a press that deselected does
+    /// not start a drag from it.
+    pub fn toggle_cell(&mut self, coord: CellCoord) -> bool {
         let single = CellRange::single(coord);
         if let Some(index) = self.extra.iter().position(|range| *range == single) {
             self.extra.remove(index);
-            return;
+            return false;
         }
         if self.selected_range() == Some(single) {
             if self.extra.is_empty() {
@@ -133,11 +136,12 @@ impl SelectionState {
             } else {
                 self.restore_last_extra();
             }
-            return;
+            return false;
         }
         self.push_current_range();
         self.active = Some(coord);
         self.anchor = Some(coord);
+        true
     }
 
     /// Ctrl+click on a row number: keep what is selected and add the row, or
@@ -160,8 +164,9 @@ impl SelectionState {
             return;
         }
         self.push_current_range();
-        self.anchor = Some(whole_row.start);
-        self.active = Some(whole_row.end);
+        // As select_row: the cursor in the first column, the anchor spanning.
+        self.anchor = Some(whole_row.end);
+        self.active = Some(whole_row.start);
     }
 
     fn push_current_range(&mut self) {
@@ -174,8 +179,8 @@ impl SelectionState {
 
     fn restore_last_extra(&mut self) {
         if let Some(range) = self.extra.pop() {
-            self.anchor = Some(range.start);
-            self.active = Some(range.end);
+            self.anchor = Some(range.end);
+            self.active = Some(range.start);
         }
     }
 
@@ -384,5 +389,52 @@ mod tests {
         sel.extend_to_row(2, 0);
 
         assert!(sel.is_empty());
+    }
+
+    #[test]
+    fn ctrl_click_on_the_current_cell_restores_the_previous_range() {
+        let mut sel = SelectionState::new();
+        sel.select_cell(CellCoord::new(0, 0));
+        assert!(sel.toggle_cell(CellCoord::new(2, 1)), "added");
+        assert!(!sel.toggle_cell(CellCoord::new(2, 1)), "taken out");
+
+        assert_eq!(sel.active, Some(CellCoord::new(0, 0)));
+        assert_eq!(sel.ranges(), vec![CellRange::single(CellCoord::new(0, 0))]);
+
+        sel.select_row(1, 3);
+        sel.toggle_row(3, 3);
+        assert_eq!(sel.active, Some(CellCoord::new(3, 0)), "cursor at the left");
+        sel.toggle_row(3, 3);
+        assert_eq!(sel.active, Some(CellCoord::new(1, 0)));
+        assert!(sel.is_full_row_selected(1, 3));
+        assert!(!sel.is_full_row_selected(3, 3));
+        assert_eq!(sel.ranges().len(), 1);
+    }
+
+    #[test]
+    fn ctrl_click_on_an_earlier_range_takes_it_out() {
+        let mut sel = SelectionState::new();
+        sel.select_cell(CellCoord::new(0, 0));
+        sel.toggle_cell(CellCoord::new(2, 1));
+        sel.toggle_cell(CellCoord::new(4, 0));
+
+        assert!(!sel.toggle_cell(CellCoord::new(0, 0)));
+        assert!(!sel.is_selected(CellCoord::new(0, 0)));
+        assert!(sel.is_selected(CellCoord::new(2, 1)));
+        assert_eq!(sel.active, Some(CellCoord::new(4, 0)), "cursor unchanged");
+    }
+
+    #[test]
+    fn shift_on_a_row_number_keeps_the_ctrl_click_ranges() {
+        let mut sel = SelectionState::new();
+        sel.select_row(1, 2);
+        sel.toggle_row(3, 2);
+        sel.extend_to_row(5, 2);
+
+        assert!(sel.is_full_row_selected(1, 2), "the earlier row stays");
+        for row in 3..=5 {
+            assert!(sel.is_full_row_selected(row, 2), "row {row}");
+        }
+        assert!(!sel.is_full_row_selected(2, 2));
     }
 }

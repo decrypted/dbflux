@@ -1534,6 +1534,12 @@ fn render_rows(
                             move |event: &MouseDownEvent, window, cx| {
                                 state.update(cx, |state, cx| {
                                     state.focus(window, cx);
+                                    // The second press of a Ctrl+double-click
+                                    // opens the editor on release; toggling
+                                    // again would take the cell back out first.
+                                    if event.click_count >= 2 && event.modifiers.secondary() {
+                                        return;
+                                    }
                                     state.begin_drag_select(coord, event.modifiers, cx);
                                 });
                             }
@@ -1553,6 +1559,11 @@ fn render_rows(
 
                             if event.click_count() == 2 {
                                 state_for_click.update(cx, |state, cx| {
+                                    // A Ctrl+double-click on the cell selected
+                                    // on its own took it out on the first press.
+                                    if !state.selection().is_selected(coord) {
+                                        state.select_cell(coord, cx);
+                                    }
                                     state.start_editing(coord, window, cx);
                                 });
                                 return;
@@ -2040,6 +2051,92 @@ mod tests {
         fx.visual.simulate_mouse_up(start, MouseButton::Left, none);
         fx.visual.run_until_parked();
         assert_eq!(fx.range(), CellRange::single(CellCoord::new(4, 0)));
+    }
+
+    /// A Ctrl+press that takes a cell out starts no drag: a jitter inside the
+    /// cell or a move to another before the release selects nothing again.
+    #[gpui::test]
+    fn a_deselecting_ctrl_press_does_not_drag(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let mut fx = DragFixture::new(cx);
+        let secondary = gpui::Modifiers::secondary_key();
+        let (a, b, other) = (fx.cell(0, 0), fx.cell(5, 1), fx.cell(2, 1));
+        fx.visual.simulate_click(a, gpui::Modifiers::default());
+        fx.visual.simulate_click(b, secondary);
+        fx.visual.run_until_parked();
+
+        let jitter = gpui::point(b.x + px(1.0), b.y + px(1.0));
+        fx.visual.simulate_mouse_down(b, MouseButton::Left, secondary);
+        fx.visual
+            .simulate_mouse_move(jitter, MouseButton::Left, secondary);
+        fx.visual
+            .simulate_mouse_move(other, MouseButton::Left, secondary);
+        fx.visual.simulate_mouse_up(other, MouseButton::Left, secondary);
+        fx.visual.run_until_parked();
+
+        let state = fx.state.clone();
+        fx.visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(selection.is_selected(CellCoord::new(0, 0)), "A kept");
+            assert!(!selection.is_selected(CellCoord::new(5, 1)), "B out");
+            assert!(!selection.is_selected(CellCoord::new(2, 1)));
+            assert!(!selection.is_selected(CellCoord::new(3, 0)), "no block");
+        });
+    }
+
+    /// Ctrl+double-click opens the editor on the cell, selected: the second
+    /// press does not toggle it out again, and a cell the first press took
+    /// out is selected for the edit.
+    #[gpui::test]
+    fn ctrl_double_click_edits_the_cell(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let mut fx = DragFixture::new(cx);
+        let state = fx.state.clone();
+        fx.visual
+            .update(|_, cx| state.update(cx, |s, _| s.set_pk_columns(vec![0])));
+        let secondary = gpui::Modifiers::secondary_key();
+
+        let double_click = |fx: &mut DragFixture, at: gpui::Point<Pixels>| {
+            for click_count in 1..=2 {
+                fx.visual.simulate_event(MouseDownEvent {
+                    position: at,
+                    modifiers: secondary,
+                    button: MouseButton::Left,
+                    click_count,
+                    first_mouse: false,
+                });
+                fx.visual.simulate_event(gpui::MouseUpEvent {
+                    position: at,
+                    modifiers: secondary,
+                    button: MouseButton::Left,
+                    click_count,
+                });
+            }
+            fx.visual.run_until_parked();
+        };
+
+        let (a, b) = (fx.cell(0, 0), fx.cell(3, 1));
+        fx.visual.simulate_click(a, gpui::Modifiers::default());
+        double_click(&mut fx, b);
+        fx.visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(state.editing_cell(), Some(CellCoord::new(3, 1)));
+            assert!(state.selection().is_selected(CellCoord::new(3, 1)));
+            assert!(state.selection().is_selected(CellCoord::new(0, 0)), "A kept");
+        });
+
+        // The cell selected on its own: the first press takes it out.
+        let c = fx.cell(6, 1);
+        fx.visual.simulate_click(c, gpui::Modifiers::default());
+        fx.visual.run_until_parked();
+        double_click(&mut fx, c);
+        fx.visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(state.editing_cell(), Some(CellCoord::new(6, 1)));
+            assert!(state.selection().is_selected(CellCoord::new(6, 1)));
+        });
     }
 
     /// A release outside the table ends the drag: moving back over the cells

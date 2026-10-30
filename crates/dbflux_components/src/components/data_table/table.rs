@@ -1965,9 +1965,11 @@ mod tests {
         // Out to another cell and back: the release on the start cell keeps
         // the cell the drag ended on.
         let (start, away) = (fx.cell(4, 0), fx.cell(5, 1));
-        fx.visual.simulate_mouse_down(start, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_down(start, MouseButton::Left, none);
         fx.visual.simulate_mouse_move(away, MouseButton::Left, none);
-        fx.visual.simulate_mouse_move(start, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_move(start, MouseButton::Left, none);
         fx.visual.simulate_mouse_up(start, MouseButton::Left, none);
         fx.visual.run_until_parked();
         assert_eq!(fx.range(), CellRange::single(CellCoord::new(4, 0)));
@@ -1984,16 +1986,20 @@ mod tests {
         let none = gpui::Modifiers::default();
 
         let (start, end, outside) = (fx.cell(1, 0), fx.cell(2, 1), fx.outside());
-        fx.visual.simulate_mouse_down(start, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_down(start, MouseButton::Left, none);
         fx.visual.simulate_mouse_move(end, MouseButton::Left, none);
-        fx.visual.simulate_mouse_move(outside, MouseButton::Left, none);
-        fx.visual.simulate_mouse_up(outside, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_move(outside, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_up(outside, MouseButton::Left, none);
         fx.visual.run_until_parked();
         let dragged = CellRange::new(CellCoord::new(1, 0), CellCoord::new(2, 1));
         assert_eq!(fx.range(), dragged);
 
         let later = fx.cell(4, 1);
-        fx.visual.simulate_mouse_move(later, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_move(later, MouseButton::Left, none);
         fx.visual.run_until_parked();
         assert_eq!(fx.range(), dragged, "no drag runs after the release");
 

@@ -1,6 +1,6 @@
 # Fork-only: packages the integration branch (`local/build`) of decrypted/dbflux with upstream's
 # reusable build workflow, so every push yields an AppImage, .deb, .rpm, tarball and macOS DMGs as
-# run artifacts. Not meant for upstream; it never publishes a release.
+# run artifacts. Not meant for upstream; it never publishes a release (fork-release.yml does, on tags).
 name: Fork build
 
 on:
@@ -33,11 +33,13 @@ jobs:
       - name: Compute version string
         id: fork
         run: |
-          # Same shape as upstream's nightly (`<base>-nightly+<sha>`), which the packaging scripts
-          # accept; the build metadata marks it as a fork build.
-          BASE=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/' | sed 's/-[^+]*//')
+          # The workspace version as a source build has it (`0.10.0-dev.0`) plus build metadata. No
+          # `-nightly`: the app derives its runtime channel from the version, and a nightly opens
+          # `dbflux-nightly.db` under the app id `dbflux-nightly` instead of the `dbflux.db` that
+          # source builds and the fork's releases use.
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/' | sed 's/+.*//')
           SHORT_SHA=$(git rev-parse --short HEAD)
-          echo "version=${BASE}-nightly+fork.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=${CARGO_VERSION}+fork.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build
@@ -48,7 +50,12 @@ jobs:
       actions: read  # required by the reusable build workflow's Windows signing job
     with:
       version: ${{ needs.compute-version.outputs.version }}
-      channel: nightly
+      # `rc` packages under the stable identity (`dbflux`, "DBFlux", `dev.iperez.dbflux`) that the
+      # version above gives the app at runtime, and, unlike `stable`, embeds no AppImage update
+      # information pointing at upstream's releases. stable and rc Windows builds need SignPath,
+      # which only upstream has, so Windows is off.
+      windows: false
+      channel: rc
       prerelease: true
       cache: true
       # Fork versions never match an upstream release, so an update check

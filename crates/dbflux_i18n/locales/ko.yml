@@ -1525,6 +1525,10 @@ document:
       mode_view: "보기"
       mode_edit: "편집"
   data:
+    restored:
+      waiting_title: 연결되지 않음
+      waiting_connection: "%{object}을(를) 불러오려면 %{profile}에 연결하세요."
+      waiting_database: "%{object}을(를) 불러오려면 사이드바에서 %{database} 데이터베이스를 펼치세요."
     chart_dock:
       toolbar:
         apply: 적용

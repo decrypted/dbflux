@@ -192,6 +192,7 @@ impl MigrationRegistry {
         registry.register(mod_047_general_settings_grid_fk_labels::MigrationImpl);
         registry.register(mod_048_general_settings_grid_pk_sort_desc::MigrationImpl);
         registry.register(mod_049_connection_profile_connect_on_startup::MigrationImpl);
+        registry.register(mod_050_session_tab_view_state::MigrationImpl);
         registry.register(mod_052_general_settings_grid_copy_column_names::MigrationImpl);
         registry
     }
@@ -432,6 +433,7 @@ mod mod_046_connection_profile_read_only;
 mod mod_047_general_settings_grid_fk_labels;
 mod mod_048_general_settings_grid_pk_sort_desc;
 mod mod_049_connection_profile_connect_on_startup;
+mod mod_050_session_tab_view_state;
 mod mod_052_general_settings_grid_copy_column_names;
 
 pub use mod_001_initial::MigrationImpl;
@@ -1225,6 +1227,7 @@ mod tests {
             "047_general_settings_grid_fk_labels",
             "048_general_settings_grid_pk_sort_desc",
             "049_connection_profile_connect_on_startup",
+            "050_session_tab_view_state",
             "052_general_settings_grid_copy_column_names",
         ];
 

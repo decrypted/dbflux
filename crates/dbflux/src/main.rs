@@ -772,6 +772,8 @@ async fn flush_document_edits(cx: &mut AsyncApp) {
 
     info!("Shutdown phase: Flushing document edits...");
 
+    cx.update(|cx| workspace.update(cx, |workspace, cx| workspace.persist_session(cx)));
+
     let outcome = await_document_flush(cx, DOCUMENT_FLUSH_TIMEOUT, POLL_INTERVAL, |app_cx| {
         app_cx.update(|cx| {
             workspace.update(cx, |workspace, cx| {

@@ -23,6 +23,7 @@ mod render;
 mod result_search;
 pub(crate) mod row_inspector;
 mod selection_totals;
+mod session;
 pub(crate) mod side_island;
 mod table_documents;
 mod table_views;
@@ -79,6 +80,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use uuid::Uuid;
+
+pub use session::TableSessionView;
 
 /// Source of data for the grid panel.
 #[derive(Clone)]
@@ -981,9 +984,28 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let order_by =
+        Self::new_for_table_with_view(profile_id, table, database, None, app_state, window, cx)
+    }
+
+    /// Opens a table like [`Self::new_for_table`], reading its first page
+    /// under `view` (a restored tab's filter, limit and sort) instead of the
+    /// defaults, so the restored rows are the first ones read.
+    pub fn new_for_table_with_view(
+        profile_id: Uuid,
+        table: TableRef,
+        database: Option<String>,
+        view: Option<&TableSessionView>,
+        app_state: gpui::Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let pk_order =
             Self::get_primary_key_columns(&app_state, profile_id, database.as_deref(), &table, cx);
-        let pk_columns: Vec<String> = order_by.iter().map(|c| c.column.name.clone()).collect();
+        let pk_columns: Vec<String> = pk_order.iter().map(|c| c.column.name.clone()).collect();
+        let order_by = match view {
+            Some(view) if !view.order_by.is_empty() => view.order_by.clone(),
+            _ => pk_order,
+        };
         let pagination = Pagination::default();
 
         let source = DataSource::Table {
@@ -997,6 +1019,9 @@ impl DataGridPanel {
 
         let mut panel =
             Self::new_internal(source, app_state.clone(), pk_columns.clone(), window, cx);
+        if let Some(view) = view {
+            panel.apply_session_view(view, window, cx);
+        }
         panel.init_table_views(window, cx);
         if pk_columns.is_empty() {
             panel.first_page_awaits_pk = true;

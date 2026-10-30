@@ -221,6 +221,7 @@ impl Workspace {
                     title: snap.title,
                     position: tabs.len(),
                     is_pinned: false,
+                    view_state_json: snap.view_state_json,
                 },
             );
         }
@@ -362,6 +363,13 @@ impl Workspace {
                     mgr.open(Tab::Pane(Box::new(pane)), cx);
                 });
 
+                continue;
+            }
+
+            if tab.tab_kind == crate::ui::document::DataDocument::TABLE_SESSION_TAB_KIND
+                || tab.tab_kind == crate::ui::document::DataDocument::COLLECTION_SESSION_TAB_KIND
+            {
+                self.restore_data_tab(tab, window, cx);
                 continue;
             }
 

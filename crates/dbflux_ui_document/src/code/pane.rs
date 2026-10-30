@@ -262,6 +262,7 @@ impl CodeDocument {
                         file_path: None,
                         scratch_path: None,
                         shadow_path: None,
+                        view_state_json: None,
                     });
                 }
 
@@ -283,6 +284,7 @@ impl CodeDocument {
                     file_path: d.path().cloned(),
                     scratch_path: d.scratch_path().cloned(),
                     shadow_path: d.shadow_path().cloned(),
+                    view_state_json: None,
                 })
             })
         });

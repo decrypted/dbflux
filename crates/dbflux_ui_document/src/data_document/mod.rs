@@ -1,4 +1,5 @@
 mod pane;
+mod restore;
 
 use super::console::{NativeConsole, NativeConsoleEvent, NativeConsoleTarget};
 use super::data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
@@ -24,6 +25,11 @@ pub struct DataDocument {
     result_panel: Entity<ResultPanel>,
     /// Native command console of a collection whose driver offers one.
     console: Option<Entity<NativeConsole>>,
+    /// Set while a restored tab waits for its connection; `data_grid` then
+    /// only names the source.
+    pending_restore: Option<restore::PendingRestore>,
+    /// Kept so a grid built after a restore starts in the tab's real state.
+    is_active_tab: bool,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -45,8 +51,22 @@ impl DataDocument {
         });
 
         let mut document = Self::new_with_grid(title, DataSourceKind::Table, data_grid, window, cx);
+        document.attach_table_console(profile_id, console_database, schema, app_state, window, cx);
+        document
+    }
 
-        let label = console_database
+    /// Docks the console under a table; it is labelled by the database, the
+    /// schema, or the connection, whichever is known first.
+    fn attach_table_console(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        schema: Option<String>,
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = database
             .clone()
             .or(schema)
             .or_else(|| {
@@ -57,8 +77,7 @@ impl DataDocument {
                     .map(|connected| connected.profile.name.clone())
             })
             .unwrap_or_default();
-        document.attach_console(profile_id, console_database, label, app_state, window, cx);
-        document
+        self.attach_console(profile_id, database, label, app_state, window, cx);
     }
 
     pub fn new_for_collection(
@@ -213,6 +232,28 @@ impl DataDocument {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (result_panel, subscriptions) = Self::wire_grid(&data_grid, cx);
+
+        Self {
+            id: DocumentId::new(),
+            title,
+            source_kind,
+            data_grid,
+            result_panel,
+            console: None,
+            pending_restore: None,
+            is_active_tab: false,
+            focus_handle: cx.focus_handle(),
+            _subscriptions: subscriptions,
+        }
+    }
+
+    /// Hosts `data_grid` in a `ResultPanel` and forwards its events. Returns
+    /// the panel and the subscriptions the document must hold.
+    fn wire_grid(
+        data_grid: &Entity<DataGridPanel>,
+        cx: &mut Context<Self>,
+    ) -> (Entity<ResultPanel>, Vec<Subscription>) {
         // Build a ViewHandle from the DataGridPanel entity. The grid draws its
         // own header, filter row and view switch for table and collection
         // sources.
@@ -224,7 +265,7 @@ impl DataDocument {
 
         // Forward DataGridEvent to DocumentEvent and keep ResultPanel in sync
         // for mode changes driven by the grid (e.g. auto chart selection).
-        let grid_sub = cx.subscribe(&data_grid, Self::on_grid_event);
+        let grid_sub = cx.subscribe(data_grid, Self::on_grid_event);
 
         // ResultPanel calls view.set_mode / view.set_refresh_policy directly
         // via ViewHandle closures. We still subscribe to ResultPanelEvent for
@@ -236,16 +277,7 @@ impl DataDocument {
             }
         });
 
-        Self {
-            id: DocumentId::new(),
-            title,
-            source_kind,
-            data_grid,
-            result_panel,
-            console: None,
-            focus_handle: cx.focus_handle(),
-            _subscriptions: vec![grid_sub, panel_sub],
-        }
+        (result_panel, vec![grid_sub, panel_sub])
     }
 
     /// Forwards `DataGridEvent` emissions to `DocumentEvent`.
@@ -366,6 +398,7 @@ impl DataDocument {
     }
 
     pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.is_active_tab = active;
         self.data_grid
             .update(cx, |grid, cx| grid.set_active_tab(active, cx));
     }
@@ -465,6 +498,12 @@ impl DataDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // A tab waiting for its connection has no rows to act on; leaving the
+        // command unhandled lets the workspace act on it instead.
+        if self.pending_restore.is_some() {
+            return false;
+        }
+
         if cmd == Command::ToggleConsole {
             return self.toggle_console(window, cx);
         }
@@ -496,7 +535,15 @@ impl DataDocument {
 impl EventEmitter<DocumentEvent> for DataDocument {}
 
 impl Render for DataDocument {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.pending_restore.is_some() {
+            return div()
+                .size_full()
+                .flex()
+                .track_focus(&self.focus_handle)
+                .child(self.render_pending_restore(cx));
+        }
+
         // Render through the ResultPanel, which provides the chrome row
         // (mode bar + filter bar segment + refresh dropdown) and hosts the
         // DataGridPanel as its inner child view via ViewHandle.

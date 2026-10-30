@@ -490,6 +490,7 @@ pub(super) mod tests {
             title: title.to_string(),
             position,
             is_pinned: false,
+            view_state_json: None,
         }
     }
 

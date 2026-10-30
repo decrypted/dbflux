@@ -1813,6 +1813,7 @@ document:
         builder_notice: 行来自构建器查询
         edit_in_builder: 在构建器中编辑
         reset_builder: 重置
+        value_not_filterable: "此值无法添加到筛选条件中"
         history:
           toggle: "筛选历史"
           delete: "从历史中移除"

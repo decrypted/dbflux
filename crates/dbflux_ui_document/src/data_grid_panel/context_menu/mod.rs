@@ -3482,18 +3482,61 @@ impl DataGridPanel {
         }
     }
 
-    /// Appends `expr` to the WHERE filter input and refreshes.
-    /// Wraps with parentheses — `(old) AND (new)` — to avoid precedence bugs.
+    /// Narrows the WHERE filter with `expr` and reloads. The current filter
+    /// is kept as an `AND` term, in parentheses when it has a top-level `OR`;
+    /// a condition it already holds is not added again and reads nothing.
     fn apply_filter_expression(&mut self, expr: &str, window: &mut Window, cx: &mut Context<Self>) {
         let current = self.filter_bar.filter_input.read(cx).value().to_string();
 
-        let new_filter = if current.trim().is_empty() {
-            expr.to_string()
-        } else {
-            format!("({}) AND ({})", current.trim(), expr)
+        let Some(new_filter) = super::filter_bar::and_filter(&current, expr) else {
+            return;
         };
 
         self.replace_filter_and_reload(&new_filter, window, cx);
+    }
+
+    /// Alt+click on a cell: narrows the WHERE filter of a table to the
+    /// cell's value (`col = value`, or `col IS NULL`), as Filter by value's
+    /// `=` entry does. Other sources have no WHERE to narrow; a value with no
+    /// literal form (binary, JSON, nested) only gets a hint.
+    pub(in crate::data_grid_panel) fn add_cell_to_filter(
+        &mut self,
+        visual_row: usize,
+        col: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.source.is_table()
+            || !self.filter_input_visible()
+            || self.neighbor_bar_search().is_some()
+        {
+            return;
+        }
+
+        let Some(value) = self.resolve_cell_value(visual_row, col, cx) else {
+            return;
+        };
+
+        let expr = match value {
+            Value::Null => self.sql_is_null_expr(col, false, cx),
+            Value::Bytes(_)
+            | Value::Json(_)
+            | Value::Array(_)
+            | Value::Document(_)
+            | Value::Unsupported(_) => {
+                Toast::info(dbflux_i18n::t!(
+                    "document.data.grid.filter.value_not_filterable"
+                ))
+                .meta_right(now_hms())
+                .push(cx);
+                return;
+            }
+            _ => self.sql_value_filter_expr(visual_row, col, FilterOperator::Eq, cx),
+        };
+
+        if let Some(expr) = expr {
+            self.apply_filter_expression(&expr, window, cx);
+        }
     }
 
     fn handle_filter_by_value(
@@ -3504,9 +3547,23 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(expr) = self.sql_value_filter_expr(visual_row, col, operator, cx) {
+            self.apply_filter_expression(&expr, window, cx);
+        }
+    }
+
+    /// The SQL condition comparing column `col` with the value of the cell
+    /// at `visual_row`, in the connection's dialect.
+    fn sql_value_filter_expr(
+        &self,
+        visual_row: usize,
+        col: usize,
+        operator: FilterOperator,
+        cx: &App,
+    ) -> Option<String> {
         let profile_id = match &self.source {
             DataSource::Table { profile_id, .. } => *profile_id,
-            _ => return,
+            _ => return None,
         };
 
         let conn = self
@@ -3514,23 +3571,14 @@ impl DataGridPanel {
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|c| c.connection.clone());
-
-        let Some(conn) = conn else { return };
+            .map(|c| c.connection.clone())?;
         let dialect = conn.dialect();
 
-        let (col_name, col_type_name) = match self.result.columns.get(col) {
-            Some(c) => (
-                dialect.quote_identifier(&c.name),
-                c.type_name.to_ascii_lowercase(),
-            ),
-            None => return,
-        };
+        let column = self.result.columns.get(col)?;
+        let col_name = dialect.quote_identifier(&column.name);
+        let col_type_name = column.type_name.to_ascii_lowercase();
 
-        let cell_value = match self.resolve_cell_value(visual_row, col, cx) {
-            Some(v) => v,
-            None => return,
-        };
+        let cell_value = self.resolve_cell_value(visual_row, col, cx)?;
 
         let literal = dialect.value_to_literal(&cell_value);
 
@@ -3542,7 +3590,7 @@ impl DataGridPanel {
             let raw = match &cell_value {
                 Value::Text(text) => text.clone(),
                 Value::ObjectId(id) => id.clone(),
-                _ => return,
+                _ => return None,
             };
 
             let needs_escape = raw.contains('\\') || raw.contains('%') || raw.contains('_');
@@ -3570,7 +3618,7 @@ impl DataGridPanel {
             format!("{} {} {}", comparable_column, op_str, literal)
         };
 
-        self.apply_filter_expression(&expr, window, cx);
+        Some(expr)
     }
 
     fn handle_filter_is_null(
@@ -3580,9 +3628,16 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(expr) = self.sql_is_null_expr(col, is_not_null, cx) {
+            self.apply_filter_expression(&expr, window, cx);
+        }
+    }
+
+    /// `col IS NULL` (or `IS NOT NULL`) in the connection's dialect.
+    fn sql_is_null_expr(&self, col: usize, is_not_null: bool, cx: &App) -> Option<String> {
         let profile_id = match &self.source {
             DataSource::Table { profile_id, .. } => *profile_id,
-            _ => return,
+            _ => return None,
         };
 
         let conn = self
@@ -3590,23 +3645,16 @@ impl DataGridPanel {
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|c| c.connection.clone());
+            .map(|c| c.connection.clone())?;
+        let col_name = conn
+            .dialect()
+            .quote_identifier(&self.result.columns.get(col)?.name);
 
-        let Some(conn) = conn else { return };
-        let dialect = conn.dialect();
-
-        let col_name = match self.result.columns.get(col) {
-            Some(c) => dialect.quote_identifier(&c.name),
-            None => return,
-        };
-
-        let expr = if is_not_null {
+        Some(if is_not_null {
             format!("{} IS NOT NULL", col_name)
         } else {
             format!("{} IS NULL", col_name)
-        };
-
-        self.apply_filter_expression(&expr, window, cx);
+        })
     }
 
     fn handle_remove_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {

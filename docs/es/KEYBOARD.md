@@ -445,6 +445,11 @@ filtro resaltado, `Shift+Delete` lo quita y `Escape` cierra la lista; su última
 fila borra el historial de la tabla. Ver [Historial de
 filtros](RESULTS.md#historial-de-filtros).
 
+El submenú Filtro del menú contextual de una celda (`m`) es el equivalente de
+teclado de `Alt`+clic en una celda: sus entradas añaden el valor de la celda al
+filtro de la tabla como condición `AND`. Ver [Filtrar por una
+celda](RESULTS.md#filtrar-por-una-celda).
+
 Cuando los resultados no tienen menú contextual propio, `m` abre en su lugar el
 menú de acciones del panel, el mismo que muestra **Open pane actions** en la
 command palette.

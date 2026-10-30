@@ -157,6 +157,10 @@ pub enum DataTableEvent {
     /// Request to set the current cell to NULL (Ctrl+N).
     SetNullRequested { row: usize, col: usize },
 
+    /// Alt+click on a cell: the host narrows its filter to the cell's value.
+    /// The table only selects the cell; a host that cannot filter ignores it.
+    AddToFilterRequested { row: usize, col: usize },
+
     /// Request to copy the entire row as CSV (YY).
     CopyRowRequested(usize),
 

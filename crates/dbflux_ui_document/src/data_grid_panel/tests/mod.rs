@@ -690,6 +690,7 @@ mod close_completion;
 mod collection_views;
 mod export_all;
 mod facets;
+mod filter_alt_click;
 mod filter_autoquote;
 mod filter_history;
 mod fk_label_identity;

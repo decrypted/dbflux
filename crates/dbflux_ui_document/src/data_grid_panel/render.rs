@@ -382,6 +382,10 @@ impl DataGridPanel {
 
         dbflux_ui_base::toast::flush_pending_toast(self.pending.toast.take(), window, cx);
 
+        if let Some((row, col)) = self.pending.filter_cell.take() {
+            self.add_cell_to_filter(row, col, window, cx);
+        }
+
         if let Some(requery) = self.pending.requery.take() {
             self.run_table_query(
                 requery.profile_id,

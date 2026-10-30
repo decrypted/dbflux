@@ -474,6 +474,11 @@ impl DataGridPanel {
                     DataTableEvent::SetNullRequested { row, col } => {
                         this.handle_set_null(*row, *col, cx);
                     }
+                    // Deferred to render: the reload it issues needs a `Window`.
+                    DataTableEvent::AddToFilterRequested { row, col } => {
+                        this.pending.filter_cell = Some((*row, *col));
+                        cx.notify();
+                    }
                     DataTableEvent::CopyRowRequested(row) => {
                         this.handle_copy_row(*row, cx);
                     }

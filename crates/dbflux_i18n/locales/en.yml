@@ -435,6 +435,7 @@ connection_manager:
     read_only: "Read-only"
     connect_on_startup: "Connect on startup"
     connect_on_startup_help: "DBFlux connects to this connection in the background when it starts. If the password is not saved, it is not connected; connect to it yourself to enter the password."
+    connect_on_startup_overridden: "Not used while \"Reconnect to the connections that were open\" is on in Settings > General > Startup and session: that setting decides which connections open at startup. The choice here is kept for when it is turned off."
     name: Name
     ssl_mode: SSL mode
     ca_certificate: CA certificate
@@ -5141,6 +5142,7 @@ sidebar:
     connect: Connect
     retry_connect: Retry
     connect_on_startup: Connect on startup
+    connect_on_startup_overridden: "Off while Settings > General > Startup and session reconnects open connections"
     disconnect: Disconnect
     edit: Edit
     duplicate: Duplicate

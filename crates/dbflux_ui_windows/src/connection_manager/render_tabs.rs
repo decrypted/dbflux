@@ -258,11 +258,13 @@ impl ConnectionManagerWindow {
             self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
         let focused =
             show_focus && self.main_extra_focus_for_connect_on_startup() == Some(self.form_focus);
+        let overridden = self.connect_on_startup_overridden;
 
         let checkbox = layout::cursor_ring(
             focused,
             Checkbox::new("cm-connect-on-startup")
                 .checked(self.form.connect_on_startup)
+                .disabled(overridden)
                 .aria_label(dbflux_i18n::t!(
                     "connection_manager.field.connect_on_startup"
                 ))
@@ -282,9 +284,11 @@ impl ConnectionManagerWindow {
                 .items_center()
                 .child(checkbox)
                 .child(div().flex_1()),
-            Some(dbflux_i18n::t!(
-                "connection_manager.field.connect_on_startup_help"
-            )),
+            Some(if overridden {
+                dbflux_i18n::t!("connection_manager.field.connect_on_startup_overridden")
+            } else {
+                dbflux_i18n::t!("connection_manager.field.connect_on_startup_help")
+            }),
             cx,
         );
 

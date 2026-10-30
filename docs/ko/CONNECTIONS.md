@@ -50,8 +50,11 @@ MongoDB, DynamoDB, Redis, InfluxDB, CloudWatch Logs, Amazon S3, AWS Secrets가
 동작합니다. SSH 터널, 프록시, 훅, 키링 비밀이 적용되고, 연결에 실패하면 평소와 같은 오류가
 표시됩니다. 비밀번호가 저장되지 않은 연결은 시작 시 연결하지 않고 실패로 표시하며,
 **다시 시도**를 누르면 비밀번호를 묻습니다. 사이드바의 연결 메뉴(오른쪽 클릭 또는 행의 `…`
-버튼)에도 같은 토글이 있으며, 켜져 있는 동안 체크 표시가 나타납니다. 이 토글은 설정의
-**Reopen last connections**와 함께 동작하며, 두 설정에 모두 해당하는 연결은 한 번만 연결합니다.
+버튼)에도 같은 토글이 있으며, 켜져 있는 동안 체크 표시가 나타납니다.
+
+**Reopen last connections**(설정 > 일반 > 시작 및 세션)가 켜져 있는 동안에는 시작 시 열 연결을
+그 설정만으로 결정합니다. 이때 토글은 두 곳 모두에서 흐리게 표시되고 그 설정을 알려 주는 안내가
+붙으며, 아무 효과가 없습니다. 값은 유지되어 그 설정을 끄면 다시 적용됩니다.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">

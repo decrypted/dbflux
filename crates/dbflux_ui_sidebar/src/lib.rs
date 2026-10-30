@@ -417,6 +417,10 @@ pub struct ContextMenuItem {
     /// The mono caption at the top of a menu naming what it acts on.
     pub is_header: bool,
     pub is_danger: bool,
+    /// Shown greyed out, skipped by the keyboard and ignored when clicked.
+    pub is_disabled: bool,
+    /// A muted second line under the label, such as why the row is disabled.
+    pub detail: Option<String>,
 }
 
 impl ContextMenuItem {
@@ -428,6 +432,8 @@ impl ContextMenuItem {
             is_separator: false,
             is_header: false,
             is_danger: false,
+            is_disabled: false,
+            detail: None,
         }
     }
 
@@ -439,6 +445,8 @@ impl ContextMenuItem {
             is_separator: false,
             is_header: false,
             is_danger: true,
+            is_disabled: false,
+            detail: None,
         }
     }
 
@@ -452,6 +460,8 @@ impl ContextMenuItem {
             is_separator: false,
             is_header: true,
             is_danger: false,
+            is_disabled: false,
+            detail: None,
         }
     }
 
@@ -468,11 +478,26 @@ impl ContextMenuItem {
             is_separator: true,
             is_header: false,
             is_danger: false,
+            is_disabled: false,
+            detail: None,
         }
     }
 
-    pub fn is_selectable(&self) -> bool {
+    /// Greys the row out with `detail` as the reason under its label.
+    pub fn disabled_because(mut self, detail: impl Into<String>) -> Self {
+        self.is_disabled = true;
+        self.detail = Some(detail.into());
+        self
+    }
+
+    /// Whether the row is an entry of the menu, as opposed to a caption or
+    /// a separator. A disabled entry is still one.
+    pub fn is_entry(&self) -> bool {
         !self.is_separator && !self.is_header
+    }
+
+    pub fn is_selectable(&self) -> bool {
+        self.is_entry() && !self.is_disabled
     }
 
     pub fn to_menu_items(
@@ -509,6 +534,14 @@ impl ContextMenuItem {
 
                 if item.is_danger {
                     mi = mi.danger();
+                }
+
+                if item.is_disabled {
+                    mi = mi.disabled();
+                }
+
+                if let Some(detail) = &item.detail {
+                    mi = mi.detail(detail.clone());
                 }
 
                 mi

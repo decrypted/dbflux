@@ -4,11 +4,11 @@ use uuid::Uuid;
 
 impl Workspace {
     /// Reconnects to the profiles connected at the last quit and to the ones
-    /// the restored session documents use, and returns the ones it started.
+    /// the restored session documents use.
     pub(in crate::ui::views::workspace) fn reopen_last_connections(
         &mut self,
         cx: &mut Context<Self>,
-    ) -> Vec<Uuid> {
+    ) {
         let restored: Vec<Uuid> = self
             .tab_manager
             .read(cx)
@@ -29,33 +29,31 @@ impl Workspace {
         let profile_ids = profiles_to_reopen(&saved, &restored, &existing, &connected);
         let sidebar = self.sidebar.clone();
 
-        for profile_id in &profile_ids {
+        for profile_id in profile_ids {
             sidebar.update(cx, |sidebar, cx| {
-                sidebar.connect_to_profile(*profile_id, cx);
+                sidebar.connect_to_profile(profile_id, cx);
             });
         }
-
-        profile_ids
     }
 
-    /// Starts the connections DBFlux opens at launch: the last session's when
-    /// that setting is on, then every profile marked "Connect on startup".
+    /// Starts the connections DBFlux opens at launch.
     ///
-    /// The reopened ones are passed on so a profile in both sets gets a single
-    /// attempt, and a password prompt the reopen raised is not overridden.
+    /// With the global reopen setting on, the last session decides alone and
+    /// the per-profile "Connect on startup" flags are ignored: the connection
+    /// manager and the sidebar show them disabled then, so a greyed-out flag
+    /// must not connect anything.
     pub(in crate::ui::views::workspace) fn connect_profiles_at_launch(
         &mut self,
         reopen_last_connections: bool,
         cx: &mut Context<Self>,
     ) {
-        let reopened: HashSet<Uuid> = if reopen_last_connections {
-            self.reopen_last_connections(cx).into_iter().collect()
-        } else {
-            HashSet::new()
-        };
+        if reopen_last_connections {
+            self.reopen_last_connections(cx);
+            return;
+        }
 
         self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.connect_profiles_on_startup(&reopened, cx);
+            sidebar.connect_profiles_on_startup(cx);
         });
     }
 }

@@ -202,6 +202,7 @@ impl ConnectionManagerWindow {
         }
 
         sections.push(self.render_safety_section(cx));
+        sections.push(self.render_startup_section(cx));
 
         sections
     }
@@ -244,6 +245,55 @@ impl ConnectionManagerWindow {
             .child(dbflux_components::composites::section_header(
                 dbflux_i18n::t!("connection_manager.section.safety"),
                 Some(AppIcon::Lock.into()),
+                cx,
+            ))
+            .child(row)
+            .into_any_element()
+    }
+
+    /// Startup section of the Main tab: whether DBFlux connects the profile
+    /// when it starts.
+    fn render_startup_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
+        let focused =
+            show_focus && self.main_extra_focus_for_connect_on_startup() == Some(self.form_focus);
+
+        let checkbox = layout::cursor_ring(
+            focused,
+            Checkbox::new("cm-connect-on-startup")
+                .checked(self.form.connect_on_startup)
+                .aria_label(dbflux_i18n::t!(
+                    "connection_manager.field.connect_on_startup"
+                ))
+                .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                    this.form.connect_on_startup = *checked;
+                    window.focus(&this.focus_handle, cx);
+                    cx.notify();
+                })),
+            cx,
+        );
+
+        let row = Self::field_row_cm(
+            dbflux_i18n::t!("connection_manager.field.connect_on_startup"),
+            false,
+            div()
+                .flex()
+                .items_center()
+                .child(checkbox)
+                .child(div().flex_1()),
+            Some(dbflux_i18n::t!(
+                "connection_manager.field.connect_on_startup_help"
+            )),
+            cx,
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("connection_manager.section.startup"),
+                Some(AppIcon::Power.into()),
                 cx,
             ))
             .child(row)

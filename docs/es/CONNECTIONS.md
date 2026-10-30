@@ -43,7 +43,7 @@ respaldados por archivo, como SQLite, usan un formulario de ruta de archivo. La
 mayoría de los drivers relacionales también aceptan una única cadena de
 conexión; ver [Modo formulario vs. URI directa](#modo-formulario-vs-uri-directa).
 
-La sección **Seguridad** al final de la pestaña Main contiene el interruptor
+La sección **Seguridad** cerca del final de la pestaña Main contiene el interruptor
 **Solo lectura**. Cuando está activado, DBFlux bloquea los cambios hechos desde la
 grilla de datos, el constructor visual de consultas y la comparación de esquemas en
 esa conexión, rechaza las sentencias del editor de consultas que cambiarían datos o
@@ -55,6 +55,17 @@ MCP toma cualquiera de los dos cambios en su siguiente llamada. El editor clasif
 su texto, así que una función con efectos secundarios llamada desde un `SELECT`, como
 `setval` de PostgreSQL, se sigue ejecutando: las credenciales de solo lectura en la
 base de datos siguen siendo el límite más fuerte.
+
+La sección **Inicio**, la última de la pestaña Main, contiene el interruptor
+**Conectar al iniciar**. Cuando está activado, DBFlux se conecta a esa conexión en
+segundo plano cada vez que se inicia, igual que al hacer clic en la conexión: se
+aplican los túneles SSH, los proxies, los hooks y los secretos del llavero, y una
+conexión fallida muestra su error habitual. Una conexión cuya contraseña no está
+guardada no se conecta al iniciar; en su lugar queda marcada como fallida, y
+**Reintentar** pide la contraseña. El menú de la conexión en la barra lateral (clic
+derecho, o el botón `…` de la fila) tiene el mismo interruptor, con una marca de
+verificación mientras está activado. Funciona junto con **Reopen last connections**
+de Settings: una conexión cubierta por ambos se conecta una sola vez.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">

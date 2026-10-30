@@ -1750,9 +1750,7 @@ impl Workspace {
                 workspace.restore_session(window, cx);
             }
 
-            if settings.reopen_last_connections {
-                workspace.reopen_last_connections(cx);
-            }
+            workspace.connect_profiles_at_launch(settings.reopen_last_connections, cx);
 
             let has_tabs = !workspace.tab_manager.read(cx).is_empty();
             match settings.default_focus_on_startup {

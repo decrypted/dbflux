@@ -370,6 +370,7 @@ pub fn save_profiles(
             navigator_view: profile.navigator_view.as_str().to_string(),
             show_all_databases: profile.show_all_databases,
             read_only: profile.read_only_flag,
+            connect_on_startup: profile.connect_on_startup,
         };
 
         repo.upsert(&dto)?;
@@ -1798,6 +1799,7 @@ fn load_profiles(
                     .and_then(dbflux_core::ConnectionEnvironment::from_id),
                 navigator_view: dbflux_core::NavigatorView::from_storage_str(&dto.navigator_view),
                 show_all_databases: dto.show_all_databases,
+                connect_on_startup: dto.connect_on_startup,
             })
         })
         .collect()
@@ -2505,6 +2507,29 @@ mod tests {
             reloaded.value_refs.get("user"),
             Some(dbflux_core::ValueRef::Env { key }) if key == "DB_USER"
         ));
+    }
+
+    #[test]
+    fn profile_connect_on_startup_round_trips_and_defaults_to_off() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut eager = ConnectionProfile::new("eager", DbConfig::default_postgres());
+        eager.connect_on_startup = true;
+        let manual = ConnectionProfile::new("manual", DbConfig::default_postgres());
+
+        save_profiles(&runtime, &[eager.clone(), manual.clone()])
+            .expect("save profiles with connect-on-startup flag");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let find = |id| {
+            loaded
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .expect("reloaded profile")
+        };
+
+        assert!(find(eager.id).connect_on_startup);
+        assert!(!find(manual.id).connect_on_startup);
     }
 
     #[test]

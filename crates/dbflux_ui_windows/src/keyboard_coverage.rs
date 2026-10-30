@@ -314,6 +314,10 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
         ),
         ("cm-read-only", KeyboardPath::Command(Command::Execute)),
         (
+            "cm-connect-on-startup",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
             "segmented-enter-as-*",
             KeyboardPath::Command(Command::FocusRight),
         ),

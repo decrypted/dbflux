@@ -65,6 +65,50 @@ fn new_workspace_with(
     (workspace, app_state, window)
 }
 
+/// Launch connects the profiles marked "Connect on startup" through the
+/// sidebar's connect path, and leaves the others alone.
+#[gpui::test]
+fn launch_connects_only_the_profiles_marked_to_connect_on_startup(cx: &mut TestAppContext) {
+    use dbflux_core::{ConnectionProfile, DbConfig, DbKind};
+    use dbflux_test_support::FakeDriver;
+    use std::sync::Arc;
+
+    let mut marked = ConnectionProfile::new("marked", DbConfig::default_postgres());
+    marked.connect_on_startup = true;
+    let unmarked = ConnectionProfile::new("unmarked", DbConfig::default_postgres());
+    let (marked_id, unmarked_id) = (marked.id, unmarked.id);
+
+    let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+        cx.new(|_| {
+            let runtime =
+                dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+            let mut state =
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup");
+            state.inner.facade.connections.drivers.insert(
+                "postgres".into(),
+                Arc::new(FakeDriver::new(DbKind::Postgres)),
+            );
+            state.profiles_mut().push(marked);
+            state.profiles_mut().push(unmarked);
+            state
+        })
+    });
+
+    let (_workspace, app_state, window) = new_workspace_with(cx, app_state);
+    window.run_until_parked();
+
+    app_state.read_with(window, |state, _| {
+        assert!(
+            state.connections().contains_key(&marked_id),
+            "the marked profile connects at launch"
+        );
+        assert!(
+            !state.connections().contains_key(&unmarked_id),
+            "an unmarked profile waits for a click"
+        );
+    });
+}
+
 /// Opens an empty query tab and returns its document id.
 fn open_code_tab(
     window: &mut VisualTestContext,

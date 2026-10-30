@@ -218,6 +218,8 @@ array with one object per row, keyed by column name, with numbers, booleans and
 cell inside that area but outside the selection is empty in CSV and `null` in
 JSON. Plain **Copy** (`Ctrl+c`) still copies tab-separated text without a
 header.
+`Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
+the menu shows it next to the item.
 
 ## Copy as Query
 

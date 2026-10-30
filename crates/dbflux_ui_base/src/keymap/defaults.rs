@@ -689,6 +689,12 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("c", Modifiers::primary()),
         Command::ResultsCopyCell,
     );
+    // Primary+Alt because primary+Shift+C is the global Open saved chart,
+    // which must keep working from the results too.
+    layer.bind(
+        KeyChord::new("c", Modifiers::primary_alt()),
+        Command::CopySelectionAsJson,
+    );
 
     // Toggle panel collapse
     layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);

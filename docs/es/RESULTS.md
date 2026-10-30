@@ -235,6 +235,8 @@ columnas como claves y los números, booleanos y `null` como tales. Se incluyen
 todas las filas y columnas que abarca la selección; una celda dentro de esa área
 pero fuera de la selección queda vacía en CSV y `null` en JSON. **Copiar**
 (`Ctrl+c`) sigue copiando texto separado por tabulaciones sin cabecera.
+`Ctrl+Alt+c` (`Cmd+Alt+c` en macOS) ejecuta **Copiar como JSON** desde el
+teclado; el menú lo muestra junto a la entrada.
 
 ## Copiar como query
 

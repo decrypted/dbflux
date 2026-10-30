@@ -63,8 +63,8 @@ pub(super) struct MenuRowCursor<'a> {
 /// app (`Ctrl C`, `Delete`).
 ///
 /// Row actions the data table binds come from its GPUI bindings; the ones
-/// dispatched through the app keymap (inspect row, view value) come from the
-/// Results layer.
+/// dispatched through the app keymap (inspect row, view value, copy as JSON)
+/// come from the Results layer.
 fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> {
     if let Some(keystroke) = context_menu_keystroke(action, cx) {
         let label = chord_display_parts(&key_chord_from_gpui(&keystroke)).join(" ");
@@ -76,6 +76,7 @@ fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> 
         ContextMenuAction::InspectRow => Command::ToggleRowInspector,
         ContextMenuAction::ViewValue => Command::ToggleValuePanel,
         ContextMenuAction::FindSimilarRows => Command::FindSimilarRows,
+        ContextMenuAction::CopyAsJson => Command::CopySelectionAsJson,
         _ => return None,
     };
 

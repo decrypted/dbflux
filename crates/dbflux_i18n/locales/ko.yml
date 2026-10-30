@@ -4337,6 +4337,7 @@ settings:
       toggle_value_panel: 값 패널 전환
       toggle_row_inspector: 행 검사기 전환
       find_similar_rows: 유사한 행 찾기
+      copy_selection_as_json: "선택 영역을 JSON으로 복사"
       results_set_null: 셀을 NULL로 설정
       open_context_menu: 상황에 맞는 메뉴 열기
       open_pane_actions: 패널 작업 열기

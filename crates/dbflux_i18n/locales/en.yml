@@ -4337,6 +4337,7 @@ settings:
       toggle_value_panel: Toggle value panel
       toggle_row_inspector: Toggle row inspector
       find_similar_rows: Find similar rows
+      copy_selection_as_json: "Copy selection as JSON"
       results_set_null: Set cell to NULL
       open_context_menu: Open context menu
       open_pane_actions: Open pane actions

@@ -5250,6 +5250,74 @@ settings:
       save_failed_copy: "저장하지 못했습니다: %{error}"
     toast:
       saved: 감사 설정을 저장했습니다.
+  reset:
+    title: "초기화"
+    subtitle: "DBFlux가 기억하는 것을 종류별로 지웁니다."
+    intro: "각 행은 확인 후 DBFlux 데이터베이스에 저장된 상태 한 종류를 지웁니다. 연결, 인증 프로필, 프록시, SSH 터널, 드라이버 매개변수, 키링 비밀, 훅, RPC 서비스, MCP 설정, 저장된 쿼리, 저장된 감사 필터는 절대 건드리지 않습니다."
+    button: "초기화…"
+    error: "%{name}을(를) 초기화할 수 없습니다"
+    groups:
+      interface: "인터페이스"
+      history: "세션 및 기록"
+      settings: "설정"
+      everything: "전체"
+      audit: "감사 로그"
+    count:
+      none: "저장된 항목 없음"
+      one: "저장된 항목 1개"
+      many: "저장된 항목 %{count}개"
+      customized: "사용자 지정됨"
+      defaults: "기본값"
+      events_range: "이벤트 %{count}개, %{oldest} ~ %{newest}"
+    confirm:
+      title: "%{name}을(를) 초기화할까요?"
+      final_title: "%{name}을(를) 영구적으로 초기화할까요?"
+      includes: "지워지는 항목: %{names}."
+      current: "현재: %{count}."
+      untouched: "연결, 프로필, 비밀, 훅, RPC 서비스, MCP 설정, 저장된 쿼리는 건드리지 않습니다."
+      final_body: "마지막 단계입니다: %{name}(%{count})이(가) 삭제됩니다."
+      irreversible: "이 작업은 되돌릴 수 없습니다."
+      continue: "계속…"
+      reset: "초기화"
+      reset_permanently: "영구적으로 초기화"
+      cancel: "취소"
+    toast:
+      done: "%{name} 초기화됨 (%{count}개 제거)."
+      restart_note: "일부는 다음 시작 시 적용됩니다."
+    rows:
+      window_layout:
+        name: "창 및 대화 상자 크기"
+        description: "메인 창의 크기와 위치, 셀 편집기의 크기와 최대화 여부, 쿼리 결과가 열리는 위치입니다. 다음 시작 시 메인 창이 기본 크기로 열립니다."
+      column_layouts:
+        name: "그리드 열 레이아웃"
+        description: "테이블별로 기억된 숨김, 이동, 고정, 크기 조정된 열입니다. 열려 있는 테이블은 다시 열 때까지 레이아웃을 유지합니다."
+      filter_history:
+        name: "WHERE 필터 기록"
+        description: "테이블 그리드의 이전 WHERE 필터와 문서 컬렉션의 이전 쿼리입니다."
+      export_options:
+        name: "내보내기 메뉴 선택"
+        description: "데이터 그리드 내보내기 메뉴의 행, 열, CSV 헤더 선택입니다."
+      session:
+        name: "복원되는 탭"
+        description: "DBFlux가 시작 시 다시 여는 탭과 함께 다시 연결하는 연결입니다. 다음 시작은 현재 탭 없이 열립니다. 재시작 전에 연 탭도 기억되지 않으며, 그 안의 저장하지 않은 스크래치 쿼리는 사라집니다."
+      query_history:
+        name: "쿼리 기록"
+        description: "기록 패널에 표시되는, SQL 편집기에서 실행한 쿼리입니다. 별표 항목과 저장된 쿼리는 유지됩니다."
+      recent_files:
+        name: "최근 파일"
+        description: "최근에 연 파일 목록입니다. 파일 자체는 그대로 남습니다."
+      schema_snapshots:
+        name: "스키마 스냅샷"
+        description: "연결 시 캡처되어 스키마 비교에 쓰이는 스키마 스냅샷입니다."
+      general_settings:
+        name: "일반 설정"
+        description: "설정 → 일반의 모든 설정을 기본값으로 되돌립니다: 테마, 글꼴, 편집기, 데이터 그리드, 시작, 새로 고침, 쿼리 안전. 언어 변경은 재시작 후 적용됩니다."
+      everything:
+        name: "위의 모든 항목"
+        description: "위의 모든 행을 한 번에 초기화합니다. 아래의 감사 로그는 포함되지 않습니다."
+      audit_log:
+        name: "감사 로그"
+        description: "모든 감사 이벤트: 쿼리, 연결, 구성 변경, MCP 요청 및 승인, 수집된 로그 줄입니다. 감사가 켜져 있으면 초기화 자체가 첫 번째 새 이벤트로 기록됩니다."
   nav:
     no_results: "일치하는 설정 없음"
     search_placeholder: "설정 검색"
@@ -5258,6 +5326,7 @@ settings:
     keybindings: 키 바인딩
     updates: 업데이트
     audit: 감사
+    reset: "초기화"
     about: 정보
     network: 네트워크
     ssh_tunnels: "SSH 터널"

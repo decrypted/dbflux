@@ -12,6 +12,7 @@ window is organized into sections down the left side.
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
 | [Keybindings](#keybindings) | Browse and change the keymap. |
 | [Updates](#updates) | Update checks at startup and the changelog after an update. |
+| [Reset](#reset) | Clear remembered sizes, layouts, histories, the restored tabs, the general settings or the audit log. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | AWS SSO / shared-credentials profiles. |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels) | SOCKS5 / HTTP proxy profiles. |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels) | Reusable SSH tunnel profiles. |
@@ -295,6 +296,44 @@ checks are disabled in this build." in place of the startup checkbox and
 says. What is new keeps working. The feature is meant for fork and local
 builds, whose versions do not match the published releases and would
 otherwise report updates that are not ones.
+
+---
+
+## Reset
+
+The Reset section clears one kind of state stored in `dbflux.db` at a time,
+so a remembered window size, layout or history that gets in the way can go
+without editing the database by hand. Each row shows what it holds right now
+and has a **Reset…** button, disabled while there is nothing to clear.
+
+Connections, auth profiles, proxies, SSH tunnels, driver parameters, keyring
+secrets, hooks, RPC services, MCP settings, saved queries and saved audit
+filters are never touched by any row.
+
+| Row | What is removed | When it applies |
+|-----|-----------------|-----------------|
+| **Window and dialog sizes** | The main window's size and position, the cell editor's size and whether it was maximized, where query results open. | The cell editor and new query tabs at once; the main window opens at its default size at the next start. |
+| **Grid column layouts** | Hidden, moved, pinned and resized columns, per table. | Tables opened after the reset. |
+| **WHERE filter history** | Previous WHERE filters of table grids and previous queries of document collections. | Grids opened after the reset. |
+| **Export menu choices** | The rows, columns and CSV header choices of the grid export menu. | The next export menu. |
+| **Restored tabs** | The tabs reopened at startup and the connections reconnected with them. Unsaved scratch queries in those tabs are lost. | The next start opens without the current tabs; tabs opened before the restart are not remembered either. |
+| **Query history** | The SQL editor's history. Starred entries and saved queries are kept. | At once. |
+| **Recent files** | The list of recently opened files (not the files). | At once. |
+| **Schema snapshots** | Snapshots captured on connect for the schema diff. | At once. |
+| **General settings** | Every setting of [General](#general) back to its default. | At once; a language change after a restart. |
+| **Everything above** | All the rows above in one go. | As each row. |
+| **Audit log** | Every audit event (queries, connections, configuration changes, MCP requests and approvals, captured log lines). Not part of **Everything above**. | At once. |
+
+**Reset…** opens a confirmation that names what goes, how much is stored and
+that it cannot be undone; the red button resets and Cancel (or Escape) keeps
+everything. **Everything above** and **Audit log** ask a second time before
+they delete anything. A toast reports how many entries were removed. With auditing
+on, every reset is recorded in the audit log, so after clearing the audit log
+its first entry is that reset.
+
+The section is on the keyboard ring like the others: `j` and `k` (or the
+arrows) move between the rows, `Enter` opens the confirmation of the row under
+the cursor.
 
 ---
 

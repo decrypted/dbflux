@@ -123,7 +123,7 @@ pub(crate) enum ResultsPosition {
 
 /// UI state key holding the position the last toggle chose, which new query
 /// tabs open with.
-const RESULTS_POSITION_KEY: &str = "query_results_position";
+const RESULTS_POSITION_KEY: &str = dbflux_storage::ui_state_keys::QUERY_RESULTS_POSITION;
 
 impl ResultsPosition {
     fn toggled(self) -> Self {

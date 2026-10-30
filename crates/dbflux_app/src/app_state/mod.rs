@@ -43,6 +43,7 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 mod bootstrap;
+mod state_reset;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 use crate::config_loader::EditableGlobalHook;
@@ -120,6 +121,8 @@ pub struct AppState {
     auth_provider_registry: AuthProviderRegistry,
     secret_provider_registry: crate::secret_provider_registry::SecretProviderRegistry,
     history_manager: crate::history_manager_sqlite::HistoryManager,
+    /// Writes held back for the rest of the run after Settings → Reset.
+    persistence_hold: state_reset::PersistenceHold,
     scripts_directory: Option<ScriptsDirectory>,
     storage_runtime: StorageRuntime,
     audit_service: dbflux_audit::AuditService,
@@ -2151,6 +2154,10 @@ impl AppState {
     }
 
     fn remember_connected_profiles(&self) {
+        if self.session_persistence_held() {
+            return;
+        }
+
         let mut profile_ids: Vec<Uuid> = self.connections().keys().copied().collect();
         profile_ids.sort();
 

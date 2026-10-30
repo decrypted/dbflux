@@ -27,8 +27,8 @@ use crate::repositories::services::ServiceRepository;
 use crate::repositories::ssh_tunnel_profiles::SshTunnelProfileRepository;
 use crate::repositories::state::{
     query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
-    saved_queries::SavedQueriesRepository, sessions::SessionRepository,
-    ui_state::UiStateRepository,
+    reset::StateResetRepository, saved_queries::SavedQueriesRepository,
+    sessions::SessionRepository, ui_state::UiStateRepository,
 };
 use crate::repositories::update_settings::UpdateSettingsRepository;
 use crate::repositories::viz_dashboard_panels::DashboardPanelsRepository;
@@ -369,6 +369,11 @@ impl StorageRuntime {
     /// Creates a UI state repository.
     pub fn ui_state(&self) -> UiStateRepository {
         UiStateRepository::new(self.dbflux_db())
+    }
+
+    /// Counts and clears the categories of Settings → Reset.
+    pub fn state_reset(&self) -> StateResetRepository {
+        StateResetRepository::new(self.dbflux_db())
     }
 
     /// Creates a recent items repository.

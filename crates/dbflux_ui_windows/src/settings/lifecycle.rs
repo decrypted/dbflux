@@ -290,6 +290,16 @@ impl SettingsCoordinator {
                 });
                 (ActiveSettingsSection::Updates(section), vec![focus_sub])
             }
+            SettingsSectionId::Reset => {
+                let section = cx.new(|cx| ResetSection::new(app_state, window, cx));
+                let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
+                    if matches!(event, SectionFocusEvent::RequestFocusReturn) {
+                        this.pending_focus_return = true;
+                        cx.notify();
+                    }
+                });
+                (ActiveSettingsSection::Reset(section), vec![focus_sub])
+            }
             SettingsSectionId::About => (
                 ActiveSettingsSection::About(cx.new(AboutSection::new)),
                 vec![],

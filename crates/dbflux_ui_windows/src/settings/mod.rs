@@ -23,6 +23,7 @@ mod mcp_section;
 mod proxies;
 mod proxies_section;
 mod render;
+mod reset_section;
 mod rpc_services;
 mod section_trait;
 mod services_section;
@@ -50,6 +51,7 @@ use keybindings_section::KeybindingsSection;
 use mcp_section::{McpSection, McpSectionVariant};
 
 use proxies_section::ProxiesSection;
+use reset_section::ResetSection;
 use services_section::ServicesSection;
 use ssh_tunnels_section::SshTunnelsSection;
 use updates_section::UpdatesSection;
@@ -96,6 +98,7 @@ enum ActiveSettingsSection {
     Services(Entity<ServicesSection>),
     SshTunnels(Entity<SshTunnelsSection>),
     Updates(Entity<UpdatesSection>),
+    Reset(Entity<ResetSection>),
 }
 
 /// Keycap of the settings window's Save shortcut, from the keymap; `None`
@@ -133,6 +136,7 @@ impl ActiveSettingsSection {
             Self::Services(section) => AnyView::from(section.clone()),
             Self::SshTunnels(section) => AnyView::from(section.clone()),
             Self::Updates(section) => AnyView::from(section.clone()),
+            Self::Reset(section) => AnyView::from(section.clone()),
         }
     }
 
@@ -204,6 +208,11 @@ impl ActiveSettingsSection {
                     section.handle_key_event(event, window, cx)
                 });
             }
+            Self::Reset(section) => {
+                section.update(cx, |section, cx| {
+                    section.handle_key_event(event, window, cx)
+                });
+            }
         }
     }
 
@@ -244,6 +253,9 @@ impl ActiveSettingsSection {
                 section.update(cx, |section, cx| section.focus_in(window, cx));
             }
             Self::Updates(section) => {
+                section.update(cx, |section, cx| section.focus_in(window, cx));
+            }
+            Self::Reset(section) => {
                 section.update(cx, |section, cx| section.focus_in(window, cx));
             }
         }
@@ -288,6 +300,9 @@ impl ActiveSettingsSection {
             Self::Updates(section) => {
                 section.update(cx, |section, cx| section.focus_out(window, cx));
             }
+            Self::Reset(section) => {
+                section.update(cx, |section, cx| section.focus_out(window, cx));
+            }
         }
     }
 
@@ -308,6 +323,7 @@ impl ActiveSettingsSection {
             Self::Services(section) => section.read(cx).is_dirty(cx),
             Self::SshTunnels(section) => section.read(cx).is_dirty(cx),
             Self::Updates(section) => section.read(cx).is_dirty(cx),
+            Self::Reset(section) => section.read(cx).is_dirty(cx),
         }
     }
 
@@ -354,6 +370,9 @@ impl ActiveSettingsSection {
             Self::Updates(section) => {
                 section.update(cx, |section, cx| section.render_footer_actions(window, cx))
             }
+            Self::Reset(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
         }
     }
 
@@ -374,6 +393,7 @@ impl ActiveSettingsSection {
             Self::Services(section) => section.read(cx).unsaved_change_count(cx),
             Self::SshTunnels(section) => section.read(cx).unsaved_change_count(cx),
             Self::Updates(section) => section.read(cx).unsaved_change_count(cx),
+            Self::Reset(section) => section.read(cx).unsaved_change_count(cx),
         }
     }
 
@@ -422,6 +442,9 @@ impl ActiveSettingsSection {
             Self::Updates(section) => section.update(cx, |section, cx| {
                 section.render_footer_leading_actions(window, cx)
             }),
+            Self::Reset(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
         }
     }
 
@@ -462,6 +485,9 @@ impl ActiveSettingsSection {
                 section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
             }
             Self::Updates(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::Reset(section) => {
                 section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
             }
         }

@@ -24,9 +24,12 @@ pub use repositories::qry_saved_document_queries::{
 pub use repositories::qry_saved_queries::{SavedQueryRepo, SavedQuerySummary};
 pub use repositories::sch_schema_snapshots::{SchemaSnapshotRepo, SchemaSnapshotSummary};
 pub use repositories::state::{
-    query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
-    saved_queries::SavedQueriesRepository, sessions::SessionRepository,
-    ui_state::UiStateRepository,
+    query_history::QueryHistoryRepository,
+    recent_items::RecentItemsRepository,
+    reset::{ResetCategory, ResetStats, StateResetRepository},
+    saved_queries::SavedQueriesRepository,
+    sessions::SessionRepository,
+    ui_state::{UiStateRepository, keys as ui_state_keys},
 };
 pub use repositories::{
     auth_profiles::AuthProfileRepository, connection_profiles::ConnectionProfileRepository,

@@ -712,6 +712,12 @@ fn save_main_window_geometry(app_state: &Entity<AppStateEntity>, cx: &mut App) {
         return;
     };
 
+    // Settings → Reset forgot the window sizes; storing the current size now
+    // would bring it straight back at the next start.
+    if app_state.read(cx).window_geometry_persistence_held() {
+        return;
+    }
+
     window_state::save(app_state.read(cx).storage_runtime(), geometry);
 }
 

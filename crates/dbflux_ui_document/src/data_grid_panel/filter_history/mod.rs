@@ -19,10 +19,10 @@ use std::ops::Range;
 
 /// Prefix of the `st_ui_state` keys of table filters. The version lets a
 /// later format use new keys instead of misreading old rows.
-const TABLE_KEY_PREFIX: &str = "grid_filter_history.v1";
+const TABLE_KEY_PREFIX: &str = dbflux_storage::ui_state_keys::GRID_FILTER_HISTORY_PREFIX;
 
 /// Prefix of the `st_ui_state` keys of document collection queries.
-const COLLECTION_KEY_PREFIX: &str = "collection_query_history.v1";
+const COLLECTION_KEY_PREFIX: &str = dbflux_storage::ui_state_keys::COLLECTION_QUERY_HISTORY_PREFIX;
 
 /// Filters kept per table.
 pub(super) const TABLE_HISTORY_LIMIT: usize = 50;

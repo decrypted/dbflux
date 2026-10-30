@@ -25,7 +25,7 @@ use super::context_menu::ExportMenuEntry;
 
 /// The `st_ui_state` key. The version lets a later format use a new key
 /// instead of misreading old rows.
-const STORE_KEY: &str = "grid_export_options.v1";
+const STORE_KEY: &str = dbflux_storage::ui_state_keys::GRID_EXPORT_OPTIONS;
 
 /// Which rows an export writes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

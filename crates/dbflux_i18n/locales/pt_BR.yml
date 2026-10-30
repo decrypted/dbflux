@@ -5251,6 +5251,74 @@ settings:
       save_failed_copy: "Falha ao salvar: %{error}"
     toast:
       saved: Configurações de auditoria salvas.
+  reset:
+    title: "Redefinir"
+    subtitle: "Apague o que o DBFlux lembra, um tipo de cada vez."
+    intro: "Cada linha apaga um tipo de estado guardado no banco de dados do DBFlux, depois que você confirma. Conexões, perfis de autenticação, proxies, túneis SSH, parâmetros de driver, segredos do chaveiro, hooks, serviços RPC, configurações de MCP, consultas salvas e filtros de auditoria salvos nunca são tocados."
+    button: "Redefinir…"
+    error: "Não foi possível redefinir %{name}"
+    groups:
+      interface: "Interface"
+      history: "Sessão e histórico"
+      settings: "Configurações"
+      everything: "Tudo"
+      audit: "Log de auditoria"
+    count:
+      none: "Nada guardado"
+      one: "1 entrada guardada"
+      many: "%{count} entradas guardadas"
+      customized: "Personalizado"
+      defaults: "Nos padrões"
+      events_range: "%{count} eventos, de %{oldest} a %{newest}"
+    confirm:
+      title: "Redefinir %{name}?"
+      final_title: "Redefinir %{name} permanentemente?"
+      includes: "Isto apaga: %{names}."
+      current: "Atualmente: %{count}."
+      untouched: "Conexões, perfis, segredos, hooks, serviços RPC, configurações de MCP e consultas salvas não são tocados."
+      final_body: "Este é o último passo: %{name} (%{count}) será apagado."
+      irreversible: "Isto não pode ser desfeito."
+      continue: "Continuar…"
+      reset: "Redefinir"
+      reset_permanently: "Redefinir permanentemente"
+      cancel: "Cancelar"
+    toast:
+      done: "%{name} redefinido (%{count} removidos)."
+      restart_note: "Parte disso vale na próxima inicialização."
+    rows:
+      window_layout:
+        name: "Tamanhos de janelas e diálogos"
+        description: "O tamanho e a posição da janela principal, o tamanho do editor de células e se ele estava maximizado, e onde os resultados das consultas abrem. A janela principal abre no tamanho padrão na próxima inicialização."
+      column_layouts:
+        name: "Layouts de colunas da grade"
+        description: "Colunas ocultas, movidas, fixadas e redimensionadas, lembradas por tabela. Tabelas abertas mantêm o layout até você reabri-las."
+      filter_history:
+        name: "Histórico de filtros WHERE"
+        description: "Filtros WHERE anteriores das grades de tabelas e consultas anteriores das coleções de documentos."
+      export_options:
+        name: "Escolhas do menu de exportação"
+        description: "As escolhas de linhas, colunas e cabeçalho CSV do menu de exportação da grade."
+      session:
+        name: "Abas restauradas"
+        description: "As abas que o DBFlux reabre na inicialização e as conexões que ele reconecta junto. A próxima inicialização abre sem as abas atuais; abas abertas antes de reiniciar também não são lembradas, e consultas rascunho não salvas nelas são perdidas."
+      query_history:
+        name: "Histórico de consultas"
+        description: "Consultas executadas no editor SQL, como listadas no painel de histórico. Entradas com estrela e consultas salvas são mantidas."
+      recent_files:
+        name: "Arquivos recentes"
+        description: "A lista de arquivos abertos recentemente. Os arquivos em si ficam."
+      schema_snapshots:
+        name: "Snapshots de esquema"
+        description: "Snapshots de esquema capturados ao conectar, com os quais a comparação de esquemas compara."
+      general_settings:
+        name: "Configurações gerais"
+        description: "Todas as configurações de Configurações → Geral voltam ao padrão: tema, fontes, editor, grade, inicialização, atualização e segurança de consultas. Uma mudança de idioma vale após reiniciar."
+      everything:
+        name: "Tudo acima"
+        description: "Todas as linhas acima de uma vez. O log de auditoria abaixo não está incluído."
+      audit_log:
+        name: "Log de auditoria"
+        description: "Todos os eventos de auditoria: consultas, conexões, mudanças de configuração, solicitações e aprovações de MCP e linhas de log capturadas. Com a auditoria ativada, a própria redefinição é registrada como o primeiro evento novo."
   nav:
     no_results: "Nenhuma configuração corresponde"
     search_placeholder: "Buscar configurações"
@@ -5259,6 +5327,7 @@ settings:
     keybindings: Atalhos de teclado
     updates: Atualizações
     audit: Auditoria
+    reset: "Redefinir"
     about: Sobre
     network: Rede
     ssh_tunnels: "Túneis SSH"

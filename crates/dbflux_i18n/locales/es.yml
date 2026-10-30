@@ -5251,6 +5251,74 @@ settings:
       save_failed_copy: "No se pudo guardar: %{error}"
     toast:
       saved: Ajustes de auditoría guardados.
+  reset:
+    title: "Restablecer"
+    subtitle: "Borra lo que DBFlux recuerda, un tipo a la vez."
+    intro: "Cada fila borra un tipo de estado guardado en la base de datos de DBFlux, tras confirmarlo. Nunca se tocan las conexiones, los perfiles de autenticación, los proxies, los túneles SSH, los parámetros de driver, los secretos del llavero, los hooks, los servicios RPC, los ajustes de MCP, las consultas guardadas ni los filtros de auditoría guardados."
+    button: "Restablecer…"
+    error: "No se pudo restablecer %{name}"
+    groups:
+      interface: "Interfaz"
+      history: "Sesión e historial"
+      settings: "Ajustes"
+      everything: "Todo"
+      audit: "Registro de auditoría"
+    count:
+      none: "Nada guardado"
+      one: "1 entrada guardada"
+      many: "%{count} entradas guardadas"
+      customized: "Personalizado"
+      defaults: "Valores predeterminados"
+      events_range: "%{count} eventos, del %{oldest} al %{newest}"
+    confirm:
+      title: "¿Restablecer %{name}?"
+      final_title: "¿Restablecer %{name} de forma permanente?"
+      includes: "Esto borra: %{names}."
+      current: "Actualmente: %{count}."
+      untouched: "No se tocan las conexiones, los perfiles, los secretos, los hooks, los servicios RPC, los ajustes de MCP ni las consultas guardadas."
+      final_body: "Este es el último paso: se eliminará %{name} (%{count})."
+      irreversible: "Esto no se puede deshacer."
+      continue: "Continuar…"
+      reset: "Restablecer"
+      reset_permanently: "Restablecer de forma permanente"
+      cancel: "Cancelar"
+    toast:
+      done: "%{name} restablecido (%{count} eliminados)."
+      restart_note: "Parte de ello se aplica en el próximo inicio."
+    rows:
+      window_layout:
+        name: "Tamaños de ventanas y diálogos"
+        description: "El tamaño y la posición de la ventana principal, el tamaño del editor de celdas y si estaba maximizado, y dónde se abren los resultados de las consultas. La ventana principal se abre con su tamaño predeterminado en el próximo inicio."
+      column_layouts:
+        name: "Disposición de columnas"
+        description: "Columnas ocultas, movidas, fijadas y redimensionadas, recordadas por tabla. Las tablas abiertas conservan su disposición hasta que las vuelvas a abrir."
+      filter_history:
+        name: "Historial de filtros WHERE"
+        description: "Filtros WHERE anteriores de las tablas y consultas anteriores de las colecciones de documentos."
+      export_options:
+        name: "Opciones del menú de exportación"
+        description: "Las opciones de filas, columnas y encabezado CSV del menú de exportación de la cuadrícula."
+      session:
+        name: "Pestañas restauradas"
+        description: "Las pestañas que DBFlux vuelve a abrir al iniciar y las conexiones que reconecta con ellas. El próximo inicio se abre sin las pestañas actuales; las pestañas abiertas antes de reiniciar tampoco se recuerdan, y las consultas borrador sin guardar en ellas se pierden."
+      query_history:
+        name: "Historial de consultas"
+        description: "Las consultas ejecutadas desde el editor SQL, tal como aparecen en el panel de historial. Se conservan las entradas marcadas con estrella y las consultas guardadas."
+      recent_files:
+        name: "Archivos recientes"
+        description: "La lista de archivos abiertos recientemente. Los archivos en sí no se tocan."
+      schema_snapshots:
+        name: "Instantáneas de esquema"
+        description: "Instantáneas de esquema tomadas al conectar, con las que compara la diferencia de esquemas."
+      general_settings:
+        name: "Ajustes generales"
+        description: "Todos los ajustes de Ajustes → General vuelven a su valor predeterminado: tema, fuentes, editor, cuadrícula, inicio, actualización y seguridad de consultas. Un cambio de idioma se aplica tras reiniciar."
+      everything:
+        name: "Todo lo anterior"
+        description: "Todas las filas anteriores de una vez. No incluye el registro de auditoría de abajo."
+      audit_log:
+        name: "Registro de auditoría"
+        description: "Todos los eventos de auditoría: consultas, conexiones, cambios de configuración, solicitudes y aprobaciones de MCP y líneas de registro capturadas. Con la auditoría activada, el propio restablecimiento queda registrado como el primer evento nuevo."
   nav:
     no_results: "Ningún ajuste coincide"
     search_placeholder: "Buscar en ajustes"
@@ -5259,6 +5327,7 @@ settings:
     keybindings: Atajos de teclado
     updates: Actualizaciones
     audit: Auditoría
+    reset: "Restablecer"
     about: Acerca de
     network: Red
     ssh_tunnels: "Túneles SSH"

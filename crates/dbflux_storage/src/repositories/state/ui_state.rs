@@ -8,7 +8,29 @@ use rusqlite::{Connection, params};
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
 
-const LAST_CONNECTED_PROFILES_KEY: &str = "last_connected_profiles";
+/// The `st_ui_state` keys the app writes. They live here, next to the
+/// table, so Settings → Reset clears exactly what the writers store.
+pub mod keys {
+    /// The main window's size, position and display.
+    pub const MAIN_WINDOW_GEOMETRY: &str = "main_window_geometry";
+    /// The modal cell editor's size and whether it was maximized.
+    pub const CELL_EDITOR_GEOMETRY: &str = "cell_editor_geometry";
+    /// Where new query tabs place their results (bottom or right).
+    pub const QUERY_RESULTS_POSITION: &str = "query_results_position";
+    /// Column layouts of table grids, one key per table under this prefix.
+    /// The version lets a later layout format use new keys.
+    pub const GRID_COLUMN_LAYOUT_PREFIX: &str = "grid_column_layout.v1";
+    /// WHERE filters of table grids, one key per table under this prefix.
+    pub const GRID_FILTER_HISTORY_PREFIX: &str = "grid_filter_history.v1";
+    /// Queries of document collections, one key per collection.
+    pub const COLLECTION_QUERY_HISTORY_PREFIX: &str = "collection_query_history.v1";
+    /// The data grid export menu's choices.
+    pub const GRID_EXPORT_OPTIONS: &str = "grid_export_options.v1";
+    /// Profiles connected when the app last started quitting.
+    pub const LAST_CONNECTED_PROFILES: &str = "last_connected_profiles";
+}
+
+const LAST_CONNECTED_PROFILES_KEY: &str = keys::LAST_CONNECTED_PROFILES;
 
 /// Repository for app runtime state (UI layout, collapse preferences).
 pub struct UiStateRepository {

@@ -105,8 +105,10 @@ pub(super) fn selection_totals(
     selection: &SelectionState,
 ) -> Option<SelectionTotals> {
     let ranges = selection.ranges();
-    if ranges.is_empty() || (ranges.len() == 1 && ranges[0].start == ranges[0].end) {
-        return None;
+    match ranges.as_slice() {
+        [] => return None,
+        [only] if only.start == only.end => return None,
+        _ => {}
     }
 
     let visual_order = edit_buffer.compute_visual_order();

@@ -432,6 +432,10 @@ impl CellEditorModal {
     }
 
     /// Replaces the editor's text with a new identifier of `kind`.
+    ///
+    /// An identifier is plain text: a text cell read as JSON or XML is edited
+    /// as text from here on, so Save writes the identifier as it is instead
+    /// of warning that it no longer parses.
     fn generate_id(
         &mut self,
         kind: dbflux_core::GeneratedIdKind,
@@ -439,11 +443,20 @@ impl CellEditorModal {
         cx: &mut Context<Self>,
     ) {
         let value = kind.generate();
+        let to_text = !self.is_json && self.format.is_structured();
+        if to_text {
+            self.format = ValueFormat::Text;
+        }
+        let language = self.format.editor_language();
         self.input.update(cx, |state, cx| {
+            if to_text {
+                state.set_highlighter(language, cx);
+            }
             state.set_value(&value, window, cx);
             state.focus(window, cx);
         });
         self.validation_error = None;
+        self.invalid_warning = None;
         cx.notify();
     }
 
@@ -913,6 +926,29 @@ mod keyboard_tests {
             commands: Vec::new(),
             saves: 0,
         }
+    }
+
+    /// A generated identifier replaces a text cell's JSON, and Save writes it
+    /// at once: the identifier is text, not JSON that no longer parses.
+    #[gpui::test]
+    fn a_generated_id_in_a_text_cell_read_as_json_saves_at_once(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let (host, window) = cx.add_window_view(host);
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, 0, "{\"a\":1}".to_string(), false, None, window, cx);
+                modal.set_generated_id_kinds(vec![dbflux_core::GeneratedIdKind::UuidV4], cx);
+                modal.generate_id(dbflux_core::GeneratedIdKind::UuidV4, window, cx);
+                modal.save(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(window.update(|_, cx| host.read(cx).saves), 1);
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 
     #[gpui::test]

@@ -149,6 +149,18 @@ table, and `Escape` closes the list.
 The query history of a document collection (the history button of its query bar)
 is kept across restarts the same way.
 
+### Quotes after a comparison
+
+With **Insert quotes after a comparison in the WHERE filter** on (Settings →
+General → Data grid, off by default), typing a comparison after a text or
+date/time column of a SQL table inserts the quotes for its value: `method =`
+becomes `method = '|'` with the caret between them. A space or quote typed right
+after, out of habit, is absorbed; once you typed the value, a `'` typed in front
+of the closing quote steps over it instead of adding one; and `Backspace` right
+after the insertion removes the quotes again. Numbers, booleans, `IS NULL`,
+`IN (...)`, text inside a string literal and pasted text get no quotes. See
+[Settings](SETTINGS.md#data-grid) for the operators.
+
 ## Similar rows
 
 On a table with a vector column (today a PostgreSQL table with a pgvector

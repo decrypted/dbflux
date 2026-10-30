@@ -85,6 +85,7 @@ converted crate by crate and stays in English for now.
 | Setting | Default | What it does |
 |---------|---------|--------------|
 | **Show referenced-row labels in foreign-key cells** | Off | Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after you save; the row inspector always resolves references. |
+| **Insert quotes after a comparison in the WHERE filter** | Off | Typing `=`, `!=`, `<>`, `<=` or `>=` (on its last character), `<` or `>` (on the space after it), or `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE` (on the space after the keyword) after a text or date/time column in a table's `WHERE` filter inserts `''` and puts the caret between the quotes. Numbers, booleans, `IS NULL`, `IN (...)` and anything inside a string literal are left as typed, and a paste never inserts quotes. See [Filtering results](RESULTS.md#filtering-results). |
 
 ### Startup & session
 

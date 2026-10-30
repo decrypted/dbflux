@@ -1244,6 +1244,10 @@ impl DataGridPanel {
                     }
                 }),
             )
+            // A paste is not typing: the next change must not insert quotes.
+            .capture_action(cx.listener(|this, _: &gpui_component::input::Paste, _, _| {
+                this.filter_bar.autoquote.pasting = true;
+            }))
             .capture_action(
                 cx.listener(|this, _: &gpui_component::input::Escape, _, cx| {
                     let completion_open = this

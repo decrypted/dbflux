@@ -216,8 +216,11 @@ clipboard**: CSV starts with a header row of the column names, and JSON is an
 array with one object per row, keyed by column name, with numbers, booleans and
 `null` kept as such. Every row and column the selection covers is included; a
 cell inside that area but outside the selection is empty in CSV and `null` in
-JSON. Plain **Copy** (`Ctrl+c`) still copies tab-separated text without a
-header.
+JSON. The copies follow what the grid shows: an unsaved edit is copied with
+its new value and an added row that is not saved yet at its place. In JSON,
+columns that share a name (`a.id` and `b.id` of a join) share one key, which
+takes the value of the last of them. Plain **Copy** (`Ctrl+c`) still copies
+tab-separated text without a header.
 
 ## Copy as Query
 

@@ -233,8 +233,12 @@ cargadas al portapapeles**: el CSV empieza con una fila de cabecera con los
 nombres de las columnas, y el JSON es un array con un objeto por fila, con las
 columnas como claves y los números, booleanos y `null` como tales. Se incluyen
 todas las filas y columnas que abarca la selección; una celda dentro de esa área
-pero fuera de la selección queda vacía en CSV y `null` en JSON. **Copiar**
-(`Ctrl+c`) sigue copiando texto separado por tabulaciones sin cabecera.
+pero fuera de la selección queda vacía en CSV y `null` en JSON. Las copias
+siguen lo que muestra la cuadrícula: una edición sin guardar se copia con su
+valor nuevo y una fila añadida aún sin guardar, en su lugar. En JSON, las
+columnas con el mismo nombre (`a.id` y `b.id` de un join) comparten una clave,
+que toma el valor de la última. **Copiar** (`Ctrl+c`) sigue copiando texto
+separado por tabulaciones sin cabecera.
 
 ## Copiar como query
 

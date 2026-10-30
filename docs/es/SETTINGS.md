@@ -92,6 +92,7 @@ y permanece en English por ahora.
 | Setting                      | Default | Qué hace |
 | ---------------------------- | ------- | -------- |
 | **Mostrar el valor del registro referenciado en celdas de clave foránea** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
+| **Insertar comillas tras una comparación en el filtro WHERE** | Off | Al escribir `=`, `!=`, `<>`, `<=` o `>=` (en su último carácter), `<` o `>` (en el espacio que lo sigue), o `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE` (en el espacio tras la palabra) después de una columna de texto o de fecha/hora en el filtro `WHERE` de una tabla, se inserta `''` y el cursor queda entre las comillas. Los números, booleanos, `IS NULL`, `IN (...)` y lo que esté dentro de un literal de texto quedan como se escriben, y pegar texto nunca inserta comillas. Ver [Filtrar resultados](RESULTS.md#filtrar-resultados). |
 
 ### Inicio y sesión
 

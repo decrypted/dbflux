@@ -160,6 +160,19 @@ la tabla, y `Escape` cierra la lista.
 El historial de queries de una colección de documentos (el botón de historial de
 su barra de query) también se conserva al reiniciar.
 
+### Comillas tras una comparación
+
+Con **Insertar comillas tras una comparación en el filtro WHERE** activado
+(Ajustes → General → Data grid, desactivado por defecto), escribir una
+comparación tras una columna de texto o de fecha/hora de una tabla SQL inserta
+las comillas de su valor: `method =` pasa a `method = '|'` con el cursor entre
+ellas. Un espacio o una comilla escritos justo después, por costumbre, se
+absorben; una vez escrito el valor, una `'` escrita delante de la comilla de
+cierre pasa por encima en lugar de añadir otra; y `Backspace` justo después de la
+inserción vuelve a quitar las comillas. Los números, booleanos, `IS NULL`,
+`IN (...)`, el texto dentro de un literal y el texto pegado no reciben comillas.
+Ver [Ajustes](SETTINGS.md) para los operadores.
+
 ## Filas similares
 
 En una tabla con una columna vectorial (hoy, una tabla PostgreSQL con una

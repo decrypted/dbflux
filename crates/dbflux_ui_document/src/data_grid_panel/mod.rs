@@ -6,6 +6,7 @@ mod document_view;
 mod documents;
 mod export_all;
 mod facets;
+mod filter_autoquote;
 pub(crate) mod filter_bar;
 mod filter_history;
 mod fk_display;
@@ -641,6 +642,8 @@ struct FilterBarState {
     /// A relational filter whose visual query is in flight: the history
     /// keeps it once that query succeeds.
     pending_history: Option<String>,
+    /// The quotes the WHERE field inserts after a comparison (a setting).
+    autoquote: filter_autoquote::AutoQuoteState,
 }
 
 /// Auto-refresh policy, timer, and grid load state.
@@ -1169,7 +1172,15 @@ impl DataGridPanel {
                     this.close_filter_history(cx);
                     this.exit_edit_mode(window, cx);
                 }
+                InputEvent::Focus => {
+                    // A filter put in while the field was not being typed
+                    // in (history, Filter by value) is the base the next
+                    // keystroke is told apart from.
+                    this.filter_bar.autoquote.text = input.read(cx).value().to_string();
+                    this.filter_bar.autoquote.pair = None;
+                }
                 InputEvent::Change => {
+                    this.filter_autoquote_changed(window, cx);
                     let text = input.read(cx).value().to_string();
                     this.filter_history_text_changed(&text, cx);
                     if filter_bar::classify_filter_input(&text)
@@ -1389,6 +1400,7 @@ impl DataGridPanel {
                 browse_query_label: None,
                 history: Default::default(),
                 pending_history: None,
+                autoquote: Default::default(),
             },
             refresh: RefreshState {
                 refresh_policy: default_refresh,

@@ -4114,6 +4114,9 @@ settings:
     grid_fk_labels:
       label: "在外键单元格中显示被引用行的标签"
       hint: "保存后加载的页面会解析外键单元格，并在其 ID 旁显示被引用行的标签。行检查器始终解析引用。"
+    grid_filter_autoquote:
+      label: "在 WHERE 筛选中比较运算符后插入引号"
+      hint: "在表的 WHERE 筛选中，于文本或日期/时间列后输入 =、!=、<>、<=、>=、<、>、LIKE 或 NOT LIKE 时，会添加 ''，并把光标放在两个引号之间。数字、布尔值和 NULL 判断保持原样。"
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"

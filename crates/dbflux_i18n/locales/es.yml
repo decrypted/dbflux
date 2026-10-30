@@ -4114,6 +4114,9 @@ settings:
     grid_fk_labels:
       label: "Mostrar el valor del registro referenciado en celdas de clave foránea"
       hint: "Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias."
+    grid_filter_autoquote:
+      label: "Insertar comillas tras una comparación en el filtro WHERE"
+      hint: "Al escribir =, !=, <>, <=, >=, <, >, LIKE o NOT LIKE tras una columna de texto o de fecha/hora en el filtro WHERE de una tabla, se añade '' con el cursor entre las comillas. Los números, booleanos y comprobaciones de NULL quedan como se escriben."
     vim_mode:
       label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."

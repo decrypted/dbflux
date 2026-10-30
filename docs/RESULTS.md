@@ -46,7 +46,7 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
-With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty.
+With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. The extra ranges are for copying: delete, duplicate, save and the other row actions act on the row of the cursor, a right-click selects the cell under the pointer, and the record view treats `Ctrl`+click as a plain click.
 
 When the selection covers more than one cell, the status bar shows how many cells it holds and, for the numbers among them, their sum, average, minimum and maximum. NULLs and text are counted but left out of the figures, and the status bar says how many it skipped. The totals are worked out from the rows already loaded, unsaved edits included, without querying the database again.
 
@@ -68,7 +68,7 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted.
+list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does.
 
 ## Value panel
 
@@ -218,8 +218,11 @@ clipboard**: CSV starts with a header row of the column names, and JSON is an
 array with one object per row, keyed by column name, with numbers, booleans and
 `null` kept as such. Every row and column the selection covers is included; a
 cell inside that area but outside the selection is empty in CSV and `null` in
-JSON. Plain **Copy** (`Ctrl+c`) still copies tab-separated text without a
-header.
+JSON. The copies follow what the grid shows: an unsaved edit is copied with
+its new value and an added row that is not saved yet at its place. In JSON,
+columns that share a name (`a.id` and `b.id` of a join) share one key, which
+takes the value of the last of them. Plain **Copy** (`Ctrl+c`) still copies
+tab-separated text without a header.
 `Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
 the menu shows it next to the item.
 

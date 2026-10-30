@@ -46,6 +46,26 @@ fn apply_vim_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
     crate::keymap::set_vim_leader(leader, cx);
 }
 
+/// Publishes the data grid settings the table component reads (what a column
+/// header click does) now and after every app-state change.
+pub fn publish_grid_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    apply_grid_settings(app_state, cx);
+
+    cx.subscribe(app_state, |app_state, _: &AppStateChanged, cx| {
+        apply_grid_settings(&app_state, cx);
+    })
+    .detach();
+}
+
+fn apply_grid_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    let sorts = app_state
+        .read(cx)
+        .general_settings()
+        .grid_header_click_sorts;
+
+    dbflux_components::components::data_table::set_header_click_sorts(cx, sorts);
+}
+
 /// Publishes the font settings now and after every app-state change. When
 /// the resolved fonts change, the theme takes the new families and sizes and
 /// every open window re-renders with them.
@@ -734,6 +754,46 @@ mod vim_setting_tests {
         assert_eq!(vim_leader(), default_vim_leader());
 
         cx.update(|cx| set_vim_leader(default_vim_leader(), cx));
+    }
+}
+
+#[cfg(test)]
+mod grid_setting_tests {
+    use super::{AppStateChanged, AppStateEntity, publish_grid_settings};
+    use dbflux_components::components::data_table::header_click_sorts;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext as _, TestAppContext};
+
+    /// The header click setting starts from the saved settings and follows
+    /// every later save.
+    #[gpui::test]
+    fn the_header_click_setting_is_published(cx: &mut TestAppContext) {
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| publish_grid_settings(&app_state, cx));
+        assert!(
+            !cx.update(|cx| header_click_sorts(cx)),
+            "selects by default"
+        );
+
+        cx.update(|cx| {
+            app_state.update(cx, |state, cx| {
+                let mut settings = state.general_settings().clone();
+                settings.grid_header_click_sorts = true;
+                state.update_general_settings(settings);
+                cx.emit(AppStateChanged);
+            });
+        });
+        cx.run_until_parked();
+
+        assert!(cx.update(|cx| header_click_sorts(cx)));
     }
 }
 

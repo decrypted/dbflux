@@ -52,6 +52,36 @@ pub enum ModelSwap {
     ResetCursor,
 }
 
+/// What a primary click on a column header does, from Settings > General >
+/// Data grid: select the column (the default), or sort it as the header did
+/// before column selection. Published by the app so the table, which has no
+/// access to the settings, can follow them.
+///
+/// Absent means select: component tests that never publish it keep the
+/// default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeaderClickSetting {
+    pub sorts: bool,
+}
+
+impl gpui::Global for HeaderClickSetting {}
+
+/// Publishes whether a header click sorts.
+pub fn set_header_click_sorts(cx: &mut App, sorts: bool) {
+    if header_click_sorts(cx) == sorts && cx.has_global::<HeaderClickSetting>() {
+        return;
+    }
+
+    cx.set_global(HeaderClickSetting { sorts });
+}
+
+/// Whether a header click sorts, as last published with
+/// [`set_header_click_sorts`].
+pub fn header_click_sorts(cx: &App) -> bool {
+    cx.try_global::<HeaderClickSetting>()
+        .is_some_and(|setting| setting.sorts)
+}
+
 /// Main state for the DataTable component.
 pub struct DataTableState {
     /// The data model (Arc to avoid cloning).
@@ -73,9 +103,9 @@ pub struct DataTableState {
     /// Current sort state.
     sort: Option<SortState>,
 
-    /// Whether a header offers the sort arrow. A host that keeps rows in
-    /// source order (a file opened as a table) turns it off rather than
-    /// undoing every sort it receives.
+    /// Whether the table sorts: a header offers the sort arrow and the sort
+    /// can be set. A host that keeps rows in source order (a file opened as a
+    /// table) turns it off.
     sortable: bool,
 
     /// Viewport size (updated on layout).
@@ -307,8 +337,8 @@ impl DataTableState {
         }
     }
 
-    /// The width a column opens with: wide enough for its header (name, type
-    /// and a key or sort icon) and for the longest value among the first
+    /// The width a column opens with: wide enough for its header (name, type,
+    /// a key icon and the sort control) and for the longest value among the first
     /// `AUTO_WIDTH_SAMPLE_ROWS` rows, so short values are not cut while the
     /// pane has room. Content counts up to `MAX_AUTO_COLUMN_WIDTH`; a header
     /// wider than that still gets its full width.
@@ -332,7 +362,10 @@ impl DataTableState {
         } else {
             gap + type_chars as f32 * type_char
         };
-        let icon_width = gap + f32::from(GridMetrics::HEADER_ICON);
+        // Two icons: a key column draws its key icon and, on a table that
+        // sorts, every header draws the sort control. The keys are not known
+        // yet when the widths are first worked out, so both are budgeted.
+        let icon_width = 2.0 * (gap + f32::from(GridMetrics::HEADER_ICON));
         let header_width =
             padding + column.title.chars().count() as f32 * cell_char + type_width + icon_width;
 
@@ -638,11 +671,21 @@ impl DataTableState {
         self.sortable
     }
 
+    /// Turning sorting off drops the current sort, and from then on
+    /// [`Self::set_sort`] and [`Self::cycle_sort`] keep the rows in order.
     pub fn set_sortable(&mut self, sortable: bool) {
         self.sortable = sortable;
+        if !sortable {
+            self.sort = None;
+        }
     }
 
+    /// Sets the sort and reports it. A table that does not sort ignores a
+    /// new sort.
     pub fn set_sort(&mut self, sort: Option<SortState>, cx: &mut Context<Self>) {
+        if sort.is_some() && !self.sortable {
+            return;
+        }
         if self.sort != sort {
             self.sort = sort;
             cx.emit(DataTableEvent::SortChanged(sort));
@@ -693,37 +736,52 @@ impl DataTableState {
     /// Shift extends the range from the anchor, as Shift with the arrow keys
     /// does; Ctrl (Cmd on macOS) adds the cell to the selection, or takes it
     /// out when it is selected on its own; a plain click starts a new
-    /// selection there. The grid and the
-    /// record view both route their clicks here so the modifier means the same
-    /// thing in either layout.
+    /// selection there. The grid and the record view both route their clicks
+    /// here so Shift means the same thing in either layout. The record view
+    /// shows one field range only, so there Ctrl+click is a plain click.
     pub fn click_cell(
         &mut self,
         coord: CellCoord,
         modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) {
+        self.apply_cell_click(coord, modifiers, cx);
+    }
+
+    /// `click_cell`, returning whether `coord` ended up as the start of the
+    /// range being made (false after a Ctrl+click that deselected).
+    fn apply_cell_click(
+        &mut self,
+        coord: CellCoord,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if modifiers.shift {
             self.extend_selection(coord, cx);
-        } else if modifiers.secondary() {
+            true
+        } else if modifiers.secondary() && !self.record_mode {
             self.commit_edit_in_progress(cx);
-            self.selection.toggle_cell(coord);
+            let added = self.selection.toggle_cell(coord);
             cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
             cx.notify();
+            added
         } else {
             self.select_cell(coord, cx);
+            true
         }
     }
 
     /// Left button pressed on a cell: select it, or extend to it with Shift,
-    /// and start a drag selection from there.
+    /// and start a drag selection from there. A Ctrl+press that took the cell
+    /// out starts no drag, so a small move before the release does not select
+    /// it again or stretch a restored range.
     pub fn begin_drag_select(
         &mut self,
         coord: CellCoord,
         modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) {
-        self.click_cell(coord, modifiers, cx);
-        self.drag_selecting = true;
+        self.drag_selecting = self.apply_cell_click(coord, modifiers, cx);
     }
 
     /// The pointer moved onto `coord` with the left button held: extend the
@@ -742,6 +800,8 @@ impl DataTableState {
     /// with Shift every row from the anchor's row to this one, and with
     /// Ctrl (Cmd on macOS) the row added to, or taken out of, the selection.
     pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        // A press on a row number never starts a cell drag.
+        self.drag_selecting = false;
         self.commit_edit_in_progress(cx);
         let col_count = self.col_count();
         if modifiers.shift {
@@ -753,6 +813,19 @@ impl DataTableState {
         }
         cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
+    }
+
+    /// A primary click on a column header. It selects the column (see
+    /// [`Self::click_column`]); with the header click set to sort, a plain
+    /// click on a table that sorts cycles the sort instead, while Shift and
+    /// Ctrl (Cmd on macOS) still select.
+    pub fn click_header(&mut self, col: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        let plain = !modifiers.shift && !modifiers.secondary();
+        if plain && self.sortable && header_click_sorts(cx) {
+            self.cycle_sort(col, cx);
+        } else {
+            self.click_column(col, modifiers, cx);
+        }
     }
 
     /// Selection change for a primary click on a column header: the whole
@@ -825,6 +898,11 @@ impl DataTableState {
             return;
         }
         self.record_mode = record_mode;
+        // The record view draws one field range; Ctrl+click ranges kept from
+        // the grid would be invisible there and still be copied.
+        if record_mode {
+            self.selection.clear_extra();
+        }
 
         // The record view highlights the active field, and Enter edits it, so
         // entering the mode without a selection would leave both with nothing
@@ -937,8 +1015,26 @@ impl DataTableState {
 
     // --- Clipboard ---
 
+    /// The selection as tab-separated text, with the values the grid shows:
+    /// pending inserts at their place and unsaved edits applied.
     pub fn copy_selection(&self) -> Option<String> {
-        clipboard::copy_selection(&self.model, &self.selection)
+        let visual_order = self.edit_buffer.compute_visual_order();
+        clipboard::copy_selection_with(&self.selection, |row, col| {
+            self.displayed_cell(&visual_order, row, col)
+        })
+    }
+
+    /// The cell the grid shows at visual `row`: a pending insert's value, or
+    /// the base row's value with its unsaved edit applied. `visual_order` is
+    /// the edit buffer's [`EditBuffer::compute_visual_order`].
+    pub fn displayed_cell<'a>(
+        &'a self,
+        visual_order: &[super::model::VisualRowSource],
+        row: usize,
+        col: usize,
+    ) -> Option<&'a super::model::CellValue> {
+        self.edit_buffer
+            .displayed_cell(&self.model, visual_order, row, col)
     }
 
     // --- Focus ---
@@ -1887,6 +1983,36 @@ mod tests {
         std::sync::Arc::new(TableModel::new(columns, rows))
     }
 
+    fn three_column_model() -> std::sync::Arc<super::super::model::TableModel> {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::TextAlign;
+
+        let column = |id: &str, kind: ColumnKind| ColumnSpec {
+            id: id.into(),
+            title: id.into(),
+            kind,
+            align: TextAlign::Left,
+            type_name: "text".into(),
+        };
+        let columns = vec![
+            column("id", ColumnKind::Integer),
+            column("name", ColumnKind::Text),
+            column("city", ColumnKind::Text),
+        ];
+        let rows = (0..4)
+            .map(|i| RowData {
+                cells: vec![
+                    CellValue::int(i),
+                    CellValue::text("name"),
+                    CellValue::text("city"),
+                ],
+            })
+            .collect();
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
     fn two_row_model() -> std::sync::Arc<super::super::model::TableModel> {
         use crate::components::data_table::model::{
             CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
@@ -2749,6 +2875,45 @@ mod tests {
     }
 
     #[gpui::test]
+    fn row_number_click_keeps_the_active_cell_in_the_first_column(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| super::DataTableState::new(three_column_model(), cx));
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_row(1, gpui::Modifiers::default(), cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(1, 0)));
+            assert!(selection.is_full_row_selected(1, 3));
+        });
+
+        // Shift+click upward: rows 0 and 1, the cursor on the clicked row.
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_row(0, shift, cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(0, 0)));
+            assert!(selection.is_full_row_selected(0, 3));
+            assert!(selection.is_full_row_selected(1, 3));
+            assert!(!selection.is_full_row_selected(2, 3));
+        });
+    }
+
+    #[gpui::test]
     fn record_mode_shift_click_extends_the_field_range(cx: &mut gpui::TestAppContext) {
         use super::super::selection::CellCoord;
 
@@ -2785,6 +2950,88 @@ mod tests {
         window.update(|_, app| {
             let selection = state.read(app).selection();
             assert_eq!(selection.active, Some(CellCoord::new(1, 1)));
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+        });
+    }
+
+    /// The record view shows one field range: Ctrl+click there is a plain
+    /// click, and entering the mode drops the grid's Ctrl+click ranges.
+    #[gpui::test]
+    fn record_mode_ctrl_click_is_a_plain_click(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, window) = record_mode_state(cx);
+        let secondary = gpui::Modifiers::secondary_key();
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 1), secondary, cx)
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(0, 1)));
+            assert_eq!(selection.ranges().len(), 1);
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+        });
+
+        // Ctrl+click on the only selected field keeps it, no jump to row 0.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
+        });
+        window.update(|_, app| {
+            assert_eq!(
+                state.read(app).selection().active,
+                Some(CellCoord::new(1, 1))
+            );
+        });
+
+        // Ranges added in the grid are dropped on the way into the mode.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.set_record_mode(false, cx);
+                s.click_cell(CellCoord::new(0, 0), secondary, cx);
+                assert_eq!(s.selection().ranges().len(), 2);
+                s.set_record_mode(true, cx);
+            });
+        });
+        window.update(|_, app| {
+            assert_eq!(state.read(app).selection().ranges().len(), 1);
+        });
+    }
+
+    /// A new model drops the Ctrl+click ranges, which name rows of the old one.
+    #[gpui::test]
+    fn a_new_model_drops_the_ctrl_click_ranges(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| super::DataTableState::new(three_column_model(), cx));
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        let secondary = gpui::Modifiers::secondary_key();
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 0), gpui::Modifiers::default(), cx);
+                s.click_cell(CellCoord::new(2, 2), secondary, cx);
+                assert_eq!(s.selection().ranges().len(), 2);
+                s.set_model(three_column_model(), super::ModelSwap::KeepCursor, cx);
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.ranges().len(), 1);
+            assert!(selection.is_selected(CellCoord::new(2, 2)), "cursor kept");
             assert!(!selection.is_selected(CellCoord::new(0, 0)));
         });
     }
@@ -3163,6 +3410,28 @@ mod tests {
         );
     }
 
+    /// A header opens wide enough for its name, its type and two icons: the
+    /// key icon of a key column and the sort control, which every header of
+    /// a sorting table draws.
+    #[test]
+    fn a_header_budgets_a_key_icon_and_the_sort_control() {
+        let metrics = default_metrics();
+        let model = model_with_values("customer_id", &[]);
+        let width = super::DataTableState::initial_column_width(&model, 0, &metrics);
+
+        let gap = f32::from(crate::tokens::GridMetrics::HEADER_GAP);
+        let icon = f32::from(crate::tokens::GridMetrics::HEADER_ICON);
+        let text = f32::from(CELL_PADDING_X) * 2.0
+            + "customer_id".chars().count() as f32 * metrics.cell_char_advance
+            + gap
+            + "text".chars().count() as f32 * metrics.type_char_advance;
+
+        assert!(
+            width >= text + 2.0 * (gap + icon),
+            "{width} leaves no room for both icons beside {text}"
+        );
+    }
+
     #[test]
     fn long_values_widen_a_column_only_up_to_the_cap() {
         let long_value = "x".repeat(400);
@@ -3177,14 +3446,14 @@ mod tests {
 
     #[test]
     fn column_width_scales_with_the_grid_font_size() {
-        let model = model_with_values("title", &["medium value"]);
+        let model = model_with_values("title", &["medium value text"]);
 
         let default_width =
             super::DataTableState::initial_column_width(&model, 0, &default_metrics());
         let larger_width =
             super::DataTableState::initial_column_width(&model, 0, &metrics_at(18.0));
 
-        let value_chars = "medium value".chars().count() as f32;
+        let value_chars = "medium value text".chars().count() as f32;
         let expected_growth = value_chars * (18.0 - 12.5) * 0.6;
 
         assert!(

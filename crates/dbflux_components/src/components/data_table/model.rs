@@ -900,6 +900,27 @@ impl EditBuffer {
         self.overrides.get(&(row, col)).unwrap_or(base)
     }
 
+    /// The cell the grid shows at visual `row`: a pending insert's value, or
+    /// the base row's value with its unsaved edit applied. `visual_order` is
+    /// [`EditBuffer::compute_visual_order`] for this buffer.
+    pub fn displayed_cell<'a>(
+        &'a self,
+        model: &'a TableModel,
+        visual_order: &[VisualRowSource],
+        row: usize,
+        col: usize,
+    ) -> Option<&'a CellValue> {
+        match visual_order.get(row).copied()? {
+            VisualRowSource::Base(base_row) => {
+                let base = model.cell(base_row, col)?;
+                Some(self.get_cell(base_row, col, base))
+            }
+            VisualRowSource::Insert(insert_idx) => {
+                self.get_pending_insert_by_idx(insert_idx)?.get(col)
+            }
+        }
+    }
+
     /// Check if a cell has been modified.
     pub fn is_cell_dirty(&self, row: usize, col: usize) -> bool {
         self.overrides.contains_key(&(row, col))

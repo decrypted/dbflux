@@ -3326,6 +3326,292 @@ mod tests {
             hook_ids(&ids, &["alpha", "gamma"])
         );
     }
+
+    /// The optional auth profile picker is a stop of the SSH tunnel and
+    /// proxy rings too, after the mode's own stops: J reaches it before Test
+    /// connection, Enter opens it and the next J lands on Manage.
+    #[::core::prelude::v1::test]
+    fn the_tunnel_and_proxy_rings_reach_the_auth_profile_picker() {
+        use crate::connection_manager::{AccessTabMode, ActiveTab};
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        for mode in [AccessTabMode::Ssh, AccessTabMode::Proxy] {
+            window
+                .update(&mut cx, |manager, window, cx| {
+                    manager.select_driver("mysql", window, cx);
+                    manager.active_tab = ActiveTab::Access;
+                    manager.access.access_tab_mode = mode;
+                    manager.access.ssh_enabled = mode == AccessTabMode::Ssh;
+                    manager.edit_state = EditState::Navigating;
+                    manager.form_focus = FormFocus::AccessMethod;
+                    window.focus(&manager.focus_handle, cx);
+                })
+                .expect("window is open");
+            cx.run_until_parked();
+
+            let focus = |cx: &mut TestAppContext| {
+                window
+                    .update(cx, |manager, _, _| manager.form_focus)
+                    .expect("window is open")
+            };
+            let picker_open = |cx: &mut TestAppContext| {
+                window
+                    .update(cx, |manager, _, cx| {
+                        manager
+                            .auth_profile
+                            .auth_profile_dropdown
+                            .read(cx)
+                            .is_open()
+                    })
+                    .expect("window is open")
+            };
+
+            let mut steps = 0;
+            while focus(&mut cx) != FormFocus::SsmAuthProfile {
+                cx.simulate_keystrokes(window.into(), "j");
+                steps += 1;
+
+                let reached = focus(&mut cx);
+                assert_ne!(
+                    reached,
+                    FormFocus::TestConnection,
+                    "{mode:?}: J passed the auth profile picker"
+                );
+                assert!(
+                    steps < 32,
+                    "{mode:?}: J never reached the auth profile picker"
+                );
+            }
+
+            cx.simulate_keystrokes(window.into(), "enter");
+            assert!(picker_open(&mut cx), "{mode:?}: Enter opens the picker");
+
+            cx.simulate_keystrokes(window.into(), "escape");
+            assert!(!picker_open(&mut cx), "{mode:?}: Escape closes it");
+
+            cx.simulate_keystrokes(window.into(), "j");
+            assert_eq!(focus(&mut cx), FormFocus::SsmAuthManage, "{mode:?}");
+
+            cx.simulate_keystrokes(window.into(), "j");
+            assert_eq!(focus(&mut cx), FormFocus::TestConnection, "{mode:?}");
+        }
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// The auth profile belongs to the connection, not to an access method:
+    /// moving between Direct, SSH tunnel and proxy keeps the selection.
+    #[::core::prelude::v1::test]
+    fn switching_the_access_method_keeps_the_selected_auth_profile() {
+        use crate::connection_manager::AccessTabMode;
+        use dbflux_components::controls::{DropdownItem, DropdownSelectionChanged};
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+        let auth_profile_id = uuid::Uuid::new_v4();
+
+        let seen = window
+            .update(&mut cx, |manager, _, cx| {
+                manager.auth_profile.selected_auth_profile_id = Some(auth_profile_id);
+
+                [
+                    (1, "ssh"),
+                    (2, "proxy"),
+                    (0, "direct"),
+                    (2, "proxy"),
+                    (1, "ssh"),
+                ]
+                .into_iter()
+                .map(|(index, value)| {
+                    let event = DropdownSelectionChanged {
+                        index,
+                        item: DropdownItem::with_value(value, value),
+                    };
+                    manager.handle_access_method_dropdown_selection(&event, cx);
+
+                    (
+                        manager.access.access_tab_mode,
+                        manager.auth_profile.selected_auth_profile_id,
+                    )
+                })
+                .collect::<Vec<_>>()
+            })
+            .expect("window is open");
+
+        assert_eq!(
+            seen,
+            vec![
+                (AccessTabMode::Ssh, Some(auth_profile_id)),
+                (AccessTabMode::Proxy, Some(auth_profile_id)),
+                (AccessTabMode::Direct, Some(auth_profile_id)),
+                (AccessTabMode::Proxy, Some(auth_profile_id)),
+                (AccessTabMode::Ssh, Some(auth_profile_id)),
+            ]
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// A MySQL connection through a saved SSH tunnel whose password comes
+    /// from Secret Manager: with an auth profile selected it validates, and
+    /// the saved profile keeps the auth profile, the tunnel and the secret
+    /// reference.
+    #[::core::prelude::v1::test]
+    fn an_ssh_tunnel_with_a_secret_manager_password_saves_its_auth_profile() {
+        use crate::connection_manager::AccessTabMode;
+        use dbflux_core::{AuthProfile, SshAuthMethod, SshTunnelProfile};
+
+        let mut cx = TestAppContext::single();
+        init_form_test_runtime(&mut cx);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let app_state = test_app_state(
+            &mut cx,
+            SecretStoreFixture::new(PasswordSaveOutcome::Success),
+        );
+
+        let tunnel = SshTunnelProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "bastion".to_string(),
+            config: SshTunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                user: "deploy".to_string(),
+                auth_method: SshAuthMethod::PrivateKey { key_path: None },
+                ssh_config_host: None,
+            },
+            save_secret: false,
+        };
+        let auth_profile = AuthProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "sso".to_string(),
+            // Stored AWS profiles are replaced by their `~/.aws/config`
+            // reflection, so the fixture uses a provider id of its own.
+            provider_id: "test-sso".to_string(),
+            fields: HashMap::new(),
+            secret_fields: HashMap::new(),
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+        app_state.update(&mut cx, |state, _| {
+            state.add_ssh_tunnel(tunnel.clone());
+            state.add_auth_profile(auth_profile.clone());
+        });
+
+        let mut profile = ConnectionProfile::new(
+            "mysql via bastion",
+            DbConfig::MySQL {
+                use_uri: false,
+                uri: None,
+                host: "db.internal".to_string(),
+                port: 3306,
+                user: "app".to_string(),
+                database: Some("app".to_string()),
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: Some(tunnel.id),
+            },
+        );
+        profile.save_password = false;
+        profile.access_kind = Some(AccessKind::Ssh {
+            ssh_tunnel_profile_id: tunnel.id,
+        });
+        profile.auth_profile_id = Some(auth_profile.id);
+        profile.value_refs = HashMap::from([(
+            "password".to_string(),
+            ValueRef::Secret {
+                provider: "aws-secrets-manager".to_string(),
+                locator: "arn:aws:secretsmanager:eu-central-1:123456789012:secret:db-AbCdEf"
+                    .to_string(),
+                json_key: Some("password".to_string()),
+            },
+        )]);
+
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+
+        let (mode, errors, saved, errors_without_auth_profile) = window
+            .update(&mut cx, |manager, _, cx| {
+                manager.validate_form(false, cx);
+                let errors = manager.validation_errors.clone();
+                let saved = manager.build_profile(cx);
+
+                let selected = manager.auth_profile.selected_auth_profile_id.take();
+                manager.validate_form(false, cx);
+                let errors_without_auth_profile = manager.validation_errors.clone();
+                manager.auth_profile.selected_auth_profile_id = selected;
+
+                (
+                    manager.access.access_tab_mode,
+                    errors,
+                    saved,
+                    errors_without_auth_profile,
+                )
+            })
+            .expect("window is open");
+
+        assert_eq!(
+            mode,
+            AccessTabMode::Ssh,
+            "the saved tunnel opens in SSH mode"
+        );
+
+        // The test app state registers no `test-sso` provider, which
+        // validation reports on its own; nothing else may fail.
+        assert_eq!(
+            errors,
+            vec![dbflux_i18n::t!(
+                "form.validation.auth_profile_no_provider",
+                name = auth_profile.name.clone()
+            )]
+        );
+        assert_eq!(
+            errors_without_auth_profile,
+            vec![dbflux_i18n::t!(
+                "form.validation.dynamic_auth_profile_required"
+            )],
+            "without an auth profile the Secret Manager password is refused"
+        );
+
+        let saved = saved.expect("the profile builds");
+        assert_eq!(saved.auth_profile_id, Some(auth_profile.id));
+        assert!(
+            matches!(
+                saved.access_kind,
+                Some(AccessKind::Ssh { ssh_tunnel_profile_id }) if ssh_tunnel_profile_id == tunnel.id
+            ),
+            "the tunnel stays referenced: {:?}",
+            saved.access_kind
+        );
+        assert!(
+            matches!(
+                saved.value_refs.get("password"),
+                Some(ValueRef::Secret { json_key: Some(key), .. }) if key == "password"
+            ),
+            "the password stays a Secret Manager reference: {:?}",
+            saved.value_refs.get("password")
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
 }
 
 /// SQL Server SSL mode tests. A separate module with explicit imports:

@@ -42,10 +42,6 @@ impl ConnectionManagerWindow {
                 dropdown.set_focus_ring(None, cx);
             });
 
-        let login_enabled = !self.auth_profile.auth_profile_login_in_progress
-            && self.selected_auth_profile_needs_login(cx);
-        let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
-
         let access_tab_label = dbflux_i18n::t!("access.tab_label");
 
         let mut sections = vec![
@@ -77,140 +73,175 @@ impl ConnectionManagerWindow {
                         .flex_col()
                         .gap_3()
                         .child(Text::caption(dbflux_i18n::t!("access.direct_hint")))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(Label::new(dbflux_i18n::t!("access.auth_profile_optional")))
-                                .child(
-                                    self.render_focus_shell(
-                                        show_focus && self.form_focus == FormFocus::SsmAuthProfile,
-                                        ring_color,
-                                        self.auth_profile.auth_profile_dropdown.clone(),
-                                        cx,
-                                    )
-                                    .min_w(px(280.0))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, window, cx| {
-                                            this.enter_edit_mode_for_field(
-                                                FormFocus::SsmAuthProfile,
-                                                window,
-                                                cx,
-                                            );
-                                        }),
-                                    ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            self.render_focus_shell(
-                                                show_focus
-                                                    && self.form_focus == FormFocus::SsmAuthManage,
-                                                ring_color,
-                                                Button::new(
-                                                    "auth-open-settings",
-                                                    dbflux_i18n::t!("access.manage"),
-                                                )
-                                                .ghost()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.open_auth_profiles_settings(cx);
-                                                })),
-                                                cx,
-                                            )
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, window, cx| {
-                                                    this.enter_edit_mode_for_field(
-                                                        FormFocus::SsmAuthManage,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            self.render_focus_shell(
-                                                show_focus
-                                                    && self.form_focus == FormFocus::SsmAuthLogin,
-                                                ring_color,
-                                                Button::new(
-                                                    "auth-login-selected",
-                                                    dbflux_i18n::t!("access.login"),
-                                                )
-                                                .ghost()
-                                                .disabled(!login_enabled)
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.login_selected_auth_profile(cx);
-                                                })),
-                                                cx,
-                                            )
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, window, cx| {
-                                                    this.enter_edit_mode_for_field(
-                                                        FormFocus::SsmAuthLogin,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            self.render_focus_shell(
-                                                show_focus
-                                                    && self.form_focus == FormFocus::SsmAuthRefresh,
-                                                ring_color,
-                                                Button::new(
-                                                    "auth-refresh-session",
-                                                    dbflux_i18n::t!("access.refresh"),
-                                                )
-                                                .ghost()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.refresh_auth_profile_statuses(cx);
-                                                })),
-                                                cx,
-                                            )
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, window, cx| {
-                                                    this.enter_edit_mode_for_field(
-                                                        FormFocus::SsmAuthRefresh,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }),
-                                            ),
-                                        ),
-                                )
-                                .child(Text::caption(dbflux_i18n::t!("access.auth_profile_hint"))),
-                        )
-                        .when_some(self.selected_auth_profile_status_text(cx), |d, status| {
-                            d.child(Text::caption(status))
-                        })
-                        .when(auth_profile_is_valid, |d| {
-                            d.child(
-                                StatusIndicator::new(Status::Connected)
-                                    .label(dbflux_i18n::t!("access.session_valid")),
-                            )
-                        })
-                        .when_some(
-                            self.auth_profile.auth_profile_action_message.as_ref(),
-                            |d, message| d.child(Text::caption(message.clone())),
-                        )
+                        .children(self.render_optional_auth_profile(cx))
                         .into_any_element(),
                 );
             }
-            AccessTabMode::Ssh => sections.extend(self.render_ssh_tab(cx)),
-            AccessTabMode::Proxy => sections.extend(self.render_proxy_tab(cx)),
+            AccessTabMode::Ssh => {
+                sections.extend(self.render_ssh_tab(cx));
+                self.push_optional_auth_profile_section(&mut sections, cx);
+            }
+            AccessTabMode::Proxy => {
+                sections.extend(self.render_proxy_tab(cx));
+                self.push_optional_auth_profile_section(&mut sections, cx);
+            }
             AccessTabMode::ManagedSsm => sections.push(self.render_ssm_access_section(cx)),
         }
 
         sections
+    }
+
+    /// Pushes the optional Auth Profile picker after a tunnel or proxy mode's
+    /// own sections and records where it landed, since those modes render a
+    /// varying number of sections and the scroll target must follow it.
+    fn push_optional_auth_profile_section(
+        &mut self,
+        sections: &mut Vec<AnyElement>,
+        cx: &mut Context<Self>,
+    ) {
+        self.auth_profile.optional_section_index = sections.len();
+        sections.push(
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .children(self.render_optional_auth_profile(cx))
+                .into_any_element(),
+        );
+    }
+
+    /// The optional Auth Profile picker of the Direct, SSH tunnel and proxy
+    /// modes. Value sources (Secret Manager, Parameter Store, auth fields)
+    /// resolve through this profile before any access method opens, so the
+    /// picker belongs to every mode that can carry them, not only Direct.
+    fn render_optional_auth_profile(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let ring_color = cx.theme().ring;
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Access;
+        let login_enabled = !self.auth_profile.auth_profile_login_in_progress
+            && self.selected_auth_profile_needs_login(cx);
+        let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
+
+        let mut elements = vec![
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(Label::new(dbflux_i18n::t!("access.auth_profile_optional")))
+                .child(
+                    self.render_focus_shell(
+                        show_focus && self.form_focus == FormFocus::SsmAuthProfile,
+                        ring_color,
+                        self.auth_profile.auth_profile_dropdown.clone(),
+                        cx,
+                    )
+                    .min_w(px(280.0))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.enter_edit_mode_for_field(FormFocus::SsmAuthProfile, window, cx);
+                        }),
+                    ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            self.render_focus_shell(
+                                show_focus && self.form_focus == FormFocus::SsmAuthManage,
+                                ring_color,
+                                Button::new("auth-open-settings", dbflux_i18n::t!("access.manage"))
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_auth_profiles_settings(cx);
+                                    })),
+                                cx,
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.enter_edit_mode_for_field(
+                                        FormFocus::SsmAuthManage,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            ),
+                        )
+                        .child(
+                            self.render_focus_shell(
+                                show_focus && self.form_focus == FormFocus::SsmAuthLogin,
+                                ring_color,
+                                Button::new("auth-login-selected", dbflux_i18n::t!("access.login"))
+                                    .ghost()
+                                    .disabled(!login_enabled)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.login_selected_auth_profile(cx);
+                                    })),
+                                cx,
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.enter_edit_mode_for_field(
+                                        FormFocus::SsmAuthLogin,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            ),
+                        )
+                        .child(
+                            self.render_focus_shell(
+                                show_focus && self.form_focus == FormFocus::SsmAuthRefresh,
+                                ring_color,
+                                Button::new(
+                                    "auth-refresh-session",
+                                    dbflux_i18n::t!("access.refresh"),
+                                )
+                                .ghost()
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.refresh_auth_profile_statuses(cx);
+                                    },
+                                )),
+                                cx,
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.enter_edit_mode_for_field(
+                                        FormFocus::SsmAuthRefresh,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            ),
+                        ),
+                )
+                .child(Text::caption(dbflux_i18n::t!("access.auth_profile_hint")))
+                .into_any_element(),
+        ];
+
+        if let Some(status) = self.selected_auth_profile_status_text(cx) {
+            elements.push(Text::caption(status).into_any_element());
+        }
+
+        if auth_profile_is_valid {
+            elements.push(
+                StatusIndicator::new(Status::Connected)
+                    .label(dbflux_i18n::t!("access.session_valid"))
+                    .into_any_element(),
+            );
+        }
+
+        if let Some(message) = self.auth_profile.auth_profile_action_message.as_ref() {
+            elements.push(Text::caption(message.clone()).into_any_element());
+        }
+
+        elements
     }
 
     fn render_ssm_access_section(&self, cx: &mut Context<Self>) -> AnyElement {

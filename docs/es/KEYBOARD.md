@@ -421,9 +421,10 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `Esc` | Salir de las filas similares y volver a la página de la tabla |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `Ctrl+Alt+c` / `Cmd+Alt+c` | Copiar la selección como JSON, como **Copiar como JSON** del menú contextual (resultados de tabla) |
+| `Ctrl+Alt+s` / `Cmd+Alt+s` | Revisar las sentencias que Guardar ejecutará para los cambios pendientes (resultados de tabla) |
 | `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, mostrar otra vista del resultado, los botones del panel de valor y del inspector de fila, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
-| `Shift+m` | Abrir el menú de la cabecera de la columna de la celda seleccionada, como un clic derecho en su cabecera: orden, filtro y la sección Columna |
+| `Shift+m` | Abrir el menú de la cabecera de la columna de la celda seleccionada, como un clic derecho en su cabecera: orden, filtro y la sección Columna. Solo en la cuadrícula, que tiene cabeceras de columna; la vista de registro y el árbol de documentos lo ignoran |
 
 Una pestaña de inspector de instancia también toma estas teclas: `m` abre el
 menú contextual de la fila elegida con las acciones de fila del driver (por
@@ -439,6 +440,19 @@ consultas abre el menú del historial con el teclado dentro: las teclas del men�
 contextual se mueven, `Enter` vuelve a ejecutar la consulta resaltada y `Escape`
 lo cierra.
 
+En el campo `WHERE` de una tabla, `Up` o `Down` abre el historial de filtros de
+la tabla mientras el campo está vacío o el cursor está al principio; **Filter
+history** en el submenú Barra de herramientas también lo abre. Con la lista
+abierta, escribir la reduce, `Up` / `Down` mueven el resaltado, `Enter` aplica el
+filtro resaltado, `Shift+Delete` lo quita y `Escape` cierra la lista; su última
+fila borra el historial de la tabla. Ver [Historial de
+filtros](RESULTS.md#historial-de-filtros).
+
+El submenú Filtro del menú contextual de una celda (`m`) es el equivalente de
+teclado de `Alt`+clic en una celda: sus entradas añaden el valor de la celda al
+filtro de la tabla como condición `AND`. Ver [Filtrar por una
+celda](RESULTS.md#filtrar-por-una-celda).
+
 Cuando los resultados no tienen menú contextual propio, `m` abre en su lugar el
 menú de acciones del panel, el mismo que muestra **Open pane actions** en la
 command palette.
@@ -446,8 +460,8 @@ command palette.
 Una pestaña de análisis de dump toma las teclas de tabla en cada una de sus dos
 tablas: `Alt+l` y `Alt+h` pasan de Claves más grandes a Por prefijo y viceversa,
 `Escape` cancela un análisis que todavía lee el archivo, y `m` lista la otra
-tabla, un orden por columna de la tabla donde está el teclado (como lo hace un
-clic en la cabecera) y Cancelar mientras se lee el archivo.
+tabla, un orden por columna de la tabla donde está el teclado (como lo hace la
+flecha de orden de la cabecera) y Cancelar mientras se lee el archivo.
 
 La vista Columnas de una tabla toma `j` / `k` para moverse entre columnas,
 `Space` para agregar a la vista Datos la columna bajo el cursor o quitarla,
@@ -650,8 +664,9 @@ foco y no se está editando ninguna celda.
 | `d d` / `Delete` | Borrar la fila |
 | `a a` / `Shift+a Shift+a` | Agregar / duplicar una fila |
 | `Ctrl+n` | Poner la celda en NULL |
-| `u` / `Ctrl+z` / `Cmd+z` | Deshacer |
-| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer |
+| `Ctrl+Alt+e` / `Cmd+Alt+e` | Editar la celda como expresión SQL; con el editor abierto, alternar entre valor y expresión (`fx`) |
+| `u` / `Ctrl+z` / `Cmd+z` | Deshacer; una vez deshechas las ediciones desde la última lectura de la tabla, el filtro `WHERE` anterior (ver [Deshacer un filtro](RESULTS.md#deshacer-un-filtro)) |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer, filtros incluidos |
 | `e` | Expandir o contraer una columna anidada (grillas de documentos) |
 | `Backspace` | Salir de un valor anidado (grillas de documentos) |
 
@@ -669,7 +684,7 @@ constructor de consultas que está a su lado.
 | `Enter` | Editar el valor (panel de valor) |
 | `Escape` | Dejar de editar el valor, o volver a la grilla |
 | `Ctrl+h` | Volver a la grilla |
-| `m` (o `Shift+F10`) | Abrir el menú contextual de la grilla. Su entrada Barra de herramientas lista los botones del panel abierto: en el panel de valor los demás formatos, el ajuste de línea, Formatear, Compactar y, cuando el valor cambió, Revertir y Guardar; en el inspector de fila Fijar o Soltar, e Ir al registro referenciado cuando lista referencias de clave foránea salientes, o cuando el cursor está sobre una celda de clave foránea |
+| `m` (o `Shift+F10`) | Abrir el menú contextual de la grilla. Su entrada Barra de herramientas lista los botones del panel abierto: en el panel de valor los demás formatos, el ajuste de línea, Formatear, Compactar y, cuando el valor cambió, Revertir y Guardar, y para un valor que contiene una imagen Imagen o Hex (Texto en base64), Guardar imagen como y Copiar imagen; en el inspector de fila Fijar o Soltar, e Ir al registro referenciado cuando lista referencias de clave foránea salientes, o cuando el cursor está sobre una celda de clave foránea |
 
 **Ir al registro referenciado** abre la fila a la que apunta una clave foránea de la
 fila inspeccionada, igual que hacer clic en una entrada REFERENCES del
@@ -881,6 +896,9 @@ menú, un desplegable o un selector, los atajos globales esperan a que se cierre
 | `Enter` | Confirmar, cuando el botón principal está habilitado |
 | `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Desplazar el contenido de un diálogo largo |
 | `Escape` / `Ctrl+s` / `Cmd+s` | Cerrar / guardar el editor de celda y la vista previa de documento |
+| `Ctrl+Shift+k` / `Ctrl+Shift+h` (`Cmd` en macOS) | Copiar el texto del editor de celda tal como se ve / compactado |
+| `Ctrl+Shift+u` / `Ctrl+Shift+j` (`Cmd` en macOS) | Formatear / compactar el JSON o XML del editor de celda |
+| `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) | Maximizar o restaurar el editor de celda |
 | `Tab` / `Shift+Tab` | Pasar al control siguiente / anterior dentro del diálogo |
 
 `Tab` y `Shift+Tab` dan la vuelta dentro de un diálogo abierto: desde el último

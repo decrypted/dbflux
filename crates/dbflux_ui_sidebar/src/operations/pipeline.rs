@@ -22,6 +22,18 @@ fn connect_capture_applies(
     category == dbflux_core::DatabaseCategory::Relational && database.is_some()
 }
 
+/// The database a connect-time capture reads: the schema's current database,
+/// else the one the connection reports. Runs off the UI thread because
+/// `active_database` may block on the driver (an RPC, a busy connection lock).
+fn connect_capture_database(
+    schema: Option<&SchemaSnapshot>,
+    connection: &dyn Connection,
+) -> Option<String> {
+    schema
+        .and_then(|schema| schema.current_database().map(str::to_string))
+        .or_else(|| connection.active_database())
+}
+
 fn discover_capture_tables(
     connection: &dyn Connection,
     database: Option<&str>,
@@ -648,11 +660,13 @@ impl Sidebar {
                             None
                         };
 
-                    Ok::<_, String>((profile, connection, schema, tunnel_handle))
+                    let capture_database = connect_capture_database(schema.as_ref(), &*connection);
+
+                    Ok::<_, String>((profile, connection, schema, tunnel_handle, capture_database))
                 })
                 .await;
 
-            let (profile, connection, schema, tunnel_handle) = match connect_result {
+            let (profile, connection, schema, tunnel_handle, capture_database) = match connect_result {
                 Ok(values) => values,
                 Err(error) => {
                     let _ = state_tx.send(dbflux_core::PipelineState::Failed {
@@ -833,9 +847,6 @@ impl Sidebar {
             let capture_witness = Arc::clone(&connection);
             let capture_category = connection.metadata().category;
             let capture_schema = schema.clone();
-            let capture_database = schema
-                .as_ref()
-                .and_then(|s| s.current_database().map(str::to_string));
 
             let capture_ctx = if connect_capture_applies(capture_category, capture_database.as_deref())
             {
@@ -932,7 +943,8 @@ impl Sidebar {
 mod connect_capture_tests {
     use super::{
         ConnectSnapshotCapture, capture_connected_schema, connect_capture_applies,
-        discover_capture_tables, hydrate_current_capture, run_connect_snapshot_capture,
+        connect_capture_database, discover_capture_tables, hydrate_current_capture,
+        run_connect_snapshot_capture,
     };
     use dbflux_core::{
         Connection, ConnectionProfile, DbConfig, DbError, DbKind, DbSchemaInfo, DriverMetadata,
@@ -1901,6 +1913,55 @@ mod connect_capture_tests {
         assert!(!connect_capture_applies(
             DatabaseCategory::KeyValue,
             Some("0")
+        ));
+    }
+
+    #[test]
+    fn connect_capture_database_falls_back_to_the_active_database() {
+        use dbflux_core::DatabaseCategory;
+
+        let configured = MockConnection {
+            discovery: Ok(Vec::new()),
+            active_database: Some("from_profile".into()),
+        };
+        let unresolved = MockConnection {
+            discovery: Ok(Vec::new()),
+            active_database: None,
+        };
+        let schema_with_database = SchemaSnapshot::relational(RelationalSchema {
+            databases: Vec::new(),
+            current_database: Some("from_schema".into()),
+            schemas: Vec::new(),
+            tables: Vec::new(),
+            views: Vec::new(),
+        });
+
+        // schema() failed, but the connection knows its database: still captured.
+        let database = connect_capture_database(None, &configured);
+        assert_eq!(database.as_deref(), Some("from_profile"));
+        assert!(connect_capture_applies(
+            DatabaseCategory::Relational,
+            database.as_deref()
+        ));
+
+        // A schema without a current database also falls back.
+        assert_eq!(
+            connect_capture_database(Some(&nested_schema()), &configured).as_deref(),
+            Some("from_profile")
+        );
+
+        // The schema's own database wins over the connection's.
+        assert_eq!(
+            connect_capture_database(Some(&schema_with_database), &configured).as_deref(),
+            Some("from_schema")
+        );
+
+        // Nothing resolves (MySQL with Database left empty): skipped.
+        let database = connect_capture_database(Some(&nested_schema()), &unresolved);
+        assert_eq!(database, None);
+        assert!(!connect_capture_applies(
+            DatabaseCategory::Relational,
+            database.as_deref()
         ));
     }
 

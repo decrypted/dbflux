@@ -1,6 +1,6 @@
 // Explicit imports, not `use super::*`: the parent glob together with
 // `#[gpui::test]` sends the macro expansion into unbounded recursion.
-use crate::ui::document::DataDocument;
+use crate::ui::document::{DataDocument, Tab, TableSessionView};
 use crate::ui::views::workspace::Workspace;
 use crate::ui::views::workspace::actions::TabPlacement;
 use dbflux_storage::repositories::state::sessions::{
@@ -260,14 +260,8 @@ fn table_tabs_reopen_in_place_and_load_once_connected(cx: &mut TestAppContext) {
     );
 }
 
-/// A table tab whose connection was deleted since the last session is not
-/// restored; the tabs around it are.
-#[gpui::test]
-fn a_table_tab_of_a_deleted_connection_is_dropped(cx: &mut TestAppContext) {
-    init(cx);
-    let (app_state, profile_id) = app_state_with_profile(cx);
-
-    let table_tab = |profile: Uuid, name: &str, position: usize| WorkspaceTab {
+fn table_tab(profile: Uuid, name: &str, position: usize) -> WorkspaceTab {
+    WorkspaceTab {
         id: Uuid::new_v4().to_string(),
         tab_kind: DataDocument::TABLE_SESSION_TAB_KIND.to_string(),
         language: "sql".to_string(),
@@ -285,7 +279,29 @@ fn a_table_tab_of_a_deleted_connection_is_dropped(cx: &mut TestAppContext) {
         position,
         is_pinned: false,
         view_state_json: None,
-    };
+    }
+}
+
+fn save_session(
+    cx: &mut TestAppContext,
+    app_state: &Entity<AppStateEntity>,
+    manifest: WorkspaceSessionManifest,
+) {
+    cx.update(|cx| {
+        let runtime = app_state.read(cx).storage_runtime();
+        runtime
+            .sessions()
+            .save_workspace_session(&manifest)
+            .expect("the session must be storable");
+    });
+}
+
+/// A table tab whose connection was deleted since the last session is not
+/// restored; the tabs around it are.
+#[gpui::test]
+fn a_table_tab_of_a_deleted_connection_is_dropped(cx: &mut TestAppContext) {
+    init(cx);
+    let (app_state, profile_id) = app_state_with_profile(cx);
 
     cx.update(|cx| {
         let runtime = app_state.read(cx).storage_runtime();
@@ -306,4 +322,98 @@ fn a_table_tab_of_a_deleted_connection_is_dropped(cx: &mut TestAppContext) {
 
     let (tabs, _) = tabs_of(window, &workspace);
     assert_eq!(tabs, vec![("main.kept".to_string(), Some(profile_id))]);
+}
+
+/// A tab dropped from the session does not move the active tab onto its
+/// neighbor: the tab that was active comes back active.
+#[gpui::test]
+fn a_dropped_tab_before_the_active_one_keeps_the_active_tab(cx: &mut TestAppContext) {
+    init(cx);
+    let (app_state, profile_id) = app_state_with_profile(cx);
+
+    save_session(
+        cx,
+        &app_state,
+        WorkspaceSessionManifest {
+            version: 1,
+            active_index: Some(1),
+            tabs: vec![
+                table_tab(Uuid::new_v4(), "gone", 0),
+                table_tab(profile_id, "active", 1),
+                table_tab(profile_id, "last", 2),
+            ],
+        },
+    );
+
+    let (workspace, window) = launch_workspace(cx, app_state);
+
+    let (tabs, active) = tabs_of(window, &workspace);
+    assert_eq!(
+        tabs,
+        vec![
+            ("main.active".to_string(), Some(profile_id)),
+            ("main.last".to_string(), Some(profile_id)),
+        ]
+    );
+    assert_eq!(active.as_deref(), Some("main.active"));
+}
+
+/// A filter run after the last tab event is not in the session until the
+/// shutdown write, which records it.
+#[gpui::test]
+fn the_shutdown_write_records_a_filter_run_after_the_last_tab_event(cx: &mut TestAppContext) {
+    init(cx);
+    let driver = FakeDriver::new(dbflux_core::DbKind::SQLite);
+    let (app_state, profile_id) = app_state_with_profile(cx);
+
+    let (workspace, window) = launch_workspace(cx, app_state.clone());
+    connect(window, &app_state, &driver, profile_id);
+
+    // Opened the way `open_table_document` opens it, keeping the document
+    // to reach its grid.
+    let grid = window.update(|window, cx| {
+        let document = cx.new(|cx| {
+            DataDocument::new_for_table(
+                profile_id,
+                dbflux_core::TableRef::with_schema("main", "api_call_log"),
+                Some("main".to_string()),
+                app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let grid = document.read(cx).data_grid_for_tests().clone();
+        let pane = DataDocument::into_pane(document, cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace
+                .tab_manager
+                .update(cx, |mgr, cx| mgr.open(Tab::Pane(Box::new(pane)), cx));
+        });
+        grid
+    });
+    window.run_until_parked();
+
+    window.update(|window, cx| {
+        grid.update(cx, |grid, cx| {
+            grid.set_filter_for_tests("status = 500", window, cx);
+            grid.refresh(window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    let saved_filter = |window: &mut VisualTestContext| {
+        session_tabs(window, &app_state)
+            .first()
+            .map(|tab| TableSessionView::from_json(tab.view_state_json.as_deref()).filter)
+            .expect("the table tab is part of the session")
+    };
+    assert_eq!(
+        saved_filter(window),
+        None,
+        "running a filter is no tab event, so the session has not seen it yet"
+    );
+
+    window.update(|_, cx| workspace.update(cx, |workspace, cx| workspace.persist_session(cx)));
+
+    assert_eq!(saved_filter(window).as_deref(), Some("status = 500"));
 }

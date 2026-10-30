@@ -11,7 +11,7 @@ use crate::chart::keyboard::step_time_range;
 use crate::data_grid_panel::documents::CollectionTab;
 use crate::data_grid_panel::documents::builder::BuilderSupport;
 use crate::data_grid_panel::table_views::TableTab;
-use crate::data_grid_panel::value_panel::ValuePanelButton;
+use crate::data_grid_panel::value_panel::{ValuePanelButton, ValueView};
 use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource, ReferencedRowTarget};
 use crate::result_view::ResultViewMode;
 use dbflux_app::keymap::{Command, ContextId};
@@ -34,6 +34,8 @@ pub(crate) enum ToolbarAction {
     Export,
     /// The × in the WHERE field.
     ClearFilter,
+    /// The history toggle of the WHERE field: opens its popup.
+    FilterHistory,
     /// The table / tree view switch.
     ToggleView,
     /// A view of the result's view switch (Data, JSON, Chart and the other
@@ -49,6 +51,8 @@ pub(crate) enum ToolbarAction {
     ClearNearest,
     /// Opens the vector column picker of the neighbor bar.
     NearestColumn,
+    /// Review in the edit bar.
+    ReviewChanges,
     /// Save in the edit bar.
     SaveChanges,
     /// Revert in the edit bar.
@@ -138,6 +142,7 @@ impl ToolbarAction {
         match self {
             ToolbarAction::Export => "export",
             ToolbarAction::ClearFilter => "clear-filter",
+            ToolbarAction::FilterHistory => "filter-history",
             ToolbarAction::ToggleView => "toggle-view",
             ToolbarAction::ResultView(ResultViewMode::Table) => "result-view-table",
             ToolbarAction::ResultView(ResultViewMode::Chart) => "result-view-chart",
@@ -150,6 +155,7 @@ impl ToolbarAction {
             ToolbarAction::NearestDistance => "nearest-neighbors-distance",
             ToolbarAction::ClearNearest => "nearest-neighbors-clear",
             ToolbarAction::NearestColumn => "nearest-neighbors-column",
+            ToolbarAction::ReviewChanges => "review-changes",
             ToolbarAction::SaveChanges => "save-changes",
             ToolbarAction::RevertChanges => "revert-changes",
             ToolbarAction::AutoRefresh => "auto-refresh",
@@ -200,6 +206,13 @@ impl ToolbarAction {
             ToolbarAction::ValuePanel(ValuePanelButton::Compact) => "value-compact",
             ToolbarAction::ValuePanel(ValuePanelButton::Revert) => "value-revert",
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => "value-save",
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Image)) => {
+                "value-view-image"
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Hex)) => "value-view-hex",
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Text)) => "value-view-text",
+            ToolbarAction::ValuePanel(ValuePanelButton::SaveImage) => "value-save-image",
+            ToolbarAction::ValuePanel(ValuePanelButton::CopyImage) => "value-copy-image",
             ToolbarAction::ToggleMaximize => "maximize",
             ToolbarAction::HidePanel => "hide",
             ToolbarAction::CountRows => "count-rows",
@@ -211,6 +224,7 @@ impl ToolbarAction {
         match self {
             ToolbarAction::Export => AppIcon::FileSpreadsheet,
             ToolbarAction::ClearFilter => AppIcon::X,
+            ToolbarAction::FilterHistory => AppIcon::History,
             ToolbarAction::ToggleView => AppIcon::Braces,
             ToolbarAction::ResultView(mode) => DataGridPanel::result_mode_icon(mode),
             ToolbarAction::OpenBuilder => AppIcon::ListFilter,
@@ -218,6 +232,7 @@ impl ToolbarAction {
             ToolbarAction::NearestDistance => AppIcon::Search,
             ToolbarAction::ClearNearest => AppIcon::X,
             ToolbarAction::NearestColumn => AppIcon::ChartScatter,
+            ToolbarAction::ReviewChanges => AppIcon::Eye,
             ToolbarAction::SaveChanges => AppIcon::Save,
             ToolbarAction::RevertChanges => AppIcon::RotateCcw,
             ToolbarAction::AutoRefresh => AppIcon::Clock,
@@ -250,6 +265,10 @@ impl ToolbarAction {
             | ToolbarAction::ValuePanel(ValuePanelButton::Compact) => AppIcon::Braces,
             ToolbarAction::ValuePanel(ValuePanelButton::Revert) => AppIcon::RotateCcw,
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => AppIcon::Save,
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Image)) => AppIcon::Image,
+            ToolbarAction::ValuePanel(ValuePanelButton::View(_)) => AppIcon::ScrollText,
+            ToolbarAction::ValuePanel(ValuePanelButton::SaveImage) => AppIcon::Download,
+            ToolbarAction::ValuePanel(ValuePanelButton::CopyImage) => AppIcon::Copy,
             ToolbarAction::ToggleMaximize => AppIcon::Maximize2,
             ToolbarAction::HidePanel => AppIcon::PanelBottomClose,
             ToolbarAction::CountRows => AppIcon::Hash,
@@ -329,6 +348,10 @@ impl DataGridPanel {
             actions.push(ToolbarAction::ToggleView);
         }
 
+        if filter_controls_shown && self.offers_filter_history() {
+            actions.push(ToolbarAction::FilterHistory);
+        }
+
         if filter_controls_shown && !self.builder.builder_open && self.can_open_builder(cx) {
             actions.push(ToolbarAction::OpenBuilder);
         }
@@ -375,6 +398,9 @@ impl DataGridPanel {
         }
 
         if self.has_pending_edits(cx) || self.has_pending_document_commit(cx) {
+            if matches!(self.source, DataSource::Table { .. }) {
+                actions.push(ToolbarAction::ReviewChanges);
+            }
             actions.push(ToolbarAction::SaveChanges);
             actions.push(ToolbarAction::RevertChanges);
         }
@@ -568,6 +594,9 @@ impl DataGridPanel {
             ToolbarAction::NearestColumn => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.nearest_column")
             }
+            ToolbarAction::ReviewChanges => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.review_changes")
+            }
             ToolbarAction::SaveChanges => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.save_changes")
             }
@@ -624,6 +653,9 @@ impl DataGridPanel {
             ToolbarAction::Find => dbflux_i18n::t!("document.collection.find"),
             ToolbarAction::QueryHistory => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.query_history")
+            }
+            ToolbarAction::FilterHistory => {
+                dbflux_i18n::t!("document.data.grid.filter.history.toggle")
             }
             ToolbarAction::StepToRoot => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.step_to_root")
@@ -691,6 +723,21 @@ impl DataGridPanel {
             }
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.value_save")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Image)) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_view_image")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Hex)) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_view_hex")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Text)) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_view_text")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::SaveImage) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_save_image")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::CopyImage) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_copy_image")
             }
             ToolbarAction::ToggleMaximize if self.chrome.is_maximized => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.restore")
@@ -794,6 +841,9 @@ impl DataGridPanel {
             ToolbarAction::RevertChanges if self.commits_document_patches(cx) => {
                 self.revert_document_edits(window, cx)
             }
+            ToolbarAction::ReviewChanges => {
+                self.open_change_review(window, cx);
+            }
             ToolbarAction::SaveChanges => {
                 if let Some(table_state) = &self.grid_table.table_state {
                     table_state.update(cx, |state, cx| state.request_save_all(cx));
@@ -859,6 +909,7 @@ impl DataGridPanel {
             }
             ToolbarAction::Find => self.find_documents(window, cx),
             ToolbarAction::QueryHistory => self.open_query_history(window, cx),
+            ToolbarAction::FilterHistory => self.open_filter_history(window, cx),
             ToolbarAction::StepToRoot => self.step_to_depth(0, cx),
             ToolbarAction::CollectionView(tab) => self.set_collection_tab(tab, cx),
             ToolbarAction::TableView(tab) => {

@@ -6,7 +6,7 @@ access:
   manage: Manage
   login: Login
   refresh: Refresh
-  auth_profile_hint: Used for resolving Secret/Parameter/Auth value sources in Direct mode.
+  auth_profile_hint: Used for resolving Secret/Parameter/Auth value sources.
   session_valid: Auth profile session is valid
   ssm_title: SSM Port Forwarding
   ssm_instance_id: Instance ID
@@ -153,11 +153,30 @@ components:
     empty: No cell selected
     error:
       not_xml: Not an XML document
+    hex_cut: "Showing the first %{shown} of %{size}."
+    image:
+      copy: "Copy image"
+      decoding: "Decoding the %{format} image…"
+      incomplete: "This %{format} image is incomplete: the stored value ends before the image does, so it was probably cut short by a size limit. Showing the bytes instead."
+      invalid: "This value starts like a %{format} image but cannot be read: %{error}. Showing the bytes instead."
+      meta: "%{width} × %{height} · %{format} · %{size}"
+      save: "Save image as…"
+      save_title: "Save image"
+      too_many_bytes: "This %{format} image is %{size}, above the %{limit} image preview limit. Showing the bytes instead."
+      too_many_pixels: "This %{format} image is %{width} × %{height} pixels, above the %{limit}-megapixel preview limit. Showing the bytes instead."
+      too_much_memory: "Decoding this %{format} image needs more memory than the preview allows. Showing the bytes instead."
     read_only: Read-only
     revert: Revert
     title: Value
+    view:
+      hex: "Hex"
+      image: "Image"
+      text: "Text"
     wrap: Wrap
   data_table:
+    expression:
+      toggle: "Edit as SQL expression"
+      generate: "Generate %{kind}"
     record:
       empty: No rows to show
       name_header: Name
@@ -167,11 +186,16 @@ components:
     valid:
       one: "valid JSON · %{count} line"
       many: "valid JSON · %{count} lines"
+    valid_xml:
+      one: "valid XML · %{count} line"
+      many: "valid XML · %{count} lines"
     empty_error: Document cannot be empty
     format: Format
     compact: Compact
     cancel: Cancel
     save: Save
+    copy: Copy
+    copy_compact: Copy compact
   value_source:
     literal: Literal
     env: Environment Variable
@@ -187,6 +211,8 @@ components:
       env: "Read from the environment variable %{name} each time DBFlux connects. DBFlux does not store the value."
       dotenv: "Read from %{key} in %{path} each time DBFlux connects. The file must be readable only by you."
       dotenv_missing_key: "Add the key after the path: ~/path/to/file.env#KEY"
+      whole_value: "Uses the whole value. For a JSON secret, such as one RDS manages, add #key to use one field, for example #password."
+      json_key: "Uses the %{key} field of the JSON value."
   file_picker:
     browse: "Browse…"
   column_projection:
@@ -1529,6 +1555,17 @@ document:
       waiting_title: Not connected
       waiting_connection: "Connect to %{profile} to load %{object}."
       waiting_database: "Expand the database %{database} in the sidebar to load %{object}."
+    review:
+      title: "Review changes"
+      literals_note: "The statements Save runs, in order, as the driver sends them. Values are written into the SQL as literals; no bind parameters are sent."
+      cancel: "Cancel"
+      copy: "Copy SQL"
+      save: "Save"
+      unavailable: "This driver does not show the statement it sends for this change."
+      skipped_row: "Row %{row} is not saved: %{reason}"
+      no_connection: "The connection is not open, so the statements cannot be built."
+    expression:
+      rejected: "The expression cannot be saved: %{reason}"
     chart_dock:
       toolbar:
         apply: Apply
@@ -1615,6 +1652,8 @@ document:
         paste: Paste
         edit: Edit
         edit_in_modal: Edit in modal…
+        edit_as_expression: "Edit as SQL expression…"
+        generate_id: "Generate %{kind}"
         set_default: Set to default
         set_null: Set to NULL
         add_row: Add row
@@ -1664,6 +1703,7 @@ document:
         clear_filter: "Clear filter"
         open_builder: "Open query builder"
         reset_builder: "Reset builder query"
+        review_changes: "Review changes"
         save_changes: "Save all changes"
         revert_changes: "Revert all changes"
         auto_refresh: "Auto-refresh interval…"
@@ -1682,6 +1722,11 @@ document:
         value_compact: "Compact the value"
         value_revert: "Revert the value"
         value_save: "Save the value"
+        value_view_image: "Show the value as an image"
+        value_view_hex: "Show the value as hex"
+        value_view_text: "Show the value as text"
+        value_save_image: "Save the image as a file…"
+        value_copy_image: "Copy the image"
         view_table_data: "Show Data"
         view_table_columns: "Show Columns"
         view_table_partitions: "Show Partitions"
@@ -1708,12 +1753,8 @@ document:
         toast:
           native_picker_fallback: "Native file picker unavailable — exported to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
           exported: "Exported to %{path}"
-          exported_rows:
-            one: "Exported 1 loaded row to %{path}"
-            many: "Exported %{count} loaded rows to %{path}"
-          native_picker_fallback_rows:
-            one: "Native file picker unavailable — exported 1 loaded row to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
-            many: "Native file picker unavailable — exported %{count} loaded rows to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+          exported_scope: "Exported %{scope} to %{path}"
+          native_picker_fallback_scope: "Native file picker unavailable — exported %{scope} to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
       clipboard:
         error:
           binary_unsupported: Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead.
@@ -1724,6 +1765,8 @@ document:
           copied_rows:
             one: "Copied 1 loaded row as %{format} (%{bytes} bytes) to clipboard"
             many: "Copied %{count} loaded rows as %{format} (%{bytes} bytes) to clipboard"
+          in_list_only_nulls: "Nothing copied: the selected values are all NULL, and an SQL IN list never matches NULL"
+          copied_scope: "Copied %{scope} as %{format} (%{bytes} bytes) to clipboard"
       document:
         toast:
           inserted: Document inserted
@@ -1733,6 +1776,7 @@ document:
           update_failed: "Failed to update document: %{error}"
     grid:
       edit_bar:
+        review: "Review"
         clean: No unsaved changes
         dirty:
           one: "%{count} unsaved change"
@@ -1794,19 +1838,52 @@ document:
           average: "Avg %{value}"
           min: "Min %{value}"
           max: "Max %{value}"
-          nulls_skipped: "%{count} NULL skipped"
-          non_numeric_skipped: "%{count} non-numeric skipped"
+          nulls_skipped:
+            one: "%{count} NULL skipped"
+            many: "%{count} NULLs skipped"
+          non_numeric_skipped:
+            one: "%{count} non-numeric skipped"
+            many: "%{count} non-numeric skipped"
       export:
         trigger: Export
-        save_as_file: Save loaded rows as file
-        copy_to_clipboard: Copy loaded rows to clipboard
+        save_as_file: "Save as file"
+        copy_to_clipboard: "Copy to clipboard"
         export_all_rows: Export all rows to file
+        options:
+          title: "Export %{scope}"
+          rows: "Rows"
+          columns: "Columns"
+          header: "Include header row (column names)"
+          delimiter: "Delimiter"
+          rows_selected: "Selected"
+          rows_loaded: "Loaded"
+          rows_all: "All"
+          columns_all: "All"
+          columns_visible: "Visible"
+          columns_selected: "Selected"
+          delimiter_comma: "Comma"
+          delimiter_semicolon: "Semicolon"
+          delimiter_tab: "Tab"
+          no_selected_rows: "Select cells to export selected rows"
+          no_selected_columns: "Select cells to export selected columns"
+        scope:
+          summary: "%{rows}, %{columns}"
+          selected_rows:
+            one: "1 selected row"
+            many: "%{count} selected rows"
+          loaded_rows:
+            one: "1 loaded row"
+            many: "%{count} loaded rows"
+          all_rows: "all rows"
+          all_rows_count:
+            one: "1 row"
+            many: "all %{count} rows"
+          columns:
+            one: "1 column"
+            many: "%{count} columns"
         all:
           task: "Export all rows of %{table}"
           toast:
-            exported:
-              one: "Exported 1 row to %{path}"
-              many: "Exported all %{count} rows to %{path}"
             cancelled: "Export cancelled — %{path} holds only the rows written before it stopped"
             dropped_columns: "Fields that first appear after the first page are not in the file: %{columns}"
           error:
@@ -1847,6 +1924,13 @@ document:
         builder_notice: Rows come from the builder query
         edit_in_builder: Edit in builder
         reset_builder: Reset
+        value_not_filterable: "This value cannot be added to the filter"
+        history:
+          toggle: "Filter history"
+          delete: "Remove from history"
+          clear: "Clear history"
+          empty: "No filters yet for this table"
+          no_match: "No filter matches"
       nearest:
         summary: "Similar to %{anchor} by %{column}"
         similar_to: "Similar to"
@@ -3761,9 +3845,16 @@ modals:
       no_metrics_filtered: No metrics match the filter.
     cancel: Cancel
   cell_editor:
+    generate: "Generate %{kind}"
     title_column: "Edit %{column} (%{type_name})"
     title_json: Edit JSON
     title_text: Edit Text
+    title_xml: Edit XML
+    maximize: Maximize
+    restore: Restore size
+    invalid_warning: "Not valid %{format} any more: %{error}. Save again to store it as plain text."
+    copied: Value copied to the clipboard
+    copied_compact: Compact value copied to the clipboard
   create_dashboard:
     name_label: Dashboard name
     title: New dashboard
@@ -4139,15 +4230,24 @@ settings:
       group: "Editor"
     data_grid:
       group: "Data grid"
+    grid_review_before_save:
+      label: "Review changes before saving"
+      hint: "Save first shows the statements it will run, to save, copy or cancel them."
     grid_fk_labels:
       label: "Show referenced-row labels in foreign-key cells"
       hint: "Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after saving; the row inspector always resolves references."
     grid_pk_sort_desc:
-      label: "Sort tables by primary key, newest first"
-      hint: "Tables open ordered by their primary key descending, so the latest rows of an auto-increment key come first. Applies to tables opened after saving; a column header click still sorts as before."
+      label: "Sort tables by primary key descending"
+      hint: "Tables open ordered by their primary key descending, so with an auto-increment key the latest rows come first. Applies to tables opened after saving and, in open tables, to clearing a column sort. A click on the key column's header from this order sorts it ascending."
     grid_copy_column_names:
       label: "Include column names when copying"
-      hint: "Copy (Ctrl+C) from the data grid starts the tab-separated text with a line of column names. Copy as CSV, JSON and the other Copy as entries are not affected."
+      hint: "Copy (Ctrl+C, Cmd+C on macOS) from the data grid starts the tab-separated text with a line of column names. Copy as CSV, JSON and the other Copy as entries are not affected."
+    grid_header_click_sorts:
+      label: "Clicking a column header sorts the column"
+      hint: "Off: a click on a column header selects the whole column and the arrow at its right edge sorts. On: the click sorts the column; Shift+click and Ctrl+click still select columns."
+    grid_filter_autoquote:
+      label: "Insert quotes after a comparison in the WHERE filter"
+      hint: "Typing =, !=, <>, <=, >=, <, >, LIKE or NOT LIKE after a text or date/time column in a table's WHERE filter adds '' with the caret between the quotes. Numbers, booleans and NULL checks are left as typed."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."
@@ -4377,6 +4477,8 @@ settings:
       find_similar_rows: Find similar rows
       copy_selection_as_json: "Copy selection as JSON"
       results_set_null: Set cell to NULL
+      toggle_cell_expression: "Edit cell as SQL expression"
+      review_changes: "Review changes"
       open_context_menu: Open context menu
       open_column_menu: Open column menu
       open_pane_actions: Open pane actions
@@ -4460,6 +4562,11 @@ settings:
       load_more: Load more
       edit_expiry: Edit expiry…
       copy_preview: Copy preview
+      copy_editor_text: Copy editor text
+      copy_editor_text_compact: Copy editor text compacted
+      format_editor_text: Format editor text
+      compact_editor_text: Compact editor text
+      toggle_dialog_maximized: Maximize or restore dialog
       import_items: "Import…"
       import_from_client: "Import from another client…"
       reset_binding: "Reset binding"
@@ -5174,7 +5281,7 @@ sidebar:
     connect: Connect
     retry_connect: Retry
     connect_on_startup: Connect on startup
-    connect_on_startup_overridden: "Off while Settings > General > Startup and session reconnects open connections"
+    connect_on_startup_overridden: "No effect while Settings > General > Startup and session reconnects open connections"
     disconnect: Disconnect
     edit: Edit
     duplicate: Duplicate
@@ -5275,6 +5382,8 @@ sidebar:
     edit_reconnect_later: Later
     connection_already_pending: Connection already pending
     startup_needs_password: "'%{name}' was not connected on startup because its password is not saved. Connect to enter it."
+    startup_needs_passwords: "%{names} were not connected on startup because their passwords are not saved. Connect to each one to enter it."
+    startup_needs_passphrase: "'%{name}' was not connected on startup because its SSH tunnel needs a passphrase that is not saved. Connect to enter it."
     operation_started_elsewhere: Operation started by another thread
     background_task_limit: Too many background tasks running, please wait
     connection_cancelled_by_hook: Connection cancelled by hook

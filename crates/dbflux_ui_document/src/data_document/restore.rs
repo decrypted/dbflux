@@ -236,9 +236,10 @@ impl DataDocument {
             }
         };
 
-        if self.is_active_tab {
-            data_grid.update(cx, |grid, cx| grid.set_active_tab(true, cx));
-        }
+        // A new grid starts out active; a tab restored behind another one has
+        // to say otherwise, or it refreshes as if it were on screen.
+        let is_active_tab = self.is_active_tab;
+        data_grid.update(cx, |grid, cx| grid.set_active_tab(is_active_tab, cx));
 
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();

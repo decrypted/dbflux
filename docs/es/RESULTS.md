@@ -49,7 +49,7 @@ Cuando el panel de resultados tiene el foco:
 - `z` alterna el colapso del panel.
 - `m` (o `Shift+F10`) abre el menú contextual de fila/celda.
 
-Con el ratón, un clic selecciona una celda y `Shift`+clic, o pulsar y arrastrar, selecciona el rango hasta otra celda. Un clic en un número de fila selecciona la fila entera, y `Shift`+clic en otro número de fila selecciona todas las filas intermedias. `Ctrl`+clic (`Cmd`+clic en macOS) en una celda o un número de fila la añade a la selección, o la quita cuando está seleccionada sola; al copiar varios rangos se copian las filas y columnas que abarcan, con las celdas fuera de la selección vacías. Al arrastrar más allá de un borde de la cuadrícula, esta se desplaza en esa dirección, más deprisa cuanto más lejos esté el puntero, y el rango sigue creciendo hasta soltar el botón o volver con el puntero.
+Con el ratón, un clic selecciona una celda y `Shift`+clic, o pulsar y arrastrar, selecciona el rango hasta otra celda. Un clic en un número de fila selecciona la fila entera, y `Shift`+clic en otro número de fila selecciona todas las filas intermedias. `Ctrl`+clic (`Cmd`+clic en macOS) en una celda o un número de fila la añade a la selección, o la quita cuando está seleccionada sola; al copiar varios rangos se copian las filas y columnas que abarcan, con las celdas fuera de la selección vacías. Los rangos añadidos sirven para copiar: borrar, duplicar, guardar y las demás acciones de fila actúan sobre la fila del cursor, un clic derecho selecciona la celda bajo el puntero y la vista de registro trata `Ctrl`+clic como un clic normal. Al arrastrar más allá de un borde de la cuadrícula, esta se desplaza en esa dirección, más deprisa cuanto más lejos esté el puntero, y el rango sigue creciendo hasta soltar el botón o volver con el puntero.
 
 Cuando la selección abarca más de una celda, la barra de estado muestra cuántas celdas contiene y, para los números entre ellas, su suma, media, mínimo y máximo. Los NULL y el texto se cuentan pero quedan fuera de las cifras, y la barra de estado indica cuántos ha omitido. Los totales se calculan con las filas ya cargadas, incluidas las ediciones sin guardar, sin volver a consultar la base de datos.
 
@@ -73,14 +73,20 @@ modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
 esa columna: ordenar ascendente o descendente, quitar el orden y todos los
 operadores de filtro, en una sola lista plana. El clic izquierdo en la
-cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada.
+cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic, `Cmd`+clic en macOS, la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada. Con **Hacer clic en la cabecera de una columna la ordena** activado (Settings > General > Data grid), un clic normal en la cabecera la ordena, como la flecha.
 
 Para ordenar por varias columnas, haz `Alt`+clic en la flecha de otra columna:
 pasa a ser la siguiente clave de orden, ascendente, y otro `Alt`+clic la vuelve
 descendente y después la quita del orden. Con más de una clave, cada cabecera
 ordenada muestra su posición (1, 2, 3) junto a la flecha, y las filas que
 empatan en la primera clave se ordenan por la segunda, y así sucesivamente. Un
-clic normal en cualquier flecha vuelve a ordenar solo por esa columna. El menú
+clic normal en cualquier flecha vuelve a ordenar solo por esa columna, en la
+dirección que ya tenía si era clave. Una tabla cuya clave primaria tiene varias
+columnas se abre ordenada por todas ellas, así que sus columnas clave muestran 1
+y 2 desde el principio. Algunos escritorios Linux (KDE Plasma, por ejemplo)
+usan `Alt`+clic para mover ventanas; ahí **Añadir al orden** del menú de la
+columna hace lo mismo, o se puede cambiar el modificador del gestor de
+ventanas. El menú
 de la columna ofrece lo mismo con **Añadir al orden: columna ASC** y **Añadir
 al orden: columna DESC**, que también cambian la dirección de una columna que ya
 es clave, y **Quitar orden** elimina todas las claves. Una tabla envía todas las
@@ -89,7 +95,6 @@ ordena en memoria. En una tabla que sigue en su orden por defecto (su clave
 primaria), la primera clave añadida sustituye ese orden, porque las filas
 ordenadas primero por la clave primaria no dejan empates que otra columna pueda
 ordenar; quitar el orden vuelve al orden por defecto.
-
 `Shift+m` abre el mismo menú desde el teclado, para la columna de la celda
 seleccionada. El menú termina con una sección **Columna** de ajustes de vista,
 que cambian cómo la grilla muestra la columna y nunca la consulta. **Ajustar
@@ -114,15 +119,15 @@ la columna vuelva a desplazarse, como la primera de las demás. Seleccionar,
 editar, ordenar, redimensionar y los números de fila funcionan igual en las
 columnas fijadas. Mover a la izquierda y Mover a la derecha se quedan en su lado
 del borde de las fijadas; arrastrar una cabecera a través de él fija o suelta su
-columna.
+columna. Las columnas fijadas ocupan como mucho dos tercios del ancho de la
+grilla, para que las demás siempre tengan sitio: en una grilla estrecha, las
+fijadas que no caben se desplazan con las demás hasta que vuelva a haber ancho.
 
 La consulta sigue leyendo todas las columnas (una tabla sigue ejecutando
 `SELECT *`); para dejar una columna fuera de la consulta misma, usa la
-proyección del constructor de consultas. Copiar (con o sin nombres de columna),
-Copiar como CSV, Copiar como JSON, Copiar como lista IN de SQL, Copiar como
-sentencias INSERT y Copiar como tabla Markdown siguen la pantalla: las columnas
-visibles, en el orden en que la grilla las muestra, y la lista IN toma la que
-está más a la izquierda. Copiar fila, Copiar como consulta y Exportar usan la fila completa en
+proyección del constructor de consultas. Copiar, Copiar como CSV y Copiar como
+JSON siguen la pantalla: las columnas visibles, en el orden en que la grilla las
+muestra. Copiar fila, Copiar como consulta y Exportar usan la fila completa en
 el orden propio del resultado, columnas ocultas incluidas. Una tabla recuerda su
 disposición para su conexión, base de datos, esquema y tabla, al cerrarla y al
 reiniciar DBFlux; volver a poner todas las columnas en el orden propio de la
@@ -139,6 +144,24 @@ analiza — con formato legible, compacto y ajuste de línea. Se puede editar al
 **Guardar** confirma la fila directamente y **Revertir** descarta el cambio. El
 panel sigue la celda seleccionada al moverte por la cuadrícula, salvo mientras
 tenga un cambio sin guardar.
+
+Una celda binaria (`bytea`, `BLOB`, `varbinary` y similares) se abre como volcado
+hexadecimal, de solo lectura. Cuando sus bytes son una imagen PNG, JPEG, GIF,
+WebP o BMP, reconocida por los propios bytes y no por el nombre de la columna,
+el panel muestra la imagen, reducida para que quepa, con su tamaño en píxeles,
+su formato y su tamaño en bytes debajo. **Hex** cambia al volcado hexadecimal e
+**Imagen** vuelve a la imagen. **Guardar imagen como…** escribe los bytes
+guardados en un archivo y **Copiar imagen** pone la imagen en el portapapeles;
+ambas están también en la entrada Barra de herramientas del menú contextual
+de la grilla (`m`). Una celda de texto con una imagen en base64, sola o como URI
+`data:image/...;base64,`, se abre igual en la imagen, con **Texto** para volver
+al texto.
+
+Las imágenes de más de 32 MB o 32 megapíxeles no se decodifican, ni tampoco un
+valor que termina antes que su imagen, como uno recortado por un límite de
+tamaño: el panel indica el motivo encima del volcado hexadecimal. Las imágenes
+animadas muestran su primer fotograma y SVG no se dibuja. El volcado
+hexadecimal de un valor grande se detiene tras sus primeros 64 KB.
 
 ## Inspector de fila
 
@@ -199,6 +222,67 @@ schema](QUERY_BUILDER.md#autocompletado-consciente-del-schema)).
   <img src="../images/results/filtering-light.webp" alt="La tabla customers filtrada con una condición WHERE escrita en la barra de filtro">
 </picture>
 
+### Filtrar por una celda
+
+El submenú **Filtro** del menú contextual de una celda (`m`, o clic derecho)
+reduce el filtro al valor de la celda con `=`, `<>`, `<`, `>`, `LIKE`, `IS NULL`
+y los demás operadores que admite el tipo de la columna. `Alt`+clic en una celda
+hace lo mismo con `=` en un solo paso (`IS NULL` para una celda NULL) y
+selecciona la celda. Ambos conservan el filtro actual como término `AND`, entre
+paréntesis cuando tiene un `OR` de primer nivel, así que `status = 500` pasa a
+`status = 500 AND "method" = 'getbets'`, y una condición que el filtro ya
+contiene no se añade dos veces. Los valores binarios, JSON y anidados no se
+pueden añadir así. Algunos gestores de ventanas de Linux usan `Alt`+arrastrar
+para mover ventanas; un `Alt`+clic sin mover el puntero sigue funcionando.
+
+### Deshacer un filtro
+
+Cada filtro `WHERE` nuevo con el que se lee una tabla es un paso de Deshacer y
+Rehacer del grid, se aplique como se aplique (`Enter`, una entrada del
+historial, `Alt`+clic, el submenú Filtro, limpiar el filtro). Con el foco en el
+grid, Deshacer primero revierte las ediciones de celdas hechas desde la última
+lectura de la tabla, de la más reciente a la más antigua, y después vuelve a
+poner el filtro anterior y lee la tabla con él desde la primera página; Rehacer
+avanza del mismo modo. Mientras el campo `WHERE` tiene el teclado, Deshacer y
+Rehacer editan su texto como antes. Un paso de filtro nunca descarta ediciones
+pendientes: con ediciones que Deshacer no puede revertir se rechaza con el mismo
+mensaje que una recarga. También funciona en un grid de solo lectura, donde no
+hay ediciones que deshacer. Los cambios de orden y de `LIMIT` no son pasos de
+deshacer.
+
+### Historial de filtros
+
+Cada filtro con el que una tabla se leyó correctamente se guarda para esa tabla
+(conexión, base de datos, schema y tabla), del más reciente al más antiguo,
+hasta 50 por tabla, y se conserva al reiniciar. Aplicar de nuevo un filtro lo
+sube al principio en lugar de listarlo dos veces, y un filtro que la base de
+datos rechazó no se guarda. Solo se guarda el texto del filtro, nunca filas.
+
+Abre la lista con el icono de historial a la izquierda del campo `WHERE`, con
+**Filter history** en la entrada Toolbar del menú de la tabla (`m`), o con
+`Up` / `Down` en el campo mientras está vacío o el cursor está al principio.
+Escribir con la lista abierta la reduce a los filtros que contienen el texto.
+`Up` / `Down` mueven el resaltado y `Enter` aplica el filtro resaltado; sin nada
+resaltado, `Enter` aplica lo que escribiste. `Shift+Delete` o la × de una fila
+quita ese filtro, la última fila, **Clear history**, olvida todos los filtros de
+la tabla, y `Escape` cierra la lista.
+
+El historial de queries de una colección de documentos (el botón de historial de
+su barra de query) también se conserva al reiniciar.
+
+### Comillas tras una comparación
+
+Con **Insertar comillas tras una comparación en el filtro WHERE** activado
+(Ajustes → General → Data grid, desactivado por defecto), escribir una
+comparación tras una columna de texto o de fecha/hora de una tabla SQL inserta
+las comillas de su valor: `method =` pasa a `method = '|'` con el cursor entre
+ellas. Un espacio o una comilla escritos justo después, por costumbre, se
+absorben; una vez escrito el valor, una `'` escrita delante de la comilla de
+cierre pasa por encima en lugar de añadir otra; y `Backspace` justo después de la
+inserción vuelve a quitar las comillas. Los números, booleanos, `IS NULL`,
+`IN (...)`, el texto dentro de un literal y el texto pegado no reciben comillas.
+Ver [Ajustes](SETTINGS.md) para los operadores.
+
 ## Filas similares
 
 En una tabla con una columna vectorial (hoy, una tabla PostgreSQL con una
@@ -241,12 +325,82 @@ En el data grid:
 - `y` — copiar la fila seleccionada.
 - `Ctrl+c` (`Cmd+c`) — copiar la(s) celda(s) seleccionada(s) al portapapeles.
 
-Con varias celdas seleccionadas, `Enter`, `F2` o un doble clic en una de ellas abre el editor para todas, y la barra de estado indica cuántas celdas cambiará la edición. El valor que confirmas se escribe en cada celda seleccionada que lo admita, como cambios sin guardar que Guardar y Revertir tratan igual que cualquier otra edición, y un solo deshacer (`u` o `Ctrl+z`) revierte la edición entera. Se omiten las celdas de columnas de solo lectura, las filas marcadas para eliminar y los valores que el editor en línea no edita (JSON, texto largo o de varias líneas); un valor elegido de la lista de valores permitidos de una columna solo va a columnas con la misma lista.
+Con varias celdas seleccionadas, `Enter`, `F2` o un doble clic en una de ellas abre el editor para todas, y la barra de estado indica cuántas celdas cambiará la edición. El valor que confirmas se escribe en cada celda seleccionada del mismo tipo de columna que lo admita, como cambios sin guardar que Guardar y Revertir tratan igual que cualquier otra edición, y un solo deshacer (`u` o `Ctrl+z`) revierte la edición entera. Se omiten las celdas de columnas de solo lectura, las filas marcadas para eliminar y los valores que el editor en línea no edita (JSON, texto largo o de varias líneas), y también las columnas de clave cuando la selección abarca varias filas, porque un mismo valor en la clave de cada fila nunca podría guardarse; un valor elegido de la lista de valores permitidos de una columna solo va a columnas con la misma lista.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/results/editing-dark.webp">
   <img src="../images/results/editing-light.webp" alt="La tabla customers con una celda editada aún sin guardar y los botones Save y Revert habilitados">
 </picture>
+
+### Editar valores largos
+
+Las columnas JSON y los valores largos se abren en el editor modal de celdas.
+Una celda de texto cuyo contenido se interpreta como un objeto o un array JSON,
+o como XML, se abre ahí en el mismo editor que recibe una columna JSON,
+detectado igual que en el panel de valor: con formato legible, resaltado de
+sintaxis, números de línea y plegado, una línea de estado que indica si el
+texto sigue siendo válido, y **Format** y **Compact**. El título nombra el tipo
+de la columna y el formato, por ejemplo `Editar raw_result (TEXT · JSON)`. Los
+números y cadenas sueltos siguen siendo texto sin formato.
+
+Mostrar un valor con formato no cambia cómo se guarda. Un valor guardado en una
+sola línea se vuelve a guardar compacto, quitando solo los espacios entre
+elementos, de modo que el orden de las claves, números como `2312.64496440` y
+cadenas como `"2725.8328350479"` quedan exactamente como estaban. Un valor
+guardado en varias líneas se guarda tal como se editó, y **Save** sin cambios no
+crea ninguna edición pendiente. Si el texto de una columna de texto deja de ser
+válido, el primer **Save** muestra un aviso y el segundo lo guarda tal como se
+escribió; una columna JSON lo rechaza.
+
+**Copy** copia al portapapeles el texto del editor tal como se ve, con las
+ediciones sin guardar, y **Copy compact** lo copia compactado. Arrastra el borde
+derecho o inferior del editor, o su esquina inferior derecha, para cambiar su
+tamaño, o maximízalo con el botón junto al botón de cerrar. El tamaño se recuerda
+para el siguiente valor.
+
+| Teclas | Acción |
+|--------|--------|
+| `Ctrl+s` (`Cmd+s`) | Guardar |
+| `Ctrl+Shift+k` / `Ctrl+Shift+h` | Copiar / Copiar compacto (`Cmd` en macOS) |
+| `Ctrl+Shift+u` / `Ctrl+Shift+j` | Formatear / Compactar |
+| `Ctrl+Shift+Enter` | Maximizar o restaurar el editor |
+
+`Ctrl+c` (`Cmd+c`) sigue copiando el texto seleccionado.
+### Expresiones SQL en celdas
+
+En una tabla de MySQL, MariaDB, PostgreSQL, SQLite o SQL Server, una celda puede tomar una expresión SQL en lugar de un valor, como `NOW()`, `"qty" + 1` o `DEFAULT`. La expresión se guarda sin comillas en el `UPDATE` o `INSERT` de la fila, y la base de datos calcula el valor.
+
+- **Editar como expresión SQL…** en el menú contextual de la celda, o `Ctrl+Alt+E` (`Cmd+Alt+E` en macOS), abre el editor con su interruptor `fx` activado. En una celda de una selección mayor, la expresión va a cada celda seleccionada, como en una edición de varias celdas.
+- Con el editor abierto, un clic en `fx` o el mismo atajo alterna entre valor y expresión, conservando lo escrito.
+- Mientras `fx` está activado, una lista bajo el editor sugiere expresiones para el tipo de la columna y la base de datos, y `Abajo` / `Arriba` las escriben en el editor una a una. Se puede escribir cualquier otra expresión.
+
+| Tipo de columna | MySQL / MariaDB | PostgreSQL | SQLite | SQL Server |
+|---|---|---|---|---|
+| Fecha y hora | `NOW()`, `CURRENT_TIMESTAMP`, `UTC_TIMESTAMP()`, `DATE_ADD(NOW(), INTERVAL 1 DAY)` | `now()`, `current_timestamp`, `now() + interval '1 day'` | `CURRENT_TIMESTAMP`, `datetime('now')`, `datetime('now', 'localtime')`, `datetime('now', '+1 day')` | `GETDATE()`, `CURRENT_TIMESTAMP`, `SYSDATETIME()`, `GETUTCDATE()`, `DATEADD(day, 1, GETDATE())` |
+| Fecha | `CURDATE()`, `CURRENT_DATE`, `UTC_DATE()` | `current_date`, `current_date + 1` | `CURRENT_DATE`, `date('now')` | `CAST(GETDATE() AS date)` |
+| Hora | `CURTIME()`, `CURRENT_TIME`, `UTC_TIME()` | `current_time`, `localtime` | `CURRENT_TIME`, `time('now')` | `CAST(GETDATE() AS time)` |
+| uuid | `UUID()` (`char(36)`), `UNHEX(REPLACE(UUID(), '-', ''))` (`binary(16)`) | `gen_random_uuid()` | | `NEWID()` |
+| Número | `col + 1`, `col - 1` | igual | igual | igual |
+| Texto | `CONCAT(col, '')`, `UPPER`, `LOWER`, `TRIM` | `col \|\| ''`, `upper`, `lower`, `trim` | `col \|\| ''`, `upper`, `lower`, `trim` | `CONCAT(col, '')`, `UPPER`, `LOWER`, `LTRIM(RTRIM(col))` |
+| Cualquiera | `NULL`, `DEFAULT` | `NULL`, `DEFAULT` | `NULL` | `NULL`, `DEFAULT` |
+
+Una expresión pendiente se muestra en la celda como `fx NOW()` en cursiva hasta que se guarda; después de guardar, la fila muestra el valor que calculó la base de datos. Deshacer, rehacer y Revertir la tratan como cualquier otra edición, y las celdas de una fila nueva también la admiten. Una expresión con un comentario, un `;` o una `,` fuera de paréntesis se rechaza al confirmarla, porque podría cambiar más que la celda (un comentario podría ocultar el `WHERE` del `UPDATE`). Las demás bases de datos, los resultados de consultas y las colecciones de documentos no ofrecen expresiones.
+
+### Revisar los cambios antes de guardar
+
+**Revisar** en la barra de edición, junto a Guardar y Revertir, o `Ctrl+Alt+S` (`Cmd+Alt+S` en macOS), muestra las sentencias que Guardar ejecutará para los cambios sin guardar de la tabla, en el orden en que las ejecuta: eliminaciones, luego filas nuevas, luego filas editadas. Las construye el propio guardado y las genera el driver de la conexión, así que son lo que recibe la base de datos, con las expresiones SQL sin comillas. Los valores van en las sentencias como literales; los drivers de MySQL, MariaDB, PostgreSQL, SQLite y SQL Server no envían parámetros enlazados. Un cambio que no se puede guardar (una fila sin su clave) aparece como un comentario que explica por qué.
+
+Desde la revisión, **Guardar** (o `Enter`) ejecuta esas sentencias, sin la confirmación aparte que piden las eliminaciones; **Copiar SQL** las copia como script; **Cancelar** (o `Escape`) cierra la revisión y conserva los cambios. Con **Revisar los cambios antes de guardar** activado en Configuración > General > Cuadrícula de datos, cada Guardar en la cuadrícula de una tabla abre primero la revisión.
+
+### IDs generados
+
+Una celda puede recibir un identificador nuevo que genera DBFlux y se escribe como un valor normal, así que funciona con cualquier base de datos: **UUID v4** (aleatorio), **UUID v7** (ordenado por tiempo), **KSUID** (27 caracteres, ordenable por segundo) y **ULID** (26 caracteres, ordenable por milisegundo).
+
+- El menú contextual de la celda tiene una entrada **Generar …** por cada tipo que la columna puede guardar. En una celda de una selección mayor, cada celda seleccionada recibe su propio valor nuevo, nunca una copia, y un solo deshacer los revierte todos.
+- En una columna que parece un identificador (un tipo `uuid`, una clave, una columna de texto del tamaño de uno de los tipos o un nombre como `user_id`), la lista bajo el editor en línea ofrece primero los tipos, con los UUID arriba; `Abajo` / `Arriba` escriben un valor nuevo en el editor. Al confirmarlo sobre una selección de varias celdas, cada celda vuelve a recibir su propio valor.
+- El diálogo del editor de celdas muestra un botón **Generar …** por tipo.
+
+Una columna `uuid` o `uniqueidentifier` recibe los UUID en su forma con guiones. Una columna de texto recibe los tipos que caben en su longitud declarada: un `char(36)` los UUID, un `char(27)` un KSUID, un `varchar(30)` un KSUID o un ULID, y una columna de longitud desconocida los cuatro. Las columnas binarias como `binary(16)` de MySQL no ofrecen IDs generados, porque la cuadrícula escribe texto y necesitan los 16 bytes crudos; ahí se usa la expresión `UNHEX(REPLACE(UUID(), '-', ''))`.
 
 ### Cuándo los resultados son editables
 
@@ -292,11 +446,15 @@ cargadas al portapapeles**: el CSV empieza con una fila de cabecera con los
 nombres de las columnas, y el JSON es un array con un objeto por fila, con las
 columnas como claves y los números, booleanos y `null` como tales. Se incluyen
 todas las filas y columnas que abarca la selección; una celda dentro de esa área
-pero fuera de la selección queda vacía en CSV y `null` en JSON. **Copiar**
-(`Ctrl+c`) copia texto separado por tabulaciones, sin cabecera salvo que
-**Incluir los nombres de columna al copiar** esté activado en Ajustes → General
-→ Cuadrícula de datos, que lo empieza con una línea con los nombres de las
-columnas copiadas.
+pero fuera de la selección queda vacía en CSV y `null` en JSON. Las copias
+siguen lo que muestra la cuadrícula: una edición sin guardar se copia con su
+valor nuevo y una fila añadida aún sin guardar, en su lugar. En JSON, las
+columnas con el mismo nombre (`a.id` y `b.id` de un join) comparten una clave,
+que toma el valor de la última. **Copiar** (`Ctrl+c`) copia texto separado por
+tabulaciones, también con las ediciones y filas añadidas sin guardar, sin
+cabecera salvo que **Incluir los nombres de columna al copiar** esté activado en
+Ajustes → General → Cuadrícula de datos, que lo empieza con una línea con los
+nombres de las columnas copiadas.
 `Ctrl+Alt+c` (`Cmd+Alt+c` en macOS) ejecuta **Copiar como JSON** desde el
 teclado; el menú lo muestra junto a la entrada.
 
@@ -306,17 +464,25 @@ Debajo, el menú tiene tres extractores más:
   columna como lista para un `WHERE ... IN`, por ejemplo `('a', 'O''Brien')` o
   `(1, 2, 3)`, con las comillas que usa el driver de la conexión (comillas ANSI
   en un resultado sin conexión). Un valor seleccionado varias veces aparece una
-  sola vez y `NULL` se omite, porque `IN (NULL)` no coincide con nada. Con
-  varias columnas seleccionadas usa la de más a la izquierda.
+  sola vez y `NULL` se omite, porque `IN (NULL)` no coincide con nada; una
+  selección que solo tiene NULL no copia nada y lo avisa. Con varias columnas
+  seleccionadas usa la de más a la izquierda. El menú de una colección no la
+  ofrece.
 - **Copiar como sentencias INSERT**, en una tabla, copia un `INSERT` por cada
   fila seleccionada con las columnas seleccionadas, escrito por el mismo
   generador del driver que **Copiar como query**. Cada fila aporta sus propios
   valores para esas columnas, aunque una celda dentro del área no esté
-  seleccionada.
+  seleccionada, y una fila con un valor que el driver no puede escribir se
+  omite. No se ofrece en filas agrupadas ni en un join del constructor de
+  consultas, cuyas columnas no son todas de la tabla.
 - **Copiar como tabla Markdown** copia las mismas filas y columnas que Copiar
   como CSV como una tabla Markdown con fila de cabecera; las celdas `NULL` y
-  las no seleccionadas quedan vacías, y `|` y los saltos de línea dentro de los
-  valores se escapan.
+  las no seleccionadas quedan vacías, los bytes se escriben en hexadecimal
+  `\x` y los arrays y documentos como JSON, y `|`, `&`, `<` y los saltos de
+  línea dentro de los valores se escapan.
+
+Los tres copian lo que muestra la cuadrícula, como Copiar como CSV: una edición
+sin guardar con su valor nuevo y una fila añadida aún sin guardar, en su lugar.
 
 ## Copiar como query
 
@@ -336,17 +502,45 @@ resultado e incluyen:
 - **Text**
 - **Binary** (para resultados con forma binaria)
 
-Las secciones **Guardar filas cargadas como archivo** y **Copiar filas cargadas
-al portapapeles** del menú escriben las filas que tiene la cuadrícula, que en una
-tabla son la página actual, y el aviso indica cuántas filas fueron al archivo o
-al portapapeles.
+La parte superior del menú elige qué se exporta, y los formatos de **Guardar
+como archivo** y **Copiar al portapapeles** que hay debajo siguen esa elección:
 
-Cuando la cuadrícula muestra una tabla o una colección leída página a página, el
-menú añade **Exportar todas las filas a un archivo**, en CSV o en JSON con un
-objeto por línea. Vuelve a leer la tabla o la colección completa con el filtro,
-el orden y la selección de columnas actuales de la cuadrícula, una página a la
-vez, y la escribe en el único archivo que elijas, de modo que los datos nunca
-tienen que caber en memoria. Una tabla mostrada mediante el constructor de
+- **Filas**: **Seleccionadas** escribe las filas que tienen una celda
+  seleccionada tal como las muestra la cuadrícula, con las ediciones y filas
+  añadidas sin guardar, como Copiar como CSV; **Cargadas** las filas que tiene la cuadrícula (en una tabla, la
+  página actual) y **Todas** todas las filas de la tabla o la colección (ver más
+  abajo; solo se ofrece donde la cuadrícula puede volver a leerla página a
+  página). **Seleccionadas** está desactivada, con el motivo bajo la fila, hasta
+  que se selecciona una celda.
+- **Columnas**: **Visibles**, la opción por defecto, escribe las columnas
+  mostradas en el orden en que las muestra la cuadrícula, así que las columnas
+  ocultas se omiten y las movidas o fijadas conservan su lugar. **Todas**
+  escribe todas las columnas en el orden del resultado, incluidas las ocultas.
+  **Seleccionadas** escribe las columnas mostradas que tienen una celda
+  seleccionada, en el orden de la pantalla. Filas seleccionadas con columnas
+  seleccionadas escriben las celdas de un rango seleccionado con sus valores;
+  con varios rangos de `Ctrl`+clic, todas las filas y columnas que abarcan.
+- **Incluir fila de encabezado (nombres de columna)**, activada por defecto, y
+  **Separador** (coma, punto y coma o tabulador) se aplican al CSV guardado o
+  copiado desde este menú y a Exportar todas las filas en CSV. No cambian Copiar
+  como CSV del menú contextual.
+
+El título sobre las opciones indica qué escriben los formatos, por ejemplo
+"Exportar 12 filas seleccionadas, 4 columnas", y el aviso tras guardar o copiar
+indica las mismas filas y columnas con la ruta o el número de bytes. El menú se
+abre en el primer formato, así que `Ctrl+e` `Enter` sigue guardando de
+inmediato. `k` o `Arriba` sube a las opciones; `Enter`, `Derecha` o `l` en una
+fila de opción pasa a su siguiente valor, saltando los que no se aplican, o
+marca la casilla del encabezado, y un clic elige un valor directamente. Tus
+elecciones se guardan para todas las cuadrículas, no por tabla, y entre
+reinicios.
+
+Con **Filas** en **Todas**, el menú ofrece **Exportar todas las filas a un
+archivo**, en CSV o en JSON con un objeto por línea. Vuelve a leer la tabla o la
+colección completa con el filtro, el orden y la selección de columnas actuales
+de la cuadrícula, una página a la vez, escribe las columnas que elige la opción
+**Columnas** y la escribe en el único archivo que elijas, de modo que los datos
+nunca tienen que caber en memoria. Una tabla mostrada mediante el constructor de
 consultas o un filtro relacional se lee con esa misma consulta, desde su
 desplazamiento y hasta su límite cuando lo define. La exportación se ejecuta
 como una tarea en el panel de tareas, que muestra su progreso y permite

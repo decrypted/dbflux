@@ -114,11 +114,14 @@ impl DataTableState {
     /// selection extended to the cell now under the pointer, clamped into the
     /// body. Returns whether the pointer is still past an edge.
     fn autoscroll_tick(&mut self, cx: &mut Context<Self>) -> bool {
+        // Record mode or an emptied result stop drawing the body, and with it
+        // the listener that would end the drag: stop here instead.
+        let body_gone = self.record_mode || self.row_count() == 0;
         let Some(autoscroll) = self.drag_autoscroll.as_mut() else {
             return false;
         };
         let step = edge_step(autoscroll.pointer, autoscroll.body);
-        if !self.drag_selecting || step == Point::default() {
+        if !self.drag_selecting || body_gone || step == Point::default() {
             // This runs inside the task itself: detached, it ends on its own
             // when this returns, and the next move past an edge starts anew.
             if let Some(task) = autoscroll.task.take() {
@@ -129,28 +132,42 @@ impl DataTableState {
         let (pointer, body, row_height) =
             (autoscroll.pointer, autoscroll.body, autoscroll.row_height);
 
+        let mut moved = false;
         if step.y != px(0.0) {
             let base = self.vertical_scroll_handle.0.borrow().base_handle.clone();
             let offset = base.offset();
             let max_y = base.max_offset().y.max(px(0.0));
             let y = (offset.y - step.y).clamp(-max_y, px(0.0));
-            base.set_offset(Point::new(offset.x, y));
+            if y != offset.y {
+                base.set_offset(Point::new(offset.x, y));
+                moved = true;
+            }
         }
         if step.x != px(0.0) && self.apply_horizontal_wheel_delta(-step.x) {
             self.sync_horizontal_offset(cx);
+            moved = true;
         }
 
         if let Some(coord) = self.cell_at(pointer, body, row_height)
             && self.selection.active != Some(coord)
         {
             self.extend_selection(coord, cx);
+            moved = true;
         }
-        cx.notify();
+        // Held past the last row or column nothing moves: no redraw.
+        if moved {
+            cx.notify();
+        }
         true
     }
 
     /// The cell drawn under `pointer`, or the nearest one inside `body`
     /// when the pointer is outside it.
+    ///
+    /// Columns are hit in screen order (moved and hidden ones as the grid
+    /// draws them) and returned as model columns. The pinned strip at the
+    /// left does not scroll sideways, so a pointer over it hits a pinned
+    /// column whatever the horizontal offset.
     fn cell_at(
         &self,
         pointer: Point<Pixels>,
@@ -158,9 +175,9 @@ impl DataTableState {
         row_height: Pixels,
     ) -> Option<CellCoord> {
         let row_count = self.row_count();
-        let col_count = self.col_count();
+        let shown_count = self.column_layout.visible_count();
         if row_count == 0
-            || col_count == 0
+            || shown_count == 0
             || row_height <= px(0.0)
             || body.size.width < px(1.0)
             || body.size.height < px(1.0)
@@ -181,24 +198,19 @@ impl DataTableState {
         let content_y = f32::from(inside_y - body.top() - scroll_y);
         let row = ((content_y / f32::from(row_height)).max(0.0) as usize).min(row_count - 1);
 
-        // Rows are drawn shifted left by the horizontal offset, row number
-        // first, except for the pinned strip at the left edge, which does not
-        // scroll. Offsets run in screen order, so the hit is a screen
-        // position, mapped back to the model column the selection holds.
-        let screen_x = f32::from(inside_x - body.left() - ROW_NUMBER_WIDTH);
-        let in_pinned_strip =
-            self.column_layout.pinned_count() > 0 && screen_x < self.pinned_width();
-        let content_x = if in_pinned_strip {
-            screen_x
+        // Rows are drawn row number first, then the pinned strip, which stays
+        // put, then the other columns shifted left by the horizontal offset.
+        let cells_x = f32::from(inside_x - body.left() - ROW_NUMBER_WIDTH);
+        let content_x = if cells_x < self.pinned_width() {
+            cells_x
         } else {
-            screen_x + f32::from(self.horizontal_offset)
+            cells_x + f32::from(self.horizontal_offset)
         };
-        let last_position = self.column_layout.visible_count().checked_sub(1)?;
         let position = self
             .column_offsets
             .partition_point(|offset| *offset <= content_x)
             .saturating_sub(1)
-            .min(last_position);
+            .min(shown_count - 1);
         let col = self.column_layout.model_column(position)?;
 
         Some(CellCoord::new(row, col))
@@ -233,39 +245,21 @@ mod tests {
         assert!(above_left.y < px(0.0), "above the body scrolls up");
     }
 
-    #[test]
-    fn the_further_out_the_faster_up_to_a_limit() {
-        let near = edge_step(point(px(300.0), px(402.0)), body()).y;
-        let far = edge_step(point(px(300.0), px(460.0)), body()).y;
-        let very_far = edge_step(point(px(300.0), px(2000.0)), body()).y;
-        assert!(far > near);
-        assert_eq!(very_far, px(MAX_STEP));
-    }
-}
-
-#[cfg(test)]
-mod layout_tests {
-    use std::sync::Arc;
-
-    use gpui::{AppContext as _, TestAppContext, point, px, size};
-
-    use super::super::DataTableState;
-    use crate::components::data_table::model::{
-        CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
-    };
-    use crate::components::data_table::selection::CellCoord;
-    use crate::components::data_table::theme::ROW_NUMBER_WIDTH;
-
-    /// The cell under a dragged pointer is found by screen position: a
-    /// column pinned to the left edge is hit where the strip draws it, and
-    /// a scrolling column through the scroll, as the model column it is.
+    /// With columns moved, hidden and pinned, the cell under the pointer is
+    /// found in screen order and named by its model column, and a pointer
+    /// over the pinned strip hits a pinned column however far the grid has
+    /// scrolled.
     #[gpui::test]
-    fn the_drag_hit_test_follows_moved_and_pinned_columns(cx: &mut TestAppContext) {
-        let columns = ["a", "b", "c", "d"]
-            .iter()
-            .map(|name| ColumnSpec {
-                id: (*name).into(),
-                title: (*name).into(),
+    fn the_cell_under_the_pointer_follows_the_column_layout(cx: &mut gpui::TestAppContext) {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::AppContext as _;
+
+        let columns = (0..4)
+            .map(|col| ColumnSpec {
+                id: format!("c{col}").into(),
+                title: format!("c{col}").into(),
                 kind: ColumnKind::Text,
                 align: gpui::TextAlign::Left,
                 type_name: "text".into(),
@@ -273,35 +267,54 @@ mod layout_tests {
             .collect();
         let rows = (0..3)
             .map(|_| RowData {
-                cells: (0..4).map(|_| CellValue::text("x")).collect(),
+                cells: (0..4).map(|_| CellValue::text("v")).collect(),
             })
             .collect();
-        let model = Arc::new(TableModel::new(columns, rows));
-
+        let model = std::sync::Arc::new(TableModel::new(columns, rows));
         let state = cx.new(|cx| DataTableState::new(model, cx));
-        let hit = cx.update(|cx| {
-            state.update(cx, |state, cx| {
-                for col in 0..4 {
-                    state.set_column_width(col, 100.0, cx);
-                }
-                // Screen order c (pinned), a, b, d, scrolled 150 px.
-                state.pin_column(2, cx);
-                state.horizontal_offset = px(150.0);
 
-                let body = gpui::Bounds::new(point(px(0.0), px(0.0)), size(px(600.0), px(300.0)));
-                let at = |x: f32| point(ROW_NUMBER_WIDTH + px(x), px(5.0));
-                (
-                    state.cell_at(at(50.0), body, px(20.0)),
-                    state.cell_at(at(130.0), body, px(20.0)),
-                )
-            })
+        let row_height = px(20.0);
+        // The body starts at the window's origin; the cells start after the
+        // row-number gutter.
+        let body = Bounds::new(point(px(0.0), px(0.0)), size(px(2000.0), px(60.0)));
+        let x = |cells_x: f32| ROW_NUMBER_WIDTH + px(cells_x);
+
+        state.update(cx, |state, cx| {
+            for col in 0..4 {
+                state.set_column_width(col, 100.0, cx);
+            }
+            // Screen order: c3, c0, c2 (c1 hidden), with c3 pinned.
+            assert!(state.move_column(3, 0, cx));
+            assert!(state.hide_column(1, cx));
+            assert!(state.pin_column(3, cx));
         });
 
-        assert_eq!(hit.0, Some(CellCoord::new(0, 2)), "inside the pinned strip");
-        assert_eq!(
-            hit.1,
-            Some(CellCoord::new(0, 1)),
-            "130 px plus the 150 px scroll lands on `b`, the third on screen"
-        );
+        state.update(cx, |state, _| {
+            let at = |state: &DataTableState, cells_x: f32| {
+                state
+                    .cell_at(point(x(cells_x), px(30.0)), body, row_height)
+                    .map(|coord| (coord.row, coord.col))
+            };
+            assert_eq!(at(state, 50.0), Some((1, 3)), "the pinned first column");
+            assert_eq!(at(state, 150.0), Some((1, 0)), "the second on screen");
+            assert_eq!(at(state, 250.0), Some((1, 2)), "the hidden c1 is skipped");
+
+            state.horizontal_offset = px(100.0);
+            assert_eq!(
+                at(state, 50.0),
+                Some((1, 3)),
+                "the pinned strip does not scroll"
+            );
+            assert_eq!(at(state, 150.0), Some((1, 2)), "scrolled by one column");
+        });
+    }
+
+    #[test]
+    fn the_further_out_the_faster_up_to_a_limit() {
+        let near = edge_step(point(px(300.0), px(402.0)), body()).y;
+        let far = edge_step(point(px(300.0), px(460.0)), body()).y;
+        let very_far = edge_step(point(px(300.0), px(2000.0)), body()).y;
+        assert!(far > near);
+        assert_eq!(very_far, px(MAX_STEP));
     }
 }

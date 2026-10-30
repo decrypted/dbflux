@@ -138,10 +138,12 @@ pub(super) fn place_context_menu(
 
 /// One row of the data grid's export menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ExportMenuEntry {
-    /// Write the loaded rows to a file in this format.
+pub(crate) enum ExportMenuEntry {
+    /// A Rows, Columns or CSV choice; the format rows below follow it.
+    Option(super::export_options::ExportOptionRow),
+    /// Write the chosen rows and columns to a file in this format.
     Save(ExportFormat),
-    /// Put the loaded rows on the clipboard in this format.
+    /// Put the chosen rows and columns on the clipboard in this format.
     Copy(ExportFormat),
     /// Page through the whole table and stream it to a file in this format.
     SaveAll(dbflux_transfer::FileFormat),
@@ -805,23 +807,27 @@ impl DataGridPanel {
         let inspect_row_enabled = !self.is_grouped_result();
 
         let base_items = match self.context_menu.as_ref() {
-            Some(menu) if !is_column_header => self.with_find_similar_rows(
-                self.with_copy_extractors(
-                    self.adapt_menu_items_for_documents(
-                        Self::build_context_menu_items(
-                            is_editable,
+            Some(menu) if !is_column_header => self.with_edit_as_expression(
+                self.with_find_similar_rows(
+                    self.with_copy_extractors(
+                        self.adapt_menu_items_for_documents(
+                            Self::build_context_menu_items(
+                                is_editable,
+                                is_document_view,
+                                has_row_target,
+                                can_chart,
+                                inspect_row_enabled,
+                            ),
                             is_document_view,
-                            has_row_target,
-                            can_chart,
-                            inspect_row_enabled,
+                            cx,
                         ),
-                        is_document_view,
                         cx,
                     ),
+                    menu,
+                    has_row_target,
                     cx,
                 ),
                 menu,
-                has_row_target,
                 cx,
             ),
             _ => Vec::new(),
@@ -1187,6 +1193,8 @@ impl DataGridPanel {
         matches!(
             action,
             ContextMenuAction::Edit
+                | ContextMenuAction::EditAsExpression
+                | ContextMenuAction::GenerateId(_)
                 | ContextMenuAction::EditInModal
                 | ContextMenuAction::ViewValue
                 | ContextMenuAction::SetDefault
@@ -1229,8 +1237,15 @@ impl DataGridPanel {
             return;
         }
 
+        self.load_export_options(cx);
         self.chrome.export_menu_open = true;
-        self.chrome.export_menu_selected = 0;
+        // The keyboard starts on the first format, so Ctrl+E Enter still
+        // saves at once; the options sit above it.
+        self.chrome.export_menu_selected = self
+            .export_menu_entries()
+            .iter()
+            .position(|entry| !matches!(entry, ExportMenuEntry::Option(_)))
+            .unwrap_or(0);
         self.focus.export_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
@@ -1245,26 +1260,29 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// The rows of the export menu, in the order it draws them: a save row
-    /// per format, a copy row per format, then, when the whole table can be
-    /// read again, an export-all row per streaming format.
-    pub(super) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
-        let formats = dbflux_export::available_formats(&self.result.shape);
-        let export_all_formats: &[dbflux_transfer::FileFormat] = if self.can_export_all_rows() {
-            &dbflux_transfer::FileFormat::ALL
-        } else {
-            &[]
-        };
+    /// The rows of the export menu, in the order it draws them: the option
+    /// rows, then a save row and a copy row per format, or, when the Rows
+    /// option is All rows, an export-all row per streaming format.
+    pub(crate) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
+        let options = self
+            .export_option_rows()
+            .into_iter()
+            .map(ExportMenuEntry::Option);
 
-        formats
-            .iter()
-            .map(|&format| ExportMenuEntry::Save(format))
+        if self.exports_all_rows() {
+            return options
+                .chain(
+                    dbflux_transfer::FileFormat::ALL
+                        .iter()
+                        .map(|&format| ExportMenuEntry::SaveAll(format)),
+                )
+                .collect();
+        }
+
+        let formats = dbflux_export::available_formats(&self.result.shape);
+        options
+            .chain(formats.iter().map(|&format| ExportMenuEntry::Save(format)))
             .chain(formats.iter().map(|&format| ExportMenuEntry::Copy(format)))
-            .chain(
-                export_all_formats
-                    .iter()
-                    .map(|&format| ExportMenuEntry::SaveAll(format)),
-            )
             .collect()
     }
 
@@ -1278,6 +1296,12 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> bool {
         let entries = self.export_menu_entries();
+
+        if let Some(&entry) = entries.get(self.chrome.export_menu_selected)
+            && let Some(handled) = self.dispatch_export_option_command(entry, cmd, cx)
+        {
+            return handled;
+        }
 
         match cmd {
             Command::MenuDown | Command::SelectNext => {
@@ -1315,6 +1339,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         match entry {
+            ExportMenuEntry::Option(row) => self.activate_export_option(row, cx),
             ExportMenuEntry::Save(format) => self.export_with_format(format, window, cx),
             ExportMenuEntry::Copy(format) => self.copy_to_clipboard_with_format(format, window, cx),
             ExportMenuEntry::SaveAll(format) => self.export_all_rows(format, window, cx),
@@ -1331,8 +1356,8 @@ impl DataGridPanel {
             self.close_export_menu(window, cx);
         }
 
-        let result = self.result.clone();
-        let loaded_rows = loaded_row_count(&result);
+        let (result, scope_label) = self.export_menu_payload(cx);
+        let csv_options = self.export_menu_csv_options();
         let base_name = self.export_base_name();
         let extension = format.extension();
         let suggested_name = format!("{}.{}", base_name, extension);
@@ -1400,15 +1425,15 @@ impl DataGridPanel {
             let export_result = (|| {
                 let file = File::create(&target_path)?;
                 let mut writer = BufWriter::new(file);
-                dbflux_export::export(&result, format, &mut writer)?;
+                dbflux_export::export_with_csv_options(&result, format, csv_options, &mut writer)?;
                 Ok::<_, dbflux_export::ExportError>(())
             })();
 
             let path_text = target_path.display().to_string();
-            let (message, is_error) = match (&export_result, loaded_rows) {
-                (Ok(()), Some(count)) if used_fallback => (
-                    crate::labels::context_menu_export_native_picker_fallback_rows_toast(
-                        count, &path_text,
+            let (message, is_error) = match (&export_result, scope_label.as_deref()) {
+                (Ok(()), Some(scope)) if used_fallback => (
+                    crate::labels::context_menu_export_native_picker_fallback_scope_toast(
+                        scope, &path_text,
                     ),
                     false,
                 ),
@@ -1416,8 +1441,8 @@ impl DataGridPanel {
                     crate::labels::context_menu_export_native_picker_fallback_toast(&path_text),
                     false,
                 ),
-                (Ok(()), Some(count)) => (
-                    crate::labels::context_menu_export_exported_rows_toast(count, &path_text),
+                (Ok(()), Some(scope)) => (
+                    crate::labels::context_menu_export_exported_scope_toast(scope, &path_text),
                     false,
                 ),
                 (Ok(()), None) => (
@@ -1474,10 +1499,30 @@ impl DataGridPanel {
             return;
         }
 
+        let (result, scope_label) = self.export_menu_payload(cx);
         let mut buffer: Vec<u8> = Vec::new();
-        let export_result = dbflux_export::export(&self.result, format, &mut buffer);
-        let row_count = loaded_row_count(&self.result);
+        let export_result = dbflux_export::export_with_csv_options(
+            &result,
+            format,
+            self.export_menu_csv_options(),
+            &mut buffer,
+        );
+        let byte_len = buffer.len();
+        let row_count = scope_label.is_some().then_some(result.rows.len());
         self.finish_clipboard_copy(export_result, buffer, format, row_count, cx);
+
+        // The shared copy report words a row count; the menu states the rows
+        // and columns it chose instead.
+        if let Some(scope) = scope_label
+            && let Some(toast) = self.pending.toast.as_mut()
+            && !toast.is_error
+        {
+            toast.message = crate::labels::context_menu_clipboard_copied_scope_toast(
+                &scope,
+                format.name(),
+                byte_len,
+            );
+        }
     }
 
     /// Context menu Copy as CSV / Copy as JSON: the selected cells through the
@@ -1499,53 +1544,53 @@ impl DataGridPanel {
     }
 
     /// The part of the result the grid selection covers: every row that holds
-    /// a selected cell and every column that does, in result order. A cell in
-    /// that grid but outside the selection is `Null`, where the plain copy
-    /// leaves it empty.
+    /// a selected cell and every column that does, in the order the grid
+    /// shows them. A cell in that grid but outside the selection is `Null`,
+    /// where the plain copy leaves it empty.
+    ///
+    /// The selection names visual rows, so each is resolved through the edit
+    /// buffer: a pending insert copies its values, and a base row copies the
+    /// result's value or, for a cell with an unsaved edit, the edited one.
     fn selection_result(&self, cx: &App) -> Option<dbflux_core::QueryResult> {
+        self.selection_values(cx, true)
+    }
+
+    /// [`Self::selection_result`], with every cell of the covered rows and
+    /// columns as the grid shows it when `mask_unselected` is false (Copy as
+    /// INSERT statements writes whole rows of the selected columns).
+    fn selection_values(
+        &self,
+        cx: &App,
+        mask_unselected: bool,
+    ) -> Option<dbflux_core::QueryResult> {
         use dbflux_components::components::data_table::selection::CellCoord;
-        use std::collections::BTreeSet;
 
         let table_state = self.grid_table.table_state.as_ref()?;
-        let selection = table_state.read(cx).selection();
-        let ranges = selection.ranges();
-        if ranges.is_empty() {
-            return None;
-        }
-        let rows: BTreeSet<usize> = ranges
-            .iter()
-            .flat_map(|range| range.start.row..=range.end.row)
-            .filter(|&row| row < self.result.rows.len())
-            .collect();
-        // Columns in the order the grid shows them, as the plain copy does.
-        let mut cols: Vec<usize> = ranges
-            .iter()
-            .flat_map(|range| range.start.col..=range.end.col)
-            .filter(|&col| col < self.result.columns.len())
-            .collect::<BTreeSet<usize>>()
-            .into_iter()
-            .collect();
-        selection.sort_by_screen_order(&mut cols);
+        let state = table_state.read(cx);
+        let selection = state.selection();
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+        let (rows, cols) =
+            selection_grid(selection, visual_order.len(), self.result.columns.len())?;
 
         let columns = cols
             .iter()
             .filter_map(|&col| self.result.columns.get(col).cloned())
             .collect();
+        let shown_value =
+            |row: usize, col: usize| shown_value(&self.result, buffer, &visual_order, row, col);
         let rows = rows
             .iter()
-            .filter_map(|&row| {
-                let values = self.result.rows.get(row)?;
-                Some(
-                    cols.iter()
-                        .map(|&col| {
-                            if selection.is_selected(CellCoord::new(row, col)) {
-                                values.get(col).cloned().unwrap_or(Value::Null)
-                            } else {
-                                Value::Null
-                            }
-                        })
-                        .collect(),
-                )
+            .map(|&row| {
+                cols.iter()
+                    .map(|&col| {
+                        if !mask_unselected || selection.is_selected(CellCoord::new(row, col)) {
+                            shown_value(row, col)
+                        } else {
+                            Value::Null
+                        }
+                    })
+                    .collect()
             })
             .collect();
 
@@ -1555,6 +1600,78 @@ impl DataGridPanel {
             None,
             std::time::Duration::ZERO,
         ))
+    }
+
+    /// For each row and column of `selected` (a [`Self::selection_values`]
+    /// result), whether the cell is staged as a SQL expression.
+    pub(in crate::data_grid_panel) fn selection_expressions(
+        &self,
+        cx: &App,
+        selected: &dbflux_core::QueryResult,
+    ) -> Vec<Vec<bool>> {
+        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
+
+        let Some(table_state) = self.grid_table.table_state.as_ref() else {
+            return Vec::new();
+        };
+        let state = table_state.read(cx);
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+        let Some((rows, cols)) = selection_grid(
+            state.selection(),
+            visual_order.len(),
+            self.result.columns.len(),
+        ) else {
+            return Vec::new();
+        };
+        if rows.len() != selected.rows.len() || cols.len() != selected.columns.len() {
+            return Vec::new();
+        }
+
+        rows.iter()
+            .map(|&row| {
+                cols.iter()
+                    .map(|&col| match visual_order.get(row).copied() {
+                        Some(VisualRowSource::Base(base_row)) => {
+                            buffer.is_cell_dirty(base_row, col)
+                                && buffer
+                                    .get_cell(base_row, col, &CellValue::null())
+                                    .is_expression()
+                        }
+                        Some(VisualRowSource::Insert(insert_idx)) => buffer
+                            .get_pending_insert_by_idx(insert_idx)
+                            .and_then(|cells| cells.get(col))
+                            .is_some_and(|cell| cell.is_expression()),
+                        None => false,
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Every column of the given visual rows as the grid shows them, the way
+    /// [`Self::selection_result`] reads its cells.
+    pub(in crate::data_grid_panel) fn shown_row_values(
+        &self,
+        visual_rows: &[usize],
+        cx: &App,
+    ) -> Vec<Vec<Value>> {
+        let Some(table_state) = self.grid_table.table_state.as_ref() else {
+            return Vec::new();
+        };
+        let buffer = table_state.read(cx).edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+        let col_count = self.result.columns.len();
+
+        visual_rows
+            .iter()
+            .filter(|&&row| row < visual_order.len())
+            .map(|&row| {
+                (0..col_count)
+                    .map(|col| shown_value(&self.result, buffer, &visual_order, row, col))
+                    .collect()
+            })
+            .collect()
     }
 
     /// Writes an export to the clipboard and reports it: the toast, and the
@@ -1637,7 +1754,7 @@ impl DataGridPanel {
         }
     }
 
-    fn export_base_name(&self) -> String {
+    pub(super) fn export_base_name(&self) -> String {
         match &self.source {
             DataSource::Table { table, .. } => table.name.clone(),
             DataSource::Collection { collection, .. } => collection.name.clone(),
@@ -1809,23 +1926,27 @@ impl DataGridPanel {
                 self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
             let can_chart = self.can_chart_from_context_menu(cx);
             let inspect_row_enabled = !self.is_grouped_result();
-            let visible_items = self.with_find_similar_rows(
-                self.with_copy_extractors(
-                    self.adapt_menu_items_for_documents(
-                        Self::build_context_menu_items(
-                            is_editable,
+            let visible_items = self.with_edit_as_expression(
+                self.with_find_similar_rows(
+                    self.with_copy_extractors(
+                        self.adapt_menu_items_for_documents(
+                            Self::build_context_menu_items(
+                                is_editable,
+                                menu.is_document_view,
+                                has_row_target,
+                                can_chart,
+                                inspect_row_enabled,
+                            ),
                             menu.is_document_view,
-                            has_row_target,
-                            can_chart,
-                            inspect_row_enabled,
+                            cx,
                         ),
-                        menu.is_document_view,
                         cx,
                     ),
+                    menu,
+                    has_row_target,
                     cx,
                 ),
                 menu,
-                has_row_target,
                 cx,
             );
             detail_rows = visible_items
@@ -1989,6 +2110,17 @@ impl DataGridPanel {
             ContextMenuAction::CopyAsMarkdown => self.copy_selection_as_markdown(cx),
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
+            ContextMenuAction::GenerateId(kind) => {
+                self.handle_generate_id(menu.row, menu.col, kind, cx)
+            }
+            ContextMenuAction::EditAsExpression => {
+                // The editor takes focus, so the focus restore below must run
+                // before it opens rather than after.
+                self.restore_focus_after_context_menu(is_document_view, window, cx);
+                self.handle_edit_as_expression(menu.row, menu.col, window, cx);
+                cx.notify();
+                return;
+            }
             ContextMenuAction::ViewValue => {
                 self.request_value_panel(menu.row, menu.col, cx);
             }
@@ -2631,7 +2763,9 @@ impl DataGridPanel {
             CellKind::Bool(b) => dbflux_core::Value::Bool(*b),
             CellKind::Int(i) => dbflux_core::Value::Int(*i),
             CellKind::Float(f) => dbflux_core::Value::Float(*f),
-            CellKind::Text(s) | CellKind::Json(s) => dbflux_core::Value::Text(s.to_string()),
+            CellKind::Text(s) | CellKind::Json(s) | CellKind::Expression(s) => {
+                dbflux_core::Value::Text(s.to_string())
+            }
             CellKind::Bytes(len) => dbflux_core::Value::Bytes(vec![0u8; *len]),
             CellKind::AutoGenerated(s) => dbflux_core::Value::Text(s.to_string()),
             CellKind::Unsupported(s) => dbflux_core::Value::Text(s.to_string()),
@@ -3635,18 +3769,61 @@ impl DataGridPanel {
         }
     }
 
-    /// Appends `expr` to the WHERE filter input and refreshes.
-    /// Wraps with parentheses — `(old) AND (new)` — to avoid precedence bugs.
+    /// Narrows the WHERE filter with `expr` and reloads. The current filter
+    /// is kept as an `AND` term, in parentheses when it has a top-level `OR`;
+    /// a condition it already holds is not added again and reads nothing.
     fn apply_filter_expression(&mut self, expr: &str, window: &mut Window, cx: &mut Context<Self>) {
         let current = self.filter_bar.filter_input.read(cx).value().to_string();
 
-        let new_filter = if current.trim().is_empty() {
-            expr.to_string()
-        } else {
-            format!("({}) AND ({})", current.trim(), expr)
+        let Some(new_filter) = super::filter_bar::and_filter(&current, expr) else {
+            return;
         };
 
         self.replace_filter_and_reload(&new_filter, window, cx);
+    }
+
+    /// Alt+click on a cell: narrows the WHERE filter of a table to the
+    /// cell's value (`col = value`, or `col IS NULL`), as Filter by value's
+    /// `=` entry does. Other sources have no WHERE to narrow; a value with no
+    /// literal form (binary, JSON, nested) only gets a hint.
+    pub(in crate::data_grid_panel) fn add_cell_to_filter(
+        &mut self,
+        visual_row: usize,
+        col: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.source.is_table()
+            || !self.filter_input_visible()
+            || self.neighbor_bar_search().is_some()
+        {
+            return;
+        }
+
+        let Some(value) = self.resolve_cell_value(visual_row, col, cx) else {
+            return;
+        };
+
+        let expr = match value {
+            Value::Null => self.sql_is_null_expr(col, false, cx),
+            Value::Bytes(_)
+            | Value::Json(_)
+            | Value::Array(_)
+            | Value::Document(_)
+            | Value::Unsupported(_) => {
+                Toast::info(dbflux_i18n::t!(
+                    "document.data.grid.filter.value_not_filterable"
+                ))
+                .meta_right(now_hms())
+                .push(cx);
+                return;
+            }
+            _ => self.sql_value_filter_expr(visual_row, col, FilterOperator::Eq, cx),
+        };
+
+        if let Some(expr) = expr {
+            self.apply_filter_expression(&expr, window, cx);
+        }
     }
 
     fn handle_filter_by_value(
@@ -3657,9 +3834,23 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(expr) = self.sql_value_filter_expr(visual_row, col, operator, cx) {
+            self.apply_filter_expression(&expr, window, cx);
+        }
+    }
+
+    /// The SQL condition comparing column `col` with the value of the cell
+    /// at `visual_row`, in the connection's dialect.
+    fn sql_value_filter_expr(
+        &self,
+        visual_row: usize,
+        col: usize,
+        operator: FilterOperator,
+        cx: &App,
+    ) -> Option<String> {
         let profile_id = match &self.source {
             DataSource::Table { profile_id, .. } => *profile_id,
-            _ => return,
+            _ => return None,
         };
 
         let conn = self
@@ -3667,23 +3858,14 @@ impl DataGridPanel {
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|c| c.connection.clone());
-
-        let Some(conn) = conn else { return };
+            .map(|c| c.connection.clone())?;
         let dialect = conn.dialect();
 
-        let (col_name, col_type_name) = match self.result.columns.get(col) {
-            Some(c) => (
-                dialect.quote_identifier(&c.name),
-                c.type_name.to_ascii_lowercase(),
-            ),
-            None => return,
-        };
+        let column = self.result.columns.get(col)?;
+        let col_name = dialect.quote_identifier(&column.name);
+        let col_type_name = column.type_name.to_ascii_lowercase();
 
-        let cell_value = match self.resolve_cell_value(visual_row, col, cx) {
-            Some(v) => v,
-            None => return,
-        };
+        let cell_value = self.resolve_cell_value(visual_row, col, cx)?;
 
         let literal = dialect.value_to_literal(&cell_value);
 
@@ -3695,7 +3877,7 @@ impl DataGridPanel {
             let raw = match &cell_value {
                 Value::Text(text) => text.clone(),
                 Value::ObjectId(id) => id.clone(),
-                _ => return,
+                _ => return None,
             };
 
             let needs_escape = raw.contains('\\') || raw.contains('%') || raw.contains('_');
@@ -3723,7 +3905,7 @@ impl DataGridPanel {
             format!("{} {} {}", comparable_column, op_str, literal)
         };
 
-        self.apply_filter_expression(&expr, window, cx);
+        Some(expr)
     }
 
     fn handle_filter_is_null(
@@ -3733,9 +3915,16 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(expr) = self.sql_is_null_expr(col, is_not_null, cx) {
+            self.apply_filter_expression(&expr, window, cx);
+        }
+    }
+
+    /// `col IS NULL` (or `IS NOT NULL`) in the connection's dialect.
+    fn sql_is_null_expr(&self, col: usize, is_not_null: bool, cx: &App) -> Option<String> {
         let profile_id = match &self.source {
             DataSource::Table { profile_id, .. } => *profile_id,
-            _ => return,
+            _ => return None,
         };
 
         let conn = self
@@ -3743,23 +3932,16 @@ impl DataGridPanel {
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|c| c.connection.clone());
+            .map(|c| c.connection.clone())?;
+        let col_name = conn
+            .dialect()
+            .quote_identifier(&self.result.columns.get(col)?.name);
 
-        let Some(conn) = conn else { return };
-        let dialect = conn.dialect();
-
-        let col_name = match self.result.columns.get(col) {
-            Some(c) => dialect.quote_identifier(&c.name),
-            None => return,
-        };
-
-        let expr = if is_not_null {
+        Some(if is_not_null {
             format!("{} IS NOT NULL", col_name)
         } else {
             format!("{} IS NULL", col_name)
-        };
-
-        self.apply_filter_expression(&expr, window, cx);
+        })
     }
 
     fn handle_remove_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4187,6 +4369,7 @@ impl DataGridPanel {
                         name: name.clone(),
                         value: value.clone(),
                         type_name: Some(type_name.clone()),
+                        is_expression: false,
                     })
                     .collect();
 
@@ -4237,6 +4420,7 @@ impl DataGridPanel {
                             name,
                             value,
                             type_name: Some(type_name),
+                            is_expression: false,
                         },
                     )
                     .collect();
@@ -4455,19 +4639,11 @@ impl DataGridPanel {
             CellKind::Bytes(len) => Value::Bytes(vec![0u8; *len]),
             CellKind::Unsupported(type_name) => Value::Unsupported(type_name.to_string()),
             CellKind::AutoGenerated(expr) => Value::Text(format!("DEFAULT({})", expr)),
+            CellKind::Expression(sql) => Value::Text(sql.to_string()),
             CellKind::Missing => Value::Null,
             CellKind::Nested { .. } => Value::Text(cell.display_text().to_string()),
         }
     }
-}
-
-/// How many rows an export of the loaded result writes, or `None` for a text
-/// or binary payload, which has no rows to count.
-fn loaded_row_count(result: &dbflux_core::QueryResult) -> Option<usize> {
-    let is_payload =
-        result.rows.is_empty() && (result.text_body.is_some() || result.raw_bytes.is_some());
-
-    (!is_payload).then_some(result.rows.len())
 }
 
 pub(super) fn record_export_audit(
@@ -4523,7 +4699,7 @@ pub(super) fn record_export_audit(
     }
 }
 
-fn record_clipboard_audit(
+pub(super) fn record_clipboard_audit(
     audit_service: &dbflux_audit::AuditService,
     format_name: &str,
     byte_len: Option<usize>,
@@ -4728,6 +4904,68 @@ async fn reference_display_columns(
     }
 
     display_columns
+}
+
+/// The visual rows (below `row_count`) and the columns (below `col_count`,
+/// in the order the grid shows them, as the plain copy takes them) that
+/// hold a selected cell; `None` with nothing selected.
+fn selection_grid(
+    selection: &dbflux_components::components::data_table::selection::SelectionState,
+    row_count: usize,
+    col_count: usize,
+) -> Option<(Vec<usize>, Vec<usize>)> {
+    use std::collections::BTreeSet;
+
+    let ranges = selection.ranges();
+    if ranges.is_empty() {
+        return None;
+    }
+    let rows: BTreeSet<usize> = ranges
+        .iter()
+        .flat_map(|range| range.start.row..=range.end.row)
+        .filter(|&row| row < row_count)
+        .collect();
+    let mut cols: Vec<usize> = ranges
+        .iter()
+        .flat_map(|range| range.start.col..=range.end.col)
+        .filter(|&col| col < col_count)
+        .collect::<BTreeSet<usize>>()
+        .into_iter()
+        .collect();
+    selection.sort_by_screen_order(&mut cols);
+
+    Some((rows.into_iter().collect(), cols))
+}
+
+/// The value the grid shows at visual `row`, `col`: a pending insert's
+/// value, an unsaved edit, or the loaded value of `result`.
+fn shown_value(
+    result: &dbflux_core::QueryResult,
+    buffer: &dbflux_components::components::data_table::model::EditBuffer,
+    visual_order: &[dbflux_components::components::data_table::model::VisualRowSource],
+    row: usize,
+    col: usize,
+) -> Value {
+    use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
+
+    match visual_order.get(row).copied() {
+        Some(VisualRowSource::Base(base_row)) if buffer.is_cell_dirty(base_row, col) => {
+            let null = CellValue::null();
+            buffer.get_cell(base_row, col, &null).to_value()
+        }
+        Some(VisualRowSource::Base(base_row)) => result
+            .rows
+            .get(base_row)
+            .and_then(|values| values.get(col))
+            .cloned()
+            .unwrap_or(Value::Null),
+        Some(VisualRowSource::Insert(insert_idx)) => buffer
+            .get_pending_insert_by_idx(insert_idx)
+            .and_then(|cells| cells.get(col))
+            .map(CellValue::to_value)
+            .unwrap_or(Value::Null),
+        None => Value::Null,
+    }
 }
 
 #[cfg(test)]

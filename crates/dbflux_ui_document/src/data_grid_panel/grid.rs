@@ -221,20 +221,11 @@ impl DataGridPanel {
             pk_indices,
         );
 
-        // When a builder binding is present, respect its `insertable` flag to
-        // prevent INSERT on join results (column origin is ambiguous).
-        let binding_insertable = self
-            .builder
-            .builder_editable_binding
-            .as_ref()
-            .map(|b| b.insertable)
-            .unwrap_or(true);
-
         let is_insertable = matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
         ) && self.mutations_enabled()
-            && (self.builder.current_visual_spec.is_none() || binding_insertable)
+            && self.builder_rows_insertable()
             && !stepped_into;
 
         let column_details = self.get_column_details(cx);
@@ -289,6 +280,9 @@ impl DataGridPanel {
         );
         let document_presentation = self.document_presentation();
         let enum_options = enum_options_for_result(&self.result, column_details.as_deref());
+        let expression_suggestions =
+            self.cell_expression_suggestions_by_column(column_details.as_deref(), cx);
+        let generated_id_offers = self.generated_id_offers_by_column(column_details.as_deref());
 
         if let Some(table_state) = self.grid_table.table_state.clone() {
             // A reload reuses the state entity, so column widths, sort, scroll
@@ -327,6 +321,8 @@ impl DataGridPanel {
                 for (col_ix, options) in enum_options {
                     state.set_enum_options(col_ix, options);
                 }
+                state.set_cell_expression_suggestions(expression_suggestions);
+                state.set_generated_id_offers(generated_id_offers);
 
                 carried_edits.map_or(0, |edits| state.restore_pending_edits(edits, cx))
             });
@@ -358,6 +354,9 @@ impl DataGridPanel {
             state.set_reference_row(read_only_keys);
             state.set_insertable(is_insertable);
             state.set_document_presentation(document_presentation, cx);
+            // The grid keeps its own column layout (see column_layout_store),
+            // so a header drag only changes the screen.
+            state.set_columns_reorderable(true);
 
             if !fk_indices.is_empty() {
                 state.set_fk_columns(fk_indices);
@@ -370,6 +369,8 @@ impl DataGridPanel {
             for (col_ix, options) in enum_options {
                 state.set_enum_options(col_ix, options);
             }
+            state.set_cell_expression_suggestions(expression_suggestions);
+            state.set_generated_id_offers(generated_id_offers);
 
             state
         });
@@ -387,7 +388,7 @@ impl DataGridPanel {
                             );
                         }
                         None => {
-                            this.handle_sort_clear(cx);
+                            this.handle_header_sort_off(cx);
                         }
                     },
                     DataTableEvent::SortKeysChanged(keys) => {
@@ -482,6 +483,15 @@ impl DataGridPanel {
                     DataTableEvent::SetNullRequested { row, col } => {
                         this.handle_set_null(*row, *col, cx);
                     }
+                    // Deferred to render: the reload it issues needs a `Window`.
+                    DataTableEvent::HistoryStepRequested { redo } => {
+                        this.pending.filter_undo_step = Some(*redo);
+                        cx.notify();
+                    }
+                    DataTableEvent::AddToFilterRequested { row, col } => {
+                        this.pending.filter_cell = Some((*row, *col));
+                        cx.notify();
+                    }
                     DataTableEvent::CopyRowRequested(row) => {
                         this.handle_copy_row(*row, cx);
                     }
@@ -505,10 +515,27 @@ impl DataGridPanel {
                     DataTableEvent::CommitDeleteRequested(row_idx) => {
                         this.handle_commit_delete(*row_idx, cx);
                     }
+                    DataTableEvent::CellExpressionRejected { message } => {
+                        this.pending.toast = Some(PendingToast {
+                            message: dbflux_i18n::t!(
+                                "document.data.expression.rejected",
+                                reason = message
+                            ),
+                            is_error: true,
+                        });
+                        cx.notify();
+                    }
                     DataTableEvent::SaveAllRequested { .. }
                         if this.commits_document_patches(cx) =>
                     {
                         this.commit_document_edits(cx);
+                    }
+                    // A close applying the edits has its own confirmation.
+                    DataTableEvent::SaveAllRequested { .. }
+                        if this.reviews_before_saving(cx) && !this.close_after_apply =>
+                    {
+                        this.pending.change_review = true;
+                        cx.notify();
                     }
                     DataTableEvent::SaveAllRequested {
                         pending_deletes,
@@ -533,19 +560,53 @@ impl DataGridPanel {
         self.rebuild_result_views(cx);
     }
 
+    /// Whether rows shown by the query builder can go into the panel's table
+    /// as INSERTs: always without a builder query, and with one only when its
+    /// binding allows it, which a join does not (its columns come from more
+    /// than one table). A builder query with no binding (no key known) has
+    /// no join to rule it out and counts as insertable. Shared by the grid's
+    /// Add row and the menu's Copy as INSERT statements.
+    pub(super) fn builder_rows_insertable(&self) -> bool {
+        let Some(spec) = &self.builder.current_visual_spec else {
+            return true;
+        };
+
+        spec.joins.is_empty()
+            && self
+                .builder
+                .builder_editable_binding
+                .as_ref()
+                .is_none_or(|binding| binding.insertable)
+    }
+
+    /// The footer's sort item: a label naming every sort key, the first
+    /// key's direction for its arrow, and whether the database sorts.
     pub(super) fn current_sort_info(&self) -> Option<(String, SortDirection, bool)> {
-        match &self.source {
-            DataSource::Table { order_by, .. } => order_by
-                .first()
-                .map(|col| (col.column.name.clone(), col.direction, true)),
-            DataSource::Collection { .. } => None,
-            DataSource::QueryResult { .. } => self.grid_table.local_sort_state.and_then(|state| {
-                self.result
-                    .columns
-                    .get(state.column_ix)
-                    .map(|col| (col.name.clone(), state.direction, false))
-            }),
-        }
+        let (keys, is_server): (Vec<(String, SortDirection)>, bool) = match &self.source {
+            DataSource::Table { order_by, .. } => (
+                order_by
+                    .iter()
+                    .map(|col| (col.column.name.clone(), col.direction))
+                    .collect(),
+                true,
+            ),
+            DataSource::Collection { .. } => return None,
+            DataSource::QueryResult { .. } => (
+                self.local_sort_keys()
+                    .iter()
+                    .filter_map(|key| {
+                        self.result
+                            .columns
+                            .get(key.column_ix)
+                            .map(|col| (col.name.clone(), key.direction))
+                    })
+                    .collect(),
+                false,
+            ),
+        };
+
+        let first_direction = keys.first()?.1;
+        Some((sort_keys_label(&keys), first_direction, is_server))
     }
 
     /// Returns `(inserts, updates, deletes)` counts from the pending edit buffer.
@@ -600,4 +661,23 @@ impl DataGridPanel {
 
         true
     }
+}
+
+/// One key reads as its column name. Several name every column with its
+/// direction, since the footer arrow shows the first key's only.
+fn sort_keys_label(keys: &[(String, SortDirection)]) -> String {
+    if let [(name, _)] = keys {
+        return name.clone();
+    }
+
+    keys.iter()
+        .map(|(name, direction)| {
+            let direction = match direction {
+                SortDirection::Ascending => "ASC",
+                SortDirection::Descending => "DESC",
+            };
+            format!("{name} {direction}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }

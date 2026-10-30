@@ -192,7 +192,30 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
 /// SQLite SQL dialect implementation.
 pub struct SqliteDialect;
 
+/// Cell expressions for SQLite. SQLite has no uuid function, and it rejects
+/// `DEFAULT` inside `UPDATE ... SET` and `INSERT ... VALUES`.
+static SQLITE_CELL_EXPRESSIONS: dbflux_core::CellExpressionVocabulary =
+    dbflux_core::CellExpressionVocabulary {
+        timestamp: &[
+            "CURRENT_TIMESTAMP",
+            "datetime('now')",
+            "datetime('now', 'localtime')",
+            "datetime('now', '+1 day')",
+        ],
+        date: &["CURRENT_DATE", "date('now')"],
+        time: &["CURRENT_TIME", "time('now')"],
+        uuid: &[],
+        uuid_text: &[],
+        uuid_binary: &[],
+        text: &["{col} || ''", "upper({col})", "lower({col})", "trim({col})"],
+        supports_default: false,
+    };
+
 impl SqlDialect for SqliteDialect {
+    fn cell_expression_vocabulary(&self) -> Option<&'static dbflux_core::CellExpressionVocabulary> {
+        Some(&SQLITE_CELL_EXPRESSIONS)
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         sqlite_quote_ident(name)
     }
@@ -274,6 +297,49 @@ impl SqlDialect for SqliteDialect {
 }
 
 static SQLITE_DIALECT: SqliteDialect = SqliteDialect;
+
+/// The UPDATE `update_row` runs for `patch`, and the save preview shows.
+fn sqlite_update_row_sql(patch: &RowPatch) -> Result<String, DbError> {
+    if !patch.identity.is_valid() {
+        return Err(DbError::query_failed(
+            "Cannot update row: invalid row identity (missing primary key)".to_string(),
+        ));
+    }
+
+    if !patch.has_changes() {
+        return Err(DbError::query_failed("No changes to save".to_string()));
+    }
+
+    SqlQueryBuilder::new(&SQLITE_DIALECT)
+        .build_update(patch, false)
+        .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query".to_string()))
+}
+
+/// The INSERT `insert_row` runs for `insert`, and the save preview shows.
+fn sqlite_insert_row_sql(insert: &RowInsert) -> Result<String, DbError> {
+    if !insert.is_valid() {
+        return Err(DbError::query_failed(
+            "Cannot insert row: no columns specified".to_string(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&SQLITE_DIALECT)
+        .build_insert(insert, false)
+        .ok_or_else(|| DbError::query_failed("Failed to build INSERT query".to_string()))
+}
+
+/// The DELETE `delete_row` runs for `delete`, and the save preview shows.
+fn sqlite_delete_row_sql(delete: &RowDelete) -> Result<String, DbError> {
+    if !delete.is_valid() {
+        return Err(DbError::query_failed(
+            "Cannot delete row: invalid row identity (missing primary key)".to_string(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&SQLITE_DIALECT)
+        .build_delete(delete, false)
+        .ok_or_else(|| DbError::query_failed("Failed to build DELETE query".to_string()))
+}
 
 // =============================================================================
 // SQLite Code Generator
@@ -1188,22 +1254,21 @@ impl Connection for SqliteConnection {
         }
     }
 
+    fn update_row_statement(&self, patch: &RowPatch) -> Option<Result<String, DbError>> {
+        Some(sqlite_update_row_sql(patch))
+    }
+
+    fn insert_row_statement(&self, insert: &RowInsert) -> Option<Result<String, DbError>> {
+        Some(sqlite_insert_row_sql(insert))
+    }
+
+    fn delete_row_statement(&self, delete: &RowDelete) -> Option<Result<String, DbError>> {
+        Some(sqlite_delete_row_sql(delete))
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
-        if !patch.identity.is_valid() {
-            return Err(DbError::query_failed(
-                "Cannot update row: invalid row identity (missing primary key)".to_string(),
-            ));
-        }
-
-        if !patch.has_changes() {
-            return Err(DbError::query_failed("No changes to save".to_string()));
-        }
-
+        let update_sql = sqlite_update_row_sql(patch)?;
         let builder = SqlQueryBuilder::new(&SQLITE_DIALECT);
-
-        let update_sql = builder
-            .build_update(patch, false)
-            .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query".to_string()))?;
 
         log::debug!("[UPDATE] Executing: {}", update_sql);
 
@@ -1245,17 +1310,7 @@ impl Connection for SqliteConnection {
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
-        if !insert.is_valid() {
-            return Err(DbError::query_failed(
-                "Cannot insert row: no columns specified".to_string(),
-            ));
-        }
-
-        let builder = SqlQueryBuilder::new(&SQLITE_DIALECT);
-
-        let insert_sql = builder
-            .build_insert(insert, false)
-            .ok_or_else(|| DbError::query_failed("Failed to build INSERT query".to_string()))?;
+        let insert_sql = sqlite_insert_row_sql(insert)?;
 
         log::debug!("[INSERT] Executing: {}", insert_sql);
 
@@ -1331,9 +1386,7 @@ impl Connection for SqliteConnection {
                 })
         };
 
-        let delete_sql = builder
-            .build_delete(delete, false)
-            .ok_or_else(|| DbError::query_failed("Failed to build DELETE query".to_string()))?;
+        let delete_sql = sqlite_delete_row_sql(delete)?;
 
         log::debug!("[DELETE] Executing: {}", delete_sql);
 
@@ -3868,5 +3921,94 @@ mod read_only_tests {
 
         assert!(state.lock().expect("state mutex").is_autocommit());
         assert!(!query_only_enabled(&state));
+    }
+}
+
+#[cfg(test)]
+mod cell_expression_tests {
+    use super::*;
+    use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch, SqlQueryBuilder};
+
+    fn suggestions(column: &str, type_name: &str) -> Vec<String> {
+        SQLITE_DIALECT
+            .cell_expression_suggestions(column, type_name)
+            .expect("SQLite offers cell expressions")
+    }
+
+    #[test]
+    fn cell_expressions_are_suggested_per_column_type() {
+        assert_eq!(
+            suggestions("created_at", "DATETIME"),
+            [
+                "CURRENT_TIMESTAMP",
+                "datetime('now')",
+                "datetime('now', 'localtime')",
+                "datetime('now', '+1 day')",
+                "NULL"
+            ]
+        );
+        assert_eq!(
+            suggestions("born", "DATE"),
+            ["CURRENT_DATE", "date('now')", "NULL"]
+        );
+        assert_eq!(
+            suggestions("qty", "INTEGER"),
+            ["\"qty\" + 1", "\"qty\" - 1", "NULL"]
+        );
+        assert_eq!(
+            suggestions("name", "TEXT"),
+            [
+                "\"name\" || ''",
+                "upper(\"name\")",
+                "lower(\"name\")",
+                "trim(\"name\")",
+                "NULL"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_row_update_writes_an_expression_unquoted_and_its_text_as_a_literal() {
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "events".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("seen_at", "CURRENT_TIMESTAMP", None),
+                ColumnAssignment::new("note", Value::Text("CURRENT_TIMESTAMP".to_string())),
+            ],
+        );
+
+        let sql = SqlQueryBuilder::new(&SQLITE_DIALECT)
+            .build_update(&patch, false)
+            .unwrap();
+
+        assert!(sql.contains("\"seen_at\" = CURRENT_TIMESTAMP"), "{sql}");
+        assert!(!sql.contains("\"note\" = CURRENT_TIMESTAMP"), "{sql}");
+    }
+
+    #[test]
+    fn the_previewed_statements_are_the_ones_the_row_mutations_run() {
+        let identity = RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]);
+        let patch = RowPatch::with_typed_changes(
+            identity.clone(),
+            "events".to_string(),
+            None,
+            vec![ColumnAssignment::expression(
+                "seen_at",
+                "CURRENT_TIMESTAMP",
+                None,
+            )],
+        );
+        let delete = dbflux_core::RowDelete::new(identity, "events".to_string(), None);
+
+        assert_eq!(
+            sqlite_update_row_sql(&patch).unwrap(),
+            "UPDATE \"events\" SET \"seen_at\" = CURRENT_TIMESTAMP WHERE \"id\" = 1"
+        );
+        assert_eq!(
+            sqlite_delete_row_sql(&delete).unwrap(),
+            "DELETE FROM \"events\" WHERE \"id\" = 1"
+        );
     }
 }

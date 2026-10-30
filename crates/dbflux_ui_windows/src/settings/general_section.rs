@@ -42,7 +42,10 @@ pub(super) enum GeneralFormRow {
     TableAliasUseAs,
     GridFkLabels,
     GridPkSortDesc,
+    GridReviewBeforeSave,
     GridCopyColumnNames,
+    GridHeaderClickSorts,
+    GridFilterAutoquote,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -1979,8 +1982,20 @@ mod tests {
                 "settings.general.grid_pk_sort_desc.label",
             ),
             (
+                "grid-review-before-save",
+                "settings.general.grid_review_before_save.label",
+            ),
+            (
                 "grid-copy-column-names",
                 "settings.general.grid_copy_column_names.label",
+            ),
+            (
+                "grid-header-click-sorts",
+                "settings.general.grid_header_click_sorts.label",
+            ),
+            (
+                "grid-filter-autoquote",
+                "settings.general.grid_filter_autoquote.label",
             ),
             ("restore-session", "settings.general.restore_session.label"),
             ("reopen-conns", "settings.general.reopen_connections.label"),

@@ -746,6 +746,7 @@ fn data_table_action(command: Command) -> Option<Box<dyn Action>> {
         Command::ResultsAddRow => Box::new(actions::AddRow),
         Command::ResultsDuplicateRow => Box::new(actions::DuplicateRow),
         Command::ResultsSetNull => Box::new(actions::SetNull),
+        Command::ToggleCellExpression => Box::new(actions::ToggleCellExpression),
         Command::Undo => Box::new(actions::Undo),
         Command::Redo => Box::new(actions::Redo),
         Command::ToggleColumnGroup => Box::new(actions::ToggleColumnGroup),
@@ -809,6 +810,11 @@ fn modal_editor_action(command: Command) -> Option<Box<dyn Action>> {
     let action: Box<dyn Action> = match command {
         Command::Cancel => Box::new(component_actions::Cancel),
         Command::SaveQuery => Box::new(component_actions::SaveEdit),
+        Command::CopyEditorText => Box::new(component_actions::CopyEditorText),
+        Command::CopyEditorTextCompact => Box::new(component_actions::CopyEditorTextCompact),
+        Command::FormatEditorText => Box::new(component_actions::FormatEditorText),
+        Command::CompactEditorText => Box::new(component_actions::CompactEditorText),
+        Command::ToggleDialogMaximized => Box::new(component_actions::ToggleDialogMaximized),
         _ => return None,
     };
 

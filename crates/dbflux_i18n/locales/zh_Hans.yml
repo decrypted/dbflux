@@ -6,7 +6,7 @@ access:
   manage: 管理
   login: 登录
   refresh: 刷新
-  auth_profile_hint: 用于在直连模式下解析密钥、连接参数、认证配置文件取值来源。
+  auth_profile_hint: 用于解析密钥、连接参数、认证配置文件取值来源。
   session_valid: 认证配置文件会话有效
   ssm_title: SSM 端口转发
   ssm_instance_id: 实例 ID
@@ -153,11 +153,30 @@ components:
     empty: 未选择单元格
     error:
       not_xml: 不是 XML 文档
+    hex_cut: "仅显示 %{size} 中的前 %{shown}。"
+    image:
+      copy: "复制图片"
+      decoding: "正在解码 %{format} 图片…"
+      incomplete: "此 %{format} 图片不完整：存储的值在图片结束之前就已结束，很可能被大小限制截断。改为显示字节。"
+      invalid: "此值看起来是 %{format} 图片，但无法读取：%{error}。改为显示字节。"
+      meta: "%{width} × %{height} · %{format} · %{size}"
+      save: "图片另存为…"
+      save_title: "保存图片"
+      too_many_bytes: "此 %{format} 图片大小为 %{size}，超过 %{limit} 的图片预览上限。改为显示字节。"
+      too_many_pixels: "此 %{format} 图片为 %{width} × %{height} 像素，超过 %{limit} 百万像素的预览上限。改为显示字节。"
+      too_much_memory: "解码此 %{format} 图片所需的内存超过预览允许的上限。改为显示字节。"
     read_only: 只读
     revert: 还原
     title: 值
+    view:
+      hex: "十六进制"
+      image: "图片"
+      text: "文本"
     wrap: 自动换行
   data_table:
+    expression:
+      toggle: "作为 SQL 表达式编辑"
+      generate: "生成 %{kind}"
     record:
       empty: 没有可显示的行
       name_header: 名称
@@ -167,11 +186,16 @@ components:
     valid:
       one: "有效的 JSON · %{count} 行"
       many: "有效的 JSON · %{count} 行"
+    valid_xml:
+      one: "有效的 XML · %{count} 行"
+      many: "有效的 XML · %{count} 行"
     empty_error: 文档不能为空
     format: 格式化
     compact: 紧凑
     cancel: 取消
     save: 保存
+    copy: 复制
+    copy_compact: 紧凑复制
   value_source:
     literal: 字符
     env: 环境变量
@@ -187,6 +211,8 @@ components:
       env: "DBFlux 每次连接时从环境变量 %{name} 读取。DBFlux 不保存该值。"
       dotenv: "DBFlux 每次连接时从 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
       dotenv_missing_key: "在路径后添加键：~/path/to/file.env#KEY"
+      whole_value: "使用整个值。对于 JSON 密钥（例如由 RDS 管理的密钥），请添加 #键 以只使用其中一个字段，例如 #password。"
+      json_key: "使用 JSON 值中的 %{key} 字段。"
   file_picker:
     browse: 浏览…
   column_projection:
@@ -1529,6 +1555,17 @@ document:
       waiting_title: 未连接
       waiting_connection: "连接到 %{profile} 以加载 %{object}。"
       waiting_database: "在侧边栏展开数据库 %{database} 以加载 %{object}。"
+    review:
+      title: "查看更改"
+      literals_note: "保存将按顺序执行的语句，与驱动发送的完全一致。值以字面量写入 SQL，不发送绑定参数。"
+      cancel: "取消"
+      copy: "复制 SQL"
+      save: "保存"
+      unavailable: "此驱动不显示它为该更改发送的语句。"
+      skipped_row: "第 %{row} 行不会保存：%{reason}"
+      no_connection: "连接未打开，无法生成语句。"
+    expression:
+      rejected: "无法保存该表达式：%{reason}"
     chart_dock:
       toolbar:
         apply: 应用
@@ -1615,6 +1652,8 @@ document:
         paste: 粘贴
         edit: 编辑
         edit_in_modal: 在弹窗中编辑…
+        edit_as_expression: "作为 SQL 表达式编辑…"
+        generate_id: "生成 %{kind}"
         set_default: 设为默认值
         set_null: 设为 NULL
         add_row: 添加行
@@ -1664,6 +1703,7 @@ document:
         clear_filter: "清除筛选"
         open_builder: "打开查询构建器"
         reset_builder: "重置构建器查询"
+        review_changes: "查看更改"
         save_changes: "保存所有更改"
         revert_changes: "还原所有更改"
         auto_refresh: "自动刷新间隔…"
@@ -1682,6 +1722,11 @@ document:
         value_compact: "压缩值"
         value_revert: "还原值"
         value_save: "保存值"
+        value_view_image: "以图片显示值"
+        value_view_hex: "以十六进制显示值"
+        value_view_text: "以文本显示值"
+        value_save_image: "将图片保存为文件…"
+        value_copy_image: "复制图片"
         view_table_data: "显示数据"
         view_table_columns: "显示列"
         view_table_partitions: "显示分区"
@@ -1708,12 +1753,8 @@ document:
         toast:
           native_picker_fallback: "原生文件选择器不可用 — 已改为导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
           exported: "已导出到 %{path}"
-          exported_rows:
-            one: "已将 1 行已加载的数据导出到 %{path}"
-            many: "已将 %{count} 行已加载的数据导出到 %{path}"
-          native_picker_fallback_rows:
-            one: "原生文件选择器不可用 — 已改为将 1 行已加载的数据导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
-            many: "原生文件选择器不可用 — 已改为将 %{count} 行已加载的数据导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
+          exported_scope: "已将%{scope}导出到 %{path}"
+          native_picker_fallback_scope: "原生文件选择器不可用 — 已改为将%{scope}导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
       clipboard:
         error:
           binary_unsupported: 原始二进制无法复制到剪贴板 — 请选择 Hex 或 Base64。
@@ -1724,6 +1765,8 @@ document:
           copied_rows:
             one: "已将 1 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
             many: "已将 %{count} 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
+          in_list_only_nulls: "未复制任何内容：所选值全部为 NULL，SQL IN 列表无法匹配 NULL"
+          copied_scope: "已将%{scope}以 %{format}（%{bytes} 字节）复制到剪贴板"
       document:
         toast:
           inserted: 文档已插入
@@ -1733,6 +1776,7 @@ document:
           update_failed: "更新文档失败：%{error}"
     grid:
       edit_bar:
+        review: "查看"
         clean: 无未保存的更改
         dirty:
           one: "%{count} 处未保存更改"
@@ -1794,19 +1838,52 @@ document:
           average: "平均 %{value}"
           min: "最小 %{value}"
           max: "最大 %{value}"
-          nulls_skipped: "已跳过 %{count} 个 NULL"
-          non_numeric_skipped: "已跳过 %{count} 个非数字值"
+          nulls_skipped:
+            one: "已跳过 %{count} 个 NULL"
+            many: "已跳过 %{count} 个 NULL"
+          non_numeric_skipped:
+            one: "已跳过 %{count} 个非数字值"
+            many: "已跳过 %{count} 个非数字值"
       export:
         trigger: 导出
-        save_as_file: 将已加载的行保存为文件
-        copy_to_clipboard: 将已加载的行复制到剪贴板
+        save_as_file: "保存为文件"
+        copy_to_clipboard: "复制到剪贴板"
         export_all_rows: 将所有行导出到文件
+        options:
+          title: "导出%{scope}"
+          rows: "行"
+          columns: "列"
+          header: "包含标题行（列名）"
+          delimiter: "分隔符"
+          rows_selected: "已选"
+          rows_loaded: "已加载"
+          rows_all: "全部"
+          columns_all: "全部"
+          columns_visible: "可见"
+          columns_selected: "已选"
+          delimiter_comma: "逗号"
+          delimiter_semicolon: "分号"
+          delimiter_tab: "制表符"
+          no_selected_rows: "选择单元格后可导出已选的行"
+          no_selected_columns: "选择单元格后可导出已选的列"
+        scope:
+          summary: "%{rows}，%{columns}"
+          selected_rows:
+            one: "已选的 1 行"
+            many: "已选的 %{count} 行"
+          loaded_rows:
+            one: "已加载的 1 行"
+            many: "已加载的 %{count} 行"
+          all_rows: "所有行"
+          all_rows_count:
+            one: "1 行"
+            many: "全部 %{count} 行"
+          columns:
+            one: "1 列"
+            many: "%{count} 列"
         all:
           task: "导出 %{table} 的所有行"
           toast:
-            exported:
-              one: "已将 1 行导出到 %{path}"
-              many: "已将全部 %{count} 行导出到 %{path}"
             cancelled: "导出已取消 — %{path} 仅包含停止前写入的行"
             dropped_columns: "首页之后才出现的字段未写入文件：%{columns}"
           error:
@@ -1847,6 +1924,13 @@ document:
         builder_notice: 行来自构建器查询
         edit_in_builder: 在构建器中编辑
         reset_builder: 重置
+        value_not_filterable: "此值无法添加到筛选条件中"
+        history:
+          toggle: "筛选历史"
+          delete: "从历史中移除"
+          clear: "清除历史"
+          empty: "此表还没有筛选条件"
+          no_match: "没有匹配的筛选条件"
       nearest:
         summary: "按 %{column} 与 %{anchor} 相似"
         similar_to: "相似于"
@@ -3761,9 +3845,16 @@ modals:
       no_metrics_filtered: 没有符合筛选条件的指标。
     cancel: 取消
   cell_editor:
+    generate: "生成 %{kind}"
     title_column: "编辑 %{column}（%{type_name}）"
     title_json: 编辑 JSON
     title_text: 编辑文本
+    title_xml: 编辑 XML
+    maximize: 最大化
+    restore: 恢复大小
+    invalid_warning: "已不是有效的 %{format}：%{error}。再次保存将以纯文本存储。"
+    copied: 值已复制到剪贴板
+    copied_compact: 紧凑值已复制到剪贴板
   create_dashboard:
     name_label: 仪表盘名称
     title: 新建仪表盘
@@ -4139,15 +4230,24 @@ settings:
       group: "编辑器"
     data_grid:
       group: "数据网格"
+    grid_review_before_save:
+      label: "保存前查看更改"
+      hint: "保存时先显示将要执行的语句，可以保存、复制或取消。"
     grid_fk_labels:
       label: "在外键单元格中显示被引用行的标签"
       hint: "保存后加载的页面会解析外键单元格，并在其 ID 旁显示被引用行的标签。行检查器始终解析引用。"
     grid_pk_sort_desc:
-      label: "按主键排序表格，最新的在前"
-      hint: "表格按主键降序打开，自增主键的最新行显示在最前面。适用于保存后打开的表格；点击列标题仍按原方式排序。"
+      label: "按主键降序排序表格"
+      hint: "表格按主键降序打开，使用自增主键时最新的行显示在最前面。适用于保存后打开的表格，以及已打开表格中清除列排序的操作。在此顺序下点击主键列的标题会改为升序。"
     grid_copy_column_names:
       label: "复制时包含列名"
-      hint: "从数据网格复制（Ctrl+C）时，制表符分隔的文本以一行列名开头。复制为 CSV、JSON 及其他“复制为”项不受影响。"
+      hint: "从数据网格复制（Ctrl+C，macOS 上为 Cmd+C）时，制表符分隔的文本以一行列名开头。复制为 CSV、JSON 及其他“复制为”项不受影响。"
+    grid_header_click_sorts:
+      label: "点击列标题时对该列排序"
+      hint: "关：点击列标题选择整列，标题右侧的箭头用于排序。开：点击即对该列排序；Shift+单击和 Ctrl+单击仍然选择列。"
+    grid_filter_autoquote:
+      label: "在 WHERE 筛选中比较运算符后插入引号"
+      hint: "在表的 WHERE 筛选中，于文本或日期/时间列后输入 =、!=、<>、<=、>=、<、>、LIKE 或 NOT LIKE 时，会添加 ''，并把光标放在两个引号之间。数字、布尔值和 NULL 判断保持原样。"
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"
@@ -4377,6 +4477,8 @@ settings:
       find_similar_rows: 查找相似行
       copy_selection_as_json: "将选区复制为 JSON"
       results_set_null: 将单元格设为 NULL
+      toggle_cell_expression: "将单元格作为 SQL 表达式编辑"
+      review_changes: "查看更改"
       open_context_menu: 打开上下文菜单
       open_column_menu: 打开列菜单
       open_pane_actions: 打开面板操作
@@ -4460,6 +4562,11 @@ settings:
       load_more: 加载更多
       edit_expiry: 编辑过期时间…
       copy_preview: 复制预览
+      copy_editor_text: 复制编辑器文本
+      copy_editor_text_compact: 紧凑复制编辑器文本
+      format_editor_text: 格式化编辑器文本
+      compact_editor_text: 紧凑编辑器文本
+      toggle_dialog_maximized: 最大化或恢复对话框
       import_items: "导入…"
       import_from_client: "从其他客户端导入…"
       reset_binding: "重置快捷键"
@@ -5273,6 +5380,8 @@ sidebar:
     edit_reconnect_later: 稍后
     connection_already_pending: 连接已在等待中
     startup_needs_password: "'%{name}' 未保存密码，因此启动时未连接。请连接并输入密码。"
+    startup_needs_passwords: "%{names} 未保存密码，因此启动时未连接。请逐个连接并输入密码。"
+    startup_needs_passphrase: "'%{name}' 的 SSH 隧道需要未保存的密码短语，因此启动时未连接。请连接并输入密码短语。"
     operation_started_elsewhere: 操作已由其他线程启动
     background_task_limit: 后台任务运行过多，请稍候
     connection_cancelled_by_hook: 连接被 Hook 取消

@@ -30,11 +30,10 @@ impl BuildStamp {
         Some(Self { built_at, git_sha })
     }
 
-    /// `built 2026-10-30 11:21 · 8744286a`, in the viewer's local time zone so
-    /// it reads the same as the clock next to it, wherever the build ran.
+    /// `2026-10-30 11:21 · 8744286a`, in the viewer's local time zone so it
+    /// reads the same as the clock next to it, wherever the build ran.
     ///
-    /// Not translated: like the build profile shown in About, it identifies the
-    /// binary rather than describing anything to the user.
+    /// Numbers and a commit only, so it needs no translation in any locale.
     pub fn label(&self) -> String {
         self.label_in(&Local)
     }
@@ -47,19 +46,31 @@ impl BuildStamp {
         let built = self.built_at.with_timezone(zone).format("%Y-%m-%d %H:%M");
 
         match &self.git_sha {
-            Some(sha) => format!("built {built} · {sha}"),
-            None => format!("built {built}"),
+            Some(sha) => format!("{built} · {sha}"),
+            None => built.to_string(),
         }
     }
 }
 
 /// The main window title: the app name, followed by the build stamp when the
-/// binary carries one, so rebuilt binaries can be told apart at a glance.
-pub fn main_window_title(app_name: &str, stamp: Option<&BuildStamp>) -> String {
-    match stamp {
+/// binary carries one and is not a stable release (see
+/// [`shows_stamp_in_title`]), so rebuilt binaries can be told apart at a glance.
+pub fn main_window_title(app_name: &str, version: &str, stamp: Option<&BuildStamp>) -> String {
+    match stamp.filter(|_| shows_stamp_in_title(version)) {
         Some(stamp) => format!("{app_name} · {}", stamp.label()),
         None => app_name.to_owned(),
     }
+}
+
+/// Whether a binary of `version` puts its build stamp in the window title.
+///
+/// A stable release is one `MAJOR.MINOR.PATCH` build per version, and its
+/// title is read in the taskbar, the window switcher and by screen readers, so
+/// only pre-release versions show the stamp there: nightlies, release
+/// candidates and source builds (`-dev`). Settings > About shows it for every
+/// build.
+pub fn shows_stamp_in_title(version: &str) -> bool {
+    version.contains('-')
 }
 
 #[cfg(test)]
@@ -74,14 +85,14 @@ mod tests {
     fn test_label_shows_the_build_minute_and_the_commit() {
         let stamp = BuildStamp::from_build_env(BUILT_AT, "8744286a").unwrap();
 
-        assert_eq!(stamp.label_in(&Utc), "built 2026-10-30 11:21 · 8744286a");
+        assert_eq!(stamp.label_in(&Utc), "2026-10-30 11:21 · 8744286a");
     }
 
     #[test]
     fn test_label_without_a_commit_shows_the_time_alone() {
         let stamp = BuildStamp::from_build_env(BUILT_AT, "").unwrap();
 
-        assert_eq!(stamp.label_in(&Utc), "built 2026-10-30 11:21");
+        assert_eq!(stamp.label_in(&Utc), "2026-10-30 11:21");
     }
 
     #[test]
@@ -91,7 +102,7 @@ mod tests {
 
         assert_eq!(
             stamp.label_in(&berlin_winter),
-            "built 2026-10-30 12:21 · 8744286a"
+            "2026-10-30 12:21 · 8744286a"
         );
     }
 
@@ -115,17 +126,31 @@ mod tests {
         let stamp = BuildStamp::from_build_env(BUILT_AT, "8744286a").unwrap();
 
         assert_eq!(
-            main_window_title("DBFlux", Some(&stamp)),
+            main_window_title("DBFlux", "0.10.0-dev.0", Some(&stamp)),
             format!("DBFlux · {}", stamp.label())
         );
-        assert!(
-            main_window_title("DBFlux Nightly", Some(&stamp))
-                .starts_with("DBFlux Nightly · built ")
+        assert_eq!(
+            main_window_title("DBFlux Nightly", "0.10.0-nightly+8744286a", Some(&stamp)),
+            format!("DBFlux Nightly · {}", stamp.label())
+        );
+        assert_eq!(
+            main_window_title("DBFlux", "0.10.0-rc.1", Some(&stamp)),
+            format!("DBFlux · {}", stamp.label())
+        );
+    }
+
+    #[test]
+    fn test_main_window_title_of_a_stable_release_is_the_app_name() {
+        let stamp = BuildStamp::from_build_env(BUILT_AT, "8744286a").unwrap();
+
+        assert_eq!(
+            main_window_title("DBFlux", "0.10.0", Some(&stamp)),
+            "DBFlux"
         );
     }
 
     #[test]
     fn test_main_window_title_without_a_stamp_is_the_app_name() {
-        assert_eq!(main_window_title("DBFlux", None), "DBFlux");
+        assert_eq!(main_window_title("DBFlux", "0.10.0-dev.0", None), "DBFlux");
     }
 }

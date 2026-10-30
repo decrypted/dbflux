@@ -6,7 +6,7 @@ access:
   manage: 관리
   login: 로그인
   refresh: 새로고침
-  auth_profile_hint: 직접 연결 모드에서 비밀/매개변수/인증 값 소스를 확인하는 데 사용됩니다.
+  auth_profile_hint: 비밀/매개변수/인증 값 소스를 확인하는 데 사용됩니다.
   session_valid: 인증 프로필 세션이 유효합니다.
   ssm_title: SSM 포트 포워딩
   ssm_instance_id: 인스턴스 ID
@@ -153,11 +153,30 @@ components:
     empty: 선택된 셀이 없습니다
     error:
       not_xml: XML 문서가 아닙니다
+    hex_cut: "%{size} 중 처음 %{shown}만 표시합니다."
+    image:
+      copy: "이미지 복사"
+      decoding: "%{format} 이미지를 디코딩하는 중…"
+      incomplete: "이 %{format} 이미지는 불완전합니다. 저장된 값이 이미지보다 먼저 끝나므로 크기 제한으로 잘렸을 가능성이 높습니다. 대신 바이트를 표시합니다."
+      invalid: "이 값은 %{format} 이미지처럼 시작하지만 읽을 수 없습니다: %{error}. 대신 바이트를 표시합니다."
+      meta: "%{width} × %{height} · %{format} · %{size}"
+      save: "다른 이름으로 이미지 저장…"
+      save_title: "이미지 저장"
+      too_many_bytes: "이 %{format} 이미지는 %{size}로 이미지 미리 보기 한도인 %{limit}을(를) 넘습니다. 대신 바이트를 표시합니다."
+      too_many_pixels: "이 %{format} 이미지는 %{width} × %{height} 픽셀로 미리 보기 한도인 %{limit}메가픽셀을 넘습니다. 대신 바이트를 표시합니다."
+      too_much_memory: "이 %{format} 이미지를 디코딩하려면 미리 보기가 허용하는 것보다 많은 메모리가 필요합니다. 대신 바이트를 표시합니다."
     read_only: 읽기 전용
     revert: 되돌리기
     title: 값
+    view:
+      hex: "16진수"
+      image: "이미지"
+      text: "텍스트"
     wrap: 줄바꿈
   data_table:
+    expression:
+      toggle: "SQL 식으로 편집"
+      generate: "%{kind} 생성"
     record:
       empty: 표시할 행이 없습니다
       name_header: 이름
@@ -167,11 +186,16 @@ components:
     valid:
       one: "유효한 JSON · %{count}줄"
       many: "유효한 JSON · %{count}줄"
+    valid_xml:
+      one: "유효한 XML · %{count}줄"
+      many: "유효한 XML · %{count}줄"
     empty_error: 문서는 비어 있을 수 없습니다
     format: 서식
     compact: 압축
     cancel: 취소
     save: 저장
+    copy: 복사
+    copy_compact: 압축하여 복사
   value_source:
     literal: 리터럴
     env: 환경 변수
@@ -187,6 +211,8 @@ components:
       env: "DBFlux가 연결할 때마다 환경 변수 %{name}에서 읽습니다. DBFlux는 값을 저장하지 않습니다."
       dotenv: "DBFlux가 연결할 때마다 %{path}의 %{key}에서 읽습니다. 파일은 본인만 읽을 수 있어야 합니다."
       dotenv_missing_key: "경로 뒤에 키를 추가하세요: ~/path/to/file.env#KEY"
+      whole_value: "값 전체를 사용합니다. RDS가 관리하는 시크릿처럼 JSON 시크릿이라면 #키를 붙여 한 필드만 사용하세요. 예: #password"
+      json_key: "JSON 값의 %{key} 필드를 사용합니다."
   file_picker:
     browse: "찾아보기…"
   column_projection:
@@ -1529,6 +1555,17 @@ document:
       waiting_title: 연결되지 않음
       waiting_connection: "%{object}을(를) 불러오려면 %{profile}에 연결하세요."
       waiting_database: "%{object}을(를) 불러오려면 사이드바에서 %{database} 데이터베이스를 펼치세요."
+    review:
+      title: "변경 사항 검토"
+      literals_note: "저장이 실행하는 문을 순서대로, 드라이버가 보내는 그대로 보여 줍니다. 값은 리터럴로 SQL에 들어가며 바인드 매개변수는 보내지 않습니다."
+      cancel: "취소"
+      copy: "SQL 복사"
+      save: "저장"
+      unavailable: "이 드라이버는 이 변경에 대해 보내는 문을 보여 주지 않습니다."
+      skipped_row: "%{row}행은 저장되지 않습니다: %{reason}"
+      no_connection: "연결이 열려 있지 않아 문을 만들 수 없습니다."
+    expression:
+      rejected: "식을 저장할 수 없습니다: %{reason}"
     chart_dock:
       toolbar:
         apply: 적용
@@ -1615,6 +1652,8 @@ document:
         paste: 붙여넣기
         edit: 편집
         edit_in_modal: 모달에서 편집…
+        edit_as_expression: "SQL 식으로 편집…"
+        generate_id: "%{kind} 생성"
         set_default: 기본값으로 설정
         set_null: NULL로 설정
         add_row: 행 추가
@@ -1664,6 +1703,7 @@ document:
         clear_filter: "필터 지우기"
         open_builder: "쿼리 빌더 열기"
         reset_builder: "빌더 쿼리 초기화"
+        review_changes: "변경 사항 검토"
         save_changes: "모든 변경 사항 저장"
         revert_changes: "모든 변경 사항 되돌리기"
         auto_refresh: "자동 새로 고침 간격…"
@@ -1682,6 +1722,11 @@ document:
         value_compact: "값 압축"
         value_revert: "값 되돌리기"
         value_save: "값 저장"
+        value_view_image: "값을 이미지로 표시"
+        value_view_hex: "값을 16진수로 표시"
+        value_view_text: "값을 텍스트로 표시"
+        value_save_image: "이미지를 파일로 저장…"
+        value_copy_image: "이미지 복사"
         view_table_data: "데이터 보기"
         view_table_columns: "열 보기"
         view_table_partitions: "파티션 보기"
@@ -1708,12 +1753,8 @@ document:
         toast:
           native_picker_fallback: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
           exported: "%{path}에 내보냈습니다"
-          exported_rows:
-            one: "불러온 행 1개를 %{path}에 내보냈습니다"
-            many: "불러온 행 %{count}개를 %{path}에 내보냈습니다"
-          native_picker_fallback_rows:
-            one: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 불러온 행 1개를 %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
-            many: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 불러온 행 %{count}개를 %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
+          exported_scope: "%{scope}을(를) %{path}에 내보냈습니다"
+          native_picker_fallback_scope: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 %{scope}을(를) %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
       clipboard:
         error:
           binary_unsupported: 원시 바이너리는 클립보드로 복사할 수 없습니다 — 대신 Hex 또는 Base64를 선택하세요.
@@ -1724,6 +1765,8 @@ document:
           copied_rows:
             one: "불러온 행 1개를 %{format} (%{bytes}바이트)로 클립보드에 복사했습니다"
             many: "불러온 행 %{count}개를 %{format} (%{bytes}바이트)로 클립보드에 복사했습니다"
+          in_list_only_nulls: "복사하지 않았습니다: 선택한 값이 모두 NULL이며 SQL IN 목록은 NULL과 일치하지 않습니다"
+          copied_scope: "%{scope}을(를) %{format} (%{bytes}바이트)로 클립보드에 복사했습니다"
       document:
         toast:
           inserted: 문서 삽입됨
@@ -1733,6 +1776,7 @@ document:
           update_failed: "문서를 업데이트하지 못했습니다: %{error}"
     grid:
       edit_bar:
+        review: "검토"
         clean: 저장하지 않은 변경 사항 없음
         dirty:
           one: "저장하지 않은 변경 사항 %{count}개"
@@ -1794,19 +1838,52 @@ document:
           average: "평균 %{value}"
           min: "최소 %{value}"
           max: "최대 %{value}"
-          nulls_skipped: "NULL %{count}개 제외"
-          non_numeric_skipped: "숫자가 아닌 값 %{count}개 제외"
+          nulls_skipped:
+            one: "NULL %{count}개 제외"
+            many: "NULL %{count}개 제외"
+          non_numeric_skipped:
+            one: "숫자가 아닌 값 %{count}개 제외"
+            many: "숫자가 아닌 값 %{count}개 제외"
       export:
         trigger: 내보내기
-        save_as_file: 불러온 행을 파일로 저장
-        copy_to_clipboard: 불러온 행을 클립보드로 복사
+        save_as_file: "파일로 저장"
+        copy_to_clipboard: "클립보드로 복사"
         export_all_rows: 모든 행을 파일로 내보내기
+        options:
+          title: "내보내기: %{scope}"
+          rows: "행"
+          columns: "열"
+          header: "헤더 행 포함 (열 이름)"
+          delimiter: "구분자"
+          rows_selected: "선택"
+          rows_loaded: "불러온 행"
+          rows_all: "전체"
+          columns_all: "전체"
+          columns_visible: "표시"
+          columns_selected: "선택"
+          delimiter_comma: "쉼표"
+          delimiter_semicolon: "세미콜론"
+          delimiter_tab: "탭"
+          no_selected_rows: "선택한 행을 내보내려면 셀을 선택하세요"
+          no_selected_columns: "선택한 열을 내보내려면 셀을 선택하세요"
+        scope:
+          summary: "%{rows}, %{columns}"
+          selected_rows:
+            one: "선택한 행 1개"
+            many: "선택한 행 %{count}개"
+          loaded_rows:
+            one: "불러온 행 1개"
+            many: "불러온 행 %{count}개"
+          all_rows: "모든 행"
+          all_rows_count:
+            one: "1개 행"
+            many: "모든 %{count}개 행"
+          columns:
+            one: "열 1개"
+            many: "열 %{count}개"
         all:
           task: "%{table}의 모든 행 내보내기"
           toast:
-            exported:
-              one: "1개 행을 %{path}에 내보냈습니다"
-              many: "모든 %{count}개 행을 %{path}에 내보냈습니다"
             cancelled: "내보내기를 취소했습니다 — %{path}에는 중지 전에 기록된 행만 있습니다"
             dropped_columns: "첫 페이지 이후에 처음 나타난 필드는 파일에 없습니다: %{columns}"
           error:
@@ -1847,6 +1924,13 @@ document:
         builder_notice: 행은 빌더 쿼리에서 가져옵니다
         edit_in_builder: 빌더에서 편집
         reset_builder: 초기화
+        value_not_filterable: "이 값은 필터에 추가할 수 없습니다"
+        history:
+          toggle: "필터 기록"
+          delete: "기록에서 제거"
+          clear: "기록 지우기"
+          empty: "이 테이블의 필터가 아직 없습니다"
+          no_match: "일치하는 필터가 없습니다"
       nearest:
         summary: "%{column} 기준 %{anchor}와 유사"
         similar_to: "유사 대상"
@@ -3761,9 +3845,16 @@ modals:
       no_metrics_filtered: 필터와 일치하는 지표가 없습니다.
     cancel: 취소
   cell_editor:
+    generate: "%{kind} 생성"
     title_column: "%{column} 편집 (%{type_name})"
     title_json: JSON 편집
     title_text: 텍스트 편집
+    title_xml: XML 편집
+    maximize: 최대화
+    restore: 크기 복원
+    invalid_warning: "더 이상 유효한 %{format}이(가) 아닙니다: %{error}. 일반 텍스트로 저장하려면 다시 저장하세요."
+    copied: 값을 클립보드에 복사했습니다
+    copied_compact: 압축된 값을 클립보드에 복사했습니다
   create_dashboard:
     name_label: 대시보드 이름
     title: 새 대시보드
@@ -4139,15 +4230,24 @@ settings:
       group: "편집기"
     data_grid:
       group: "데이터 그리드"
+    grid_review_before_save:
+      label: "저장 전에 변경 사항 검토"
+      hint: "저장할 때 먼저 실행할 문을 보여 주며, 저장하거나 복사하거나 취소할 수 있습니다."
     grid_fk_labels:
       label: "외래 키 셀에 참조된 행의 레이블 표시"
       hint: "외래 키를 담은 셀은 참조된 행의 레이블을 id와 함께 확인해 표시합니다. 저장한 이후에 불러오는 페이지에 적용됩니다. 행 인스펙터는 항상 참조를 확인합니다."
     grid_pk_sort_desc:
-      label: "기본 키 기준으로 최신 행부터 테이블 정렬"
-      hint: "테이블을 기본 키 내림차순으로 열어 자동 증가 키의 최신 행이 먼저 표시됩니다. 저장한 이후에 여는 테이블에 적용됩니다. 열 머리글을 클릭하면 이전과 같이 정렬됩니다."
+      label: "기본 키 내림차순으로 테이블 정렬"
+      hint: "테이블을 기본 키 내림차순으로 열어 자동 증가 키라면 최신 행이 먼저 표시됩니다. 저장한 이후에 여는 테이블과, 이미 열린 테이블에서 열 정렬을 해제할 때 적용됩니다. 이 순서에서 키 열의 머리글을 클릭하면 오름차순으로 정렬됩니다."
     grid_copy_column_names:
       label: "복사할 때 열 이름 포함"
-      hint: "데이터 그리드에서 복사(Ctrl+C)하면 탭으로 구분된 텍스트가 열 이름 한 줄로 시작합니다. CSV, JSON 등 다른 형식으로 복사 항목에는 영향을 주지 않습니다."
+      hint: "데이터 그리드에서 복사(Ctrl+C, macOS에서는 Cmd+C)하면 탭으로 구분된 텍스트가 열 이름 한 줄로 시작합니다. CSV, JSON 등 다른 형식으로 복사 항목에는 영향을 주지 않습니다."
+    grid_header_click_sorts:
+      label: "열 헤더를 클릭하면 열 정렬"
+      hint: "끔: 열 헤더를 클릭하면 열 전체가 선택되고, 헤더 오른쪽 끝의 화살표로 정렬합니다. 켬: 클릭하면 열이 정렬됩니다. Shift+클릭과 Ctrl+클릭은 계속 열을 선택합니다."
+    grid_filter_autoquote:
+      label: "WHERE 필터에서 비교 연산자 뒤에 따옴표 삽입"
+      hint: "테이블의 WHERE 필터에서 텍스트 또는 날짜/시간 열 뒤에 =, !=, <>, <=, >=, <, >, LIKE 또는 NOT LIKE를 입력하면 ''가 추가되고 캐럿이 따옴표 사이에 놓입니다. 숫자, 불리언, NULL 검사는 입력한 그대로 둡니다."
     vim_mode:
       label: "편집기에서 Vim 모드 사용"
       hint: "노멀 모드와 삽입 모드: h, j, k, l, Enter로 이동하고, i로 입력을 시작하고, Esc로 노멀 모드로 돌아가고, x로 문자를 삭제하고, u로 실행을 취소합니다. 저장하면 열려 있는 편집기에 적용됩니다."
@@ -4377,6 +4477,8 @@ settings:
       find_similar_rows: 유사한 행 찾기
       copy_selection_as_json: "선택 영역을 JSON으로 복사"
       results_set_null: 셀을 NULL로 설정
+      toggle_cell_expression: "셀을 SQL 식으로 편집"
+      review_changes: "변경 사항 검토"
       open_context_menu: 상황에 맞는 메뉴 열기
       open_column_menu: 열 메뉴 열기
       open_pane_actions: 패널 작업 열기
@@ -4460,6 +4562,11 @@ settings:
       load_more: 더 불러오기
       edit_expiry: 만료 편집…
       copy_preview: 미리보기 복사
+      copy_editor_text: 편집기 텍스트 복사
+      copy_editor_text_compact: 편집기 텍스트 압축하여 복사
+      format_editor_text: 편집기 텍스트 서식 지정
+      compact_editor_text: 편집기 텍스트 압축
+      toggle_dialog_maximized: 대화 상자 최대화 또는 복원
       import_items: "가져오기…"
       import_from_client: "다른 클라이언트에서 가져오기…"
       reset_binding: "단축키 재설정"
@@ -5173,7 +5280,7 @@ sidebar:
     connect: 연결
     retry_connect: 다시 시도
     connect_on_startup: 시작 시 연결
-    connect_on_startup_overridden: "설정 > 일반 > 시작 및 세션에서 열려 있던 연결에 다시 연결하는 동안 꺼짐"
+    connect_on_startup_overridden: "설정 > 일반 > 시작 및 세션에서 열려 있던 연결에 다시 연결하는 동안 효과 없음"
     disconnect: 연결 끊기
     edit: 편집
     duplicate: 복제
@@ -5274,6 +5381,8 @@ sidebar:
     edit_reconnect_later: 나중에
     connection_already_pending: 연결이 이미 대기 중입니다
     startup_needs_password: "'%{name}'의 비밀번호가 저장되어 있지 않아 시작 시 연결하지 않았습니다. 연결하여 비밀번호를 입력하세요."
+    startup_needs_passwords: "%{names}의 비밀번호가 저장되어 있지 않아 시작 시 연결하지 않았습니다. 각각 연결하여 비밀번호를 입력하세요."
+    startup_needs_passphrase: "'%{name}'의 SSH 터널에 저장되지 않은 암호 문구가 필요하여 시작 시 연결하지 않았습니다. 연결하여 암호 문구를 입력하세요."
     operation_started_elsewhere: 다른 스레드에서 시작한 작업입니다
     background_task_limit: 실행 중인 백그라운드 작업이 너무 많습니다. 잠시 기다려 주세요
     connection_cancelled_by_hook: 훅에 의해 연결이 취소되었습니다

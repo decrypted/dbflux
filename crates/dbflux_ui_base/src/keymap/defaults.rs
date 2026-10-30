@@ -239,7 +239,9 @@ fn global_layer() -> KeymapLayer {
 /// Workspace commands that also have an activity rail entry, a status bar
 /// chip or a title bar button. Every chord holds the primary modifier or
 /// Ctrl, so it also works while a text field has focus, and none uses Alt:
-/// Ctrl+Alt is AltGr on Windows and types characters on many layouts.
+/// Ctrl+Alt is AltGr on Windows and types characters on many layouts. (The
+/// Results layer's primary+Alt+C is not global: a focused text field roots
+/// the keyboard in `TextInput`, which does not inherit it.)
 fn bind_workspace_commands(layer: &mut KeymapLayer) {
     layer.bind(
         KeyChord::new(",", Modifiers::primary()),
@@ -690,10 +692,18 @@ fn results_layer() -> KeymapLayer {
         Command::ResultsCopyCell,
     );
     // Primary+Alt because primary+Shift+C is the global Open saved chart,
-    // which must keep working from the results too.
+    // which must keep working from the results too. Ctrl+Alt is AltGr on
+    // Windows, but this binding is in the Results layer only: a text field in
+    // the results (filter, inline cell editor) roots the keyboard in
+    // `TextInput`, so AltGr+C still types there.
     layer.bind(
         KeyChord::new("c", Modifiers::primary_alt()),
         Command::CopySelectionAsJson,
+    );
+    // Next to primary+S, which saves without the review.
+    layer.bind(
+        KeyChord::new("s", Modifiers::primary_alt()),
+        Command::ReviewChanges,
     );
 
     // Toggle panel collapse
@@ -1531,6 +1541,13 @@ fn data_table_layer() -> KeymapLayer {
         KeyChord::new("n", Modifiers::ctrl()),
         Command::ResultsSetNull,
     );
+    // Primary+Alt like Copy as JSON: primary+Shift+E is a workspace command,
+    // and Alt alone types characters on macOS. It also reaches the open
+    // inline editor, which sits inside the table's context.
+    layer.bind(
+        KeyChord::new("e", Modifiers::primary_alt()),
+        Command::ToggleCellExpression,
+    );
 
     // Undo / redo: the standard primary chords plus the vim-style `u` and
     // `ctrl-r`, kept literal as familiar editor aliases.
@@ -1671,12 +1688,36 @@ fn sql_preview_modal_layer() -> KeymapLayer {
 
 /// The cell editor modal: Escape closes it (a focused editor only lets
 /// Escape through when it has nothing of its own to cancel) and the primary
-/// modifier + S saves the value.
+/// modifier + S saves the value. With the primary modifier + Shift, K copies
+/// the text and H copies it compacted, U formats it and J compacts it, and
+/// Enter maximizes the dialog. These are chords the text editor and the
+/// workspace leave alone, so the primary modifier + C keeps copying the
+/// selection (Ctrl+Shift+I is gpui's inspector).
 fn cell_editor_modal_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::CellEditorModal);
 
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
     layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
+    layer.bind(
+        KeyChord::new("k", Modifiers::primary_shift()),
+        Command::CopyEditorText,
+    );
+    layer.bind(
+        KeyChord::new("h", Modifiers::primary_shift()),
+        Command::CopyEditorTextCompact,
+    );
+    layer.bind(
+        KeyChord::new("u", Modifiers::primary_shift()),
+        Command::FormatEditorText,
+    );
+    layer.bind(
+        KeyChord::new("j", Modifiers::primary_shift()),
+        Command::CompactEditorText,
+    );
+    layer.bind(
+        KeyChord::new("enter", Modifiers::primary_shift()),
+        Command::ToggleDialogMaximized,
+    );
 
     layer
 }

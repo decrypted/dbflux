@@ -62,7 +62,10 @@ segundo plano cada vez que se inicia, igual que al hacer clic en la conexión: s
 aplican los túneles SSH, los proxies, los hooks y los secretos del llavero, y una
 conexión fallida muestra su error habitual. Una conexión cuya contraseña no está
 guardada no se conecta al iniciar; en su lugar queda marcada como fallida, y
-**Reintentar** pide la contraseña. El menú de la conexión en la barra lateral (clic
+**Reintentar** pide la contraseña. Lo mismo ocurre con una conexión cuyo túnel SSH
+necesita una frase de contraseña de la clave que no está guardada: **Reintentar**
+pide la frase. Un solo aviso nombra todas las conexiones que no se conectaron
+porque su contraseña no está guardada. El menú de la conexión en la barra lateral (clic
 derecho, o el botón `…` de la fila) tiene el mismo interruptor, con una marca de
 verificación mientras está activado.
 
@@ -179,8 +182,22 @@ el `IdentityFile` que ese host indique, o el SSH agent y las claves por defecto
 si no indica ninguna. `Include`, `Match` y los tokens `%h`, `%r` y `%d` dentro
 de un `IdentityFile` se resuelven como los resuelve OpenSSH.
 
-Un host cuya configuración necesite `ProxyJump` o `ProxyCommand` aparece en la
-lista con una marca: DBFlux no puede alcanzarlo, y la conexión falla con ese
+En Linux y macOS, un host con `ProxyCommand` funciona igual que en una
+terminal: DBFlux ejecuta el comando a través de tu `$SHELL` y habla SSH por su
+entrada y salida estándar, así que funcionan proxies de acceso como
+`cloudflared access ssh --hostname %h`. Se expanden los tokens `%h`, `%p`,
+`%r`, `%n` y `%%`; cualquier otro token hace fallar la conexión antes de que se
+ejecute el comando. Lo mismo ocurre con un valor para `%h`, `%n` o `%r` que
+contenga espacios o un carácter que la shell interpretaría (comillas, `$`,
+comillas invertidas, `;`, `|` y similares) o que empiece por `-`, de modo que
+un alias de host no puede inyectar comandos en la shell. La salida de error
+del comando aparece en el log, que es donde un proxy de acceso imprime su URL
+de inicio de sesión. El log solo nombra el programa que ejecuta el comando; la
+línea de comando completa, que puede llevar un token de acceso, solo se
+registra en el nivel debug.
+
+Un host cuya configuración necesite `ProxyJump`, o `ProxyCommand` en Windows,
+aparece en la lista con una marca: DBFlux no puede alcanzarlo, y la conexión falla con ese
 motivo en lugar de conectar directamente al bastión. Las claves de host se
 siguen verificando contra el almacén propio de DBFlux en su directorio de
 datos, no contra tu `~/.ssh/known_hosts`, así que un host al que llevas años
@@ -333,7 +350,12 @@ Notas:
 
 - Las fuentes Secret/Parameter pueden apuntar a una **clave JSON** dentro de un
   secreto JSON, de forma que un único documento JSON almacenado puede alimentar
-  varios campos.
+  varios campos. Escribe la clave después del nombre o ARN del secreto como
+  `<locator>#<clave>`, por ejemplo `rds!db-1a2b#password` para la contraseña de
+  un secreto que gestiona RDS. La indicación bajo el campo dice si se usa el valor
+  completo o una sola clave. Un secreto de Secrets Manager que contiene un objeto
+  JSON pero se referencia sin clave se rechaza al conectar, y el error lista las
+  claves del secreto (nunca sus valores).
 - Los valores resueltos se cachean durante **5 minutos** para evitar volver a
   obtenerlos en cada reconexión.
 - Las fuentes Secret/Parameter respaldadas por un auth provider **requieren un

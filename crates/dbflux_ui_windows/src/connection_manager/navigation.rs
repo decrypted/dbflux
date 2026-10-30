@@ -1667,6 +1667,18 @@ impl ConnectionManagerWindow {
         }
     }
 
+    /// Enter in a single-line form input. The input also hands the key on to
+    /// the window, whose Execute command already left the field and moved
+    /// down before this event arrives; moving again would skip fields.
+    pub(super) fn leave_input_on_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit_state != EditState::Editing {
+            return;
+        }
+
+        self.exit_edit_mode(window, cx);
+        self.focus_down(cx);
+    }
+
     pub(super) fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.edit_state = EditState::Navigating;
         window.focus(&self.focus_handle, cx);

@@ -484,7 +484,11 @@ fn run_gui() {
             env!("DBFLUX_BUILD_UNIX_TIME"),
             env!("DBFLUX_BUILD_GIT_SHA"),
         );
-        let main_window_title = main_window_title(channel.display_name(), build_stamp.as_ref());
+        let main_window_title = main_window_title(
+            channel.display_name(),
+            env!("CARGO_PKG_VERSION"),
+            build_stamp.as_ref(),
+        );
         if let Some(build_stamp) = build_stamp {
             cx.set_global(build_stamp);
         }

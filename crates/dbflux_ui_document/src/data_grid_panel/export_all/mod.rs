@@ -25,6 +25,7 @@ use dbflux_ui_base::{SaveTargetOutcome, SaveTargetRequest};
 use gpui::*;
 
 use super::documents::CollectionTab;
+use super::export_options::ProjectColumns;
 use super::{DataGridPanel, DataSource};
 use crate::progress_forwarding::spawn_task_progress_forwarder;
 use document_shape::DocumentPageShape;
@@ -42,6 +43,10 @@ struct ExportAllRun {
     format: FileFormat,
     target_path: PathBuf,
     cancel_token: CancelToken,
+    csv_options: dbflux_export::CsvOptions,
+    /// Columns the file gets, for the toast; `None` when each document is
+    /// written whole with its own fields.
+    column_count: Option<usize>,
 }
 
 /// The source the export reads from, resolved from the grid.
@@ -112,7 +117,8 @@ impl DataGridPanel {
             return;
         };
 
-        let shape = self.export_all_shape(format, cx);
+        let (shape, column_count) = self.export_all_shape(format, cx);
+        let csv_options = self.export_menu_csv_options();
         // The table's count does not bound a builder query's rows.
         let estimated_total = match &read {
             ReplayableRead::VisualQuery { .. } => None,
@@ -145,6 +151,8 @@ impl DataGridPanel {
                             format,
                             target_path,
                             cancel_token,
+                            csv_options,
+                            column_count,
                         }
                     })
                 })
@@ -191,17 +199,42 @@ impl DataGridPanel {
     /// A document collection's pages are flattened as the grid flattens its
     /// page, so a CSV file has the loaded-rows export's columns. JSON has no
     /// header to fix, so each document is written whole.
-    fn export_all_shape(&self, format: FileFormat, cx: &App) -> Box<dyn PageShape> {
-        if self.source.is_collection() && self.is_document_collection(cx) {
+    ///
+    /// The menu's Columns choice then picks and orders the columns by name,
+    /// which is how they are matched across pages anyway. A whole document
+    /// keeps every field. Also returns how many columns the file gets.
+    fn export_all_shape(
+        &self,
+        format: FileFormat,
+        cx: &App,
+    ) -> (Box<dyn PageShape>, Option<usize>) {
+        let shape: Box<dyn PageShape> = if self.source.is_collection()
+            && self.is_document_collection(cx)
+        {
             let shape =
                 DocumentPageShape::new(self.collection.expanded.clone(), self.identity_columns());
             match format {
-                FileFormat::Json => Box::new(shape.whole_documents()),
+                FileFormat::Json => return (Box::new(shape.whole_documents()), None),
                 FileFormat::Csv => Box::new(shape),
             }
         } else {
             Box::new(AlignByName::default())
+        };
+
+        let scope = self.export_scope(cx);
+        let names = scope.column_names(&self.result);
+        let all_names: Vec<String> = self
+            .result
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect();
+        if names.is_empty() || names == all_names {
+            return (shape, Some(all_names.len()));
         }
+
+        let count = names.len();
+        (Box::new(ProjectColumns::new(shape, names)), Some(count))
     }
 
     fn export_all_connection(
@@ -257,6 +290,7 @@ impl DataGridPanel {
 
         let app_state = self.app_state.clone();
         let target_path = run.target_path.clone();
+        let column_count = run.column_count;
 
         cx.spawn(async move |_this, cx| {
             let result = cx
@@ -265,7 +299,7 @@ impl DataGridPanel {
                 .await;
 
             cx.update(|cx| {
-                finish_export_all(&app_state, task_id, &target_path, result, cx);
+                finish_export_all(&app_state, task_id, &target_path, column_count, result, cx);
             });
         })
         .detach();
@@ -332,6 +366,8 @@ fn stream_all_rows(
         format,
         target_path,
         cancel_token,
+        csv_options,
+        column_count: _,
     } = run;
 
     let mut source = BrowseSource::open_with_shape(
@@ -344,7 +380,7 @@ fn stream_all_rows(
     let columns = source.columns().to_vec();
     // The file mirrors what the grid reads, so no column is remapped.
     let column_map = AutoColumnMap::new(&columns, &columns);
-    let mut sink = FileSink::to_file(target_path, format);
+    let mut sink = FileSink::to_file(target_path, format).with_csv_options(csv_options);
     if source.writes_whole_documents() {
         sink = sink.writing_whole_documents();
     }
@@ -379,6 +415,7 @@ fn finish_export_all(
     app_state: &Entity<dbflux_ui_base::AppStateEntity>,
     task_id: TaskId,
     target_path: &std::path::Path,
+    column_count: Option<usize>,
     result: Result<TransferReport, TransferError>,
     cx: &mut App,
 ) {
@@ -399,6 +436,7 @@ fn finish_export_all(
             });
             Toast::success(crate::labels::export_all_rows_exported_toast(
                 report.rows_transferred,
+                column_count,
                 &path_text,
             ))
             .push(cx);

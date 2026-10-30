@@ -4,14 +4,14 @@
 
 use super::super::{ContextMenuItem, DataGridPanel, DataSource};
 use dbflux_components::components::data_table::ContextMenuAction;
-use dbflux_components::components::data_table::selection::CellCoord;
 use dbflux_components::icons::AppIcon;
 use dbflux_core::{
-    ColumnAssignment, ColumnMeta, DefaultSqlDialect, MutationRequest, QueryGenerator, QueryResult,
-    RowInsert, SqlDialect, TableRef, Value,
+    ColumnAssignment, ColumnMeta, DefaultSqlDialect, MutationRequest, QueryGenerator,
+    QueryLanguage, QueryResult, RowInsert, SqlDialect, TableRef, Value,
 };
+use dbflux_ui_base::toast::{Toast, now_hms};
 use gpui::{App, Context};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 
 /// Formats `values` as a parenthesized SQL list, `('a', 'b')` or `(1, 2)`,
 /// with the dialect's literals. NULLs are left out, since `x IN (NULL)` never
@@ -30,27 +30,46 @@ pub(super) fn in_list_text(values: &[Value], dialect: &dyn SqlDialect) -> Option
 
 /// One INSERT per row into `table`, for `columns`, through the driver's
 /// generator; rows holding a value the driver cannot write are skipped, as
-/// Copy as Query skips them.
+/// Copy as Query skips them. `expressions` marks, per row and column, a
+/// cell staged as a SQL expression, whose text is written unquoted as the
+/// save writes it; an empty slice marks none.
 pub(super) fn insert_statements(
     generator: &dyn QueryGenerator,
     table: &TableRef,
     columns: &[ColumnMeta],
     rows: &[Vec<Value>],
+    expressions: &[Vec<bool>],
 ) -> Vec<String> {
     rows.iter()
-        .filter(|values| {
+        .enumerate()
+        .filter(|(_, values)| {
             !values
                 .iter()
                 .any(|value| matches!(value, Value::Unsupported(_)))
         })
-        .filter_map(|values| {
+        .filter_map(|(row, values)| {
             let assignments = columns
                 .iter()
                 .zip(values)
-                .map(|(column, value)| ColumnAssignment {
-                    name: column.name.clone(),
-                    value: value.clone(),
-                    type_name: Some(column.type_name.clone()),
+                .enumerate()
+                .map(|(col, (column, value))| {
+                    let is_expression = expressions
+                        .get(row)
+                        .and_then(|marks| marks.get(col))
+                        .copied()
+                        .unwrap_or(false);
+                    match value {
+                        Value::Text(sql) if is_expression => ColumnAssignment::expression(
+                            column.name.clone(),
+                            sql.clone(),
+                            Some(column.type_name.clone()),
+                        ),
+                        value => ColumnAssignment::typed(
+                            column.name.clone(),
+                            value.clone(),
+                            column.type_name.clone(),
+                        ),
+                    }
                 })
                 .collect();
             let insert = RowInsert::with_typed_assignments(
@@ -75,8 +94,10 @@ fn terminated(statement: String) -> String {
 }
 
 /// A GitHub-flavored Markdown table with a header row of column names. NULL
-/// cells are empty; pipes and line breaks inside values are escaped so each
-/// row stays on its own line.
+/// cells are empty and the other values are written as the exporters write
+/// them (see [`markdown_value`]); pipes, line breaks, `&` and `<` inside
+/// values are escaped so each row stays on its own line and no value reads
+/// as HTML.
 pub(super) fn markdown_table(result: &QueryResult) -> String {
     let header: Vec<String> = result
         .columns
@@ -93,7 +114,7 @@ pub(super) fn markdown_table(result: &QueryResult) -> String {
             .iter()
             .map(|value| match value {
                 Value::Null => String::new(),
-                value => markdown_cell(&value.as_display_string_truncated(usize::MAX)),
+                value => markdown_cell(&markdown_value(value)),
             })
             .collect();
         markdown_row(&cells)
@@ -102,12 +123,26 @@ pub(super) fn markdown_table(result: &QueryResult) -> String {
     lines.join("\n")
 }
 
+/// A value as Copy as CSV writes it (bytes as `\x` hex, dates in ISO
+/// form), except arrays and documents, which take the plain JSON of Copy as
+/// JSON rather than the CSV writer's tagged form.
+fn markdown_value(value: &Value) -> String {
+    match value {
+        Value::Array(_) | Value::Document(_) => Value::to_serde_json(value).to_string(),
+        value => dbflux_export::value_to_csv_field(value),
+    }
+}
+
 fn markdown_row(cells: &[String]) -> String {
     format!("| {} |", cells.join(" | "))
 }
 
 fn markdown_cell(text: &str) -> String {
-    text.replace('\\', "\\\\")
+    // `&` first, so the entities written for `<` stay as they are, and both
+    // before the line breaks, so a literal `<br>` in a value reads as text.
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('\\', "\\\\")
         .replace('|', "\\|")
         .replace("\r\n", "<br>")
         .replace(['\n', '\r'], "<br>")
@@ -140,11 +175,14 @@ impl DataGridPanel {
             return items;
         };
 
-        let mut extractors = vec![copy_item(
-            dbflux_i18n::t!("document.data.context_menu.item.copy_as_sql_in_list"),
-            ContextMenuAction::CopyAsSqlInList,
-            AppIcon::Parentheses,
-        )];
+        let mut extractors = Vec::new();
+        if self.offers_copy_as_in_list(cx) {
+            extractors.push(copy_item(
+                dbflux_i18n::t!("document.data.context_menu.item.copy_as_sql_in_list"),
+                ContextMenuAction::CopyAsSqlInList,
+                AppIcon::Parentheses,
+            ));
+        }
         if self.offers_copy_as_inserts(cx) {
             extractors.push(copy_item(
                 dbflux_i18n::t!("document.data.context_menu.item.copy_as_insert_statements"),
@@ -185,7 +223,15 @@ impl DataGridPanel {
     /// columns selected it takes the leftmost, since an IN list compares one
     /// column.
     pub(in crate::data_grid_panel) fn copy_selection_as_in_list(&mut self, cx: &mut Context<Self>) {
-        let Some(values) = self.selected_values_of_first_column(cx) else {
+        // Cells of the first column outside the selection come back NULL,
+        // and an IN list leaves NULLs out.
+        let Some(values) = self.selection_result(cx).map(|result| {
+            result
+                .rows
+                .into_iter()
+                .filter_map(|row| row.into_iter().next())
+                .collect::<Vec<_>>()
+        }) else {
             return;
         };
 
@@ -195,20 +241,26 @@ impl DataGridPanel {
             None => in_list_text(&values, &DefaultSqlDialect),
         };
 
-        if let Some(text) = text {
-            self.finish_clipboard_text(text, "SQL IN list", None, cx);
+        match text {
+            Some(text) => self.finish_clipboard_text(text, "SQL IN list", None, cx),
+            // The clipboard keeps what it held, so say why nothing changed.
+            None => {
+                Toast::warning(crate::labels::copy_as_in_list_only_nulls_toast())
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
         }
     }
 
     /// Copy as INSERT statements: one INSERT into the table per selected row,
     /// with the columns that hold a selected cell and each row's values for
-    /// them, selected or not.
+    /// them as the grid shows them, selected or not.
     pub(in crate::data_grid_panel) fn copy_selection_as_inserts(&mut self, cx: &mut Context<Self>) {
         let DataSource::Table { table, .. } = &self.source else {
             return;
         };
         let table = table.clone();
-        let Some((columns, rows)) = self.selected_rows_and_columns(cx) else {
+        let Some(selected) = self.selection_values(cx, false) else {
             return;
         };
         let Some(connection) = self.copy_connection(cx) else {
@@ -218,7 +270,14 @@ impl DataGridPanel {
             return;
         };
 
-        let statements = insert_statements(generator, &table, &columns, &rows);
+        let expressions = self.selection_expressions(cx, &selected);
+        let statements = insert_statements(
+            generator,
+            &table,
+            &selected.columns,
+            &selected.rows,
+            &expressions,
+        );
         if statements.is_empty() {
             return;
         }
@@ -227,7 +286,9 @@ impl DataGridPanel {
         self.finish_clipboard_text(statements.join("\n"), "SQL INSERT", Some(count), cx);
     }
 
-    /// Copy as Markdown table: the same rows and columns as Copy as CSV.
+    /// Copy as Markdown table: every row and column the grid shows holding a
+    /// selected cell, with the cells outside the selection empty, as Copy as
+    /// CSV takes them.
     pub(in crate::data_grid_panel) fn copy_selection_as_markdown(
         &mut self,
         cx: &mut Context<Self>,
@@ -240,10 +301,28 @@ impl DataGridPanel {
         self.finish_clipboard_text(markdown_table(&selected), "Markdown", Some(count), cx);
     }
 
+    /// Whether the menu offers Copy as SQL IN list: a table, or a query
+    /// result that came from SQL (or from no connection, which falls back to
+    /// standard SQL literals). A collection's documents are not SQL rows.
+    pub(super) fn offers_copy_as_in_list(&self, cx: &App) -> bool {
+        match &self.source {
+            DataSource::Table { .. } => true,
+            DataSource::Collection { .. } => false,
+            DataSource::QueryResult { .. } => self.copy_connection(cx).is_none_or(|connection| {
+                connection.metadata().query_language == QueryLanguage::Sql
+            }),
+        }
+    }
+
     /// Whether the menu offers Copy as INSERT statements: a table whose
-    /// driver generates SQL, the same generator Copy as Query uses.
+    /// driver generates SQL, the same generator Copy as Query uses, showing
+    /// rows of that table alone. Grouped rows and a builder join hold
+    /// columns the table does not have, so the predicate is the one that
+    /// lets the grid add rows to a builder result.
     pub(super) fn offers_copy_as_inserts(&self, cx: &App) -> bool {
         matches!(self.source, DataSource::Table { .. })
+            && !self.is_grouped_result()
+            && self.builder_rows_insertable()
             && self
                 .copy_connection(cx)
                 .is_some_and(|connection| connection.query_generator().is_some())
@@ -262,74 +341,6 @@ impl DataGridPanel {
             .connections()
             .get(&profile_id)
             .map(|connected| connected.connection.clone())
-    }
-
-    fn selected_values_of_first_column(&self, cx: &App) -> Option<Vec<Value>> {
-        let table_state = self.grid_table.table_state.as_ref()?;
-        let selection = table_state.read(cx).selection();
-        let ranges = selection.ranges();
-        // The leftmost selected column as the grid shows it, which is not the
-        // lowest model index once columns are moved or pinned. Every column
-        // of every range is a candidate: a range covering adjacent model
-        // columns starts at the lowest index, not at the leftmost on screen.
-        let column = ranges
-            .iter()
-            .flat_map(|range| range.start.col..=range.end.col)
-            .filter(|&col| col < self.result.columns.len())
-            .min_by_key(|&col| (selection.view_position(col).unwrap_or(usize::MAX), col))?;
-        let rows: BTreeSet<usize> = ranges
-            .iter()
-            .flat_map(|range| range.start.row..=range.end.row)
-            .collect();
-
-        Some(
-            rows.into_iter()
-                .filter(|&row| selection.is_selected(CellCoord::new(row, column)))
-                .filter_map(|row| self.result.rows.get(row)?.get(column).cloned())
-                .collect(),
-        )
-    }
-
-    /// The columns holding a selected cell and, for every row holding one,
-    /// that row's values in those columns.
-    fn selected_rows_and_columns(&self, cx: &App) -> Option<(Vec<ColumnMeta>, Vec<Vec<Value>>)> {
-        let table_state = self.grid_table.table_state.as_ref()?;
-        let selection = table_state.read(cx).selection();
-        let ranges = selection.ranges();
-        if ranges.is_empty() {
-            return None;
-        }
-        let rows: BTreeSet<usize> = ranges
-            .iter()
-            .flat_map(|range| range.start.row..=range.end.row)
-            .collect();
-        // Columns in the order the grid shows them, as the plain copy does.
-        let mut cols: Vec<usize> = ranges
-            .iter()
-            .flat_map(|range| range.start.col..=range.end.col)
-            .filter(|&col| col < self.result.columns.len())
-            .collect::<BTreeSet<usize>>()
-            .into_iter()
-            .collect();
-        selection.sort_by_screen_order(&mut cols);
-
-        let columns = cols
-            .iter()
-            .filter_map(|&col| self.result.columns.get(col).cloned())
-            .collect();
-        let values = rows
-            .iter()
-            .filter_map(|&row| {
-                let values = self.result.rows.get(row)?;
-                Some(
-                    cols.iter()
-                        .map(|&col| values.get(col).cloned().unwrap_or(Value::Null))
-                        .collect(),
-                )
-            })
-            .collect();
-
-        Some((columns, values))
     }
 }
 
@@ -381,7 +392,7 @@ mod tests {
             vec![Value::Int(2), Value::Null],
         ];
 
-        let statements = insert_statements(&generator, &table, &columns, &rows);
+        let statements = insert_statements(&generator, &table, &columns, &rows, &[]);
 
         assert_eq!(
             statements,
@@ -389,6 +400,34 @@ mod tests {
                 "INSERT INTO \"public\".\"users\" (\"id\", \"name\") VALUES (1, 'Ann');",
                 "INSERT INTO \"public\".\"users\" (\"id\", \"name\") VALUES (2, NULL);",
             ]
+        );
+    }
+
+    #[test]
+    fn markdown_table_writes_bytes_and_arrays_as_the_exporter_does() {
+        let result = QueryResult::table(
+            vec![column("blob", "bytea"), column("tags", "text[]")],
+            vec![vec![
+                Value::Bytes(vec![0xde, 0xad]),
+                Value::Array(vec![Value::Text("a".to_string()), Value::Int(2)]),
+            ]],
+            None,
+            Duration::ZERO,
+        );
+
+        assert_eq!(
+            markdown_table(&result),
+            "| blob | tags |\n| --- | --- |\n| \\\\xdead | [\"a\",2] |"
+        );
+    }
+
+    #[test]
+    fn markdown_cell_escapes_html_and_keeps_a_literal_br_apart() {
+        assert_eq!(markdown_cell("a<b & c"), "a&lt;b &amp; c");
+        assert_eq!(
+            markdown_cell("x<br>y\nz"),
+            "x&lt;br>y<br>z",
+            "a literal <br> no longer reads like an escaped line break"
         );
     }
 

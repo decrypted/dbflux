@@ -4,8 +4,9 @@
 
 use super::{DataGridPanel, DataSource};
 use dbflux_components::components::data_table::SortState as TableSortState;
-use dbflux_core::{OrderByColumn, SortDirection};
-use gpui::Context;
+use dbflux_core::{OrderByColumn, OrderByMode, SortDirection};
+use gpui::{App, Context};
+use uuid::Uuid;
 
 impl DataGridPanel {
     /// The header keys for an ORDER BY, by the result columns it names.
@@ -87,6 +88,8 @@ impl DataGridPanel {
     /// The ORDER BY for `keys` on a table. A key added to the table's default
     /// order replaces it: the default is the primary key, after which no other
     /// column changes the order, so keeping it would make the new key a no-op.
+    /// Keys past what the driver can order by are dropped, and the headers
+    /// then show the keys that were kept.
     pub(super) fn order_by_for_sort_keys(
         &mut self,
         keys: &[TableSortState],
@@ -120,7 +123,11 @@ impl DataGridPanel {
             table,
             cx,
         );
-        let adjusted = drop_default_order_prefix(order_by, &default_order, requested);
+        let limit = self.order_by_column_limit(*profile_id, cx);
+        let adjusted = truncate_order_by(
+            drop_default_order_prefix(order_by, &default_order, requested),
+            limit,
+        );
 
         if adjusted.len() != keys.len() {
             let shown = self.sort_keys_for_order_by(&adjusted);
@@ -128,6 +135,21 @@ impl DataGridPanel {
         }
 
         adjusted
+    }
+
+    /// How many ORDER BY columns the connection's driver takes, `None` for
+    /// no limit. A driver that orders only by its sort key takes one.
+    fn order_by_column_limit(&self, profile_id: Uuid, cx: &App) -> Option<usize> {
+        let state = self.app_state.read(cx);
+        let connected = state.connections().get(&profile_id)?;
+        let query = connected.connection.metadata().query.as_ref()?;
+
+        match query.order_by_mode {
+            OrderByMode::AnyColumns => {
+                (query.max_order_by_columns > 0).then_some(query.max_order_by_columns as usize)
+            }
+            OrderByMode::SortKeyOnly | OrderByMode::None => Some(1),
+        }
     }
 
     /// The header menu's "Add to sort": the column becomes the next key, or
@@ -189,9 +211,30 @@ fn drop_default_order_prefix(
     }
 }
 
+/// `order` cut to the first `limit` columns.
+fn truncate_order_by(mut order: Vec<OrderByColumn>, limit: Option<usize>) -> Vec<OrderByColumn> {
+    if let Some(limit) = limit {
+        order.truncate(limit.max(1));
+    }
+
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_order_by_keeps_what_the_driver_orders_by() {
+        let order = vec![asc("city"), desc("name"), asc("id")];
+
+        assert_eq!(truncate_order_by(order.clone(), None), order);
+        assert_eq!(
+            truncate_order_by(order.clone(), Some(2)),
+            vec![asc("city"), desc("name")]
+        );
+        assert_eq!(truncate_order_by(order, Some(1)), vec![asc("city")]);
+    }
 
     fn asc(name: &str) -> OrderByColumn {
         OrderByColumn::from_name(name, SortDirection::Ascending)

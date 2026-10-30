@@ -53,7 +53,10 @@ impl GeneralSection {
             current.table_alias_use_as != saved.table_alias_use_as,
             current.grid_fk_labels != saved.grid_fk_labels,
             current.grid_pk_sort_desc != saved.grid_pk_sort_desc,
+            current.grid_review_before_save != saved.grid_review_before_save,
             current.grid_copy_column_names != saved.grid_copy_column_names,
+            current.grid_header_click_sorts != saved.grid_header_click_sorts,
+            current.grid_filter_autoquote != saved.grid_filter_autoquote,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
 
@@ -129,7 +132,10 @@ impl GeneralSection {
             GeneralFormRow::TableAliasUseAs,
             GeneralFormRow::GridFkLabels,
             GeneralFormRow::GridPkSortDesc,
+            GeneralFormRow::GridReviewBeforeSave,
             GeneralFormRow::GridCopyColumnNames,
+            GeneralFormRow::GridHeaderClickSorts,
+            GeneralFormRow::GridFilterAutoquote,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -288,9 +294,23 @@ impl GeneralSection {
                 self.gen_settings.grid_pk_sort_desc = !self.gen_settings.grid_pk_sort_desc;
                 cx.notify();
             }
+            Some(GeneralFormRow::GridReviewBeforeSave) => {
+                self.gen_settings.grid_review_before_save =
+                    !self.gen_settings.grid_review_before_save;
+                cx.notify();
+            }
             Some(GeneralFormRow::GridCopyColumnNames) => {
                 self.gen_settings.grid_copy_column_names =
                     !self.gen_settings.grid_copy_column_names;
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridHeaderClickSorts) => {
+                self.gen_settings.grid_header_click_sorts =
+                    !self.gen_settings.grid_header_click_sorts;
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridFilterAutoquote) => {
+                self.gen_settings.grid_filter_autoquote = !self.gen_settings.grid_filter_autoquote;
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -1047,6 +1067,17 @@ impl GeneralSection {
                 cx,
             ))
             .child(self.render_gen_checkbox(
+                "grid-review-before-save",
+                dbflux_i18n::t!("settings.general.grid_review_before_save.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.grid_review_before_save.hint"
+                )),
+                self.gen_settings.grid_review_before_save,
+                GeneralFormRow::GridReviewBeforeSave,
+                |this, value, _cx| this.gen_settings.grid_review_before_save = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
                 "grid-copy-column-names",
                 dbflux_i18n::t!("settings.general.grid_copy_column_names.label"),
                 Some(dbflux_i18n::t!(
@@ -1055,6 +1086,28 @@ impl GeneralSection {
                 self.gen_settings.grid_copy_column_names,
                 GeneralFormRow::GridCopyColumnNames,
                 |this, value, _cx| this.gen_settings.grid_copy_column_names = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-header-click-sorts",
+                dbflux_i18n::t!("settings.general.grid_header_click_sorts.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.grid_header_click_sorts.hint"
+                )),
+                self.gen_settings.grid_header_click_sorts,
+                GeneralFormRow::GridHeaderClickSorts,
+                |this, value, _cx| this.gen_settings.grid_header_click_sorts = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-filter-autoquote",
+                dbflux_i18n::t!("settings.general.grid_filter_autoquote.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.grid_filter_autoquote.hint"
+                )),
+                self.gen_settings.grid_filter_autoquote,
+                GeneralFormRow::GridFilterAutoquote,
+                |this, value, _cx| this.gen_settings.grid_filter_autoquote = value,
                 cx,
             ));
 

@@ -8,8 +8,9 @@ use dbflux_core::LogErr;
 use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
-    AbsoluteLength, AnyElement, AnyWindowHandle, App, Div, ElementId, FocusHandle, Hsla,
-    KeyContext, MouseButton, Pixels, ScrollHandle, SharedString, Stateful, Window, div, point, px,
+    AbsoluteLength, AnyElement, AnyWindowHandle, App, CursorStyle, Div, ElementId, FocusHandle,
+    Hsla, KeyContext, MouseButton, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
+    div, point, px,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, FocusTrapElement};
@@ -19,6 +20,53 @@ use std::sync::Arc;
 
 type CloseHandler = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync + 'static>;
 type ConfirmHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
+type ResizeStartHandler = Rc<dyn Fn(ResizeEdge, Point<Pixels>, &mut Window, &mut App) + 'static>;
+type ResizeMoveHandler = Rc<dyn Fn(Point<Pixels>, &mut Window, &mut App) + 'static>;
+type ResizeEndHandler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
+
+/// The edge of a [`Modal::resizable`] card a grip drags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeEdge {
+    Right,
+    Bottom,
+    /// The bottom-right corner: both at once.
+    Corner,
+}
+
+impl ResizeEdge {
+    /// Whether dragging this grip changes the card's width.
+    pub fn resizes_width(self) -> bool {
+        matches!(self, ResizeEdge::Right | ResizeEdge::Corner)
+    }
+
+    /// Whether dragging this grip changes the card's height.
+    pub fn resizes_height(self) -> bool {
+        matches!(self, ResizeEdge::Bottom | ResizeEdge::Corner)
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            ResizeEdge::Right => "modal-resize-right",
+            ResizeEdge::Bottom => "modal-resize-bottom",
+            ResizeEdge::Corner => "modal-resize-corner",
+        }
+    }
+}
+
+/// Thickness of the grips along the edges of a resizable card.
+const RESIZE_GRIP: Pixels = px(6.0); // guardrail-allow: a hit area, not spacing
+
+/// Side of the corner grip of a resizable card.
+const RESIZE_CORNER: Pixels = px(14.0);
+
+/// The resize grips of a card and the drag they start, owned by the view
+/// that keeps the card's size.
+struct ModalResize {
+    dragging: bool,
+    on_start: ResizeStartHandler,
+    on_move: ResizeMoveHandler,
+    on_end: ResizeEndHandler,
+}
 
 /// Element id of the modal's close button.
 pub const MODAL_CLOSE_ID: &str = "modal-close";
@@ -186,6 +234,8 @@ pub struct Modal {
     height: ModalHeight,
     placement: ModalPlacement,
     header_extra: Option<AnyElement>,
+    header_actions: Option<AnyElement>,
+    resize: Option<ModalResize>,
     body: Option<AnyElement>,
     footer: Option<AnyElement>,
     children: Vec<AnyElement>,
@@ -215,6 +265,8 @@ impl Modal {
             height: ModalHeight::Auto,
             placement: ModalPlacement::Centered,
             header_extra: None,
+            header_actions: None,
+            resize: None,
             body: None,
             footer: None,
             children: Vec::new(),
@@ -292,6 +344,35 @@ impl Modal {
     /// Extra header content placed after the title (a type badge, a count).
     pub fn header_extra(mut self, element: impl IntoElement) -> Self {
         self.header_extra = Some(element.into_any_element());
+        self
+    }
+
+    /// Header controls placed right before the close button (a maximize
+    /// toggle).
+    pub fn header_actions(mut self, element: impl IntoElement) -> Self {
+        self.header_actions = Some(element.into_any_element());
+        self
+    }
+
+    /// Grips on the right edge, the bottom edge and the bottom-right corner
+    /// that resize the card. The owner keeps the size and passes it back
+    /// through [`Modal::width`] and [`Modal::height`]: a press on a grip
+    /// calls `on_start` with the edge and the pointer, and while `dragging`
+    /// is set, a mask over the window sends every pointer move to `on_move`
+    /// and the release to `on_end`, wherever the pointer is.
+    pub fn resizable(
+        mut self,
+        dragging: bool,
+        on_start: impl Fn(ResizeEdge, Point<Pixels>, &mut Window, &mut App) + 'static,
+        on_move: impl Fn(Point<Pixels>, &mut Window, &mut App) + 'static,
+        on_end: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.resize = Some(ModalResize {
+            dragging,
+            on_start: Rc::new(on_start),
+            on_move: Rc::new(on_move),
+            on_end: Rc::new(on_end),
+        });
         self
     }
 
@@ -551,6 +632,7 @@ impl RenderOnce for Modal {
             )
             .when_some(self.header_extra, |header, extra| header.child(extra))
             .child(div().flex_1())
+            .when_some(self.header_actions, |header, actions| header.child(actions))
             .when_some(close_control, |header, close| header.child(close));
 
         let mut shape = Chamfer::new(self.cut)
@@ -615,6 +697,19 @@ impl RenderOnce for Modal {
                     .debug_selector(|| MODAL_FOOTER_SELECTOR.to_string())
                     .child(footer),
             );
+        }
+
+        let mut drag_mask = None;
+
+        if let Some(resize) = self.resize {
+            card = card
+                .child(resize_grip(ResizeEdge::Right, resize.on_start.clone()))
+                .child(resize_grip(ResizeEdge::Bottom, resize.on_start.clone()))
+                .child(resize_grip(ResizeEdge::Corner, resize.on_start));
+
+            if resize.dragging {
+                drag_mask = Some(resize_drag_mask(resize.on_move, resize.on_end));
+            }
         }
 
         let close_for_backdrop = close_handler.clone();
@@ -717,7 +812,7 @@ impl RenderOnce for Modal {
             });
         }
 
-        let backdrop = backdrop.child(card);
+        let backdrop = backdrop.child(card).children(drag_mask);
 
         // The trap tracks the modal's focus handle and keeps Tab and Shift+Tab
         // cycling inside the modal, so they never reach the view behind it.
@@ -726,6 +821,60 @@ impl RenderOnce for Modal {
             None => backdrop.into_any_element(),
         }
     }
+}
+
+/// One resize grip of a [`Modal::resizable`] card, laid over its edge.
+fn resize_grip(edge: ResizeEdge, on_start: ResizeStartHandler) -> Stateful<Div> {
+    let grip = div().id(edge.id()).absolute();
+
+    let grip = match edge {
+        ResizeEdge::Right => grip
+            .top_0()
+            .right_0()
+            .bottom(RESIZE_CORNER)
+            .w(RESIZE_GRIP)
+            .cursor(CursorStyle::ResizeLeftRight),
+        ResizeEdge::Bottom => grip
+            .left_0()
+            .bottom_0()
+            .right(RESIZE_CORNER)
+            .h(RESIZE_GRIP)
+            .cursor(CursorStyle::ResizeUpDown),
+        ResizeEdge::Corner => grip
+            .right_0()
+            .bottom_0()
+            .size(RESIZE_CORNER)
+            .cursor(CursorStyle::ResizeUpLeftDownRight),
+    };
+
+    grip.on_mouse_down(MouseButton::Left, move |event, window, cx| {
+        cx.stop_propagation();
+        (on_start)(edge, event.position, window, cx);
+    })
+}
+
+/// Covers the window while a grip is dragged, so the pointer is followed
+/// over the card, the scrim and past the window's edge alike. A move without
+/// the button held (released outside the window) ends the drag too.
+fn resize_drag_mask(on_move: ResizeMoveHandler, on_end: ResizeEndHandler) -> Stateful<Div> {
+    let end_on_up = on_end.clone();
+
+    div()
+        .id("modal-resize-mask")
+        .absolute()
+        .inset_0()
+        .cursor(CursorStyle::ResizeUpLeftDownRight)
+        .on_mouse_move(move |event, window, cx| {
+            if event.pressed_button == Some(MouseButton::Left) {
+                (on_move)(event.position, window, cx);
+            } else {
+                (on_end)(window, cx);
+            }
+        })
+        .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
+            (end_on_up)(window, cx);
+        })
 }
 
 /// The modal keys the app keymap binds in the `Modal` context (see the modal

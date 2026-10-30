@@ -157,13 +157,9 @@ impl dbflux_core::Connection for StubConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: no test path in this suite calls the dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!()
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
@@ -521,13 +517,9 @@ impl dbflux_core::Connection for StubBuilderConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: no test path in this suite calls the dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!("StubBuilderConnection::dialect not needed for this test")
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
@@ -686,22 +678,31 @@ mod builder_binding;
 mod builder_draft_and_fk;
 mod builder_mutations;
 mod bulk_delete_outcome;
+mod cell_expressions;
 mod close_completion;
 mod collection_views;
 mod column_menu;
 mod copy_extractors;
 mod export_all;
+mod export_options;
 mod facets;
+mod filter_alt_click;
+mod filter_autoquote;
+mod filter_history;
+mod filter_undo;
 mod first_page_order;
 mod fk_label_identity;
 mod fk_navigation;
+mod generated_ids;
 mod multi_edit;
 mod multi_sort;
 mod reload_pending_edits;
 mod reload_state;
+mod review_changes;
 mod selection_totals;
 mod sources_and_keys;
 mod statement_outcome;
+mod value_panel_images;
 
 fn reload_columns(names: &[&str]) -> Vec<ColumnMeta> {
     names

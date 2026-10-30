@@ -1,5 +1,6 @@
 use super::isolated_test_app_state;
 use crate::data_grid_panel::DataGridPanel;
+use dbflux_components::components::data_table::model::CellValue;
 use dbflux_components::components::data_table::selection::CellCoord;
 use dbflux_components::theme;
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
@@ -119,11 +120,60 @@ fn one_selected_cell_shows_no_totals(cx: &mut TestAppContext) {
     let (panel, window) = amounts_grid(cx);
 
     with_table(&panel, window, |state, cx| {
-        state.click_column(0, Modifiers::default(), cx);
+        state.click_column(0, Modifiers::default(), cx)
+    });
+    let footer = window.update(|_, cx| panel.read(cx).selection_totals_footer(cx));
+    assert!(footer.is_some(), "the column fills the totals first");
+
+    with_table(&panel, window, |state, cx| {
         state.select_cell(CellCoord::new(1, 0), cx);
     });
 
     let footer = window.update(|_, cx| panel.read(cx).selection_totals_footer(cx));
     assert_eq!(footer, None, "a single cell is its own total");
     assert!(window.debug_bounds("footer-selection-totals").is_none());
+}
+
+#[gpui::test]
+fn a_staged_edit_updates_the_shown_totals(cx: &mut TestAppContext) {
+    let (panel, window) = amounts_grid(cx);
+
+    with_table(&panel, window, |state, cx| {
+        state.click_column(0, Modifiers::default(), cx)
+    });
+    let footer = window.update(|_, cx| panel.read(cx).selection_totals_footer(cx));
+    assert_eq!(
+        footer.as_deref(),
+        Some("4 cells · Sum 35 · Avg 11.6667 · Min 5 · Max 20 · 1 NULL skipped")
+    );
+
+    with_table(&panel, window, |state, cx| {
+        state
+            .edit_buffer_mut()
+            .set_cell(2, 0, CellValue::text("65"));
+        cx.notify();
+    });
+
+    let footer = window.update(|_, cx| panel.read(cx).selection_totals_footer(cx));
+    assert_eq!(
+        footer.as_deref(),
+        Some("4 cells · Sum 100 · Avg 25 · Min 5 · Max 65"),
+        "the edited NULL is now a number"
+    );
+}
+
+#[gpui::test]
+fn two_skipped_nulls_use_the_plural_label(cx: &mut TestAppContext) {
+    let (panel, window) = amounts_grid(cx);
+
+    with_table(&panel, window, |state, cx| {
+        state.click_column(0, Modifiers::default(), cx);
+        state.edit_buffer_mut().set_cell(0, 0, CellValue::null());
+    });
+
+    let footer = window.update(|_, cx| panel.read(cx).selection_totals_footer(cx));
+    assert_eq!(
+        footer.as_deref(),
+        Some("4 cells · Sum 25 · Avg 12.5 · Min 5 · Max 20 · 2 NULLs skipped")
+    );
 }

@@ -126,8 +126,39 @@ async fn get_secret_inner(
 
     match json_key {
         Some(key) => extract_json_field(secret_string, key, locator),
-        None => Ok(SecretString::from(secret_string.to_string())),
+        None => whole_secret_value(secret_string, locator),
     }
+}
+
+/// The secret string used as it is, unless it is a JSON object: a reference
+/// without a JSON key would then hand the whole document to the driver (an
+/// RDS-managed secret sent as the password), which fails later with an
+/// unrelated "access denied". The error names the keys, never the values.
+#[allow(clippy::result_large_err)]
+fn whole_secret_value(secret_string: &str, locator: &str) -> Result<SecretString, DbError> {
+    let Ok(serde_json::Value::Object(fields)) =
+        serde_json::from_str::<serde_json::Value>(secret_string)
+    else {
+        return Ok(SecretString::from(secret_string.to_string()));
+    };
+
+    let keys = fields
+        .keys()
+        .map(|key| format!("'{key}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let example = fields
+        .keys()
+        .find(|key| key.as_str() == "password")
+        .or_else(|| fields.keys().next())
+        .map(String::as_str)
+        .unwrap_or("key");
+
+    Err(DbError::ValueResolutionFailed(format!(
+        "AWS Secrets Manager: secret '{locator}' holds a JSON object (keys: {keys}) but the \
+         reference names no JSON key; add one after the locator, for example \
+         '{locator}#{example}'"
+    )))
 }
 
 fn map_secretsmanager_error(
@@ -218,6 +249,38 @@ fn extract_json_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whole_secret_value_keeps_plain_strings_and_json_scalars() {
+        use secrecy::ExposeSecret;
+
+        for plain in ["hunter2", "\"quoted\"", "42", "[1, 2]", "{not json"] {
+            let value = whole_secret_value(plain, "prod/db").expect("plain value");
+            assert_eq!(value.expose_secret(), plain);
+        }
+    }
+
+    #[test]
+    fn whole_secret_value_rejects_a_json_object_and_names_only_its_keys() {
+        let rds_managed = r#"{"username":"admin","password":"s3cr3t-value"}"#;
+        let error = whole_secret_value(rds_managed, "rds!db-1a2b")
+            .expect_err("a JSON object needs a key")
+            .to_string();
+
+        assert!(
+            error.contains("'username'") && error.contains("'password'"),
+            "{error}"
+        );
+        assert!(error.contains("rds!db-1a2b#password"), "{error}");
+        assert!(
+            !error.contains("s3cr3t-value"),
+            "the error must not leak values: {error}"
+        );
+        assert!(
+            !error.contains("admin"),
+            "the error must not leak values: {error}"
+        );
+    }
 
     #[test]
     fn parse_locator_without_region() {

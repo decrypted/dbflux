@@ -385,6 +385,7 @@ impl<'a> FilterBar<'a> {
 pub struct FilterField {
     id: ElementId,
     filter: Option<(SharedString, AnyElement)>,
+    leading: Option<AnyElement>,
     trailing: Vec<AnyElement>,
     limit: Option<(SharedString, AnyElement)>,
     filter_focused: bool,
@@ -397,6 +398,7 @@ impl FilterField {
         Self {
             id: id.into(),
             filter: None,
+            leading: None,
             trailing: Vec::new(),
             limit: None,
             filter_focused: false,
@@ -409,6 +411,13 @@ impl FilterField {
     /// editor that follows it.
     pub fn filter(mut self, keyword: impl Into<SharedString>, editor: impl IntoElement) -> Self {
         self.filter = Some((keyword.into(), editor.into_any_element()));
+        self
+    }
+
+    /// An element drawn in place of the filter icon, before the keyword (a
+    /// host that keeps a filter history puts its toggle there).
+    pub fn leading(mut self, element: impl IntoElement) -> Self {
+        self.leading = Some(element.into_any_element());
         self
     }
 
@@ -481,13 +490,16 @@ impl RenderOnce for FilterField {
             .text_color(theme.accent_foreground)
             .child(shape)
             .when_some(self.filter, |this, (filter_keyword, editor)| {
-                this.child(
+                let leading = self.leading.unwrap_or_else(|| {
                     Icon::new(AppIcon::ListFilter)
                         .size(Fields::FILTER_ICON)
-                        .color(theme.muted_foreground),
-                )
-                .child(keyword(filter_keyword))
-                .child(div().flex_1().min_w(px(0.0)).child(editor))
+                        .color(theme.muted_foreground)
+                        .into_any_element()
+                });
+
+                this.child(leading)
+                    .child(keyword(filter_keyword))
+                    .child(div().flex_1().min_w(px(0.0)).child(editor))
             })
             .children(self.trailing)
             .when_some(self.limit, |this, (limit_keyword, value)| {

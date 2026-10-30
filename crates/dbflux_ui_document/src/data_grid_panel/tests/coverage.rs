@@ -69,6 +69,17 @@ fn a_table_grid_and_its_menus_are_covered(cx: &mut TestAppContext) {
         checked.iter().any(|id| id.starts_with("export-save-")),
         "{checked:?}"
     );
+    for option in [
+        "export-option-header",
+        "segmented-export-rows-loaded",
+        "segmented-export-columns-visible",
+        "segmented-export-delimiter-semicolon",
+    ] {
+        assert!(
+            checked.iter().any(|id| id.ends_with(option)),
+            "{option} is checked: {checked:?}"
+        );
+    }
 
     keys(window, "escape m k l");
     let checked = assert_covered(&panel, &capture, window);

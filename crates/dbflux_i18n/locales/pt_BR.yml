@@ -6,7 +6,7 @@ access:
   manage: Gerenciar
   login: Entrar
   refresh: Atualizar
-  auth_profile_hint: Usado para resolver as origens de valor Secret/Parameter/Auth no modo Direto.
+  auth_profile_hint: Usado para resolver as origens de valor Secret/Parameter/Auth.
   session_valid: A sessão do perfil de autenticação é válida
   ssm_title: Encaminhamento de portas SSM
   ssm_instance_id: ID da instância
@@ -153,11 +153,30 @@ components:
     empty: Nenhuma célula selecionada
     error:
       not_xml: Não é um documento XML
+    hex_cut: "Mostrando os primeiros %{shown} de %{size}."
+    image:
+      copy: "Copiar imagem"
+      decoding: "Decodificando a imagem %{format}…"
+      incomplete: "Esta imagem %{format} está incompleta: o valor armazenado termina antes da imagem, então provavelmente foi cortado por um limite de tamanho. Mostrando os bytes."
+      invalid: "Este valor começa como uma imagem %{format}, mas não pode ser lido: %{error}. Mostrando os bytes."
+      meta: "%{width} × %{height} · %{format} · %{size}"
+      save: "Salvar imagem como…"
+      save_title: "Salvar imagem"
+      too_many_bytes: "Esta imagem %{format} tem %{size}, acima do limite de pré-visualização de imagens de %{limit}. Mostrando os bytes."
+      too_many_pixels: "Esta imagem %{format} tem %{width} × %{height} pixels, acima do limite de pré-visualização de %{limit} megapixels. Mostrando os bytes."
+      too_much_memory: "Decodificar esta imagem %{format} exige mais memória do que a pré-visualização permite. Mostrando os bytes."
     read_only: Somente leitura
     revert: Reverter
     title: Valor
+    view:
+      hex: "Hex"
+      image: "Imagem"
+      text: "Texto"
     wrap: Quebrar linha
   data_table:
+    expression:
+      toggle: "Editar como expressão SQL"
+      generate: "Gerar %{kind}"
     record:
       empty: Nenhuma linha para exibir
       name_header: Nome
@@ -167,11 +186,16 @@ components:
     valid:
       one: "JSON válido · %{count} linha"
       many: "JSON válido · %{count} linhas"
+    valid_xml:
+      one: "XML válido · %{count} linha"
+      many: "XML válido · %{count} linhas"
     empty_error: O documento não pode estar vazio
     format: Formatar
     compact: Compactar
     cancel: Cancelar
     save: Salvar
+    copy: Copiar
+    copy_compact: Copiar compacto
   value_source:
     literal: Literal
     env: Variável de ambiente
@@ -187,6 +211,8 @@ components:
       env: "Lido da variável de ambiente %{name} sempre que o DBFlux se conecta. O DBFlux não guarda o valor."
       dotenv: "Lido de %{key} em %{path} sempre que o DBFlux se conecta. Somente você deve poder ler o arquivo."
       dotenv_missing_key: "Adicione a chave depois do caminho: ~/caminho/do/arquivo.env#CHAVE"
+      whole_value: "Usa o valor inteiro. Para um segredo JSON, como um gerenciado pelo RDS, adicione #chave para usar um só campo, por exemplo #password."
+      json_key: "Usa o campo %{key} do valor JSON."
   file_picker:
     browse: "Procurar…"
   column_projection:
@@ -1529,6 +1555,17 @@ document:
       waiting_title: Sem conexão
       waiting_connection: "Conecte-se a %{profile} para carregar %{object}."
       waiting_database: "Expanda o banco de dados %{database} na barra lateral para carregar %{object}."
+    review:
+      title: "Revisar alterações"
+      literals_note: "Os comandos que Salvar executa, em ordem, como o driver os envia. Os valores entram no SQL como literais; nenhum parâmetro vinculado é enviado."
+      cancel: "Cancelar"
+      copy: "Copiar SQL"
+      save: "Salvar"
+      unavailable: "Este driver não mostra o comando que envia para esta alteração."
+      skipped_row: "A linha %{row} não é salva: %{reason}"
+      no_connection: "A conexão não está aberta, então os comandos não podem ser montados."
+    expression:
+      rejected: "A expressão não pode ser salva: %{reason}"
     chart_dock:
       toolbar:
         apply: Aplicar
@@ -1615,6 +1652,8 @@ document:
         paste: Colar
         edit: Editar
         edit_in_modal: Editar em janela…
+        edit_as_expression: "Editar como expressão SQL…"
+        generate_id: "Gerar %{kind}"
         set_default: Definir como padrão
         set_null: Definir como NULL
         add_row: Adicionar linha
@@ -1664,6 +1703,7 @@ document:
         clear_filter: "Limpar filtro"
         open_builder: "Abrir construtor de consultas"
         reset_builder: "Redefinir consulta do construtor"
+        review_changes: "Revisar alterações"
         save_changes: "Salvar todas as alterações"
         revert_changes: "Reverter todas as alterações"
         auto_refresh: "Intervalo de atualização automática…"
@@ -1682,6 +1722,11 @@ document:
         value_compact: "Compactar o valor"
         value_revert: "Reverter o valor"
         value_save: "Salvar o valor"
+        value_view_image: "Mostrar o valor como imagem"
+        value_view_hex: "Mostrar o valor em hexadecimal"
+        value_view_text: "Mostrar o valor como texto"
+        value_save_image: "Salvar a imagem em um arquivo…"
+        value_copy_image: "Copiar a imagem"
         view_table_data: "Mostrar Dados"
         view_table_columns: "Mostrar Colunas"
         view_table_partitions: "Mostrar Partições"
@@ -1708,12 +1753,8 @@ document:
         toast:
           native_picker_fallback: "O seletor de arquivos nativo não está disponível — exportado para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
           exported: "Exportado para %{path}"
-          exported_rows:
-            one: "1 linha carregada exportada para %{path}"
-            many: "%{count} linhas carregadas exportadas para %{path}"
-          native_picker_fallback_rows:
-            one: "O seletor de arquivos nativo não está disponível — 1 linha carregada exportada para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
-            many: "O seletor de arquivos nativo não está disponível — %{count} linhas carregadas exportadas para %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
+          exported_scope: "Exportado para %{path}: %{scope}"
+          native_picker_fallback_scope: "O seletor de arquivos nativo não está disponível — exportado para %{path} (%{scope}). Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
       clipboard:
         error:
           binary_unsupported: Dados binários brutos não podem ser copiados para a área de transferência — escolha Hex ou Base64.
@@ -1724,6 +1765,8 @@ document:
           copied_rows:
             one: "1 linha carregada copiada como %{format} (%{bytes} bytes) para a área de transferência"
             many: "%{count} linhas carregadas copiadas como %{format} (%{bytes} bytes) para a área de transferência"
+          in_list_only_nulls: "Nada copiado: todos os valores selecionados são NULL e uma lista SQL IN não corresponde a NULL"
+          copied_scope: "Copiado como %{format} (%{bytes} bytes) para a área de transferência: %{scope}"
       document:
         toast:
           inserted: Documento inserido
@@ -1733,6 +1776,7 @@ document:
           update_failed: "Falha ao atualizar o documento: %{error}"
     grid:
       edit_bar:
+        review: "Revisar"
         clean: Nenhuma alteração não salva
         dirty:
           one: "%{count} alteração não salva"
@@ -1794,19 +1838,52 @@ document:
           average: "Média %{value}"
           min: "Mín %{value}"
           max: "Máx %{value}"
-          nulls_skipped: "%{count} NULL ignorados"
-          non_numeric_skipped: "%{count} não numéricos ignorados"
+          nulls_skipped:
+            one: "%{count} NULL ignorado"
+            many: "%{count} NULL ignorados"
+          non_numeric_skipped:
+            one: "%{count} não numérico ignorado"
+            many: "%{count} não numéricos ignorados"
       export:
         trigger: Exportar
-        save_as_file: Salvar linhas carregadas como arquivo
-        copy_to_clipboard: Copiar linhas carregadas para a área de transferência
+        save_as_file: "Salvar como arquivo"
+        copy_to_clipboard: "Copiar para a área de transferência"
         export_all_rows: Exportar todas as linhas para um arquivo
+        options:
+          title: "Exportar %{scope}"
+          rows: "Linhas"
+          columns: "Colunas"
+          header: "Incluir linha de cabeçalho (nomes das colunas)"
+          delimiter: "Separador"
+          rows_selected: "Selecionadas"
+          rows_loaded: "Carregadas"
+          rows_all: "Todas"
+          columns_all: "Todas"
+          columns_visible: "Visíveis"
+          columns_selected: "Selecionadas"
+          delimiter_comma: "Vírgula"
+          delimiter_semicolon: "Ponto e vírgula"
+          delimiter_tab: "Tab"
+          no_selected_rows: "Selecione células para exportar as linhas selecionadas"
+          no_selected_columns: "Selecione células para exportar as colunas selecionadas"
+        scope:
+          summary: "%{rows}, %{columns}"
+          selected_rows:
+            one: "1 linha selecionada"
+            many: "%{count} linhas selecionadas"
+          loaded_rows:
+            one: "1 linha carregada"
+            many: "%{count} linhas carregadas"
+          all_rows: "todas as linhas"
+          all_rows_count:
+            one: "1 linha"
+            many: "todas as %{count} linhas"
+          columns:
+            one: "1 coluna"
+            many: "%{count} colunas"
         all:
           task: "Exportar todas as linhas de %{table}"
           toast:
-            exported:
-              one: "1 linha exportada para %{path}"
-              many: "Todas as %{count} linhas exportadas para %{path}"
             cancelled: "Exportação cancelada — %{path} contém apenas as linhas gravadas antes da interrupção"
             dropped_columns: "Os campos que aparecem pela primeira vez depois da primeira página não estão no arquivo: %{columns}"
           error:
@@ -1847,6 +1924,13 @@ document:
         builder_notice: As linhas vêm da consulta do construtor
         edit_in_builder: Editar no construtor
         reset_builder: Redefinir
+        value_not_filterable: "Este valor não pode ser adicionado ao filtro"
+        history:
+          toggle: "Histórico de filtros"
+          delete: "Remover do histórico"
+          clear: "Limpar histórico"
+          empty: "Ainda não há filtros para esta tabela"
+          no_match: "Nenhum filtro corresponde"
       nearest:
         summary: "Semelhantes a %{anchor} por %{column}"
         similar_to: "Semelhantes a"
@@ -3761,9 +3845,16 @@ modals:
       no_metrics_filtered: Nenhuma métrica corresponde ao filtro.
     cancel: Cancelar
   cell_editor:
+    generate: "Gerar %{kind}"
     title_column: "Editar %{column} (%{type_name})"
     title_json: Editar JSON
     title_text: Editar texto
+    title_xml: Editar XML
+    maximize: Maximizar
+    restore: Restaurar tamanho
+    invalid_warning: "Não é mais %{format} válido: %{error}. Salve novamente para armazenar como texto simples."
+    copied: Valor copiado para a área de transferência
+    copied_compact: Valor compacto copiado para a área de transferência
   create_dashboard:
     name_label: Nome do dashboard
     title: Novo dashboard
@@ -4139,15 +4230,24 @@ settings:
       group: "Editor"
     data_grid:
       group: "Grade de dados"
+    grid_review_before_save:
+      label: "Revisar as alterações antes de salvar"
+      hint: "Salvar mostra primeiro os comandos que vai executar, para salvá-los, copiá-los ou cancelar."
     grid_fk_labels:
       label: "Mostrar o valor do registro referenciado em células de chave estrangeira"
       hint: "Células que contêm uma chave estrangeira resolvem e mostram o valor do registro referenciado ao lado do seu id. Aplica-se às páginas carregadas após salvar; o inspetor de linhas sempre resolve referências."
     grid_pk_sort_desc:
-      label: "Ordenar tabelas pela chave primária, mais recentes primeiro"
-      hint: "As tabelas abrem ordenadas pela chave primária em ordem decrescente, então as linhas mais recentes de uma chave autoincremental aparecem primeiro. Aplica-se às tabelas abertas após salvar; clicar em um cabeçalho de coluna continua ordenando como antes."
+      label: "Ordenar tabelas pela chave primária em ordem decrescente"
+      hint: "As tabelas abrem ordenadas pela chave primária em ordem decrescente, então com uma chave autoincremental as linhas mais recentes aparecem primeiro. Aplica-se às tabelas abertas após salvar e, nas tabelas já abertas, ao remover a ordenação de uma coluna. Clicar no cabeçalho da coluna da chave a partir dessa ordem a ordena de forma crescente."
     grid_copy_column_names:
       label: "Incluir os nomes das colunas ao copiar"
-      hint: "Copiar (Ctrl+C) na grade de dados começa o texto separado por tabulações com uma linha de nomes de colunas. Copiar como CSV, JSON e as outras entradas Copiar como não mudam."
+      hint: "Copiar (Ctrl+C, Cmd+C no macOS) na grade de dados começa o texto separado por tabulações com uma linha de nomes de colunas. Copiar como CSV, JSON e as outras entradas Copiar como não mudam."
+    grid_header_click_sorts:
+      label: "Clicar no cabeçalho de uma coluna a ordena"
+      hint: "Desligado: um clique no cabeçalho de uma coluna seleciona a coluna inteira e a seta na borda direita ordena. Ligado: o clique ordena a coluna; Shift+clique e Ctrl+clique continuam selecionando colunas."
+    grid_filter_autoquote:
+      label: "Inserir aspas após uma comparação no filtro WHERE"
+      hint: "Ao digitar =, !=, <>, <=, >=, <, >, LIKE ou NOT LIKE após uma coluna de texto ou de data/hora no filtro WHERE de uma tabela, '' é adicionado com o cursor entre as aspas. Números, booleanos e verificações de NULL ficam como digitados."
     vim_mode:
       label: "Modo Vim nos editores"
       hint: "Modos Normal e Insert: h, j, k, l e Enter movem, i insere, Esc volta ao Normal, x exclui um caractere, u desfaz. Aplicado aos editores abertos ao salvar."
@@ -4377,6 +4477,8 @@ settings:
       find_similar_rows: Encontrar linhas semelhantes
       copy_selection_as_json: "Copiar a seleção como JSON"
       results_set_null: Definir célula como NULL
+      toggle_cell_expression: "Editar célula como expressão SQL"
+      review_changes: "Revisar alterações"
       open_context_menu: Abrir menu de contexto
       open_column_menu: Abrir menu da coluna
       open_pane_actions: Abrir ações do painel
@@ -4460,6 +4562,11 @@ settings:
       load_more: Carregar mais
       edit_expiry: Editar expiração…
       copy_preview: Copiar pré-visualização
+      copy_editor_text: Copiar texto do editor
+      copy_editor_text_compact: Copiar texto do editor compactado
+      format_editor_text: Formatar texto do editor
+      compact_editor_text: Compactar texto do editor
+      toggle_dialog_maximized: Maximizar ou restaurar diálogo
       import_items: "Importar…"
       import_from_client: "Importar de outro cliente…"
       reset_binding: "Restaurar atalho"
@@ -5275,6 +5382,8 @@ sidebar:
     edit_reconnect_later: Depois
     connection_already_pending: A conexão já está pendente
     startup_needs_password: "'%{name}' não foi conectada ao iniciar porque a senha não está salva. Conecte-se para digitá-la."
+    startup_needs_passwords: "%{names} não foram conectadas ao iniciar porque as senhas não estão salvas. Conecte-se a cada uma para digitá-la."
+    startup_needs_passphrase: "'%{name}' não foi conectada ao iniciar porque o túnel SSH precisa de uma frase secreta que não está salva. Conecte-se para digitá-la."
     operation_started_elsewhere: Operação iniciada por outra thread
     background_task_limit: Há tarefas em segundo plano demais em execução, aguarde
     connection_cancelled_by_hook: Conexão cancelada pelo hook

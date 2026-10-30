@@ -91,13 +91,9 @@ impl dbflux_core::Connection for StubTimeSeriesConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: no test path in this suite calls the dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!("StubTimeSeriesConnection::dialect not needed for this test")
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {

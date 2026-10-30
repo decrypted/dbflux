@@ -487,6 +487,7 @@ mod tests {
             name: "id".into(),
             value: Value::Int(1),
             type_name: None,
+            is_expression: false,
         }];
         let sql = TURSO_DIALECT
             .build_upsert_statement(None, "t", &assignments, &["id".to_string()], &[])

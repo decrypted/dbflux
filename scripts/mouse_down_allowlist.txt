@@ -22,6 +22,8 @@ crates/dbflux_components/src/components/data_table/record.rs:render_fields: prop
 crates/dbflux_components/src/components/data_table/record.rs:render_record: edit commit
 crates/dbflux_components/src/components/data_table/table.rs:column_resize_handle: resize grip
 crates/dbflux_components/src/components/data_table/table.rs:render: focus on press
+crates/dbflux_components/src/components/data_table/table.rs:render_expression_suggestions: focus guard
+crates/dbflux_components/src/components/data_table/table.rs:render_expression_toggle: focus guard
 crates/dbflux_components/src/components/data_table/table.rs:render_rows: selection start
 crates/dbflux_components/src/components/data_table/table.rs:render_rows: selection start
 crates/dbflux_components/src/components/document_tree/tree.rs:render_chevron: propagation guard
@@ -34,6 +36,7 @@ crates/dbflux_components/src/controls/button.rs:render: focus guard
 crates/dbflux_components/src/controls/checkbox.rs:render: focus guard
 crates/dbflux_components/src/modals/modal.rs:render: propagation guard
 crates/dbflux_components/src/modals/modal.rs:render: outside-press dismiss
+crates/dbflux_components/src/modals/modal.rs:resize_grip: resize grip
 crates/dbflux_ui/src/ui/dock/sidebar_dock.rs:render_grip: resize grip
 crates/dbflux_ui/src/ui/overlays/command_palette.rs:render: propagation guard
 crates/dbflux_ui/src/ui/overlays/command_palette.rs:render: outside-press dismiss
@@ -74,7 +77,7 @@ crates/dbflux_ui_windows/src/connection_manager/render.rs:render_form_header: cu
 crates/dbflux_ui_windows/src/connection_manager/render.rs:render_password_field: cursor sync
 crates/dbflux_ui_windows/src/connection_manager/render.rs:render_password_field: cursor sync
 crates/dbflux_ui_windows/src/connection_manager/render_tabs.rs:render_mcp_tab: cursor sync
-crates/dbflux_ui_windows/src/connection_manager/render_tabs.rs:render_settings_tab: focus on press
+crates/dbflux_ui_windows/src/connection_manager/render_tabs.rs:render_settings_tab: cursor sync
 crates/dbflux_ui_windows/src/settings/audit_section.rs:render_audit_dropdown: cursor sync
 crates/dbflux_ui_windows/src/settings/audit_section.rs:render_audit_input_field: cursor sync
 crates/dbflux_ui_windows/src/settings/audit_section.rs:render_audit_unsupported_checkbox: cursor sync

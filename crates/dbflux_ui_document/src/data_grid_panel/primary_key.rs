@@ -166,43 +166,31 @@ impl DataGridPanel {
         self.release_first_page(cx);
     }
 
-    /// Read the first page now if it was held back for the primary key: with
-    /// the order just learned, or as the source stands when no key is coming.
+    /// Read the first page if it was held back for the primary key, through
+    /// `refresh` like every other read of the table: with the order just
+    /// learned, or as the source stands when no key is coming.
     ///
-    /// Read here rather than queued for the next frame, as an open always did:
-    /// a tab that is not drawn yet still loads its rows.
+    /// The read runs once the current update ends, in the window the table
+    /// opened in, rather than on the next frame: a tab that is not drawn yet
+    /// still loads its rows. A window closed meanwhile has no grid to fill.
     pub(super) fn release_first_page(&mut self, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.first_page_awaits_pk) {
+        let Some(window_handle) = self.first_page_awaits_pk.take() else {
             return;
-        }
+        };
 
-        if let Some(requery) = self.pending.requery.take() {
-            self.run_table_query_in(
-                requery.profile_id,
-                requery.database,
-                requery.table,
-                requery.pagination,
-                requery.order_by,
-                requery.total_rows,
-                None,
-                cx,
-            );
-            return;
-        }
+        // The key requery rewrote the source with the order it asks for, so
+        // `refresh` reads the same page; left queued it would read it twice.
+        self.pending.requery = None;
 
-        if let DataSource::Table {
-            profile_id,
-            database,
-            table,
-            pagination,
-            order_by,
-            total_rows,
-        } = self.source.clone()
-        {
-            self.run_table_query_in(
-                profile_id, database, table, pagination, order_by, total_rows, None, cx,
-            );
-        }
+        let panel = cx.entity();
+        cx.defer(move |cx| {
+            let read = window_handle.update(cx, |_, window, cx| {
+                panel.update(cx, |panel, cx| panel.refresh(window, cx));
+            });
+            if read.is_err() {
+                log::debug!("[PK] window closed before the first page was read");
+            }
+        });
     }
 
     fn apply_pk_details_to_source(&mut self, pk_names: Vec<String>, cx: &mut Context<Self>) {
@@ -277,6 +265,8 @@ impl DataGridPanel {
             &table,
             cx,
         );
+
+        self.default_order_by = order_by.clone();
 
         if order_by.is_empty() && !restored_keys {
             self.pending.rebuild = true;

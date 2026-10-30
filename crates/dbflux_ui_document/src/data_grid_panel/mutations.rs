@@ -497,96 +497,33 @@ impl DataGridPanel {
             return;
         };
 
-        let state = table_state.read(cx);
-        let pk_indices = state.pk_columns();
-        let model = state.model();
+        let built =
+            super::row_statements::row_patch(table_state.read(cx), row_idx, changes, &table_ref);
+        let patch = match built {
+            Ok(patch) => patch,
+            Err(problem) => {
+                let message = problem.message();
+                let kind = if problem == super::row_statements::PatchProblem::MissingIdentity {
+                    ErrorKind::User
+                } else {
+                    // A value the grid cannot send marks the row, so the user
+                    // sees which one failed.
+                    table_state.update(cx, |state, cx| {
+                        state
+                            .edit_buffer_mut()
+                            .set_row_state(row_idx, RowState::Error(message.clone()));
+                        cx.notify();
+                    });
+                    ErrorKind::Driver
+                };
 
-        let mut pk_columns = Vec::with_capacity(pk_indices.len());
-        let mut pk_values = Vec::with_capacity(pk_indices.len());
-
-        for &col_idx in pk_indices {
-            if let Some(col_spec) = model.columns.get(col_idx) {
-                pk_columns.push(col_spec.title.to_string());
+                if batch_owned {
+                    self.abandon_close_apply(cx);
+                }
+                report_error(UserFacingError::new(kind, message), cx);
+                return;
             }
-            if let Some(cell) = model.cell(row_idx, col_idx) {
-                pk_values.push(cell.to_value());
-            }
-        }
-
-        if pk_values
-            .iter()
-            .any(|value| matches!(value, Value::Unsupported(_)))
-        {
-            let message = dbflux_i18n::t!("document.data.mutation.error.save_row_unsupported_pk");
-
-            table_state.update(cx, |state, cx| {
-                state
-                    .edit_buffer_mut()
-                    .set_row_state(row_idx, RowState::Error(message.clone()));
-                cx.notify();
-            });
-
-            if batch_owned {
-                self.abandon_close_apply(cx);
-            }
-            report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
-            return;
-        }
-
-        if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
-            if batch_owned {
-                self.abandon_close_apply(cx);
-            }
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::User,
-                    dbflux_i18n::t!("document.data.mutation.error.save_row_identity_failed"),
-                ),
-                cx,
-            );
-            return;
-        }
-
-        let identity = RowIdentity::new(pk_columns, pk_values);
-
-        let change_values: Vec<ColumnAssignment> = changes
-            .iter()
-            .filter_map(|&(col_idx, cell_value)| {
-                model.columns.get(col_idx).map(|col| ColumnAssignment {
-                    name: col.title.to_string(),
-                    value: cell_value.to_value(),
-                    type_name: Some(col.type_name.to_string()),
-                })
-            })
-            .collect();
-
-        if change_values
-            .iter()
-            .any(|a| matches!(a.value, Value::Unsupported(_)))
-        {
-            let message =
-                dbflux_i18n::t!("document.data.mutation.error.save_row_unsupported_values");
-
-            table_state.update(cx, |state, cx| {
-                state
-                    .edit_buffer_mut()
-                    .set_row_state(row_idx, RowState::Error(message.clone()));
-                cx.notify();
-            });
-
-            if batch_owned {
-                self.abandon_close_apply(cx);
-            }
-            report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
-            return;
-        }
-
-        let patch = RowPatch::with_typed_changes(
-            identity,
-            table_ref.name.clone(),
-            table_ref.schema.clone(),
-            change_values,
-        );
+        };
 
         let table_state_for_update = table_state.clone();
         table_state_for_update.update(cx, |state, cx| {
@@ -842,17 +779,35 @@ impl DataGridPanel {
                     )
                 });
 
-                table_state.update(cx, |state, cx| {
-                    match returned_row {
-                        Some(returned_row) => state.apply_returning_row(row_idx, &returned_row),
-                        None if crud_result.returning_row.is_some() => {
-                            state.keep_row_edits(row_idx)
+                // Only the database knows what an expression computed, so a
+                // row saved with one and not returned is read back instead
+                // of keeping the edits as its values.
+                let needs_reload = table_state.update(cx, |state, cx| {
+                    let saved_expression = state
+                        .edit_buffer()
+                        .row_changes(row_idx)
+                        .iter()
+                        .any(|(_, cell)| cell.is_expression());
+
+                    let needs_reload = match returned_row {
+                        Some(returned_row) => {
+                            state.apply_returning_row(row_idx, &returned_row);
+                            false
                         }
-                        None => {}
-                    }
+                        None if saved_expression => true,
+                        None if crud_result.returning_row.is_some() => {
+                            state.keep_row_edits(row_idx);
+                            false
+                        }
+                        None => false,
+                    };
                     state.edit_buffer_mut().clear_row(row_idx);
                     cx.notify();
+                    needs_reload
                 });
+                if needs_reload {
+                    self.queue_reload_after_mutation(cx);
+                }
                 self.pending.toast = Some(PendingToast {
                     message: dbflux_i18n::t!("document.data.mutation.toast.saved"),
                     is_error: false,
@@ -1068,44 +1023,13 @@ impl DataGridPanel {
             return;
         };
 
-        let insert_data = {
-            let state = table_state.read(cx);
-            state
-                .edit_buffer()
-                .get_pending_insert_by_idx(insert_idx)
-                .map(|cells| cells.to_vec())
-        };
-
-        let Some(cells) = insert_data else {
+        let Some(insert) =
+            super::row_statements::row_insert(table_state.read(cx), insert_idx, &table_ref)
+        else {
             return;
         };
 
-        let assignments: Vec<ColumnAssignment> = {
-            let state = table_state.read(cx);
-            let model = state.model();
-
-            let mut assignments = Vec::new();
-
-            for (col_idx, cell) in cells.iter().enumerate() {
-                let value = cell.to_value();
-
-                if matches!(value, Value::Null) {
-                    continue;
-                }
-
-                if let Some(col) = model.columns.get(col_idx) {
-                    assignments.push(ColumnAssignment {
-                        name: col.title.to_string(),
-                        value,
-                        type_name: Some(col.type_name.to_string()),
-                    });
-                }
-            }
-
-            assignments
-        };
-
-        if assignments.is_empty() {
+        if !insert.is_valid() {
             if batch_owned {
                 self.abandon_close_apply(cx);
             }
@@ -1118,12 +1042,6 @@ impl DataGridPanel {
             );
             return;
         }
-
-        let insert = RowInsert::with_typed_assignments(
-            table_ref.name.clone(),
-            table_ref.schema.clone(),
-            assignments,
-        );
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::Query,
@@ -1799,31 +1717,18 @@ impl DataGridPanel {
         let mut unidentified = 0;
         {
             let state = table_state.read(cx);
-            let model = state.model();
 
             for &row_idx in &row_indices {
-                let mut pk_columns = Vec::with_capacity(pk_indices.len());
-                let mut pk_values = Vec::with_capacity(pk_indices.len());
-
-                for &col_idx in pk_indices.iter() {
-                    if let Some(col_spec) = model.columns.get(col_idx) {
-                        pk_columns.push(col_spec.title.to_string());
-                    }
-                    if let Some(cell) = model.cell(row_idx, col_idx) {
-                        pk_values.push(cell.to_value());
+                match super::row_statements::row_identity(state, row_idx) {
+                    Some(identity) => identities.push((row_idx, identity)),
+                    None => {
+                        log::warn!(
+                            "[BULK DELETE] Failed to build row identity for row {}",
+                            row_idx
+                        );
+                        unidentified += 1;
                     }
                 }
-
-                if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
-                    log::warn!(
-                        "[BULK DELETE] Failed to build row identity for row {}",
-                        row_idx
-                    );
-                    unidentified += 1;
-                    continue;
-                }
-
-                identities.push((row_idx, RowIdentity::new(pk_columns, pk_values)));
             }
         }
 

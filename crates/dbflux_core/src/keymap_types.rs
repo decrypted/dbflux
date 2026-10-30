@@ -119,6 +119,11 @@ pub enum Command {
     /// Copies the grid selection as JSON, as the context menu's Copy as JSON.
     CopySelectionAsJson,
     ResultsSetNull,
+    /// Edits the active cell as a SQL expression, or flips the open inline
+    /// editor between a value and an expression.
+    ToggleCellExpression,
+    /// Shows the statements Save would run for the grid's staged changes.
+    ReviewChanges,
     // Context menu
     OpenContextMenu,
     /// Opens the column header menu of the active cell's column.
@@ -268,6 +273,16 @@ pub enum Command {
     LoadMore,
     EditExpiry,
     CopyPreview,
+    /// Copies the text of the modal value editor as it stands.
+    CopyEditorText,
+    /// Copies the text of the modal value editor compacted (JSON, XML).
+    CopyEditorTextCompact,
+    /// Pretty-prints the text of the modal value editor (JSON, XML).
+    FormatEditorText,
+    /// Compacts the text of the modal value editor (JSON, XML).
+    CompactEditorText,
+    /// Maximizes the modal value editor, or restores its size.
+    ToggleDialogMaximized,
     /// Imports entries from a file into the list that has the keyboard (the
     /// profile lists of the settings window).
     ImportItems,
@@ -431,6 +446,8 @@ impl Command {
             Command::FindSimilarRows => "Find similar rows",
             Command::CopySelectionAsJson => "Copy selection as JSON",
             Command::ResultsSetNull => "Set cell to NULL",
+            Command::ToggleCellExpression => "Edit cell as SQL expression",
+            Command::ReviewChanges => "Review changes",
             Command::OpenContextMenu => "Open context menu",
             Command::OpenColumnMenu => "Open column menu",
             Command::OpenPaneActions => "Open pane actions",
@@ -534,6 +551,11 @@ impl Command {
             Command::LoadMore => "Load more",
             Command::EditExpiry => "Edit expiry…",
             Command::CopyPreview => "Copy preview",
+            Command::CopyEditorText => "Copy editor text",
+            Command::CopyEditorTextCompact => "Copy editor text compacted",
+            Command::FormatEditorText => "Format editor text",
+            Command::CompactEditorText => "Compact editor text",
+            Command::ToggleDialogMaximized => "Maximize or restore dialog",
             Command::ImportItems => "Import…",
             Command::ImportFromClient => "Import from another client…",
             Command::ResetBinding => "Reset binding",
@@ -635,6 +657,8 @@ impl Command {
             Command::FindSimilarRows => "find_similar_rows",
             Command::CopySelectionAsJson => "copy_selection_as_json",
             Command::ResultsSetNull => "results_set_null",
+            Command::ToggleCellExpression => "toggle_cell_expression",
+            Command::ReviewChanges => "review_changes",
             Command::OpenContextMenu => "open_context_menu",
             Command::OpenColumnMenu => "open_column_menu",
             Command::OpenPaneActions => "open_pane_actions",
@@ -739,6 +763,11 @@ impl Command {
             Command::LoadMore => "load_more",
             Command::EditExpiry => "edit_expiry",
             Command::CopyPreview => "copy_preview",
+            Command::CopyEditorText => "copy_editor_text",
+            Command::CopyEditorTextCompact => "copy_editor_text_compact",
+            Command::FormatEditorText => "format_editor_text",
+            Command::CompactEditorText => "compact_editor_text",
+            Command::ToggleDialogMaximized => "toggle_dialog_maximized",
             Command::ImportItems => "import_items",
             Command::ImportFromClient => "import_from_client",
             Command::ResetBinding => "reset_binding",
@@ -856,6 +885,8 @@ impl Command {
             Command::FindSimilarRows,
             Command::CopySelectionAsJson,
             Command::ResultsSetNull,
+            Command::ToggleCellExpression,
+            Command::ReviewChanges,
             Command::OpenContextMenu,
             Command::OpenColumnMenu,
             Command::OpenPaneActions,
@@ -948,6 +979,11 @@ impl Command {
             Command::LoadMore,
             Command::EditExpiry,
             Command::CopyPreview,
+            Command::CopyEditorText,
+            Command::CopyEditorTextCompact,
+            Command::FormatEditorText,
+            Command::CompactEditorText,
+            Command::ToggleDialogMaximized,
             Command::ImportItems,
             Command::ImportFromClient,
             Command::ResetBinding,
@@ -1052,6 +1088,8 @@ impl Command {
             | Command::FindSimilarRows
             | Command::CopySelectionAsJson
             | Command::ResultsSetNull
+            | Command::ToggleCellExpression
+            | Command::ReviewChanges
             | Command::OpenContextMenu
             | Command::OpenColumnMenu
             | Command::MenuUp
@@ -1157,7 +1195,12 @@ impl Command {
             Command::ToggleConsole => "View",
             Command::LoadMore => "Navigation",
             Command::EditExpiry => "Actions",
-            Command::CopyPreview => "Actions",
+            Command::CopyPreview
+            | Command::CopyEditorText
+            | Command::CopyEditorTextCompact
+            | Command::FormatEditorText
+            | Command::CompactEditorText
+            | Command::ToggleDialogMaximized => "Actions",
             Command::ImportItems
             | Command::ImportFromClient
             | Command::ResetBinding

@@ -1,4 +1,5 @@
 mod builder;
+mod cell_expressions;
 mod chart;
 mod chrome;
 mod column_chooser;
@@ -7,9 +8,14 @@ pub(crate) mod context_menu;
 mod document_view;
 mod documents;
 mod export_all;
+pub(crate) mod export_options;
 mod facets;
+mod filter_autoquote;
 pub(crate) mod filter_bar;
+mod filter_history;
+mod filter_undo;
 mod fk_display;
+mod generated_ids;
 mod grid;
 mod multi_edit;
 mod multi_sort;
@@ -23,7 +29,9 @@ mod query;
 mod refresh;
 mod render;
 mod result_search;
+mod review_changes;
 pub(crate) mod row_inspector;
+mod row_statements;
 mod selection_totals;
 mod session;
 pub(crate) mod side_island;
@@ -58,7 +66,7 @@ use dbflux_components::controls::{
 };
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::modals::cell_editor::{
-    CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
+    CellEditorClosedEvent, CellEditorCopiedEvent, CellEditorModal, CellEditorSaveEvent,
 };
 use dbflux_components::modals::document_preview::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
@@ -542,6 +550,14 @@ struct PendingActions {
     /// The JSON view has to be reloaded with the page. Deferred to render
     /// because setting an editor's text needs a `Window`.
     json_reload: bool,
+    /// Save was asked for while "Review changes before saving" is on. The
+    /// review opens at render because focusing it needs a `Window`.
+    change_review: bool,
+    /// Cell (visual row, column) an Alt+click asked to add to the filter.
+    filter_cell: Option<(usize, usize)>,
+    /// Undo (`false`) or Redo (`true`) the table's edit history had no step
+    /// for, to try on the filters.
+    filter_undo_step: Option<bool>,
 }
 
 /// How the grid should treat the state held by an existing `DataTableState`
@@ -647,6 +663,15 @@ struct FilterBarState {
     /// connection's own query language. `None` when the driver does not
     /// describe its browse query, or for table and query-result sources.
     browse_query_label: Option<String>,
+    /// The history popup of the WHERE field.
+    history: filter_history::FilterHistoryPopup,
+    /// A relational filter whose visual query is in flight: the history
+    /// keeps it once that query succeeds.
+    pending_history: Option<String>,
+    /// The quotes the WHERE field inserts after a comparison (a setting).
+    autoquote: filter_autoquote::AutoQuoteState,
+    /// The filters the table was read with, as steps of Undo / Redo.
+    undo: filter_undo::FilterUndo,
 }
 
 /// Auto-refresh policy, timer, and grid load state.
@@ -750,6 +775,9 @@ struct ChromeState {
     export_menu_open: bool,
     /// Highlighted row of the export menu, an index into `export_menu_entries`.
     export_menu_selected: usize,
+    /// The export menu's Rows, Columns and CSV choices, read from the store
+    /// each time the menu opens.
+    export_options: export_options::ExportOptions,
     result_view_mode: ResultViewMode,
     /// When `true`, the result area shows the active row as a vertical
     /// name/value record instead of the grid.
@@ -883,11 +911,11 @@ pub struct DataGridPanel {
     /// answers, the grid is read-only for want of a key it may well have, so
     /// the "no primary key" banner waits rather than flashing on every open.
     pk_details_pending: bool,
-    /// The table opened before its primary key was known, and its first page
-    /// waits for it: read without the key, the page is unsorted, and with
-    /// newest-first sorting it shows the oldest rows until the reordered page
-    /// replaces it.
-    first_page_awaits_pk: bool,
+    /// Set while the table opened before its primary key was known and its
+    /// first page waits for it, to the window the page is read in: read
+    /// without the key, the page is unsorted, and with newest-first sorting
+    /// it shows the oldest rows until the reordered page replaces it.
+    first_page_awaits_pk: Option<AnyWindowHandle>,
     /// The key arrived after the first page and the table is being read again
     /// in key order. The rows on screen were built without the key, so the
     /// banner waits for the reordered page instead of flashing until it lands.
@@ -898,6 +926,11 @@ pub struct DataGridPanel {
     /// The read behind the rows on screen: a table or collection browse, or
     /// a builder SELECT. "Export all rows" pages through it again.
     last_replayable_read: Option<dbflux_transfer::ReplayableRead>,
+    /// The order a table opens in when nobody picked one: its primary key, in
+    /// the direction the settings asked for when the order was computed. The
+    /// session leaves a sort equal to it unsaved, so the tab follows the
+    /// setting on the next launch.
+    default_order_by: Vec<OrderByColumn>,
     /// The neighbor bar's controls and the search in flight.
     nearest: nearest_neighbors::NearestNeighborsUi,
     view_config: super::data_view::DataViewConfig,
@@ -911,6 +944,8 @@ pub struct DataGridPanel {
     side_panels_hosted: bool,
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
+    /// The open review of the statements Save would run.
+    change_review: Option<review_changes::ChangeReview>,
     pending_batch_remaining: Option<PendingBatchRemaining>,
     /// A close is waiting on the staged edits being applied.
     ///
@@ -1006,6 +1041,7 @@ impl DataGridPanel {
         let pk_order =
             Self::get_primary_key_columns(&app_state, profile_id, database.as_deref(), &table, cx);
         let pk_columns: Vec<String> = pk_order.iter().map(|c| c.column.name.clone()).collect();
+        let default_order_by = pk_order.clone();
         let order_by = match view {
             Some(view) if !view.order_by.is_empty() => view.order_by.clone(),
             _ => pk_order,
@@ -1023,12 +1059,13 @@ impl DataGridPanel {
 
         let mut panel =
             Self::new_internal(source, app_state.clone(), pk_columns.clone(), window, cx);
+        panel.default_order_by = default_order_by;
         if let Some(view) = view {
             panel.apply_session_view(view, window, cx);
         }
         panel.init_table_views(window, cx);
         if pk_columns.is_empty() {
-            panel.first_page_awaits_pk = true;
+            panel.first_page_awaits_pk = Some(window.window_handle());
             panel.refresh.state = GridState::Loading;
         } else {
             panel.refresh(window, cx);
@@ -1070,6 +1107,19 @@ impl DataGridPanel {
         let mut panel = Self::new_internal(source, app_state, pk_columns, window, cx);
         panel.refresh(window, cx);
         panel
+    }
+
+    /// Types `filter` into the filter bar, as a user would before running it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_filter_for_tests(
+        &mut self,
+        filter: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.filter_bar
+            .filter_input
+            .update(cx, |input, cx| input.set_value(filter, window, cx));
     }
 
     /// A table grid showing `result`, with rows identified by `pk_columns`,
@@ -1203,20 +1253,23 @@ impl DataGridPanel {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
-                    if this.reload_blocked_by_pending_edits(cx) {
-                        return;
-                    }
-
-                    // A new filter selects a different row set.
-                    this.grid_table.reload = TableReload::ResetRows;
-                    this.refresh(window, cx);
-                    this.focus_table(window, cx);
+                    this.submit_filter_input(window, cx);
                 }
                 InputEvent::Blur => {
+                    this.close_filter_history(cx);
                     this.exit_edit_mode(window, cx);
                 }
+                InputEvent::Focus => {
+                    // A filter put in while the field was not being typed
+                    // in (history, Filter by value) is the base the next
+                    // keystroke is told apart from.
+                    this.filter_bar.autoquote.text = input.read(cx).value().to_string();
+                    this.filter_bar.autoquote.pair = None;
+                }
                 InputEvent::Change => {
+                    this.filter_autoquote_changed(window, cx);
                     let text = input.read(cx).value().to_string();
+                    this.filter_history_text_changed(&text, cx);
                     if filter_bar::classify_filter_input(&text)
                         == filter_bar::FilterMode::Relational
                     {
@@ -1259,6 +1312,12 @@ impl DataGridPanel {
         let context_menu_focus = cx.focus_handle();
 
         let cell_editor = cx.new(|cx| CellEditorModal::new(window, cx));
+        crate::cell_editor_host::install_geometry_store(&app_state, cx);
+
+        cx.subscribe(&cell_editor, |_, _, event: &CellEditorCopiedEvent, cx| {
+            crate::cell_editor_host::copied_toast(event, cx);
+        })
+        .detach();
 
         cx.subscribe_in(
             &cell_editor,
@@ -1433,6 +1492,10 @@ impl DataGridPanel {
                 limit_input,
                 refresh_dropdown,
                 browse_query_label: None,
+                history: Default::default(),
+                pending_history: None,
+                autoquote: Default::default(),
+                undo: Default::default(),
             },
             refresh: RefreshState {
                 refresh_policy: default_refresh,
@@ -1476,6 +1539,7 @@ impl DataGridPanel {
                 is_maximized: false,
                 export_menu_open: false,
                 export_menu_selected: 0,
+                export_options: export_options::ExportOptions::default(),
                 result_view_mode,
                 record_mode: false,
                 derived_json: None,
@@ -1517,10 +1581,11 @@ impl DataGridPanel {
             panel_origin: Point::default(),
             panel_size: Size::default(),
             pk_details_pending: false,
-            first_page_awaits_pk: false,
+            first_page_awaits_pk: None,
             pk_requery_pending: false,
             nearest_neighbors: None,
             last_replayable_read: None,
+            default_order_by: Vec::new(),
             nearest,
             view_config,
             context_menu: None,
@@ -1529,6 +1594,7 @@ impl DataGridPanel {
             side_panels_hosted: false,
             pending: PendingActions::default(),
             pending_delete_confirm: None,
+            change_review: None,
             pending_batch_remaining: None,
             close_after_apply: false,
             batch_op_in_flight: false,
@@ -1539,6 +1605,7 @@ impl DataGridPanel {
         };
 
         panel.follow_vim_setting(cx);
+        panel.load_collection_query_history(cx);
         panel
     }
 

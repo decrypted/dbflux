@@ -46,7 +46,7 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
-With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. Dragging past an edge of the grid scrolls it that way, faster the further out the pointer is, and keeps extending the range until the button is released or the pointer comes back.
+With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. The extra ranges are for copying: delete, duplicate, save and the other row actions act on the row of the cursor, a right-click selects the cell under the pointer, and the record view treats `Ctrl`+click as a plain click. Dragging past an edge of the grid scrolls it that way, faster the further out the pointer is, and keeps extending the range until the button is released or the pointer comes back.
 
 When the selection covers more than one cell, the status bar shows how many cells it holds and, for the numbers among them, their sum, average, minimum and maximum. NULLs and text are counted but left out of the figures, and the status bar says how many it skipped. The totals are worked out from the rows already loaded, unsaved edits included, without querying the database again.
 
@@ -68,14 +68,18 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted.
+list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does, and `Alt`+click on the header adds a sort key as on the arrow.
 
 To sort by several columns, `Alt`+click the arrow of another column: it becomes
 the next sort key, ascending, and a further `Alt`+click turns it descending and
 then takes it out of the sort. With more than one key, each sorted header shows
 its place (1, 2, 3) next to the arrow, and rows that tie on the first key are
 ordered by the second, and so on. A plain click on any arrow sorts by that
-column alone again. The column menu offers the same as **Add to sort: column
+column alone again, in the direction it already had when it was a key. A table
+whose primary key has several columns opens sorted by all of them, so its key
+columns show 1 and 2 from the start. Some Linux desktops (KDE Plasma, for one)
+take `Alt`+click for moving windows; there the column menu's **Add to sort**
+does the same, or the window manager's modifier can be changed. The column menu offers the same as **Add to sort: column
 ASC** and **Add to sort: column DESC**, which also change the direction of a
 column that is already a key, and **Remove ordering** drops every key. A table
 sends all keys to the database as one `ORDER BY`; a query result is sorted in
@@ -105,14 +109,14 @@ order they were pinned and show a pin in their header; **Unpin column** lets
 the column scroll again, as the first of the others. Selecting, editing,
 sorting, resizing and the row numbers work the same on pinned columns. Move
 left and Move right stay on their side of the pinned edge; dragging a header
-across it pins or unpins its column.
+across it pins or unpins its column. Pinned columns take at most two thirds of
+the grid's width, so the other columns always keep room: in a narrow grid the
+pinned columns past that scroll with the others until it is wide enough again.
 
 The query keeps reading every column (a table still runs `SELECT *`); to leave
-a column out of the query itself, use the query builder's projection. Copy
-(with or without column names), Copy as CSV, Copy as JSON, Copy as SQL IN list,
-Copy as INSERT statements and Copy as Markdown table follow the screen: the
-shown columns, in the order the grid shows them, and the IN list takes the
-leftmost of them. Copy row, Copy as Query and Export use the whole row in
+a column out of the query itself, use the query builder's projection. Copy,
+Copy as CSV and Copy as JSON follow the screen: the shown columns, in the order
+the grid shows them. Copy row, Copy as Query and Export use the whole row in
 the result's own order, hidden columns included. A table remembers its layout
 for its connection, database, schema and table, across closing it and
 restarting DBFlux; moving every column back to the table's own order with all
@@ -127,6 +131,21 @@ plain text — detected from the content, and only when it really parses — wit
 pretty-print, compact and word wrap. You can edit there: **Save** commits the
 row directly, **Revert** discards the edit. The panel follows the selected cell
 as you move through the grid, except while it holds an unsaved change.
+
+A binary cell (`bytea`, `BLOB`, `varbinary` and the like) opens as a hex dump,
+read-only. When its bytes are a PNG, JPEG, GIF, WebP or BMP image, recognized
+from the bytes themselves and not from the column name, the panel shows the
+picture instead, scaled down to fit, with its pixel size, format and byte size
+under it. **Hex** switches to the hex dump and **Image** back. **Save image
+as…** writes the stored bytes to a file and **Copy image** puts the image on the
+clipboard; both are also Toolbar entries of the grid's context menu (`m`). A text
+cell holding an image as base64, bare or as a `data:image/...;base64,` URI,
+opens on the picture the same way, with **Text** to switch back to the text.
+
+Images above 32 MB or 32 megapixels are not decoded, and neither is a value that
+ends before its image does, as one cut short by a size limit would: the panel
+says why above the hex dump. Animated images show their first frame, and SVG is
+not drawn. The hex dump of a large value stops after its first 64 KB.
 
 ## Row inspector
 
@@ -182,6 +201,63 @@ builder — see [Schema-aware autocomplete](QUERY_BUILDER.md#schema-aware-autoco
   <img src="images/results/filtering-light.webp" alt="The customers table filtered by a WHERE condition typed in the filter bar">
 </picture>
 
+### Filtering by a cell
+
+The **Filter** submenu of a cell's context menu (`m`, or a right click) narrows
+the filter to the cell's value with `=`, `<>`, `<`, `>`, `LIKE`, `IS NULL` and
+the other operators the column's type allows. `Alt`+click on a cell does the
+same with `=` in one step (`IS NULL` for a NULL cell) and selects the cell. Both
+keep the current filter as an `AND` term, in parentheses when it has a top-level
+`OR`, so `status = 500` becomes `status = 500 AND "method" = 'getbets'`, and a
+condition the filter already holds is not added twice. Binary, JSON and nested
+values cannot be added this way. Some Linux window managers use `Alt`+drag to
+move windows; a plain `Alt`+click without moving the pointer still works.
+
+### Undoing a filter
+
+Every new `WHERE` filter a table is read with is a step of the grid's Undo and
+Redo, whichever way it was applied (`Enter`, a history entry, `Alt`+click, the
+Filter submenu, clearing the filter). With the grid focused, Undo first takes
+back the cell edits made since the table was last read, newest first, and then
+puts the previous filter back and reads the table with it from the first page;
+Redo goes forward the same way. While the `WHERE` field has the keyboard, Undo
+and Redo edit its text as before. A filter step never drops pending edits: with
+edits that Undo cannot take back, it is refused with the same message a reload
+shows. It also works in a read-only grid, where there are no edits to undo.
+Sort order and `LIMIT` changes are not undo steps.
+
+### Filter history
+
+Every filter a table was read with successfully is kept for that table
+(connection, database, schema and table), newest first, up to 50 per table,
+and survives a restart. Applying a filter again moves it to the top instead of
+listing it twice, and a filter the database rejected is not kept. Only the
+filter text is stored, never rows.
+
+Open the list with the history icon at the left of the `WHERE` field, with
+**Filter history** in the Toolbar entry of the table menu (`m`), or with `Up` /
+`Down` in the field while it is empty or the caret is at its start. Typing while
+the list is open narrows it to the filters that contain the text. `Up` / `Down`
+move the highlight and `Enter` applies the highlighted filter; with nothing
+highlighted, `Enter` applies what you typed. `Shift+Delete` or the × of a row
+removes that filter, the last row, **Clear history**, forgets every filter of the
+table, and `Escape` closes the list.
+
+The query history of a document collection (the history button of its query bar)
+is kept across restarts the same way.
+
+### Quotes after a comparison
+
+With **Insert quotes after a comparison in the WHERE filter** on (Settings →
+General → Data grid, off by default), typing a comparison after a text or
+date/time column of a SQL table inserts the quotes for its value: `method =`
+becomes `method = '|'` with the caret between them. A space or quote typed right
+after, out of habit, is absorbed; once you typed the value, a `'` typed in front
+of the closing quote steps over it instead of adding one; and `Backspace` right
+after the insertion removes the quotes again. Numbers, booleans, `IS NULL`,
+`IN (...)`, text inside a string literal and pasted text get no quotes. See
+[Settings](SETTINGS.md#data-grid) for the operators.
+
 ## Similar rows
 
 On a table with a vector column (today a PostgreSQL table with a pgvector
@@ -221,12 +297,79 @@ In the data grid:
 - `y` — copy the selected row.
 - `Ctrl+c` (`Cmd+c`) — copy the selected cell(s) to the clipboard.
 
-With several cells selected, `Enter`, `F2` or a double-click on one of them opens the editor for all of them, and the status bar says how many cells the edit will change. The value you commit is written to every selected cell that can take it, as unsaved changes that Save and Revert handle like any other edit, and one undo (`u` or `Ctrl+z`) takes the whole edit back. Cells in read-only columns, rows marked for deletion and values the inline editor does not edit (JSON, long or multi-line text) are skipped; a value picked from a column's list of allowed values goes only to columns with the same list.
+With several cells selected, `Enter`, `F2` or a double-click on one of them opens the editor for all of them, and the status bar says how many cells the edit will change. The value you commit is written to every selected cell of the same column type that can take it, as unsaved changes that Save and Revert handle like any other edit, and one undo (`u` or `Ctrl+z`) takes the whole edit back. Cells in read-only columns, rows marked for deletion and values the inline editor does not edit (JSON, long or multi-line text) are skipped, and so are key columns when the selection spans several rows, since one value in every row's key could never be saved; a value picked from a column's list of allowed values goes only to columns with the same list.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/results/editing-dark.webp">
   <img src="images/results/editing-light.webp" alt="The customers table with one edited cell not yet saved, and the Save and Revert buttons enabled">
 </picture>
+
+### Editing long values
+
+JSON columns and long values open in the modal cell editor. A text cell whose
+content parses as a JSON object or array, or as XML, opens there in the same
+editor a JSON column gets, detected the same way the value panel detects it:
+pretty-printed, with syntax highlighting, line numbers and folding, a status
+line that says whether the text still parses, and **Format** and **Compact**.
+The title names both the column type and the format, for example
+`Edit raw_result (TEXT · JSON)`. Bare numbers and strings stay plain text.
+
+Showing a value pretty does not change how it is stored. A value stored on one
+line is saved compact again, with only the whitespace between tokens removed,
+so key order, numbers such as `2312.64496440` and strings such as
+`"2725.8328350479"` stay exactly as written. A value stored over several lines
+is saved as edited, and **Save** without a change creates no pending edit. If
+the text of a text column no longer parses, the first **Save** shows a warning
+and the second saves it as typed; a JSON column refuses it.
+
+**Copy** puts the editor's text on the clipboard as shown, unsaved edits
+included, and **Copy compact** copies it compacted. Drag the editor's right or
+bottom edge or its bottom-right corner to resize it, or maximize it with the
+button next to the close button. The size is remembered for the next value.
+
+| Keys | Action |
+|------|--------|
+| `Ctrl+s` (`Cmd+s`) | Save |
+| `Ctrl+Shift+k` / `Ctrl+Shift+h` | Copy / Copy compact (`Cmd` on macOS) |
+| `Ctrl+Shift+u` / `Ctrl+Shift+j` | Format / Compact |
+| `Ctrl+Shift+Enter` | Maximize or restore the editor |
+
+`Ctrl+c` (`Cmd+c`) keeps copying the selected text.
+### SQL expressions in cells
+
+In a table of MySQL, MariaDB, PostgreSQL, SQLite or SQL Server, a cell can be set to a SQL expression instead of a value, such as `NOW()`, `"qty" + 1` or `DEFAULT`. The expression is saved unquoted in the row's `UPDATE` or `INSERT`, and the database computes the value.
+
+- **Edit as SQL expression…** in the cell's context menu, or `Ctrl+Alt+E` (`Cmd+Alt+E` on macOS), opens the editor with its `fx` switch on. On a cell of a larger selection the expression goes to every selected cell, as a multi-cell edit does.
+- In an open editor, a click on `fx` or the same shortcut switches between a value and an expression, keeping what was typed.
+- While `fx` is on, a list under the editor suggests expressions for the column's type and the database, and `Down` / `Up` write them into the editor one by one. Any other expression can be typed.
+
+| Column type | MySQL / MariaDB | PostgreSQL | SQLite | SQL Server |
+|---|---|---|---|---|
+| Date and time | `NOW()`, `CURRENT_TIMESTAMP`, `UTC_TIMESTAMP()`, `DATE_ADD(NOW(), INTERVAL 1 DAY)` | `now()`, `current_timestamp`, `now() + interval '1 day'` | `CURRENT_TIMESTAMP`, `datetime('now')`, `datetime('now', 'localtime')`, `datetime('now', '+1 day')` | `GETDATE()`, `CURRENT_TIMESTAMP`, `SYSDATETIME()`, `GETUTCDATE()`, `DATEADD(day, 1, GETDATE())` |
+| Date | `CURDATE()`, `CURRENT_DATE`, `UTC_DATE()` | `current_date`, `current_date + 1` | `CURRENT_DATE`, `date('now')` | `CAST(GETDATE() AS date)` |
+| Time | `CURTIME()`, `CURRENT_TIME`, `UTC_TIME()` | `current_time`, `localtime` | `CURRENT_TIME`, `time('now')` | `CAST(GETDATE() AS time)` |
+| uuid | `UUID()` (`char(36)`), `UNHEX(REPLACE(UUID(), '-', ''))` (`binary(16)`) | `gen_random_uuid()` | | `NEWID()` |
+| Number | `col + 1`, `col - 1` | same | same | same |
+| Text | `CONCAT(col, '')`, `UPPER`, `LOWER`, `TRIM` | `col \|\| ''`, `upper`, `lower`, `trim` | `col \|\| ''`, `upper`, `lower`, `trim` | `CONCAT(col, '')`, `UPPER`, `LOWER`, `LTRIM(RTRIM(col))` |
+| Any | `NULL`, `DEFAULT` | `NULL`, `DEFAULT` | `NULL` | `NULL`, `DEFAULT` |
+
+A staged expression shows in the cell as an italic `fx NOW()` until it is saved; after the save the row shows the value the database computed. Undo, redo and Revert treat it like any other edit, and a new row's cells can hold one too. An expression containing a comment, a `;` or a `,` outside parentheses is refused when you commit it, because it could change more than the cell (a comment could hide the `WHERE` of the `UPDATE`). Other databases, query results and document collections do not offer expressions.
+
+### Review changes before saving
+
+**Review** in the edit bar, next to Save and Revert, or `Ctrl+Alt+S` (`Cmd+Alt+S` on macOS), shows the statements Save will run for the table's unsaved changes, in the order it runs them: deletes, then new rows, then edited rows. They are built by the save itself and rendered by the connection's driver, so they are what the database receives, with SQL expressions unquoted. Values are written into the statements as literals; the MySQL, MariaDB, PostgreSQL, SQLite and SQL Server drivers send no bind parameters. A change that cannot be saved (a row without its key) shows as a comment saying why.
+
+From the review, **Save** (or `Enter`) runs those statements, without the separate confirmation deletes otherwise ask for; **Copy SQL** copies them as a script; **Cancel** (or `Escape`) closes the review and keeps the changes. With **Review changes before saving** on in Settings > General > Data grid, every Save of a table grid opens the review first.
+
+### Generated IDs
+
+A cell can be given a new identifier generated by DBFlux and written as an ordinary value, so it works with every database: **UUID v4** (random), **UUID v7** (time-ordered), **KSUID** (27 characters, sortable by second) and **ULID** (26 characters, sortable by millisecond).
+
+- The cell's context menu has a **Generate …** entry for each kind the column can store. On a cell of a larger selection, every selected cell gets its own new value, never a copy, and one undo takes them all back.
+- For a column that looks like an identifier (a `uuid` type, a key, a text column sized for one of the kinds, or a name such as `user_id`), the list under the inline editor offers the kinds first, UUIDs on top; `Down` / `Up` write a new value into the editor. Committing it over a multi-cell selection again gives each cell its own value.
+- The cell editor dialog shows a **Generate …** button per kind.
+
+A `uuid` or `uniqueidentifier` column takes the UUIDs in their hyphenated form. A text column takes the kinds that fit its declared length: a `char(36)` the UUIDs, a `char(27)` a KSUID, a `varchar(30)` a KSUID or a ULID, and a column of unknown length all four. Binary columns such as MySQL's `binary(16)` are not offered generated IDs, because the grid writes text and they need the raw 16 bytes; use the `UNHEX(REPLACE(UUID(), '-', ''))` expression there instead.
 
 ### When results are editable
 
@@ -269,7 +412,11 @@ clipboard**: CSV starts with a header row of the column names, and JSON is an
 array with one object per row, keyed by column name, with numbers, booleans and
 `null` kept as such. Every row and column the selection covers is included; a
 cell inside that area but outside the selection is empty in CSV and `null` in
-JSON. Plain **Copy** (`Ctrl+c`) copies tab-separated text, without a header
+JSON. The copies follow what the grid shows: an unsaved edit is copied with
+its new value and an added row that is not saved yet at its place. In JSON,
+columns that share a name (`a.id` and `b.id` of a join) share one key, which
+takes the value of the last of them. Plain **Copy** (`Ctrl+c`) copies
+tab-separated text, also with unsaved edits and added rows, without a header
 unless **Include column names when copying** is on in Settings → General →
 Data grid, which starts it with a line of the copied columns' names.
 `Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
@@ -281,15 +428,23 @@ Below them the menu has three more extractors:
   for a `WHERE ... IN`, such as `('a', 'O''Brien')` or `(1, 2, 3)`, quoted the
   way the connection's driver writes literals (ANSI quoting for a result
   without a connection). A value selected more than once is listed once and
-  `NULL` is left out, since `IN (NULL)` matches nothing. With several columns
-  selected it lists the leftmost one.
+  `NULL` is left out, since `IN (NULL)` matches nothing; a selection of NULLs
+  alone copies nothing and says so. With several columns selected it lists the
+  leftmost one. A collection's menu does not offer it.
 - **Copy as INSERT statements**, on a table, copies one `INSERT` per selected
   row with the selected columns, written by the same driver generator as
   **Copy as Query**. Each row gives its own values for those columns, even
-  where a cell inside the selected area is not itself selected.
+  where a cell inside the selected area is not itself selected, and a row
+  holding a value the driver cannot write is left out. It is not offered on
+  grouped rows or on a query builder join, whose columns are not all the
+  table's.
 - **Copy as Markdown table** copies the same rows and columns as Copy as CSV as
-  a Markdown table with a header row; `NULL` and unselected cells are empty and
-  `|` and line breaks inside values are escaped.
+  a Markdown table with a header row; `NULL` and unselected cells are empty,
+  bytes are written as `\x` hex and arrays and documents as JSON, and `|`,
+  `&`, `<` and line breaks inside values are escaped.
+
+All three copy what the grid shows, as Copy as CSV does: an unsaved edit with
+its new value and a row added in the grid and not saved yet at its place.
 
 ## Copy as Query
 
@@ -307,15 +462,40 @@ command palette. The available formats depend on the result shape and include:
 - **Text**
 - **Binary** (for binary-shaped results)
 
-The menu's **Save loaded rows as file** and **Copy loaded rows to clipboard**
-sections write the rows the grid holds, which for a table is the current page,
-and the toast states how many rows went into the file or the clipboard.
+The top of the menu chooses what is exported, and the **Save as file** and
+**Copy to clipboard** formats below it follow that choice:
 
-When the grid shows a table or a collection read page by page, the menu adds
-**Export all rows to file**, in CSV or in JSON with one object per line. It
-reads the whole table or collection again with the grid's current filter, sort
-and column selection, one page at a time, and streams it into the one file you
-choose, so the data never has to fit in memory. A table shown through the query
+- **Rows**: **Selected** writes the rows that hold a selected cell as the grid
+  shows them, unsaved edits and added rows included, as Copy as CSV does;
+  **Loaded** the rows the grid holds (for a table, the current page), and
+  **All** every row of the table or collection (see below; offered only where
+  the grid can read it again page by page). **Selected** is disabled, with the
+  reason under the row, until a cell is selected.
+- **Columns**: **Visible**, the default, writes the shown columns in the order
+  the grid shows them, so hidden columns are left out and moved or pinned
+  columns keep their place. **All** writes every column in result order, hidden
+  ones included. **Selected** writes the shown columns that hold a selected
+  cell, in screen order. Selected rows with selected columns write the cells of
+  a selected range with their values; with several `Ctrl`+click ranges, every
+  row and column they cover.
+- **Include header row (column names)**, on by default, and **Delimiter**
+  (comma, semicolon or tab) apply to CSV saved or copied from this menu and to
+  Export all rows as CSV. The context menu's Copy as CSV is not affected.
+
+The caption over the options states what the formats write, for example
+"Export 12 selected rows, 4 columns", and the toast after a save or copy states
+the same rows and columns with the path or the byte count. The menu opens on the
+first format, so `Ctrl+e` `Enter` still saves at once. `k` or `Up` moves up to
+the options; `Enter`, `Right` or `l` on an option row steps to its next choice,
+passing over the ones that do not apply, or ticks the header checkbox, and a
+click picks a choice directly. Your choices are kept for every grid, not per
+table, and across restarts.
+
+With **Rows** set to **All**, the menu offers **Export all rows to file**, in
+CSV or in JSON with one object per line. It reads the whole table or collection
+again with the grid's current filter, sort and column selection, one page at a
+time, writes the columns the **Columns** option picks, and streams it into the
+one file you choose, so the data never has to fit in memory. A table shown through the query
 builder or a relational filter is read through the same query, starting at its
 offset and stopping at its limit when it sets one. The export runs as a task in
 the Tasks panel, which shows its progress and can cancel it; the toast states

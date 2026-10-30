@@ -84,6 +84,7 @@ struct FakeDriverState {
     refuse_read_only: AtomicBool,
     delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
+    dialect: RwLock<Option<&'static dyn SqlDialect>>,
 }
 
 #[derive(Clone)]
@@ -128,6 +129,14 @@ impl FakeDriver {
             .transactions
             .get_or_insert_with(TransactionCapabilities::default);
         transactions.supports_read_only = supported;
+    }
+
+    /// Connections answer `dialect()` with `dialect` instead of the default
+    /// ANSI one, for callers that read SQL syntax or dialect capabilities
+    /// from the connection.
+    pub fn with_dialect(self, dialect: &'static dyn SqlDialect) -> Self {
+        *rwlock_write(&self.state.dialect) = Some(dialect);
+        self
     }
 
     pub fn with_schema(self, schema: SchemaSnapshot) -> Self {
@@ -731,6 +740,32 @@ impl Connection for FakeConnection {
         }
     }
 
+    /// Built from the connection's dialect, so a test can render a recorded
+    /// [`CrudOp`] the same way and compare it with a preview.
+    fn update_row_statement(&self, patch: &RowPatch) -> Option<Result<String, DbError>> {
+        Some(
+            dbflux_core::SqlQueryBuilder::new(self.dialect())
+                .build_update(patch, false)
+                .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query")),
+        )
+    }
+
+    fn insert_row_statement(&self, insert: &RowInsert) -> Option<Result<String, DbError>> {
+        Some(
+            dbflux_core::SqlQueryBuilder::new(self.dialect())
+                .build_insert(insert, false)
+                .ok_or_else(|| DbError::query_failed("Failed to build INSERT query")),
+        )
+    }
+
+    fn delete_row_statement(&self, delete: &RowDelete) -> Option<Result<String, DbError>> {
+        Some(
+            dbflux_core::SqlQueryBuilder::new(self.dialect())
+                .build_delete(delete, false)
+                .ok_or_else(|| DbError::query_failed("Failed to build DELETE query")),
+        )
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         mutex_lock(&self.state.crud_ops).push(CrudOp::Update(patch.clone()));
         Ok(CrudResult::new(1, None))
@@ -762,7 +797,8 @@ impl Connection for FakeConnection {
     }
 
     fn dialect(&self) -> &dyn SqlDialect {
-        &DEFAULT_SQL_DIALECT
+        let dialect: Option<&'static dyn SqlDialect> = *rwlock_read(&self.state.dialect);
+        dialect.unwrap_or(&DEFAULT_SQL_DIALECT)
     }
 
     fn secret_stores(&self) -> Vec<&dyn SecretStoreSource> {

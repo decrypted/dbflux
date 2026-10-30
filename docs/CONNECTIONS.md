@@ -57,7 +57,9 @@ background each time it starts, the same way a click on the connection does:
 SSH tunnels, proxies, hooks and keyring secrets apply, and a failed connect
 shows its usual error. A connection whose password is not saved is not
 connected at startup; it is marked as failed instead, and **Retry** asks for the
-password. The connection's menu in the sidebar (right-click, or the `…` button
+password. The same goes for a connection whose SSH tunnel needs a key passphrase
+that is not saved: **Retry** asks for the passphrase. One notice names every
+connection left out because its password is not saved. The connection's menu in the sidebar (right-click, or the `…` button
 on the row) has the same toggle, with a check mark while it is on.
 
 While **Reopen last connections** (Settings > General > Startup and session) is
@@ -172,8 +174,13 @@ terminal: DBFlux runs the command through your `$SHELL` and speaks SSH over its
 standard input and output, so access proxies such as
 `cloudflared access ssh --hostname %h` work. The tokens `%h`, `%p`, `%r`, `%n`
 and `%%` are expanded; any other token fails the connection before the command
-runs. The command's error output appears in the log, which is where an access
-proxy prints its login URL.
+runs. So does a value for `%h`, `%n` or `%r` that contains whitespace or a
+character the shell would interpret (quotes, `$`, backticks, `;`, `|` and the
+like) or that starts with `-`, so a host alias cannot inject shell commands.
+The command's error output appears in the log, which is where an access proxy
+prints its login URL. The log names only the program the command runs; the
+full command line, which can carry an access token, is logged at debug level
+only.
 
 A host whose config needs `ProxyJump`, or `ProxyCommand` on Windows, is listed
 and marked: DBFlux cannot reach it, and connecting fails with that reason
@@ -323,7 +330,12 @@ field and choose:
 Notes:
 
 - Secret/Parameter sources can target a **JSON key** inside a JSON secret, so one
-  stored JSON document can feed several fields.
+  stored JSON document can feed several fields. Write the key after the secret
+  name or ARN as `<locator>#<key>`, for example `rds!db-1a2b#password` for the
+  password of a secret RDS manages. The hint under the field says whether the
+  whole value or one key is used. A Secrets Manager secret that holds a JSON
+  object but is referenced without a key is refused when connecting, and the
+  error lists the secret's keys (never its values).
 - Resolved values are cached for **5 minutes** to avoid re-fetching on every
   reconnect.
 - Secret/Parameter sources backed by an auth provider **require an Auth Profile**

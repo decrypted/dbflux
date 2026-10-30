@@ -78,6 +78,12 @@ pub enum ContextMenuAction {
     Paste,
     /// Start inline editing of the selected cell.
     Edit,
+    /// Start inline editing of the selected cell, or of every selected cell,
+    /// as a SQL expression.
+    EditAsExpression,
+    /// Write a new identifier of this kind into the selected cell, or one
+    /// per cell into every selected cell.
+    GenerateId(dbflux_core::GeneratedIdKind),
     /// Open modal editor for the selected cell.
     EditInModal,
     /// Show the selected cell in the value panel.
@@ -188,6 +194,14 @@ pub enum DataTableEvent {
     /// Request to set the current cell to NULL (Ctrl+N).
     SetNullRequested { row: usize, col: usize },
 
+    /// Undo (or Redo) found no step in the table's own edit history, or the
+    /// table is read-only: the host may step a history of its own.
+    HistoryStepRequested { redo: bool },
+
+    /// Alt+click on a cell: the host narrows its filter to the cell's value.
+    /// The table only selects the cell; a host that cannot filter ignores it.
+    AddToFilterRequested { row: usize, col: usize },
+
     /// Request to copy the entire row as CSV (YY).
     CopyRowRequested(usize),
 
@@ -216,6 +230,9 @@ pub enum DataTableEvent {
     /// Document grid: leave the nested value shown now (Backspace).
     StepOutRequested,
 
+    /// Enter on an expression the save would refuse (a comment, a `;`); the
+    /// editor stays open on it.
+    CellExpressionRejected { message: String },
     /// The user hid, showed or moved a column. The host may keep the new
     /// layout ([`super::DataTableState::column_layout_spec`]).
     ColumnLayoutChanged,

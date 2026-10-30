@@ -94,7 +94,7 @@ pub(super) enum SchemaLoad {
 }
 
 /// One query the user ran, for the history menu.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct QueryHistoryEntry {
     pub filter: String,
     pub projection: String,
@@ -876,11 +876,11 @@ impl DataGridPanel {
 
         let entry = self.current_query_entry(cx);
         if !entry.summary().is_empty() {
-            self.collection
-                .history
-                .retain(|existing| *existing != entry);
-            self.collection.history.insert(0, entry);
-            self.collection.history.truncate(HISTORY_LIMIT);
+            // Another tab on the same collection may have run queries since
+            // this one loaded its history.
+            self.load_collection_query_history(cx);
+            super::filter_history::record_entry(&mut self.collection.history, entry, HISTORY_LIMIT);
+            self.save_collection_query_history(cx);
         }
 
         self.collection.history_open = false;

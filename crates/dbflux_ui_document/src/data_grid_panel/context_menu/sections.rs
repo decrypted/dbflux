@@ -986,6 +986,22 @@ impl DataGridPanel {
 
 #[cfg(test)]
 mod tests {
+    /// Copy as JSON shows its Results-layer shortcut on the menu row, so the
+    /// label cannot drop off silently if the binding or the lookup changes.
+    #[gpui::test]
+    fn copy_as_json_shows_its_shortcut(cx: &mut gpui::TestAppContext) {
+        use dbflux_components::components::data_table::ContextMenuAction;
+
+        let shortcut = cx.update(|cx| super::action_shortcut(ContextMenuAction::CopyAsJson, cx));
+
+        assert!(
+            shortcut
+                .as_ref()
+                .is_some_and(|label| label.to_lowercase().contains('c')),
+            "{shortcut:?}"
+        );
+    }
+
     /// The menu panel must not clip its contents: submenus are absolutely
     /// positioned children of their rows and hang past the panel's right
     /// edge, so a clip on the panel hides every one of them.

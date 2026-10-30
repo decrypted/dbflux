@@ -419,11 +419,26 @@ pub struct GeneralSettings {
     /// an auto-increment key come first. Off by default (ascending).
     #[serde(default)]
     pub grid_pk_sort_desc: bool,
+    /// Show the statements Save runs before running them, with Save, Copy
+    /// SQL and Cancel. Off by default.
+    #[serde(default)]
+    pub grid_review_before_save: bool,
 
     /// Start a plain copy from the data grid (Ctrl+C, tab-separated) with a
     /// line of column names. Off by default, which keeps values only.
     #[serde(default)]
     pub grid_copy_column_names: bool,
+    /// A primary click on a column header sorts the column, as before column
+    /// selection. Off by default: the click selects the column and the
+    /// header's arrow sorts.
+    #[serde(default)]
+    pub grid_header_click_sorts: bool,
+
+    /// Insert a pair of quotes, with the caret between them, after a
+    /// comparison typed in the data grid's WHERE filter on a string or
+    /// date/time column. Off by default.
+    #[serde(default)]
+    pub grid_filter_autoquote: bool,
 
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
@@ -555,7 +570,10 @@ impl Default for GeneralSettings {
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
             grid_pk_sort_desc: false,
+            grid_review_before_save: false,
             grid_copy_column_names: false,
+            grid_header_click_sorts: false,
+            grid_filter_autoquote: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -583,7 +601,10 @@ mod font_settings_tests {
 
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
         assert!(!legacy.grid_fk_labels);
+        assert!(!legacy.grid_review_before_save);
         assert!(!legacy.grid_copy_column_names);
+        assert!(!legacy.grid_header_click_sorts);
+        assert!(!legacy.grid_filter_autoquote);
         assert_eq!(legacy, settings);
     }
 

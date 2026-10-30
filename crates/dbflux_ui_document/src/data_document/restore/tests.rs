@@ -258,6 +258,75 @@ fn a_restored_collection_waits_for_its_connection(cx: &mut TestAppContext) {
     assert_eq!(last_toast_title(window), None);
 }
 
+/// On a driver with one connection per database, a restored table of a
+/// database the connection has not opened keeps waiting with the connection
+/// up, and reads its first page once that database is open.
+#[gpui::test]
+fn a_restored_table_of_an_unopened_database_waits_for_that_database(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = FakeDriver::new(dbflux_core::DbKind::Postgres);
+    let (app_state, profile_id) = disconnected_app_state(cx);
+
+    let (document, window) = cx.add_window_view({
+        let app_state = app_state.clone();
+        move |window, cx| {
+            DataDocument::restore_table(
+                profile_id,
+                TableRef::with_schema("public", "invoices"),
+                Some("billing".to_string()),
+                TableSessionView::default(),
+                app_state,
+                window,
+                cx,
+            )
+        }
+    });
+    connect(window, &app_state, &driver, profile_id);
+
+    window.update(|_, cx| {
+        assert!(
+            document.read(cx).is_awaiting_connection(),
+            "the connection is up, but not to the tab's database"
+        );
+    });
+    assert!(
+        !executed_sql(&driver)
+            .iter()
+            .any(|sql| sql.contains("invoices")),
+        "nothing is read before the database is open"
+    );
+
+    window.update(|_, cx| {
+        app_state.update(cx, |state, cx| {
+            let connection = driver
+                .connect_arc(&sqlite_profile())
+                .expect("fake connection");
+            state
+                .connections_mut()
+                .get_mut(&profile_id)
+                .expect("the profile is connected")
+                .database_connections
+                .insert(
+                    "billing".to_string(),
+                    dbflux_core::DatabaseConnection {
+                        connection,
+                        schema: None,
+                    },
+                );
+            cx.emit(AppStateChanged);
+        });
+    });
+    window.run_until_parked();
+
+    window.update(|_, cx| assert!(!document.read(cx).is_awaiting_connection()));
+    assert!(
+        executed_sql(&driver)
+            .iter()
+            .any(|sql| sql.contains("invoices")),
+        "the first page is read once the database is open"
+    );
+}
+
 /// Stored view state that cannot be read reopens the table with the defaults
 /// instead of losing the tab.
 #[test]

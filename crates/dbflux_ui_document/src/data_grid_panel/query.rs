@@ -234,38 +234,11 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.run_table_query_in(
-            profile_id,
-            database,
-            table,
-            pagination,
-            order_by,
-            total_rows,
-            Some(window),
-            cx,
-        );
-    }
-
-    /// `run_table_query` for callers without a window: a first page held back
-    /// for the primary key is read when the key arrives, from a task. Only a
-    /// relational filter needs the window; without one that read waits for the
-    /// next frame instead.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn run_table_query_in(
-        &mut self,
-        profile_id: Uuid,
-        database: Option<String>,
-        table: TableRef,
-        pagination: Pagination,
-        order_by: Vec<OrderByColumn>,
-        total_rows: Option<u64>,
-        window: Option<&mut Window>,
-        cx: &mut Context<Self>,
-    ) {
         // Any page read ends the wait: a sort or filter chosen meanwhile reads
         // the first page itself.
-        self.first_page_awaits_pk = false;
+        self.first_page_awaits_pk = None;
         let filter_value = self.filter_bar.filter_input.read(cx).value();
+        self.filter_bar.undo.issued(&filter_value);
         let filter = if filter_value.trim().is_empty() {
             None
         } else {
@@ -310,11 +283,6 @@ impl DataGridPanel {
         // with at least one FK. All other cases fall through to the raw path.
         if let Some(filter_text) = &filter {
             if classify_filter_input(filter_text) == FilterMode::Relational {
-                let Some(window) = window else {
-                    self.pending.refresh = true;
-                    cx.notify();
-                    return;
-                };
                 if self.try_relational_filter(
                     profile_id,
                     database.clone(),
@@ -418,6 +386,7 @@ impl DataGridPanel {
 
         let estimate_request = browse_request.clone();
         let applied_request = browse_request.clone();
+        let history_filter = filter.clone();
 
         let task_target = TaskTarget {
             profile_id,
@@ -483,6 +452,7 @@ impl DataGridPanel {
                             panel.grid_table.keep_edits_on_reload = keep_edits;
                             panel.last_replayable_read =
                                 Some(dbflux_transfer::ReplayableRead::Table(applied_request));
+                            panel.record_filter_history(history_filter, cx);
                             panel.apply_table_result(
                                 profile_id,
                                 table_for_spawn,
@@ -594,6 +564,9 @@ impl DataGridPanel {
         }
 
         let committed_spec: Option<VisualQuerySpec> = self.builder.builder_draft_spec.clone();
+        // Set only by a relational WHERE filter just before it runs here; a
+        // builder query leaves it empty.
+        let history_filter = self.filter_bar.pending_history.take();
 
         let task = cx
             .background_executor()
@@ -631,6 +604,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
+                            panel.record_filter_history(history_filter, cx);
                             panel.builder.current_visual_spec = committed_spec.clone();
                             panel.last_replayable_read = committed_spec.clone().map(|spec| {
                                 dbflux_transfer::ReplayableRead::VisualQuery {
@@ -1240,6 +1214,7 @@ impl DataGridPanel {
                 let profile_id_for_run = profile_id;
                 let db_for_run = database.clone();
                 if let Some(select) = self.builder.visual_select.clone() {
+                    self.filter_bar.pending_history = Some(filter_text.clone());
                     self.run_visual_query(
                         profile_id_for_run,
                         db_for_run.clone(),

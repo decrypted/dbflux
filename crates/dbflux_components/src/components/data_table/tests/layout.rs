@@ -70,17 +70,14 @@ fn hidden_and_moved_columns_follow_the_screen_order(cx: &mut TestAppContext) {
     );
 }
 
-/// Dragging a header onto another moves its column into that place.
-#[gpui::test]
-fn dragging_a_header_onto_another_moves_the_column(cx: &mut TestAppContext) {
-    let (state, visual) = render_table(cx, names_model(3));
-
+/// Drags the header of model column `from` onto the header of `to`.
+fn drag_header(visual: &mut gpui::VisualTestContext, from: usize, to: usize) {
     let source = visual
-        .debug_bounds("header-col-2")
-        .expect("the `email` header is drawn");
+        .debug_bounds(Box::leak(format!("header-col-{from}").into_boxed_str()))
+        .expect("the dragged header is drawn");
     let target = visual
-        .debug_bounds("header-col-0")
-        .expect("the `id` header is drawn");
+        .debug_bounds(Box::leak(format!("header-col-{to}").into_boxed_str()))
+        .expect("the target header is drawn");
     let start = gpui::point(source.origin.x + gpui::px(10.0), source.center().y);
     let end = gpui::point(target.origin.x + gpui::px(10.0), target.center().y);
 
@@ -106,9 +103,35 @@ fn dragging_a_header_onto_another_moves_the_column(cx: &mut TestAppContext) {
         click_count: 1,
     });
     visual.run_until_parked();
+}
+
+/// Dragging a header onto another moves its column into that place, in a
+/// table whose host lets columns be reordered.
+#[gpui::test]
+fn dragging_a_header_onto_another_moves_the_column(cx: &mut TestAppContext) {
+    let (state, visual) = render_table(cx, names_model(3));
+    visual.update(|_, cx| state.update(cx, |state, _| state.set_columns_reorderable(true)));
+    visual.run_until_parked();
+
+    drag_header(visual, 2, 0);
 
     let order = visual.update(|_, cx| state.read(cx).visible_columns().to_vec());
     assert_eq!(order, [2, 0, 1, 3], "`email` takes the place of `id`");
+}
+
+/// Reordering is opt-in: in a table whose host did not ask for it (the CSV
+/// editor, where a rename or a save reads the file's own column order) a
+/// header drag leaves the columns where they are.
+#[gpui::test]
+fn a_header_drag_moves_nothing_unless_the_host_opts_in(cx: &mut TestAppContext) {
+    let (state, visual) = render_table(cx, names_model(3));
+    assert!(visual.update(|_, cx| !state.read(cx).columns_reorderable()));
+
+    drag_header(visual, 2, 0);
+
+    let order = visual.update(|_, cx| state.read(cx).visible_columns().to_vec());
+    assert_eq!(order, [0, 1, 2, 3], "the model order stays");
+    assert!(visual.update(|_, cx| state.read(cx).column_layout().is_identity()));
 }
 
 /// Copy reads the selection in screen order without the hidden column,

@@ -2356,39 +2356,148 @@ pub(crate) fn context_menu_export_exported_toast(path: &str) -> String {
     )
 }
 
-/// Toast text after the loaded rows of a result were written to a file.
-pub(crate) fn context_menu_export_exported_rows_toast(count: usize, path: &str) -> String {
-    if count == 1 {
-        dbflux_i18n::t!(
-            "document.data.context_menu.export.toast.exported_rows.one",
-            path = path
-        )
-    } else {
-        dbflux_i18n::t!(
-            "document.data.context_menu.export.toast.exported_rows.many",
-            count = count,
-            path = path
-        )
+/// Toast text after the chosen rows and columns of a result were written
+/// to a file, the scope as [`export_scope_label`] words it.
+pub(crate) fn context_menu_export_exported_scope_toast(scope: &str, path: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.export.toast.exported_scope",
+        scope = scope,
+        path = path
+    )
+}
+
+/// Toast text when the chosen rows and columns were written through the
+/// fallback path because no native file picker was available.
+pub(crate) fn context_menu_export_native_picker_fallback_scope_toast(
+    scope: &str,
+    path: &str,
+) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.export.toast.native_picker_fallback_scope",
+        scope = scope,
+        path = path
+    )
+}
+
+/// Toast text after the export menu put the chosen rows and columns on the
+/// clipboard.
+pub(crate) fn context_menu_clipboard_copied_scope_toast(
+    scope: &str,
+    format: &str,
+    bytes: usize,
+) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.clipboard.toast.copied_scope",
+        scope = scope,
+        format = format,
+        bytes = bytes
+    )
+}
+
+/// What an export writes, as the export menu and its toasts word it: "12
+/// selected rows, 4 columns", "all 2345 rows, 6 columns". A count that is
+/// not known yet (`None`) is left out.
+pub(crate) fn export_scope_label(
+    rows: crate::data_grid_panel::export_options::ExportRows,
+    row_count: Option<usize>,
+    column_count: Option<usize>,
+) -> String {
+    use crate::data_grid_panel::export_options::ExportRows;
+
+    let rows = match (rows, row_count) {
+        (ExportRows::Selected, Some(1)) => {
+            dbflux_i18n::t!("document.data.grid.export.scope.selected_rows.one")
+        }
+        (ExportRows::Selected, count) => dbflux_i18n::t!(
+            "document.data.grid.export.scope.selected_rows.many",
+            count = count.unwrap_or_default()
+        ),
+        (ExportRows::Loaded, Some(1)) => {
+            dbflux_i18n::t!("document.data.grid.export.scope.loaded_rows.one")
+        }
+        (ExportRows::Loaded, count) => dbflux_i18n::t!(
+            "document.data.grid.export.scope.loaded_rows.many",
+            count = count.unwrap_or_default()
+        ),
+        (ExportRows::All, None) => dbflux_i18n::t!("document.data.grid.export.scope.all_rows"),
+        (ExportRows::All, Some(1)) => {
+            dbflux_i18n::t!("document.data.grid.export.scope.all_rows_count.one")
+        }
+        (ExportRows::All, Some(count)) => dbflux_i18n::t!(
+            "document.data.grid.export.scope.all_rows_count.many",
+            count = count
+        ),
+    };
+
+    match column_count {
+        None => rows,
+        Some(count) => {
+            let columns = if count == 1 {
+                dbflux_i18n::t!("document.data.grid.export.scope.columns.one")
+            } else {
+                dbflux_i18n::t!(
+                    "document.data.grid.export.scope.columns.many",
+                    count = count
+                )
+            };
+            dbflux_i18n::t!(
+                "document.data.grid.export.scope.summary",
+                rows = rows,
+                columns = columns
+            )
+        }
     }
 }
 
-/// Toast text after the loaded rows were written to the fallback directory
-/// because no native file picker was available.
-pub(crate) fn context_menu_export_native_picker_fallback_rows_toast(
-    count: usize,
-    path: &str,
+/// Caption over the export menu's options: what the formats below write.
+pub(crate) fn export_options_title(scope: &str) -> String {
+    dbflux_i18n::t!("document.data.grid.export.options.title", scope = scope)
+}
+
+/// Segment label of a Rows choice in the export menu.
+pub(crate) fn export_rows_choice_label(
+    rows: crate::data_grid_panel::export_options::ExportRows,
 ) -> String {
-    if count == 1 {
-        dbflux_i18n::t!(
-            "document.data.context_menu.export.toast.native_picker_fallback_rows.one",
-            path = path
-        )
-    } else {
-        dbflux_i18n::t!(
-            "document.data.context_menu.export.toast.native_picker_fallback_rows.many",
-            count = count,
-            path = path
-        )
+    use crate::data_grid_panel::export_options::ExportRows;
+
+    match rows {
+        ExportRows::Selected => dbflux_i18n::t!("document.data.grid.export.options.rows_selected"),
+        ExportRows::Loaded => dbflux_i18n::t!("document.data.grid.export.options.rows_loaded"),
+        ExportRows::All => dbflux_i18n::t!("document.data.grid.export.options.rows_all"),
+    }
+}
+
+/// Segment label of a Columns choice in the export menu.
+pub(crate) fn export_columns_choice_label(
+    columns: crate::data_grid_panel::export_options::ExportColumns,
+) -> String {
+    use crate::data_grid_panel::export_options::ExportColumns;
+
+    match columns {
+        ExportColumns::All => dbflux_i18n::t!("document.data.grid.export.options.columns_all"),
+        ExportColumns::Visible => {
+            dbflux_i18n::t!("document.data.grid.export.options.columns_visible")
+        }
+        ExportColumns::Selected => {
+            dbflux_i18n::t!("document.data.grid.export.options.columns_selected")
+        }
+    }
+}
+
+/// Segment label of a CSV delimiter in the export menu.
+pub(crate) fn export_delimiter_label(
+    delimiter: crate::data_grid_panel::export_options::ExportDelimiter,
+) -> String {
+    use crate::data_grid_panel::export_options::ExportDelimiter;
+
+    match delimiter {
+        ExportDelimiter::Comma => {
+            dbflux_i18n::t!("document.data.grid.export.options.delimiter_comma")
+        }
+        ExportDelimiter::Semicolon => {
+            dbflux_i18n::t!("document.data.grid.export.options.delimiter_semicolon")
+        }
+        ExportDelimiter::Tab => dbflux_i18n::t!("document.data.grid.export.options.delimiter_tab"),
     }
 }
 
@@ -2414,25 +2523,30 @@ pub(crate) fn context_menu_clipboard_copied_rows_toast(
     }
 }
 
+/// Toast text when Copy as SQL IN list finds only NULL values and leaves the
+/// clipboard as it was.
+pub(crate) fn copy_as_in_list_only_nulls_toast() -> String {
+    dbflux_i18n::t!("document.data.context_menu.clipboard.toast.in_list_only_nulls")
+}
+
 /// Tasks panel label of an "Export all rows" run.
 pub(crate) fn export_all_rows_task_label(table: &str) -> String {
     dbflux_i18n::t!("document.data.grid.export.all.task", table = table)
 }
 
-/// Toast text after every row of a table was written to a file.
-pub(crate) fn export_all_rows_exported_toast(count: u64, path: &str) -> String {
-    if count == 1 {
-        dbflux_i18n::t!(
-            "document.data.grid.export.all.toast.exported.one",
-            path = path
-        )
-    } else {
-        dbflux_i18n::t!(
-            "document.data.grid.export.all.toast.exported.many",
-            count = count,
-            path = path
-        )
-    }
+/// Toast text after every row of a table was written to a file, with the
+/// number of columns when the file has a fixed set of them.
+pub(crate) fn export_all_rows_exported_toast(
+    count: u64,
+    column_count: Option<usize>,
+    path: &str,
+) -> String {
+    let scope = export_scope_label(
+        crate::data_grid_panel::export_options::ExportRows::All,
+        Some(usize::try_from(count).unwrap_or(usize::MAX)),
+        column_count,
+    );
+    context_menu_export_exported_scope_toast(&scope, path)
 }
 
 /// Toast text after an "Export all rows" run was cancelled part way.
@@ -8583,29 +8697,45 @@ mod tests {
     }
 
     #[test]
-    fn context_menu_export_exported_rows_toast_states_the_loaded_row_count() {
-        assert_eq!(
-            super::context_menu_export_exported_rows_toast(1, "/tmp/users.csv"),
-            "Exported 1 loaded row to /tmp/users.csv"
-        );
-        assert_eq!(
-            super::context_menu_export_exported_rows_toast(100, "/tmp/users.csv"),
-            "Exported 100 loaded rows to /tmp/users.csv"
-        );
-    }
+    fn export_toasts_state_the_rows_and_columns_written() {
+        use crate::data_grid_panel::export_options::ExportRows;
 
-    #[test]
-    fn context_menu_export_native_picker_fallback_rows_toast_states_the_loaded_row_count() {
-        let value = super::context_menu_export_native_picker_fallback_rows_toast(
-            42,
+        let scope = super::export_scope_label(ExportRows::Selected, Some(12), Some(4));
+        assert_eq!(scope, "12 selected rows, 4 columns");
+        assert_eq!(
+            super::context_menu_export_exported_scope_toast(&scope, "/tmp/users.csv"),
+            "Exported 12 selected rows, 4 columns to /tmp/users.csv"
+        );
+        assert_eq!(
+            super::export_scope_label(ExportRows::Selected, Some(1), Some(1)),
+            "1 selected row, 1 column"
+        );
+        assert_eq!(
+            super::export_scope_label(ExportRows::Loaded, Some(100), Some(6)),
+            "100 loaded rows, 6 columns"
+        );
+        assert_eq!(
+            super::export_scope_label(ExportRows::All, None, Some(6)),
+            "all rows, 6 columns"
+        );
+        assert_eq!(
+            super::export_options_title("100 loaded rows, 6 columns"),
+            "Export 100 loaded rows, 6 columns"
+        );
+        assert_eq!(
+            super::context_menu_clipboard_copied_scope_toast(&scope, "CSV", 512),
+            "Copied 12 selected rows, 4 columns as CSV (512 bytes) to clipboard"
+        );
+
+        let fallback = super::context_menu_export_native_picker_fallback_scope_toast(
+            "42 loaded rows, 3 columns",
             "/tmp/fallback/users.csv",
         );
-
         assert!(
-            value.starts_with(
-                "Native file picker unavailable — exported 42 loaded rows to /tmp/fallback/users.csv instead."
+            fallback.starts_with(
+                "Native file picker unavailable — exported 42 loaded rows, 3 columns to /tmp/fallback/users.csv instead."
             ),
-            "got {value:?}"
+            "got {fallback:?}"
         );
     }
 
@@ -8622,14 +8752,14 @@ mod tests {
     }
 
     #[test]
-    fn export_menu_headers_say_they_write_the_loaded_rows() {
+    fn export_menu_headers_name_the_target() {
         assert_eq!(
             dbflux_i18n::t!("document.data.grid.export.save_as_file"),
-            "Save loaded rows as file"
+            "Save as file"
         );
         assert_eq!(
             dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard"),
-            "Copy loaded rows to clipboard"
+            "Copy to clipboard"
         );
         assert_eq!(
             dbflux_i18n::t!("document.data.grid.export.export_all_rows"),
@@ -8644,12 +8774,16 @@ mod tests {
             "Export all rows of public.users"
         );
         assert_eq!(
-            super::export_all_rows_exported_toast(1, "/tmp/users.csv"),
+            super::export_all_rows_exported_toast(1, None, "/tmp/users.csv"),
             "Exported 1 row to /tmp/users.csv"
         );
         assert_eq!(
-            super::export_all_rows_exported_toast(2_345, "/tmp/users.csv"),
+            super::export_all_rows_exported_toast(2_345, None, "/tmp/users.csv"),
             "Exported all 2345 rows to /tmp/users.csv"
+        );
+        assert_eq!(
+            super::export_all_rows_exported_toast(2_345, Some(2), "/tmp/users.csv"),
+            "Exported all 2345 rows, 2 columns to /tmp/users.csv"
         );
         assert_eq!(
             super::export_all_rows_cancelled_toast("/tmp/users.csv"),

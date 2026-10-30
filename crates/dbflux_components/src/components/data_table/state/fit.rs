@@ -3,7 +3,6 @@
 
 use gpui::Context;
 
-use super::super::model::{CellValue, VisualRowSource};
 use super::super::theme::{MAX_FIT_COLUMN_WIDTH, MIN_COLUMN_WIDTH};
 use super::{DataTableState, GridTextMetrics};
 
@@ -28,27 +27,10 @@ impl DataTableState {
 
     fn fitted_column_width(&self, col: usize, metrics: &GridTextMetrics) -> Option<f32> {
         let column = self.model.columns.get(col)?;
-        let null_value = CellValue::null();
+        let visual_order = self.edit_buffer.compute_visual_order();
 
-        let longest_value = self
-            .edit_buffer
-            .compute_visual_order()
-            .into_iter()
-            .filter_map(|source| match source {
-                VisualRowSource::Base(row) => {
-                    let base = self
-                        .model
-                        .rows
-                        .get(row)
-                        .and_then(|row| row.cells.get(col))
-                        .unwrap_or(&null_value);
-                    Some(self.edit_buffer.get_cell(row, col, base))
-                }
-                VisualRowSource::Insert(insert) => self
-                    .edit_buffer
-                    .get_pending_insert_by_idx(insert)
-                    .and_then(|cells| cells.get(col)),
-            })
+        let longest_value = (0..visual_order.len())
+            .filter_map(|row| self.displayed_cell(&visual_order, row, col))
             .map(|cell| cell.display_text().chars().count())
             .max()
             .unwrap_or(0);

@@ -23,6 +23,19 @@ const CHOOSER_WIDTH: Pixels = px(240.0);
 pub(super) struct ColumnChooser {
     pub(super) position: Point<Pixels>,
     pub(super) selected_index: usize,
+    /// Scrolls the rows, so a keyboard move keeps the highlighted row in
+    /// view on a table with more columns than fit.
+    pub(super) scroll_handle: ScrollHandle,
+}
+
+impl ColumnChooser {
+    /// Scrolls row `index` into view. The scrolled list holds the title
+    /// first, then Show all, its separator and the column rows; Show all
+    /// reveals the title above it too, so the list returns to its top.
+    fn reveal(&self, index: usize) {
+        let child = if index == 0 { 0 } else { index + 2 };
+        self.scroll_handle.scroll_to_item(child);
+    }
 }
 
 /// A row of the chooser.
@@ -47,6 +60,7 @@ impl DataGridPanel {
         self.column_chooser = Some(ColumnChooser {
             position,
             selected_index: 0,
+            scroll_handle: ScrollHandle::new(),
         });
         self.focus.context_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
@@ -92,6 +106,7 @@ impl DataGridPanel {
             Command::MenuDown | Command::SelectNext => {
                 if let Some(chooser) = self.column_chooser.as_mut() {
                     chooser.selected_index = (chooser.selected_index + 1) % row_count;
+                    chooser.reveal(chooser.selected_index);
                 }
                 cx.notify();
                 true
@@ -99,6 +114,7 @@ impl DataGridPanel {
             Command::MenuUp | Command::SelectPrev => {
                 if let Some(chooser) = self.column_chooser.as_mut() {
                     chooser.selected_index = (chooser.selected_index + row_count - 1) % row_count;
+                    chooser.reveal(chooser.selected_index);
                 }
                 cx.notify();
                 true
@@ -288,10 +304,20 @@ impl DataGridPanel {
                         .left(placement.origin.x)
                         .top(placement.origin.y)
                         .w(CHOOSER_WIDTH)
-                        .max_h(self.panel_size.height.max(row_height * 4.0))
-                        .overflow_y_scroll()
                         .occlude()
-                        .children(items),
+                        .child(
+                            div()
+                                .id("column-chooser-rows")
+                                .flex()
+                                .flex_col()
+                                .max_h(
+                                    (self.panel_size.height - MenuMetrics::PADDING_Y * 2.0)
+                                        .max(row_height * 4.0),
+                                )
+                                .overflow_y_scroll()
+                                .track_scroll(&chooser.scroll_handle)
+                                .children(items),
+                        ),
                 ),
         )
         .with_priority(1)

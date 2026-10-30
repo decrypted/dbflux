@@ -344,6 +344,9 @@ impl Render for DataGridPanel {
             .when(self.pending_delete_confirm.is_some(), |d| {
                 d.child(self.render_delete_confirm_modal(&st.theme, cx))
             })
+            .when(self.change_review.is_some(), |d| {
+                d.child(self.render_change_review(cx))
+            })
             .when(self.document_view.cell_editor.read(cx).is_visible(), |d| {
                 d.child(self.document_view.cell_editor.clone())
             })
@@ -384,6 +387,14 @@ impl DataGridPanel {
         self.flush_json_reload(window, cx);
 
         dbflux_ui_base::toast::flush_pending_toast(self.pending.toast.take(), window, cx);
+
+        if let Some(redo) = self.pending.filter_undo_step.take() {
+            self.step_filter(redo, window, cx);
+        }
+
+        if let Some((row, col)) = self.pending.filter_cell.take() {
+            self.add_cell_to_filter(row, col, window, cx);
+        }
 
         if let Some(requery) = self.pending.requery.take() {
             self.run_table_query(
@@ -429,12 +440,22 @@ impl DataGridPanel {
             self.focus.context_menu_focus.focus(window, cx);
         }
 
+        if std::mem::take(&mut self.pending.change_review) {
+            self.open_change_review(window, cx);
+        }
+
         if let Some(modal) = self.pending.modal_open.take() {
             let column = self
                 .result
                 .columns
                 .get(modal.col)
                 .map(|column| (column.name.clone(), column.type_name.clone()));
+            let id_kinds = self
+                .grid_table
+                .table_state
+                .as_ref()
+                .map(|state| state.read(cx).generated_id_kinds(modal.col).to_vec())
+                .unwrap_or_default();
 
             self.document_view.cell_editor.update(cx, |editor, cx| {
                 editor.open(
@@ -446,6 +467,7 @@ impl DataGridPanel {
                     window,
                     cx,
                 );
+                editor.set_generated_id_kinds(id_kinds, cx);
             });
         }
 
@@ -565,6 +587,9 @@ impl DataGridPanel {
                 )
             })
             .unwrap_or((false, 0, false, false));
+        // Undo and Redo also step the filters once the edits run out.
+        let can_undo = can_undo || self.can_step_filter(false);
+        let can_redo = can_redo || self.can_step_filter(true);
 
         let is_grouped_result = self.is_grouped_result();
 
@@ -1043,6 +1068,10 @@ impl DataGridPanel {
 /// Width of the footer's export menu.
 const EXPORT_MENU_WIDTH: Pixels = px(220.0);
 
+/// Width of the export menu with its Rows, Columns and CSV options: room for
+/// a label and three segments in the longer translations.
+const EXPORT_MENU_OPTIONS_WIDTH: Pixels = px(360.0);
+
 /// Height of the chart above the grid in the Both view (P2Series). (330 px)
 const BOTH_CHART_HEIGHT: Pixels = px(330.0);
 
@@ -1231,9 +1260,50 @@ impl DataGridPanel {
             })),
         );
 
+        // Up / Down / Shift+Delete reach the history popup before the input:
+        // the input would otherwise move its caret or delete a character.
         let filter_editor = div()
             .flex()
             .items_center()
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::MoveUp, window, cx| {
+                    if this.filter_history_vertical_key(false, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::MoveDown, window, cx| {
+                    if this.filter_history_vertical_key(true, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            // A paste is not typing: the next change must not insert quotes.
+            .capture_action(cx.listener(|this, _: &gpui_component::input::Paste, _, _| {
+                this.filter_bar.autoquote.pasting = true;
+            }))
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Escape, _, cx| {
+                    let completion_open = this
+                        .filter_bar
+                        .filter_input
+                        .read(cx)
+                        .completion_menu_state()
+                        .open;
+                    if this.filter_bar.history.open && !completion_open {
+                        this.close_filter_history(cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Delete, window, cx| {
+                    if window.modifiers().shift && this.delete_selected_filter_history(cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -1268,10 +1338,21 @@ impl DataGridPanel {
 
         let has_filter = !filter_keyword.is_empty();
 
+        let history_toggle = (has_filter && self.offers_filter_history()).then(|| {
+            div()
+                .relative()
+                .flex()
+                .flex_none()
+                .items_center()
+                .child(self.render_filter_history_toggle(cx))
+                .children(self.render_filter_history_menu(cx))
+        });
+
         let field = FilterField::new("data-grid-filter-field")
             .when(has_filter, |field| {
                 field.filter(filter_keyword.to_string(), filter_editor)
             })
+            .when_some(history_toggle, |field, toggle| field.leading(toggle))
             .when(filter_has_value && has_filter, |field| {
                 field.trailing(
                     div()
@@ -1535,6 +1616,21 @@ impl DataGridPanel {
                     this.step_edit_history(false, window, cx);
                 })),
             )
+            .when(matches!(self.source, DataSource::Table { .. }), |bar| {
+                bar.child(
+                    Button::new(
+                        "review-btn",
+                        dbflux_i18n::t!("document.data.grid.edit_bar.review"),
+                    )
+                    .ghost()
+                    .icon(AppIcon::Eye)
+                    .disabled(!has_changes)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_change_review(window, cx);
+                    })),
+                )
+            })
             .child(
                 Button::new(
                     "save-btn",
@@ -1582,8 +1678,9 @@ impl DataGridPanel {
     /// the selection when it now points past the last row, and hand focus
     /// back to the grid.
     fn step_edit_history(&mut self, undo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let mut stepped = false;
         if let Some(table_state) = &self.grid_table.table_state {
-            table_state.update(cx, |state, cx| {
+            stepped = table_state.update(cx, |state, cx| {
                 if state.is_editing() {
                     state.stop_editing(false, cx);
                 }
@@ -1603,7 +1700,13 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 }
+                changed
             });
+        }
+
+        // The edits since the last read are newer than its filter.
+        if !stepped {
+            self.step_filter(!undo, window, cx);
         }
 
         window.focus(&self.focus_handle, cx);
@@ -3919,6 +4022,9 @@ impl DataGridPanel {
         let selected = self.chrome.export_menu_selected;
         let mut items: Vec<AnyElement> = Vec::with_capacity(entries.len() + 5);
         let mut section_start = 0;
+        let has_options = entries
+            .iter()
+            .any(|entry| matches!(entry, ExportMenuEntry::Option(_)));
 
         for (index, &entry) in entries.iter().enumerate() {
             let starts_section = entries.get(index.wrapping_sub(1)).is_none_or(|previous| {
@@ -3929,11 +4035,17 @@ impl DataGridPanel {
                 if index > 0 {
                     items.push(render_separator(cx).into_any_element());
                 }
-                items.push(
-                    render_menu_header(&MenuItem::header(export_menu_section_title(entry)), cx)
-                        .into_any_element(),
-                );
+                let title = match entry {
+                    ExportMenuEntry::Option(_) => self.export_options_title(cx),
+                    _ => export_menu_section_title(entry),
+                };
+                items.push(render_menu_header(&MenuItem::header(title), cx).into_any_element());
                 section_start = index;
+            }
+
+            if let ExportMenuEntry::Option(row) = entry {
+                items.push(self.render_export_option_row(index, row, index == selected, cx));
+                continue;
             }
 
             items.push(self.render_export_menu_row(
@@ -3952,7 +4064,11 @@ impl DataGridPanel {
                 .bottom_full()
                 .right_0()
                 .mb(Spacing::XS)
-                .w(EXPORT_MENU_WIDTH)
+                .w(if has_options {
+                    EXPORT_MENU_OPTIONS_WIDTH
+                } else {
+                    EXPORT_MENU_WIDTH
+                })
                 .occlude()
                 .track_focus(&self.focus.export_menu_focus)
                 // The grid reports the ContextMenu context while the menu is
@@ -3985,6 +4101,9 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (id, label, icon) = match entry {
+            ExportMenuEntry::Option(row) => {
+                return self.render_export_option_row(index, row, selected, cx);
+            }
             ExportMenuEntry::Save(format) => (
                 "export-save",
                 crate::labels::export_format_label(format),
@@ -4066,14 +4185,18 @@ impl DataGridPanel {
 /// header where the section changes.
 fn export_menu_section(entry: ExportMenuEntry) -> u8 {
     match entry {
-        ExportMenuEntry::Save(_) => 0,
-        ExportMenuEntry::Copy(_) => 1,
-        ExportMenuEntry::SaveAll(_) => 2,
+        ExportMenuEntry::Option(_) => 0,
+        ExportMenuEntry::Save(_) => 1,
+        ExportMenuEntry::Copy(_) => 2,
+        ExportMenuEntry::SaveAll(_) => 3,
     }
 }
 
+/// The caption of a format section. The option rows have their own, which
+/// states the scope (`DataGridPanel::export_options_title`).
 fn export_menu_section_title(entry: ExportMenuEntry) -> String {
     match entry {
+        ExportMenuEntry::Option(_) => String::new(),
         ExportMenuEntry::Save(_) => dbflux_i18n::t!("document.data.grid.export.save_as_file"),
         ExportMenuEntry::Copy(_) => dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard"),
         ExportMenuEntry::SaveAll(_) => dbflux_i18n::t!("document.data.grid.export.export_all_rows"),
@@ -4093,7 +4216,7 @@ fn format_inspector_float(value: f64) -> String {
     }
 }
 
-fn format_hex_dump(data: &[u8]) -> String {
+pub(super) fn format_hex_dump(data: &[u8]) -> String {
     const BYTES_PER_LINE: usize = 16;
 
     let mut lines = Vec::new();
@@ -4296,9 +4419,9 @@ mod tests {
         let copy_en = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "en");
         let copy_es = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "es");
 
-        assert_eq!(save_en, "Save loaded rows as file");
+        assert_eq!(save_en, "Save as file");
         assert_ne!(save_en, save_es);
-        assert_eq!(copy_en, "Copy loaded rows to clipboard");
+        assert_eq!(copy_en, "Copy to clipboard");
         assert_ne!(copy_en, copy_es);
     }
 }

@@ -326,12 +326,18 @@ impl Connection for IpcConnection {
     }
 
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
+        if let Some(refusal) = expression_refusal(&patch.changes) {
+            return Err(refusal);
+        }
         self.client
             .update_row(self.session_id, patch.clone())
             .map_err(DbError::from)
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
+        if let Some(refusal) = expression_refusal(&insert.assignments) {
+            return Err(refusal);
+        }
         self.client
             .insert_row(self.session_id, insert.clone())
             .map_err(DbError::from)
@@ -663,6 +669,20 @@ fn ensure_key_count_supported(version: ProtocolVersion) -> Result<(), DbError> {
         ));
     }
     Ok(())
+}
+
+/// The expression flag of an assignment is not part of the wire format, so a
+/// driver host would write the expression's text as a literal. Refused here
+/// rather than saved as something the user did not type.
+fn expression_refusal(assignments: &[dbflux_core::ColumnAssignment]) -> Option<DbError> {
+    assignments
+        .iter()
+        .any(|a| a.sql_expression().is_some())
+        .then(|| {
+            DbError::NotSupported(
+                "SQL expressions in cells are not supported by out-of-process drivers".to_string(),
+            )
+        })
 }
 
 #[cfg(test)]

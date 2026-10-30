@@ -65,10 +65,13 @@ fn new_workspace_with(
     (workspace, app_state, window)
 }
 
-/// Launch connects the profiles marked "Connect on startup" through the
-/// sidebar's connect path, and leaves the others alone.
-#[gpui::test]
-fn launch_connects_only_the_profiles_marked_to_connect_on_startup(cx: &mut TestAppContext) {
+/// Launches a workspace over a marked and an unmarked profile, with the
+/// global "reconnect to the connections that were open" setting as given,
+/// and returns whether each one is connected afterwards.
+fn launch_with_startup_profiles(
+    cx: &mut TestAppContext,
+    reopen_last_connections: bool,
+) -> (bool, bool) {
     use dbflux_core::{ConnectionProfile, DbConfig, DbKind};
     use dbflux_test_support::FakeDriver;
     use std::sync::Arc;
@@ -88,6 +91,9 @@ fn launch_connects_only_the_profiles_marked_to_connect_on_startup(cx: &mut TestA
                 "postgres".into(),
                 Arc::new(FakeDriver::new(DbKind::Postgres)),
             );
+            let mut settings = state.general_settings().clone();
+            settings.reopen_last_connections = reopen_last_connections;
+            state.update_general_settings(settings);
             state.profiles_mut().push(marked);
             state.profiles_mut().push(unmarked);
             state
@@ -98,15 +104,35 @@ fn launch_connects_only_the_profiles_marked_to_connect_on_startup(cx: &mut TestA
     window.run_until_parked();
 
     app_state.read_with(window, |state, _| {
-        assert!(
+        (
             state.connections().contains_key(&marked_id),
-            "the marked profile connects at launch"
-        );
-        assert!(
-            !state.connections().contains_key(&unmarked_id),
-            "an unmarked profile waits for a click"
-        );
-    });
+            state.connections().contains_key(&unmarked_id),
+        )
+    })
+}
+
+/// Launch connects the profiles marked "Connect on startup" through the
+/// sidebar's connect path, and leaves the others alone.
+#[gpui::test]
+fn launch_connects_only_the_profiles_marked_to_connect_on_startup(cx: &mut TestAppContext) {
+    let (marked, unmarked) = launch_with_startup_profiles(cx, false);
+
+    assert!(marked, "the marked profile connects at launch");
+    assert!(!unmarked, "an unmarked profile waits for a click");
+}
+
+/// While the global reopen setting is on, the per-profile flag is shown
+/// disabled, so it must not connect anything either: the last session alone
+/// decides, and this marked profile was not part of it.
+#[gpui::test]
+fn launch_ignores_connect_on_startup_while_reopen_last_connections_is_on(cx: &mut TestAppContext) {
+    let (marked, unmarked) = launch_with_startup_profiles(cx, true);
+
+    assert!(
+        !marked,
+        "a marked profile that was not open at the last quit stays disconnected"
+    );
+    assert!(!unmarked);
 }
 
 /// Opens an empty query tab and returns its document id.

@@ -2695,6 +2695,65 @@ mod tests {
             .log_err();
     }
 
+    /// While the global reopen setting is on, launch ignores the flag, so the
+    /// checkbox is out of the ring (Enter cannot flip it) until that setting
+    /// is turned off again.
+    #[::core::prelude::v1::test]
+    fn connect_on_startup_leaves_the_ring_while_the_global_reopen_setting_is_on() {
+        let mut cx = TestAppContext::single();
+        use super::super::MainExtraStop;
+
+        let set_reopen = |state: &mut AppStateEntity, on: bool| {
+            let mut settings = state.general_settings().clone();
+            settings.reopen_last_connections = on;
+            state.update_general_settings(settings);
+        };
+        let window = open_postgres_form_with(&mut cx, |state| set_reopen(state, true));
+
+        let has_startup_stop = |manager: &ConnectionManagerWindow| {
+            manager
+                .main_extra_stops()
+                .iter()
+                .any(|stop| matches!(stop, MainExtraStop::ConnectOnStartup))
+        };
+
+        let (overridden, in_ring) = window
+            .update(&mut cx, |manager, _, _| {
+                (
+                    manager.connect_on_startup_overridden,
+                    has_startup_stop(manager),
+                )
+            })
+            .expect("window is open");
+        assert!(overridden, "the form knows the global setting decides");
+        assert!(!in_ring, "the disabled checkbox is not a ring stop");
+
+        window
+            .update(&mut cx, |manager, _, cx| {
+                manager.app_state.update(cx, |state, cx| {
+                    set_reopen(state, false);
+                    cx.emit(dbflux_ui_base::AppStateChanged);
+                });
+            })
+            .expect("window is open");
+        cx.run_until_parked();
+
+        let (overridden, in_ring) = window
+            .update(&mut cx, |manager, _, _| {
+                (
+                    manager.connect_on_startup_overridden,
+                    has_startup_stop(manager),
+                )
+            })
+            .expect("window is open");
+        assert!(!overridden, "turning the global setting off is picked up");
+        assert!(in_ring, "the checkbox is a ring stop again");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
     /// A driver field without a ring stop of its own, such as the auth
     /// profile picker of an AWS driver, is an extra stop: Enter opens it and
     /// the dropdown keys drive it.

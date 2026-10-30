@@ -435,6 +435,7 @@ connection_manager:
     read_only: "Somente leitura"
     connect_on_startup: "Conectar ao iniciar"
     connect_on_startup_help: "O DBFlux se conecta a esta conexão em segundo plano ao iniciar. Se a senha não estiver salva, ela não é conectada; conecte-se você mesmo para digitar a senha."
+    connect_on_startup_overridden: "Não é usado enquanto \"Reconectar às conexões que estavam abertas\" estiver ativado em Configurações > Geral > Inicialização e sessão: essa configuração decide quais conexões abrem ao iniciar. A escolha é mantida para quando ela for desativada."
     name: Nome
     ssl_mode: Modo SSL
     ca_certificate: Certificado da CA
@@ -5135,6 +5136,7 @@ sidebar:
     connect: Conectar
     retry_connect: Tentar novamente
     connect_on_startup: Conectar ao iniciar
+    connect_on_startup_overridden: "Sem efeito enquanto Configurações > Geral > Inicialização e sessão reconecta as conexões abertas"
     disconnect: Desconectar
     edit: Editar
     duplicate: Duplicar

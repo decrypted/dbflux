@@ -64,8 +64,13 @@ conexión fallida muestra su error habitual. Una conexión cuya contraseña no e
 guardada no se conecta al iniciar; en su lugar queda marcada como fallida, y
 **Reintentar** pide la contraseña. El menú de la conexión en la barra lateral (clic
 derecho, o el botón `…` de la fila) tiene el mismo interruptor, con una marca de
-verificación mientras está activado. Funciona junto con **Reopen last connections**
-de Settings: una conexión cubierta por ambos se conecta una sola vez.
+verificación mientras está activado.
+
+Mientras **Reopen last connections** (Ajustes > General > Inicio y sesión) está
+activado, ese ajuste decide por sí solo qué conexiones se abren al iniciar. El
+interruptor se muestra entonces atenuado en ambos lugares, con una nota que nombra
+ese ajuste, y no tiene efecto; conserva su valor, que vuelve a aplicarse cuando se
+desactiva el ajuste.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/connections/driver-picker-dark.webp">

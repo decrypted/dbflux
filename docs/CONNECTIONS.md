@@ -58,9 +58,13 @@ SSH tunnels, proxies, hooks and keyring secrets apply, and a failed connect
 shows its usual error. A connection whose password is not saved is not
 connected at startup; it is marked as failed instead, and **Retry** asks for the
 password. The connection's menu in the sidebar (right-click, or the `…` button
-on the row) has the same toggle, with a check mark while it is on. The toggle
-works alongside **Reopen last connections** in Settings: a connection covered by
-both is connected once.
+on the row) has the same toggle, with a check mark while it is on.
+
+While **Reopen last connections** (Settings > General > Startup and session) is
+on, that setting alone decides which connections open at startup. The toggle is
+then shown greyed out in both places, with a note naming that setting, and has
+no effect; it keeps its value, which applies again once the setting is turned
+off.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/connections/driver-picker-dark.webp">

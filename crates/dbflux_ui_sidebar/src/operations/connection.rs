@@ -178,16 +178,12 @@ impl Sidebar {
         self.connect_to_profile_inner(profile_id, None, false, remembered_password, cx);
     }
 
-    /// Connects every profile marked "Connect on startup" that is not in
-    /// `already_started`, not connected and not already connecting.
+    /// Connects every profile marked "Connect on startup" that is not
+    /// connected and not already connecting.
     ///
     /// Each one goes through [`Self::connect_to_profile`], so tunnels, hooks,
     /// keyring secrets and connect errors behave as they do for a click.
-    pub fn connect_profiles_on_startup(
-        &mut self,
-        already_started: &HashSet<Uuid>,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn connect_profiles_on_startup(&mut self, cx: &mut Context<Self>) {
         let profile_ids: Vec<Uuid> = {
             let state = self.app_state.read(cx);
             state
@@ -196,8 +192,7 @@ impl Sidebar {
                 .filter(|profile| profile.connect_on_startup)
                 .map(|profile| profile.id)
                 .filter(|profile_id| {
-                    !already_started.contains(profile_id)
-                        && !state.connections().contains_key(profile_id)
+                    !state.connections().contains_key(profile_id)
                         && !state.is_operation_pending(*profile_id, None)
                 })
                 .collect()
@@ -1270,7 +1265,6 @@ mod tests {
     use super::wait_for_connection_teardown;
     use dbflux_core::CancelToken;
     use gpui::TestAppContext;
-    use std::collections::HashSet;
     use std::sync::mpsc;
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
@@ -1766,11 +1760,10 @@ mod tests {
         let unmarked = fixture.profile_id;
         let marked = add_saved_profile(&fixture, "marked", true, cx);
         let also_marked = add_saved_profile(&fixture, "also-marked", true, cx);
-        let started_elsewhere = add_saved_profile(&fixture, "reopened", true, cx);
 
-        fixture.sidebar.update(cx, |sidebar, cx| {
-            sidebar.connect_profiles_on_startup(&HashSet::from([started_elsewhere]), cx)
-        });
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_profiles_on_startup(cx));
         cx.run_until_parked();
 
         fixture.state.read_with(cx, |state, _| {
@@ -1780,10 +1773,6 @@ mod tests {
                 !state.connections().contains_key(&unmarked),
                 "a profile without the flag waits for a click"
             );
-            assert!(
-                !state.connections().contains_key(&started_elsewhere),
-                "a profile the session reopen already started is not connected twice"
-            );
         });
         assert_eq!(
             recorded(&fixture.passwords).len(),
@@ -1792,14 +1781,14 @@ mod tests {
         );
         assert!(fixture.prompts.lock().expect("prompts").is_empty());
 
-        fixture.sidebar.update(cx, |sidebar, cx| {
-            sidebar.connect_profiles_on_startup(&HashSet::new(), cx)
-        });
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_profiles_on_startup(cx));
         cx.run_until_parked();
         assert_eq!(
             recorded(&fixture.passwords).len(),
-            3,
-            "connected profiles are skipped; only the one left out before connects"
+            2,
+            "connected profiles are not connected again"
         );
     }
 
@@ -1819,9 +1808,9 @@ mod tests {
             }
         });
 
-        fixture.sidebar.update(cx, |sidebar, cx| {
-            sidebar.connect_profiles_on_startup(&HashSet::new(), cx)
-        });
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_profiles_on_startup(cx));
         cx.run_until_parked();
 
         assert!(

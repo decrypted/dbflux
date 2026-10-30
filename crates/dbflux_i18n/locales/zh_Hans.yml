@@ -435,6 +435,7 @@ connection_manager:
     read_only: "只读"
     connect_on_startup: "启动时连接"
     connect_on_startup_help: "DBFlux 启动时会在后台连接此连接。如果未保存密码，则不会连接；请手动连接并输入密码。"
+    connect_on_startup_overridden: "当 设置 > 常规 > 启动与会话 中的“重新连接之前打开的连接”开启时，此选项不生效：启动时打开哪些连接由该设置决定。此处的选择会保留，待该设置关闭后生效。"
     name: 名称
     ssl_mode: SSL 模式
     ca_certificate: CA 证书
@@ -5133,6 +5134,7 @@ sidebar:
     connect: 连接
     retry_connect: 重试
     connect_on_startup: 启动时连接
+    connect_on_startup_overridden: "设置 > 常规 > 启动与会话 重新连接已打开的连接时不生效"
     disconnect: 断开连接
     edit: 编辑
     duplicate: 复制

@@ -489,6 +489,10 @@ pub struct ConnectionManagerWindow {
     /// grid navigation steps by it.
     driver_grid_columns: usize,
     editing_profile_id: Option<uuid::Uuid>,
+    /// Mirrors the global "reconnect to the connections that were open"
+    /// setting. While it is on, launch ignores the per-profile startup flag,
+    /// so its checkbox is shown disabled and left out of the keyboard ring.
+    connect_on_startup_overridden: bool,
 
     validation_errors: Vec<String>,
     test_status: TestStatus,
@@ -986,8 +990,14 @@ impl ConnectionManagerWindow {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
+        let connect_on_startup_overridden = app_state
+            .read(cx)
+            .general_settings()
+            .reopen_last_connections;
+
         Self {
             app_state: app_state.clone(),
+            connect_on_startup_overridden,
             view: View::DriverSelect,
             import_panel,
             active_tab: ActiveTab::Main,
@@ -2044,7 +2054,10 @@ impl ConnectionManagerWindow {
         }
 
         stops.push(MainExtraStop::ReadOnly);
-        stops.push(MainExtraStop::ConnectOnStartup);
+
+        if !self.connect_on_startup_overridden {
+            stops.push(MainExtraStop::ConnectOnStartup);
+        }
 
         stops
     }
@@ -3449,6 +3462,11 @@ impl ConnectionManagerWindow {
 
     fn handle_app_state_changed(&mut self, cx: &mut Context<Self>) {
         self.sync_secret_providers(cx);
+        self.connect_on_startup_overridden = self
+            .app_state
+            .read(cx)
+            .general_settings()
+            .reopen_last_connections;
 
         let current_profiles = self.app_state.read(cx).list_auth_profiles();
         let current_ids = current_profiles

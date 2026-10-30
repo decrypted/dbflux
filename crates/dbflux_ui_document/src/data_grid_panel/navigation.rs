@@ -568,9 +568,31 @@ impl DataGridPanel {
 
     pub fn focus_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus_mode = GridFocusMode::Table;
+        // `EditState` tracks the toolbar inputs, not the cell editor, so it
+        // goes back to navigating even while a cell editor keeps the keyboard.
         self.focus.edit_state = EditState::Navigating;
-        window.focus(&self.focus_handle, cx);
+        if !self.focus_open_cell_editor(window, cx) {
+            window.focus(&self.focus_handle, cx);
+        }
         cx.notify();
+    }
+
+    /// Hand the keyboard to the grid's open text cell editor; false when none
+    /// is open, an enum dropdown included. Clicking a cell asks the host for
+    /// focus, and that request arrives after a double-click has already
+    /// opened the editor.
+    pub(crate) fn focus_open_cell_editor(&self, window: &mut Window, cx: &mut App) -> bool {
+        self.grid_table
+            .table_state
+            .as_ref()
+            .is_some_and(|state| state.update(cx, |state, cx| state.focus_open_editor(window, cx)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn table_state_for_test(
+        &self,
+    ) -> Option<Entity<dbflux_components::components::data_table::DataTableState>> {
+        self.grid_table.table_state.clone()
     }
 
     pub fn toolbar_left(&mut self, cx: &mut Context<Self>) {

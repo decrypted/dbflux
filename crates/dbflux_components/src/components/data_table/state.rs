@@ -1108,6 +1108,23 @@ impl DataTableState {
         self.editing_cell.is_some()
     }
 
+    /// Give the keyboard to the open text cell editor, for a host asked to
+    /// take focus while one is open. Returns false when no text editor is
+    /// open, an enum dropdown included: the dropdown takes no focus and is
+    /// driven through the host's commands, so the host focuses its own root
+    /// as usual.
+    ///
+    /// With a text editor open, a host must not focus its own root instead:
+    /// an editor opened in the same cycle is not rendered yet, so it never
+    /// sees that blur and stays open without the keyboard.
+    pub fn focus_open_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(input) = &self.cell_input else {
+            return false;
+        };
+        input.update(cx, |input, cx| input.focus(window, cx));
+        true
+    }
+
     pub fn is_editing_text_input(&self) -> bool {
         self.cell_input.is_some()
     }

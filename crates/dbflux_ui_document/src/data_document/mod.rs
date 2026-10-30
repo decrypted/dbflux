@@ -348,6 +348,12 @@ impl DataDocument {
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .data_grid
+            .update(cx, |grid, cx| grid.focus_open_cell_editor(window, cx))
+        {
+            return;
+        }
         self.focus_handle.focus(window, cx);
     }
 

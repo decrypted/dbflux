@@ -239,3 +239,42 @@ fn the_choices_are_remembered_across_grids(cx: &mut TestAppContext) {
         "opening the menu reads the store"
     );
 }
+
+/// Selected rows are written as the grid shows them, as Copy as CSV takes
+/// them: a row added in the grid and not saved at its place, and an unsaved
+/// edit with its new value, not the loaded row at the same index.
+#[gpui::test]
+fn selected_rows_export_the_rows_the_grid_shows(cx: &mut TestAppContext) {
+    use dbflux_components::components::data_table::model::CellValue;
+    use dbflux_core::Value;
+
+    init_keyboard_runtime(cx);
+    let state = app_state(cx);
+    let (_host, panel, window) = host_result_grid(cx, state);
+    let table = table_state(&panel, window);
+    window.update(|_, cx| {
+        let base_rows = panel.read(cx).result.rows.len();
+        table.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            buffer.set_base_row_count(base_rows);
+            buffer.add_pending_insert_after(0, vec![CellValue::int(9), CellValue::text("new")]);
+            buffer.set_cell(1, 1, CellValue::text("edited"));
+            // Visual rows 1 and 2: the added row, then loaded row 2.
+            state.select_cell(CellCoord::new(1, 0), cx);
+            state.extend_selection(CellCoord::new(2, 1), cx);
+        });
+        panel.update(cx, |panel, _| {
+            panel.chrome.export_options.rows = ExportRows::Selected;
+            panel.chrome.export_options.columns = ExportColumns::All;
+        });
+    });
+
+    let (result, _) = window.update(|_, cx| panel.read(cx).export_menu_payload(cx));
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![Value::Int(9), Value::Text("new".to_string())],
+            vec![Value::Int(2), Value::Text("edited".to_string())],
+        ]
+    );
+}

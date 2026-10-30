@@ -1540,7 +1540,6 @@ impl DataGridPanel {
     /// buffer: a pending insert copies its values, and a base row copies the
     /// result's value or, for a cell with an unsaved edit, the edited one.
     fn selection_result(&self, cx: &App) -> Option<dbflux_core::QueryResult> {
-        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
         use dbflux_components::components::data_table::selection::CellCoord;
         use std::collections::BTreeSet;
 
@@ -1572,27 +1571,8 @@ impl DataGridPanel {
             .iter()
             .filter_map(|&col| self.result.columns.get(col).cloned())
             .collect();
-        let shown_value = |row: usize, col: usize| -> Value {
-            match visual_order.get(row).copied() {
-                Some(VisualRowSource::Base(base_row)) if buffer.is_cell_dirty(base_row, col) => {
-                    let null = CellValue::null();
-                    buffer.get_cell(base_row, col, &null).to_value()
-                }
-                Some(VisualRowSource::Base(base_row)) => self
-                    .result
-                    .rows
-                    .get(base_row)
-                    .and_then(|values| values.get(col))
-                    .cloned()
-                    .unwrap_or(Value::Null),
-                Some(VisualRowSource::Insert(insert_idx)) => buffer
-                    .get_pending_insert_by_idx(insert_idx)
-                    .and_then(|cells| cells.get(col))
-                    .map(CellValue::to_value)
-                    .unwrap_or(Value::Null),
-                None => Value::Null,
-            }
-        };
+        let shown_value =
+            |row: usize, col: usize| shown_value(&self.result, buffer, &visual_order, row, col);
         let rows = rows
             .iter()
             .map(|&row| {
@@ -1614,6 +1594,31 @@ impl DataGridPanel {
             None,
             std::time::Duration::ZERO,
         ))
+    }
+
+    /// Every column of the given visual rows as the grid shows them, the way
+    /// [`Self::selection_result`] reads its cells.
+    pub(in crate::data_grid_panel) fn shown_row_values(
+        &self,
+        visual_rows: &[usize],
+        cx: &App,
+    ) -> Vec<Vec<Value>> {
+        let Some(table_state) = self.grid_table.table_state.as_ref() else {
+            return Vec::new();
+        };
+        let buffer = table_state.read(cx).edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+        let col_count = self.result.columns.len();
+
+        visual_rows
+            .iter()
+            .filter(|&&row| row < visual_order.len())
+            .map(|&row| {
+                (0..col_count)
+                    .map(|col| shown_value(&self.result, buffer, &visual_order, row, col))
+                    .collect()
+            })
+            .collect()
     }
 
     /// Writes an export to the clipboard and reports it: the toast, and the
@@ -4747,6 +4752,37 @@ async fn reference_display_columns(
     }
 
     display_columns
+}
+
+/// The value the grid shows at visual `row`, `col`: a pending insert's
+/// value, an unsaved edit, or the loaded value of `result`.
+fn shown_value(
+    result: &dbflux_core::QueryResult,
+    buffer: &dbflux_components::components::data_table::model::EditBuffer,
+    visual_order: &[dbflux_components::components::data_table::model::VisualRowSource],
+    row: usize,
+    col: usize,
+) -> Value {
+    use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
+
+    match visual_order.get(row).copied() {
+        Some(VisualRowSource::Base(base_row)) if buffer.is_cell_dirty(base_row, col) => {
+            let null = CellValue::null();
+            buffer.get_cell(base_row, col, &null).to_value()
+        }
+        Some(VisualRowSource::Base(base_row)) => result
+            .rows
+            .get(base_row)
+            .and_then(|values| values.get(col))
+            .cloned()
+            .unwrap_or(Value::Null),
+        Some(VisualRowSource::Insert(insert_idx)) => buffer
+            .get_pending_insert_by_idx(insert_idx)
+            .and_then(|cells| cells.get(col))
+            .map(CellValue::to_value)
+            .unwrap_or(Value::Null),
+        None => Value::Null,
+    }
 }
 
 #[cfg(test)]

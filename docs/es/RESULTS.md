@@ -303,8 +303,9 @@ resultado e incluyen:
 La parte superior del menú elige qué se exporta, y los formatos de **Guardar
 como archivo** y **Copiar al portapapeles** que hay debajo siguen esa elección:
 
-- **Filas**: **Seleccionadas** escribe las filas cargadas que tienen una celda
-  seleccionada, **Cargadas** las filas que tiene la cuadrícula (en una tabla, la
+- **Filas**: **Seleccionadas** escribe las filas que tienen una celda
+  seleccionada tal como las muestra la cuadrícula, con las ediciones y filas
+  añadidas sin guardar, como Copiar como CSV; **Cargadas** las filas que tiene la cuadrícula (en una tabla, la
   página actual) y **Todas** todas las filas de la tabla o la colección (ver más
   abajo; solo se ofrece donde la cuadrícula puede volver a leerla página a
   página). **Seleccionadas** está desactivada, con el motivo bajo la fila, hasta

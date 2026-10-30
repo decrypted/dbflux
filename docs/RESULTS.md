@@ -278,7 +278,8 @@ command palette. The available formats depend on the result shape and include:
 The top of the menu chooses what is exported, and the **Save as file** and
 **Copy to clipboard** formats below it follow that choice:
 
-- **Rows**: **Selected** writes the loaded rows that hold a selected cell,
+- **Rows**: **Selected** writes the rows that hold a selected cell as the grid
+  shows them, unsaved edits and added rows included, as Copy as CSV does;
   **Loaded** the rows the grid holds (for a table, the current page), and
   **All** every row of the table or collection (see below; offered only where
   the grid can read it again page by page). **Selected** is disabled, with the

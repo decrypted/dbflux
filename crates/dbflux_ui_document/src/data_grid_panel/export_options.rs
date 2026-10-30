@@ -153,7 +153,8 @@ pub(crate) enum ExportOptionRow {
 /// the options without a window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct GridExportView {
-    /// Rows holding a selected cell, ascending.
+    /// Visual rows (pending inserts at their place) holding a selected
+    /// cell, ascending.
     pub(crate) selected_rows: Vec<usize>,
     /// Shown columns holding a selected cell, in screen order.
     pub(crate) selected_columns: Vec<usize>,
@@ -457,7 +458,7 @@ impl DataGridPanel {
         GridExportView::from_selection(
             state.selection(),
             state.column_layout().visible_columns(),
-            self.result.rows.len(),
+            state.row_count(),
             col_count,
             can_export_all,
         )
@@ -512,7 +513,25 @@ impl DataGridPanel {
             scope.rows = ExportRows::Loaded;
         }
 
-        let result = scope.project(&self.result);
+        // Selected rows are the grid's rows as it shows them, as Copy as CSV
+        // takes them: unsaved edits applied and added rows at their place.
+        let result = match &scope.row_indices {
+            Some(visual_rows) => {
+                let mut shown = QueryResult::table(
+                    self.result.columns.clone(),
+                    self.shown_row_values(visual_rows, cx),
+                    None,
+                    std::time::Duration::ZERO,
+                );
+                shown.shape = self.result.shape.clone();
+                ExportScope {
+                    row_indices: None,
+                    ..scope.clone()
+                }
+                .project(&shown)
+            }
+            None => scope.project(&self.result),
+        };
         let label = self.export_scope_label(&scope, Some(result.rows.len()));
         (result, Some(label))
     }

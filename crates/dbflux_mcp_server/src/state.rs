@@ -680,6 +680,7 @@ fn load_profiles(
             environment: None,
             navigator_view: dbflux_core::NavigatorView::Advanced,
             show_all_databases: true,
+            connect_on_startup: dto.connect_on_startup,
         };
 
         if hook_load_error.is_none()

@@ -178,6 +178,68 @@ impl Sidebar {
         self.connect_to_profile_inner(profile_id, None, false, remembered_password, cx);
     }
 
+    /// Connects every profile marked "Connect on startup" that is not in
+    /// `already_started`, not connected and not already connecting.
+    ///
+    /// Each one goes through [`Self::connect_to_profile`], so tunnels, hooks,
+    /// keyring secrets and connect errors behave as they do for a click.
+    pub fn connect_profiles_on_startup(
+        &mut self,
+        already_started: &HashSet<Uuid>,
+        cx: &mut Context<Self>,
+    ) {
+        let profile_ids: Vec<Uuid> = {
+            let state = self.app_state.read(cx);
+            state
+                .profiles()
+                .iter()
+                .filter(|profile| profile.connect_on_startup)
+                .map(|profile| profile.id)
+                .filter(|profile_id| {
+                    !already_started.contains(profile_id)
+                        && !state.connections().contains_key(profile_id)
+                        && !state.is_operation_pending(*profile_id, None)
+                })
+                .collect()
+        };
+
+        for profile_id in profile_ids {
+            self.connect_on_startup(profile_id, cx);
+        }
+    }
+
+    fn connect_on_startup(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        let prompt = {
+            let state = self.app_state.read(cx);
+            state
+                .remembered_connection_password(profile_id)
+                .is_none()
+                .then(|| state.connection_password_prompt(profile_id))
+                .flatten()
+        };
+
+        // The password prompt shows one profile at a time, so prompting for
+        // several at startup would drop all but the last without a trace. A
+        // recorded failure marks each one instead, and its Retry prompts.
+        if let Some(prompt) = prompt {
+            let message = crate::labels::startup_needs_password_label(&prompt.profile_name);
+
+            self.app_state.update(cx, |state, cx| {
+                state.record_connect_failure(profile_id, message.clone());
+                cx.emit(AppStateChanged);
+            });
+            self.pending_toast = Some(PendingToast {
+                message,
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            cx.notify();
+            return;
+        }
+
+        self.connect_to_profile(profile_id, cx);
+    }
+
     /// Disconnect a live session and reconnect once the connection has fully
     /// cleared. Used by the "Reconnect now" prompt that fires after the user
     /// edits a profile that is currently connected — the new settings only take
@@ -1208,6 +1270,7 @@ mod tests {
     use super::wait_for_connection_teardown;
     use dbflux_core::CancelToken;
     use gpui::TestAppContext;
+    use std::collections::HashSet;
     use std::sync::mpsc;
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
@@ -1672,5 +1735,119 @@ mod tests {
         fixture.state.read_with(cx, |state, _| {
             assert!(state.connections().contains_key(&profile_id))
         });
+    }
+
+    /// Adds a profile the fixture driver connects, with a saved password so
+    /// it needs no prompt.
+    fn add_saved_profile(
+        fixture: &PasswordFixture,
+        name: &str,
+        connect_on_startup: bool,
+        cx: &mut VisualTestContext,
+    ) -> Uuid {
+        let mut profile =
+            dbflux_core::ConnectionProfile::new(name, dbflux_core::DbConfig::default_postgres());
+        profile.connect_on_startup = connect_on_startup;
+        let profile_id = profile.id;
+
+        fixture.state.update(cx, |state, _| {
+            state.profiles_mut().push(profile);
+            state.connection_tree_mut().add_node(
+                dbflux_core::ConnectionTreeNode::new_connection_ref(profile_id, None, 1000),
+            );
+        });
+
+        profile_id
+    }
+
+    #[gpui::test]
+    fn startup_connects_exactly_the_profiles_marked_to_connect_on_startup(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let unmarked = fixture.profile_id;
+        let marked = add_saved_profile(&fixture, "marked", true, cx);
+        let also_marked = add_saved_profile(&fixture, "also-marked", true, cx);
+        let started_elsewhere = add_saved_profile(&fixture, "reopened", true, cx);
+
+        fixture.sidebar.update(cx, |sidebar, cx| {
+            sidebar.connect_profiles_on_startup(&HashSet::from([started_elsewhere]), cx)
+        });
+        cx.run_until_parked();
+
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&marked));
+            assert!(state.connections().contains_key(&also_marked));
+            assert!(
+                !state.connections().contains_key(&unmarked),
+                "a profile without the flag waits for a click"
+            );
+            assert!(
+                !state.connections().contains_key(&started_elsewhere),
+                "a profile the session reopen already started is not connected twice"
+            );
+        });
+        assert_eq!(
+            recorded(&fixture.passwords).len(),
+            2,
+            "one connect per marked profile"
+        );
+        assert!(fixture.prompts.lock().expect("prompts").is_empty());
+
+        fixture.sidebar.update(cx, |sidebar, cx| {
+            sidebar.connect_profiles_on_startup(&HashSet::new(), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            recorded(&fixture.passwords).len(),
+            3,
+            "connected profiles are skipped; only the one left out before connects"
+        );
+    }
+
+    #[gpui::test]
+    fn startup_marks_an_unsaved_password_profile_failed_instead_of_prompting(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, cx) = password_fixture(false, cx);
+        let profile_id = fixture.profile_id;
+        fixture.state.update(cx, |state, _| {
+            if let Some(profile) = state
+                .profiles_mut()
+                .iter_mut()
+                .find(|profile| profile.id == profile_id)
+            {
+                profile.connect_on_startup = true;
+            }
+        });
+
+        fixture.sidebar.update(cx, |sidebar, cx| {
+            sidebar.connect_profiles_on_startup(&HashSet::new(), cx)
+        });
+        cx.run_until_parked();
+
+        assert!(
+            fixture.prompts.lock().expect("prompts").is_empty(),
+            "startup does not open the password prompt"
+        );
+        assert!(recorded(&fixture.passwords).is_empty());
+        fixture.state.read_with(cx, |state, _| {
+            assert!(!state.connections().contains_key(&profile_id));
+            assert!(!state.is_operation_pending(profile_id, None));
+            assert!(
+                state
+                    .connect_failure(profile_id)
+                    .is_some_and(|failure| failure.contains("orders")),
+                "the profile is marked failed so its Retry prompts"
+            );
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            *fixture.prompts.lock().expect("prompts"),
+            vec![profile_id],
+            "a click afterwards asks for the password as usual"
+        );
     }
 }

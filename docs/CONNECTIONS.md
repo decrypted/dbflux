@@ -40,7 +40,7 @@ the fields that driver actually needs. File-backed drivers such as SQLite use a
 file-path form. Most relational drivers also accept a single connection string;
 see [Form mode vs. direct URI](#form-mode-vs-direct-uri).
 
-The **Safety** section at the end of the Main tab holds the **Read-only**
+The **Safety** section near the end of the Main tab holds the **Read-only**
 toggle. When it is on, DBFlux blocks changes made from the data grid, the visual
 query builder and schema diff on that connection, refuses query editor
 statements that would change data or schema, and denies MCP calls above the
@@ -50,6 +50,17 @@ open connection at once, while switching it off takes effect after reconnecting.
 MCP picks up either change on its next call. The editor classifies a statement from its text, so a
 function with side effects called from a `SELECT`, such as PostgreSQL `setval`,
 still runs: read-only database credentials remain the stronger boundary.
+
+The **Startup** section, the last one of the Main tab, holds the **Connect on
+startup** toggle. When it is on, DBFlux connects to that connection in the
+background each time it starts, the same way a click on the connection does:
+SSH tunnels, proxies, hooks and keyring secrets apply, and a failed connect
+shows its usual error. A connection whose password is not saved is not
+connected at startup; it is marked as failed instead, and **Retry** asks for the
+password. The connection's menu in the sidebar (right-click, or the `…` button
+on the row) has the same toggle, with a check mark while it is on. The toggle
+works alongside **Reopen last connections** in Settings: a connection covered by
+both is connected once.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/connections/driver-picker-dark.webp">

@@ -382,6 +382,12 @@ pub(crate) fn post_disconnect_hook_cancelled_task_label() -> String {
     dbflux_i18n::t!("sidebar.task.post_disconnect_hook_cancelled")
 }
 
+/// Translated failure for a profile marked "Connect on startup" whose
+/// password is not saved, e.g. `"'prod-db' was not connected on startup …"`.
+pub(crate) fn startup_needs_password_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.startup_needs_password", name = name)
+}
+
 /// Translated toast shown when a connect/disconnect request is rejected
 /// because an operation is already pending for the same profile.
 pub(crate) fn connection_already_pending_toast_label() -> String {

@@ -433,6 +433,8 @@ connection_manager:
     show_all_databases: "Mostrar todas las bases de datos"
     read_only_help: "Bloquea los cambios desde la grilla de datos, el constructor de consultas, la comparación de esquemas y el editor de consultas, y deniega las escrituras por MCP en esta conexión. Las sentencias de lectura se siguen ejecutando."
     read_only: "Solo lectura"
+    connect_on_startup: "Conectar al iniciar"
+    connect_on_startup_help: "DBFlux se conecta a esta conexión en segundo plano al iniciar. Si la contraseña no está guardada, no se conecta; conéctate tú para introducir la contraseña."
     name: Nombre
     ssl_mode: Modo SSL
     ca_certificate: Certificado de CA
@@ -442,6 +444,7 @@ connection_manager:
     transport: TRANSPORTE
     navigator: "NAVEGADOR"
     safety: "SEGURIDAD"
+    startup: "INICIO"
   banner:
     correct_following: Corrige lo siguiente
     testing_connection: "Probando la conexión…"
@@ -5131,6 +5134,7 @@ sidebar:
     drop_collection: Eliminar colección
     connect: Conectar
     retry_connect: Reintentar
+    connect_on_startup: Conectar al iniciar
     disconnect: Desconectar
     edit: Editar
     duplicate: Duplicar
@@ -5230,6 +5234,7 @@ sidebar:
     edit_reconnect_now: Reconectar ahora
     edit_reconnect_later: Más tarde
     connection_already_pending: Ya hay una conexión pendiente
+    startup_needs_password: "'%{name}' no se conectó al iniciar porque su contraseña no está guardada. Conéctate para introducirla."
     operation_started_elsewhere: Otro proceso ya inició la operación
     background_task_limit: Hay demasiadas tareas en segundo plano, espera un momento
     connection_cancelled_by_hook: Conexión cancelada por un hook

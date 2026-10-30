@@ -75,6 +75,9 @@ pub enum ContextMenuAction {
     /// Start inline editing of the selected cell, or of every selected cell,
     /// as a SQL expression.
     EditAsExpression,
+    /// Write a new identifier of this kind into the selected cell, or one
+    /// per cell into every selected cell.
+    GenerateId(dbflux_core::GeneratedIdKind),
     /// Open modal editor for the selected cell.
     EditInModal,
     /// Show the selected cell in the value panel.

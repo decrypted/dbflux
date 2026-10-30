@@ -1180,6 +1180,7 @@ impl DataGridPanel {
             action,
             ContextMenuAction::Edit
                 | ContextMenuAction::EditAsExpression
+                | ContextMenuAction::GenerateId(_)
                 | ContextMenuAction::EditInModal
                 | ContextMenuAction::ViewValue
                 | ContextMenuAction::SetDefault
@@ -1980,6 +1981,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
+            ContextMenuAction::GenerateId(kind) => {
+                self.handle_generate_id(menu.row, menu.col, kind, cx)
+            }
             ContextMenuAction::EditAsExpression => {
                 // The editor takes focus, so the focus restore below must run
                 // before it opens rather than after.

@@ -291,6 +291,7 @@ impl DataGridPanel {
         let enum_options = enum_options_for_result(&self.result, column_details.as_deref());
         let expression_suggestions =
             self.cell_expression_suggestions_by_column(column_details.as_deref(), cx);
+        let generated_id_offers = self.generated_id_offers_by_column(column_details.as_deref());
 
         if let Some(table_state) = self.grid_table.table_state.clone() {
             // A reload reuses the state entity, so column widths, sort, scroll
@@ -330,6 +331,7 @@ impl DataGridPanel {
                     state.set_enum_options(col_ix, options);
                 }
                 state.set_cell_expression_suggestions(expression_suggestions);
+                state.set_generated_id_offers(generated_id_offers);
 
                 carried_edits.map_or(0, |edits| state.restore_pending_edits(edits, cx))
             });
@@ -372,6 +374,7 @@ impl DataGridPanel {
                 state.set_enum_options(col_ix, options);
             }
             state.set_cell_expression_suggestions(expression_suggestions);
+            state.set_generated_id_offers(generated_id_offers);
 
             state
         });

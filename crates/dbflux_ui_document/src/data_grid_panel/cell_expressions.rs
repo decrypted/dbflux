@@ -58,7 +58,8 @@ impl DataGridPanel {
     }
 
     /// Adds "Edit as SQL expression…" after "Edit" when the cell under the
-    /// menu can hold an expression.
+    /// menu can hold an expression, and after it the identifiers the cell
+    /// can be given.
     pub(super) fn with_edit_as_expression(
         &self,
         mut items: Vec<ContextMenuItem>,
@@ -76,6 +77,10 @@ impl DataGridPanel {
         else {
             return items;
         };
+
+        let ids = self.generate_id_items(menu, cx);
+        let ids_at = position + 1;
+        items.splice(ids_at..ids_at, ids);
 
         if accepts && !menu.is_document_view {
             items.insert(

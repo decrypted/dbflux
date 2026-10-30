@@ -1330,32 +1330,34 @@ impl DataTable {
 /// What the open inline editor draws for a column that can hold a SQL
 /// expression: the `fx` switch, and the suggestions while it is on.
 struct ExpressionEditorView {
+    /// The column can hold an expression, so the editor draws `fx`.
+    takes_expressions: bool,
     active: bool,
-    suggestions: Vec<String>,
+    suggestions: Vec<super::state::EditorSuggestion>,
     highlight: Option<usize>,
 }
 
 impl ExpressionEditorView {
     fn of(state: &DataTableState) -> Option<Self> {
         let coord = state.editing_cell()?;
-        if state.cell_input().is_none() || !state.accepts_cell_expressions(coord.col) {
+        state.cell_input()?;
+
+        let takes_expressions = state.accepts_cell_expressions(coord.col);
+        let suggestions = state.editor_suggestions(coord.col);
+        if !takes_expressions && suggestions.is_empty() {
             return None;
         }
 
-        let active = state.is_editing_expression();
         Some(Self {
-            active,
-            suggestions: if active {
-                state.cell_expression_suggestions(coord.col).to_vec()
-            } else {
-                Vec::new()
-            },
+            takes_expressions,
+            active: state.is_editing_expression(),
+            suggestions,
             highlight: state.expression_highlight(),
         })
     }
 
     fn shows_suggestions(&self) -> bool {
-        self.active && !self.suggestions.is_empty()
+        !self.suggestions.is_empty()
     }
 }
 
@@ -1444,7 +1446,15 @@ fn render_expression_suggestions(
                         state.apply_expression_suggestion(index, window, cx)
                     });
                 })
-                .child(suggestion.clone())
+                .child(match suggestion {
+                    super::state::EditorSuggestion::Expression(expression) => expression.clone(),
+                    super::state::EditorSuggestion::GeneratedId(kind) => {
+                        dbflux_i18n::t!(
+                            "components.data_table.expression.generate",
+                            kind = kind.label()
+                        )
+                    }
+                })
                 .into_any_element()
         })
         .collect::<Vec<_>>();
@@ -1590,12 +1600,14 @@ fn render_rows(
                                 .border_color(theme.ring)
                                 .bg(theme.background)
                                 .when_some(expression_editor, |cell, view| {
-                                    cell.child(render_expression_toggle(
-                                        state_entity,
-                                        view.active,
-                                        font_size,
-                                        theme,
-                                    ))
+                                    cell.when(view.takes_expressions, |cell| {
+                                        cell.child(render_expression_toggle(
+                                            state_entity,
+                                            view.active,
+                                            font_size,
+                                            theme,
+                                        ))
+                                    })
                                     .when(
                                         view.shows_suggestions(),
                                         |cell| {

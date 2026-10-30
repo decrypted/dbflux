@@ -387,7 +387,7 @@ impl DataGridPanel {
                             );
                         }
                         None => {
-                            this.handle_sort_clear(cx);
+                            this.handle_header_sort_off(cx);
                         }
                     },
                     DataTableEvent::SortKeysChanged(keys) => {

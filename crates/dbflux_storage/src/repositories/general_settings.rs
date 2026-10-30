@@ -834,6 +834,7 @@ mod tests {
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.grid_fk_labels, 1);
         assert_eq!(fetched.grid_copy_column_names, 1);
+        assert_eq!(fetched.grid_header_click_sorts, 0, "a column of its own");
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");
@@ -884,6 +885,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            grid_copy_column_names: 0,
             grid_header_click_sorts: 1,
             updated_at: String::new(),
         };
@@ -892,6 +894,7 @@ mod tests {
 
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.grid_header_click_sorts, 1);
+        assert_eq!(fetched.grid_copy_column_names, 0, "a column of its own");
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");

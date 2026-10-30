@@ -1977,6 +1977,8 @@ mod tests {
             (
                 "grid-copy-column-names",
                 "settings.general.grid_copy_column_names.label",
+            ),
+            (
                 "grid-header-click-sorts",
                 "settings.general.grid_header_click_sorts.label",
             ),

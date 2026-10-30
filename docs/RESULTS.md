@@ -75,6 +75,23 @@ column to its header and its loaded values, up to 640 pixels so one long JSON
 value does not push the rest of the grid off screen; a double-click on the
 resize edge at the header's right border does the same.
 
+**Hide column** takes the column off the screen, and **Columns…** lists every
+column with a check mark on the shown ones: `Enter`, `Space` or a click shows
+or hides the highlighted column while the list stays open, **Show all
+columns** brings every hidden one back, and `Escape` closes it. **Move left**
+and **Move right** move the column one place; dragging a header onto another
+header moves its column into that place.
+
+The query keeps reading every column (a table still runs `SELECT *`); to leave
+a column out of the query itself, use the query builder's projection. Copy,
+Copy as CSV and Copy as JSON follow the screen: the shown columns, in the order
+the grid shows them. Copy row, Copy as Query and Export use the whole row in
+the result's own order, hidden columns included. A table remembers its layout
+for its connection, database, schema and table, across closing it and
+restarting DBFlux; moving every column back to the table's own order with all
+of them shown forgets it. A query result keeps its layout while its tab is
+open. A document grid keeps the order of its fields and offers only Fit width.
+
 ## Value panel
 
 Right-click a cell and choose **View Value**, or press `v`, to open the cell

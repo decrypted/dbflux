@@ -1,6 +1,8 @@
 mod builder;
 mod chart;
 mod chrome;
+mod column_chooser;
+mod column_layout_store;
 pub(crate) mod context_menu;
 mod document_view;
 mod documents;
@@ -885,6 +887,8 @@ pub struct DataGridPanel {
     nearest: nearest_neighbors::NearestNeighborsUi,
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
+    /// The Columns chooser, while it is open.
+    column_chooser: Option<column_chooser::ColumnChooser>,
     is_active_tab: bool,
     /// The hosting document hands this grid's side panels (the chart stats
     /// rail) to the workspace through `side_panels`, so the grid does not
@@ -1476,6 +1480,7 @@ impl DataGridPanel {
             nearest,
             view_config,
             context_menu: None,
+            column_chooser: None,
             is_active_tab: true,
             side_panels_hosted: false,
             pending: PendingActions::default(),

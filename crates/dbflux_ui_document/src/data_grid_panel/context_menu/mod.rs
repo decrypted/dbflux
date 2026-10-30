@@ -230,10 +230,8 @@ impl DataGridPanel {
                 .map(|c| (c.row, c.col))
                 .unwrap_or((0, 0));
 
-            let widths = ts.column_widths();
-
-            // Calculate cell x position: sum of column widths up to col
-            let cell_x: f32 = widths.iter().take(col).sum();
+            // Left edge of the cell's column as the screen lays it out.
+            let cell_x = ts.column_left(col).unwrap_or(0.0);
 
             (row, col, cell_x, ts.horizontal_offset())
         };
@@ -746,6 +744,7 @@ impl DataGridPanel {
             .unwrap_or(false);
 
         if self.context_menu.is_some()
+            || self.column_chooser.is_some()
             || self.chrome.export_menu_open
             || self.collection.history_open
         {
@@ -1511,11 +1510,15 @@ impl DataGridPanel {
             .flat_map(|range| range.start.row..=range.end.row)
             .filter(|&row| row < self.result.rows.len())
             .collect();
-        let cols: BTreeSet<usize> = ranges
+        // Columns in the order the grid shows them, as the plain copy does.
+        let mut cols: Vec<usize> = ranges
             .iter()
             .flat_map(|range| range.start.col..=range.end.col)
             .filter(|&col| col < self.result.columns.len())
+            .collect::<BTreeSet<usize>>()
+            .into_iter()
             .collect();
+        selection.sort_by_screen_order(&mut cols);
 
         let columns = cols
             .iter()
@@ -2042,7 +2045,16 @@ impl DataGridPanel {
             ContextMenuAction::FindSimilarRows => {
                 self.find_similar_rows_at(menu.row, menu.col, cx);
             }
-            ContextMenuAction::FitColumnWidth => {
+            // The chooser takes the keyboard, so focus stays with it rather
+            // than going back to the grid.
+            ContextMenuAction::ChooseColumns => {
+                self.open_column_chooser(menu.position, window, cx);
+                return;
+            }
+            ContextMenuAction::FitColumnWidth
+            | ContextMenuAction::HideColumn
+            | ContextMenuAction::MoveColumnLeft
+            | ContextMenuAction::MoveColumnRight => {
                 self.handle_column_menu_action(action, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {

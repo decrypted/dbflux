@@ -1636,6 +1636,12 @@ document:
       column:
         title: Columna
         fit_width: Ajustar ancho
+        hide: Ocultar columna
+        choose: "Columnas…"
+        move_left: Mover a la izquierda
+        move_right: Mover a la derecha
+        chooser_title: Columnas
+        show_all: Mostrar todas las columnas
       generate_sql:
         title: Generar SQL
       toolbar:

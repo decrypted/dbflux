@@ -26,20 +26,66 @@ impl DataGridPanel {
         col: usize,
         cx: &App,
     ) -> Vec<ColumnMenuItem> {
-        let has_column = self
+        let Some(state) = self
             .grid_table
             .table_state
             .as_ref()
-            .is_some_and(|state| col < state.read(cx).col_count());
-        if !has_column {
+            .map(|state| state.read(cx))
+        else {
+            return Vec::new();
+        };
+        if col >= state.col_count() {
             return Vec::new();
         }
 
-        vec![ColumnMenuItem {
-            label: dbflux_i18n::t!("document.data.context_menu.column.fit_width"),
-            action: ContextMenuAction::FitColumnWidth,
-            icon: AppIcon::ArrowLeftRight,
-        }]
+        let item = |label: String, action, icon| ColumnMenuItem {
+            label,
+            action,
+            icon,
+        };
+        let mut items = vec![item(
+            dbflux_i18n::t!("document.data.context_menu.column.fit_width"),
+            ContextMenuAction::FitColumnWidth,
+            AppIcon::ArrowLeftRight,
+        )];
+        if !self.offers_column_layout(cx) {
+            return items;
+        }
+
+        let layout = state.column_layout();
+        let position = layout.view_position(col);
+        let shown = layout.visible_count();
+
+        // Entries that would do nothing are left out rather than disabled,
+        // so the keyboard never lands on a dead row.
+        if shown > 1 && position.is_some() {
+            items.push(item(
+                dbflux_i18n::t!("document.data.context_menu.column.hide"),
+                ContextMenuAction::HideColumn,
+                AppIcon::EyeOff,
+            ));
+        }
+        items.push(item(
+            dbflux_i18n::t!("document.data.context_menu.column.choose"),
+            ContextMenuAction::ChooseColumns,
+            AppIcon::Columns,
+        ));
+        if position.is_some_and(|position| position > 0) {
+            items.push(item(
+                dbflux_i18n::t!("document.data.context_menu.column.move_left"),
+                ContextMenuAction::MoveColumnLeft,
+                AppIcon::ChevronLeft,
+            ));
+        }
+        if position.is_some_and(|position| position + 1 < shown) {
+            items.push(item(
+                dbflux_i18n::t!("document.data.context_menu.column.move_right"),
+                ContextMenuAction::MoveColumnRight,
+                AppIcon::ChevronRight,
+            ));
+        }
+
+        items
     }
 
     /// Appends the Column section to the column header menu: a separator, its
@@ -91,9 +137,26 @@ impl DataGridPanel {
             return;
         };
 
-        if action == ContextMenuAction::FitColumnWidth {
-            table_state.update(cx, |state, cx| state.fit_column_width(col, cx));
-        }
+        table_state.update(cx, |state, cx| {
+            let moved = match action {
+                ContextMenuAction::FitColumnWidth => {
+                    state.fit_column_width(col, cx);
+                    false
+                }
+                ContextMenuAction::HideColumn => {
+                    state.hide_column(col, cx);
+                    false
+                }
+                ContextMenuAction::MoveColumnLeft => state.move_column_by(col, -1, cx),
+                ContextMenuAction::MoveColumnRight => state.move_column_by(col, 1, cx),
+                _ => false,
+            };
+
+            // A moved column can leave the viewport; follow it.
+            if moved {
+                state.scroll_to_column(col);
+            }
+        });
     }
 
     /// Opens the column header menu of the active cell's column, under its

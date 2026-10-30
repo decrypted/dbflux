@@ -46,18 +46,40 @@ pub(super) fn selection_totals_label(totals: &SelectionTotals) -> String {
 
     // The average is over the numbers only, so say what it left out.
     if totals.nulls > 0 {
-        parts.push(dbflux_i18n::t!(
-            "document.data.grid.status.selection.nulls_skipped",
-            count = totals.nulls
-        ));
+        parts.push(skipped_label(totals.nulls, SkippedKind::Null));
     }
     let non_numeric = totals.non_numeric();
     if non_numeric > 0 {
-        parts.push(dbflux_i18n::t!(
-            "document.data.grid.status.selection.non_numeric_skipped",
-            count = non_numeric
-        ));
+        parts.push(skipped_label(non_numeric, SkippedKind::NonNumeric));
     }
 
     parts.join(" · ")
+}
+
+enum SkippedKind {
+    Null,
+    NonNumeric,
+}
+
+/// The singular catalog bucket for exactly one skipped cell, the plural one
+/// for every other count, as `pending_change_count_label` does.
+fn skipped_label(count: usize, kind: SkippedKind) -> String {
+    match (kind, count == 1) {
+        (SkippedKind::Null, true) => dbflux_i18n::t!(
+            "document.data.grid.status.selection.nulls_skipped.one",
+            count = count
+        ),
+        (SkippedKind::Null, false) => dbflux_i18n::t!(
+            "document.data.grid.status.selection.nulls_skipped.many",
+            count = count
+        ),
+        (SkippedKind::NonNumeric, true) => dbflux_i18n::t!(
+            "document.data.grid.status.selection.non_numeric_skipped.one",
+            count = count
+        ),
+        (SkippedKind::NonNumeric, false) => dbflux_i18n::t!(
+            "document.data.grid.status.selection.non_numeric_skipped.many",
+            count = count
+        ),
+    }
 }

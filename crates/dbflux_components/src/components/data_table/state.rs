@@ -72,6 +72,11 @@ pub struct DataTableState {
     /// Current sort state.
     sort: Option<SortState>,
 
+    /// Whether a header offers the sort arrow. A host that keeps rows in
+    /// source order (a file opened as a table) turns it off rather than
+    /// undoing every sort it receives.
+    sortable: bool,
+
     /// Viewport size (updated on layout).
     viewport_size: Size<Pixels>,
 
@@ -196,6 +201,7 @@ impl DataTableState {
             auto_width_metrics,
             column_offsets,
             sort: None,
+            sortable: true,
             viewport_size: Size::default(),
             selection: SelectionState::new(),
             focus_handle: cx.focus_handle(),
@@ -621,6 +627,14 @@ impl DataTableState {
 
     pub fn sort(&self) -> Option<&SortState> {
         self.sort.as_ref()
+    }
+
+    pub fn is_sortable(&self) -> bool {
+        self.sortable
+    }
+
+    pub fn set_sortable(&mut self, sortable: bool) {
+        self.sortable = sortable;
     }
 
     pub fn set_sort(&mut self, sort: Option<SortState>, cx: &mut Context<Self>) {

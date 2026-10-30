@@ -43,6 +43,7 @@ pub(super) enum GeneralFormRow {
     GridFkLabels,
     GridPkSortDesc,
     GridReviewBeforeSave,
+    GridCopyColumnNames,
     GridHeaderClickSorts,
     RestoreSession,
     ReopenConnections,
@@ -1982,6 +1983,10 @@ mod tests {
             (
                 "grid-review-before-save",
                 "settings.general.grid_review_before_save.label",
+            ),
+            (
+                "grid-copy-column-names",
+                "settings.general.grid_copy_column_names.label",
             ),
             (
                 "grid-header-click-sorts",

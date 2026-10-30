@@ -75,6 +75,27 @@ esa columna: ordenar ascendente o descendente, quitar el orden y todos los
 operadores de filtro, en una sola lista plana. El clic izquierdo en la
 cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic, `Cmd`+clic en macOS, la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada. Con **Hacer clic en la cabecera de una columna la ordena** activado (Settings > General > Data grid), un clic normal en la cabecera la ordena, como la flecha.
 
+Para ordenar por varias columnas, haz `Alt`+clic en la flecha de otra columna:
+pasa a ser la siguiente clave de orden, ascendente, y otro `Alt`+clic la vuelve
+descendente y después la quita del orden. Con más de una clave, cada cabecera
+ordenada muestra su posición (1, 2, 3) junto a la flecha, y las filas que
+empatan en la primera clave se ordenan por la segunda, y así sucesivamente. Un
+clic normal en cualquier flecha vuelve a ordenar solo por esa columna, en la
+dirección que ya tenía si era clave. Una tabla cuya clave primaria tiene varias
+columnas se abre ordenada por todas ellas, así que sus columnas clave muestran 1
+y 2 desde el principio. Algunos escritorios Linux (KDE Plasma, por ejemplo)
+usan `Alt`+clic para mover ventanas; ahí **Añadir al orden** del menú de la
+columna hace lo mismo, o se puede cambiar el modificador del gestor de
+ventanas. El menú
+de la columna ofrece lo mismo con **Añadir al orden: columna ASC** y **Añadir
+al orden: columna DESC**, que también cambian la dirección de una columna que ya
+es clave, y **Quitar orden** elimina todas las claves. Una tabla envía todas las
+claves a la base de datos en un único `ORDER BY`; un resultado de consulta se
+ordena en memoria. En una tabla que sigue en su orden por defecto (su clave
+primaria), la primera clave añadida sustituye ese orden, porque las filas
+ordenadas primero por la clave primaria no dejan empates que otra columna pueda
+ordenar; quitar el orden vuelve al orden por defecto.
+
 ## Panel de valor
 
 Haz clic derecho en una celda y elige **Ver valor**, o pulsa `v`, para abrir la
@@ -329,10 +350,39 @@ pero fuera de la selección queda vacía en CSV y `null` en JSON. Las copias
 siguen lo que muestra la cuadrícula: una edición sin guardar se copia con su
 valor nuevo y una fila añadida aún sin guardar, en su lugar. En JSON, las
 columnas con el mismo nombre (`a.id` y `b.id` de un join) comparten una clave,
-que toma el valor de la última. **Copiar** (`Ctrl+c`) sigue copiando texto
-separado por tabulaciones sin cabecera.
+que toma el valor de la última. **Copiar** (`Ctrl+c`) copia texto separado por
+tabulaciones, también con las ediciones y filas añadidas sin guardar, sin
+cabecera salvo que **Incluir los nombres de columna al copiar** esté activado en
+Ajustes → General → Cuadrícula de datos, que lo empieza con una línea con los
+nombres de las columnas copiadas.
 `Ctrl+Alt+c` (`Cmd+Alt+c` en macOS) ejecuta **Copiar como JSON** desde el
 teclado; el menú lo muestra junto a la entrada.
+
+Debajo, el menú tiene tres extractores más:
+
+- **Copiar como lista IN de SQL** copia los valores seleccionados de una
+  columna como lista para un `WHERE ... IN`, por ejemplo `('a', 'O''Brien')` o
+  `(1, 2, 3)`, con las comillas que usa el driver de la conexión (comillas ANSI
+  en un resultado sin conexión). Un valor seleccionado varias veces aparece una
+  sola vez y `NULL` se omite, porque `IN (NULL)` no coincide con nada; una
+  selección que solo tiene NULL no copia nada y lo avisa. Con varias columnas
+  seleccionadas usa la de más a la izquierda. El menú de una colección no la
+  ofrece.
+- **Copiar como sentencias INSERT**, en una tabla, copia un `INSERT` por cada
+  fila seleccionada con las columnas seleccionadas, escrito por el mismo
+  generador del driver que **Copiar como query**. Cada fila aporta sus propios
+  valores para esas columnas, aunque una celda dentro del área no esté
+  seleccionada, y una fila con un valor que el driver no puede escribir se
+  omite. No se ofrece en filas agrupadas ni en un join del constructor de
+  consultas, cuyas columnas no son todas de la tabla.
+- **Copiar como tabla Markdown** copia las mismas filas y columnas que Copiar
+  como CSV como una tabla Markdown con fila de cabecera; las celdas `NULL` y
+  las no seleccionadas quedan vacías, los bytes se escriben en hexadecimal
+  `\x` y los arrays y documentos como JSON, y `|`, `&`, `<` y los saltos de
+  línea dentro de los valores se escapan.
+
+Los tres copian lo que muestra la cuadrícula, como Copiar como CSV: una edición
+sin guardar con su valor nuevo y una fila añadida aún sin guardar, en su lugar.
 
 ## Copiar como query
 

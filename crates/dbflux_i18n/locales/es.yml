@@ -1642,6 +1642,9 @@ document:
         copy: Copiar
         copy_as_csv: "Copiar como CSV"
         copy_as_json: "Copiar como JSON"
+        copy_as_sql_in_list: "Copiar como lista IN de SQL"
+        copy_as_insert_statements: "Copiar como sentencias INSERT"
+        copy_as_markdown: "Copiar como tabla Markdown"
         view_document: Ver documento
         add_document: Agregar documento
         duplicate_document: Duplicar documento
@@ -1680,6 +1683,7 @@ document:
       order:
         title: Orden
         remove: Quitar orden
+        add_to_sort: "Añadir al orden: %{column}"
       generate_sql:
         title: Generar SQL
       toolbar:
@@ -1754,6 +1758,7 @@ document:
           copied_rows:
             one: "Se copió 1 fila cargada como %{format} (%{bytes} bytes) al portapapeles"
             many: "Se copiaron %{count} filas cargadas como %{format} (%{bytes} bytes) al portapapeles"
+          in_list_only_nulls: "No se copió nada: todos los valores seleccionados son NULL y una lista SQL IN no coincide con NULL"
       document:
         toast:
           inserted: Documento insertado
@@ -4190,6 +4195,9 @@ settings:
     grid_pk_sort_desc:
       label: "Ordenar las tablas por clave primaria descendente"
       hint: "Las tablas se abren ordenadas por su clave primaria de forma descendente, así con una clave autoincremental las filas más recientes aparecen primero. Se aplica a las tablas abiertas después de guardar y, en las tablas ya abiertas, al quitar el orden de una columna. Un clic en el encabezado de la columna clave desde este orden la ordena de forma ascendente."
+    grid_copy_column_names:
+      label: "Incluir los nombres de columna al copiar"
+      hint: "Copiar (Ctrl+C, Cmd+C en macOS) en la cuadrícula de datos empieza el texto separado por tabulaciones con una línea de nombres de columna. Copiar como CSV, JSON y las demás entradas Copiar como no cambian."
     grid_header_click_sorts:
       label: "Hacer clic en la cabecera de una columna la ordena"
       hint: "Desactivado: un clic en la cabecera de una columna selecciona la columna entera y la flecha de su borde derecho ordena. Activado: el clic ordena la columna; Shift+clic y Ctrl+clic siguen seleccionando columnas."

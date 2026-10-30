@@ -927,6 +927,9 @@ impl GridMetrics {
     pub const TYPE_FONT: Pixels = px(10.5);
     /// PK / FK key icon and sort arrow in the header. (12 px)
     pub const HEADER_ICON: Pixels = px(12.0);
+    /// The order number beside a header's sort arrow under a multi-column
+    /// sort. (9 px)
+    pub const SORT_RANK_FONT: Pixels = px(9.0);
     /// Gap between the parts of a header cell. (6 px)
     pub const HEADER_GAP: Pixels = px(6.0);
     /// Alpha of the tint wash behind the focused and selected cells.

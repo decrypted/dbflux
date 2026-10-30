@@ -1,4 +1,4 @@
-use super::model::{CellKind, CellValue, TableModel};
+use super::model::{CellKind, CellValue, ColumnSpec, TableModel};
 use super::selection::{CellCoord, SelectionState};
 
 /// Format a single cell value for clipboard (TSV compatible).
@@ -49,14 +49,26 @@ pub fn copy_row(model: &TableModel, row: usize) -> Option<String> {
 /// the selection inside that grid is left empty. For one range this is the
 /// range itself.
 pub fn copy_selection(model: &TableModel, selection: &SelectionState) -> Option<String> {
-    copy_selection_with(selection, |row, col| model.cell(row, col))
+    copy_selection_with(selection, None, |row, col| model.cell(row, col))
+}
+
+/// `copy_selection` led by a line with the titles of the copied columns.
+pub fn copy_selection_with_column_names(
+    model: &TableModel,
+    selection: &SelectionState,
+) -> Option<String> {
+    copy_selection_with(selection, Some(model.columns.as_slice()), |row, col| {
+        model.cell(row, col)
+    })
 }
 
 /// [`copy_selection`] with the cell at each visual position looked up by
 /// `cell`, for a table whose shown rows are not the model's rows one to one
-/// (pending inserts, unsaved edits).
+/// (pending inserts, unsaved edits). With `header` the text starts with a
+/// line of the copied columns' titles.
 pub fn copy_selection_with<'a>(
     selection: &SelectionState,
+    header: Option<&[ColumnSpec]>,
     cell: impl Fn(usize, usize) -> Option<&'a CellValue>,
 ) -> Option<String> {
     let ranges = selection.ranges();
@@ -72,21 +84,32 @@ pub fn copy_selection_with<'a>(
         .flat_map(|range| range.start.col..=range.end.col)
         .collect();
 
-    let lines: Vec<String> = rows
-        .iter()
-        .map(|&row| {
+    let mut lines = Vec::with_capacity(rows.len() + 1);
+    if let Some(columns) = header {
+        lines.push(
             cols.iter()
                 .map(|&col| {
-                    if selection.is_selected(CellCoord::new(row, col)) {
-                        cell(row, col).map(format_cell).unwrap_or_default()
-                    } else {
-                        String::new()
-                    }
+                    columns
+                        .get(col)
+                        .map(|column| escape_tsv(&column.title))
+                        .unwrap_or_default()
                 })
                 .collect::<Vec<_>>()
-                .join("\t")
-        })
-        .collect();
+                .join("\t"),
+        );
+    }
+    lines.extend(rows.iter().map(|&row| {
+        cols.iter()
+            .map(|&col| {
+                if selection.is_selected(CellCoord::new(row, col)) {
+                    cell(row, col).map(format_cell).unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\t")
+    }));
 
     Some(lines.join("\n"))
 }
@@ -125,6 +148,46 @@ mod tests {
     fn test_escape_tsv() {
         assert_eq!(escape_tsv("hello\tworld"), "hello world");
         assert_eq!(escape_tsv("line1\nline2"), "line1 line2");
+    }
+
+    #[test]
+    fn copy_with_column_names_leads_with_the_copied_titles() {
+        use super::super::model::{ColumnKind, ColumnSpec, RowData};
+
+        let columns = ["id", "name", "city"]
+            .into_iter()
+            .map(|name| ColumnSpec {
+                id: name.into(),
+                title: name.into(),
+                kind: ColumnKind::Text,
+                align: gpui::TextAlign::Left,
+                type_name: "text".into(),
+            })
+            .collect();
+        let rows = (0..3)
+            .map(|i| RowData {
+                cells: vec![
+                    CellValue::int(i),
+                    CellValue::text(&format!("row{i}")),
+                    CellValue::text("Oslo"),
+                ],
+            })
+            .collect();
+        let model = TableModel::new(columns, rows);
+
+        let mut selection = SelectionState::new();
+        selection.select_cell(CellCoord::new(0, 1));
+        selection.extend_to(CellCoord::new(1, 2));
+
+        assert_eq!(
+            copy_selection_with_column_names(&model, &selection).as_deref(),
+            Some("name\tcity\nrow0\tOslo\nrow1\tOslo")
+        );
+        assert_eq!(
+            copy_selection(&model, &selection).as_deref(),
+            Some("row0\tOslo\nrow1\tOslo"),
+            "the plain copy stays values only"
+        );
     }
 
     #[test]

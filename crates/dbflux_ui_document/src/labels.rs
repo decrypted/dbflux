@@ -2414,6 +2414,12 @@ pub(crate) fn context_menu_clipboard_copied_rows_toast(
     }
 }
 
+/// Toast text when Copy as SQL IN list finds only NULL values and leaves the
+/// clipboard as it was.
+pub(crate) fn copy_as_in_list_only_nulls_toast() -> String {
+    dbflux_i18n::t!("document.data.context_menu.clipboard.toast.in_list_only_nulls")
+}
+
 /// Tasks panel label of an "Export all rows" run.
 pub(crate) fn export_all_rows_task_label(table: &str) -> String {
     dbflux_i18n::t!("document.data.grid.export.all.task", table = table)

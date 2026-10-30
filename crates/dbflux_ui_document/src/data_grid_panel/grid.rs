@@ -221,20 +221,11 @@ impl DataGridPanel {
             pk_indices,
         );
 
-        // When a builder binding is present, respect its `insertable` flag to
-        // prevent INSERT on join results (column origin is ambiguous).
-        let binding_insertable = self
-            .builder
-            .builder_editable_binding
-            .as_ref()
-            .map(|b| b.insertable)
-            .unwrap_or(true);
-
         let is_insertable = matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
         ) && self.mutations_enabled()
-            && (self.builder.current_visual_spec.is_none() || binding_insertable)
+            && self.builder_rows_insertable()
             && !stepped_into;
 
         let column_details = self.get_column_details(cx);
@@ -353,6 +344,7 @@ impl DataGridPanel {
             if let Some(sort) = initial_sort {
                 state.set_sort_without_emit(sort);
             }
+            state.set_multi_sort_enabled(true);
             if read_only_keys {
                 state.set_read_only_pk_columns(pk_indices.clone());
             } else {
@@ -395,6 +387,9 @@ impl DataGridPanel {
                             this.handle_header_sort_off(cx);
                         }
                     },
+                    DataTableEvent::SortKeysChanged(keys) => {
+                        this.handle_sort_keys_request(keys, cx);
+                    }
                     DataTableEvent::Focused => {
                         cx.emit(DataGridEvent::Focused);
                     }
@@ -548,19 +543,53 @@ impl DataGridPanel {
         self.rebuild_result_views(cx);
     }
 
+    /// Whether rows shown by the query builder can go into the panel's table
+    /// as INSERTs: always without a builder query, and with one only when its
+    /// binding allows it, which a join does not (its columns come from more
+    /// than one table). A builder query with no binding (no key known) has
+    /// no join to rule it out and counts as insertable. Shared by the grid's
+    /// Add row and the menu's Copy as INSERT statements.
+    pub(super) fn builder_rows_insertable(&self) -> bool {
+        let Some(spec) = &self.builder.current_visual_spec else {
+            return true;
+        };
+
+        spec.joins.is_empty()
+            && self
+                .builder
+                .builder_editable_binding
+                .as_ref()
+                .is_none_or(|binding| binding.insertable)
+    }
+
+    /// The footer's sort item: a label naming every sort key, the first
+    /// key's direction for its arrow, and whether the database sorts.
     pub(super) fn current_sort_info(&self) -> Option<(String, SortDirection, bool)> {
-        match &self.source {
-            DataSource::Table { order_by, .. } => order_by
-                .first()
-                .map(|col| (col.column.name.clone(), col.direction, true)),
-            DataSource::Collection { .. } => None,
-            DataSource::QueryResult { .. } => self.grid_table.local_sort_state.and_then(|state| {
-                self.result
-                    .columns
-                    .get(state.column_ix)
-                    .map(|col| (col.name.clone(), state.direction, false))
-            }),
-        }
+        let (keys, is_server): (Vec<(String, SortDirection)>, bool) = match &self.source {
+            DataSource::Table { order_by, .. } => (
+                order_by
+                    .iter()
+                    .map(|col| (col.column.name.clone(), col.direction))
+                    .collect(),
+                true,
+            ),
+            DataSource::Collection { .. } => return None,
+            DataSource::QueryResult { .. } => (
+                self.local_sort_keys()
+                    .iter()
+                    .filter_map(|key| {
+                        self.result
+                            .columns
+                            .get(key.column_ix)
+                            .map(|col| (col.name.clone(), key.direction))
+                    })
+                    .collect(),
+                false,
+            ),
+        };
+
+        let first_direction = keys.first()?.1;
+        Some((sort_keys_label(&keys), first_direction, is_server))
     }
 
     /// Returns `(inserts, updates, deletes)` counts from the pending edit buffer.
@@ -615,4 +644,23 @@ impl DataGridPanel {
 
         true
     }
+}
+
+/// One key reads as its column name. Several name every column with its
+/// direction, since the footer arrow shows the first key's only.
+fn sort_keys_label(keys: &[(String, SortDirection)]) -> String {
+    if let [(name, _)] = keys {
+        return name.clone();
+    }
+
+    keys.iter()
+        .map(|(name, direction)| {
+            let direction = match direction {
+                SortDirection::Ascending => "ASC",
+                SortDirection::Descending => "DESC",
+            };
+            format!("{name} {direction}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }

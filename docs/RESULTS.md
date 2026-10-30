@@ -68,7 +68,25 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does.
+list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does, and `Alt`+click on the header adds a sort key as on the arrow.
+
+To sort by several columns, `Alt`+click the arrow of another column: it becomes
+the next sort key, ascending, and a further `Alt`+click turns it descending and
+then takes it out of the sort. With more than one key, each sorted header shows
+its place (1, 2, 3) next to the arrow, and rows that tie on the first key are
+ordered by the second, and so on. A plain click on any arrow sorts by that
+column alone again, in the direction it already had when it was a key. A table
+whose primary key has several columns opens sorted by all of them, so its key
+columns show 1 and 2 from the start. Some Linux desktops (KDE Plasma, for one)
+take `Alt`+click for moving windows; there the column menu's **Add to sort**
+does the same, or the window manager's modifier can be changed. The column menu offers the same as **Add to sort: column
+ASC** and **Add to sort: column DESC**, which also change the direction of a
+column that is already a key, and **Remove ordering** drops every key. A table
+sends all keys to the database as one `ORDER BY`; a query result is sorted in
+memory. On a table still in its default order (its primary key), the first
+added key replaces that order, since rows sorted by the primary key first have
+no ties left for another column to order; removing the ordering returns to the
+default order.
 
 ## Value panel
 
@@ -305,10 +323,36 @@ cell inside that area but outside the selection is empty in CSV and `null` in
 JSON. The copies follow what the grid shows: an unsaved edit is copied with
 its new value and an added row that is not saved yet at its place. In JSON,
 columns that share a name (`a.id` and `b.id` of a join) share one key, which
-takes the value of the last of them. Plain **Copy** (`Ctrl+c`) still copies
-tab-separated text without a header.
+takes the value of the last of them. Plain **Copy** (`Ctrl+c`) copies
+tab-separated text, also with unsaved edits and added rows, without a header
+unless **Include column names when copying** is on in Settings → General →
+Data grid, which starts it with a line of the copied columns' names.
 `Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
 the menu shows it next to the item.
+
+Below them the menu has three more extractors:
+
+- **Copy as SQL IN list** copies the selected values of one column as a list
+  for a `WHERE ... IN`, such as `('a', 'O''Brien')` or `(1, 2, 3)`, quoted the
+  way the connection's driver writes literals (ANSI quoting for a result
+  without a connection). A value selected more than once is listed once and
+  `NULL` is left out, since `IN (NULL)` matches nothing; a selection of NULLs
+  alone copies nothing and says so. With several columns selected it lists the
+  leftmost one. A collection's menu does not offer it.
+- **Copy as INSERT statements**, on a table, copies one `INSERT` per selected
+  row with the selected columns, written by the same driver generator as
+  **Copy as Query**. Each row gives its own values for those columns, even
+  where a cell inside the selected area is not itself selected, and a row
+  holding a value the driver cannot write is left out. It is not offered on
+  grouped rows or on a query builder join, whose columns are not all the
+  table's.
+- **Copy as Markdown table** copies the same rows and columns as Copy as CSV as
+  a Markdown table with a header row; `NULL` and unselected cells are empty,
+  bytes are written as `\x` hex and arrays and documents as JSON, and `|`,
+  `&`, `<` and line breaks inside values are escaped.
+
+All three copy what the grid shows, as Copy as CSV does: an unsaved edit with
+its new value and a row added in the grid and not saved yet at its place.
 
 ## Copy as Query
 

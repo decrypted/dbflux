@@ -1642,6 +1642,9 @@ document:
         copy: Copy
         copy_as_csv: "Copy as CSV"
         copy_as_json: "Copy as JSON"
+        copy_as_sql_in_list: "Copy as SQL IN list"
+        copy_as_insert_statements: "Copy as INSERT statements"
+        copy_as_markdown: "Copy as Markdown table"
         view_document: View document
         add_document: Add document
         duplicate_document: Duplicate document
@@ -1680,6 +1683,7 @@ document:
       order:
         title: Order
         remove: Remove ordering
+        add_to_sort: "Add to sort: %{column}"
       generate_sql:
         title: Generate SQL
       toolbar:
@@ -1754,6 +1758,7 @@ document:
           copied_rows:
             one: "Copied 1 loaded row as %{format} (%{bytes} bytes) to clipboard"
             many: "Copied %{count} loaded rows as %{format} (%{bytes} bytes) to clipboard"
+          in_list_only_nulls: "Nothing copied: the selected values are all NULL, and an SQL IN list never matches NULL"
       document:
         toast:
           inserted: Document inserted
@@ -4190,6 +4195,9 @@ settings:
     grid_pk_sort_desc:
       label: "Sort tables by primary key descending"
       hint: "Tables open ordered by their primary key descending, so with an auto-increment key the latest rows come first. Applies to tables opened after saving and, in open tables, to clearing a column sort. A click on the key column's header from this order sorts it ascending."
+    grid_copy_column_names:
+      label: "Include column names when copying"
+      hint: "Copy (Ctrl+C, Cmd+C on macOS) from the data grid starts the tab-separated text with a line of column names. Copy as CSV, JSON and the other Copy as entries are not affected."
     grid_header_click_sorts:
       label: "Clicking a column header sorts the column"
       hint: "Off: a click on a column header selects the whole column and the arrow at its right edge sorts. On: the click sorts the column; Shift+click and Ctrl+click still select columns."

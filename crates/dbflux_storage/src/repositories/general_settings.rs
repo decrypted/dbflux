@@ -43,7 +43,7 @@ impl GeneralSettingsRepository {
                        ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        table_alias_completion, table_alias_use_as,
-                       grid_fk_labels, grid_pk_sort_desc, grid_header_click_sorts, grid_review_before_save,
+                       grid_fk_labels, grid_pk_sort_desc, grid_copy_column_names, grid_review_before_save, grid_header_click_sorts,
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -89,9 +89,10 @@ impl GeneralSettingsRepository {
                 table_alias_use_as: row.get(31)?,
                 grid_fk_labels: row.get(32)?,
                 grid_pk_sort_desc: row.get(33)?,
-                grid_review_before_save: row.get(34)?,
-                grid_header_click_sorts: row.get(35)?,
-                updated_at: row.get(36)?,
+                grid_copy_column_names: row.get(34)?,
+                grid_review_before_save: row.get(35)?,
+                grid_header_click_sorts: row.get(36)?,
+                updated_at: row.get(37)?,
             })
         });
 
@@ -123,9 +124,9 @@ impl GeneralSettingsRepository {
                     ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     table_alias_completion, table_alias_use_as,
-                    grid_fk_labels, grid_pk_sort_desc, grid_header_click_sorts, grid_review_before_save,
+                    grid_fk_labels, grid_pk_sort_desc, grid_copy_column_names, grid_review_before_save, grid_header_click_sorts,
                     updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, datetime('now'))
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -160,6 +161,7 @@ impl GeneralSettingsRepository {
                     table_alias_use_as = excluded.table_alias_use_as,
                     grid_fk_labels = excluded.grid_fk_labels,
                     grid_pk_sort_desc = excluded.grid_pk_sort_desc,
+                    grid_copy_column_names = excluded.grid_copy_column_names,
                     grid_review_before_save = excluded.grid_review_before_save,
                     grid_header_click_sorts = excluded.grid_header_click_sorts,
                     updated_at = datetime('now')
@@ -198,6 +200,7 @@ impl GeneralSettingsRepository {
                     settings.table_alias_use_as,
                     settings.grid_fk_labels,
                     settings.grid_pk_sort_desc,
+                    settings.grid_copy_column_names,
                     settings.grid_review_before_save,
                     settings.grid_header_click_sorts,
                 ],
@@ -277,6 +280,7 @@ pub struct GeneralSettingsDto {
     pub grid_fk_labels: i32,
     /// Whether tables open ordered by primary key descending: 1 on, 0 off.
     pub grid_pk_sort_desc: i32,
+    pub grid_copy_column_names: i32,
     /// Whether Save shows the statements it runs first: 1 on, 0 off.
     pub grid_review_before_save: i32,
     /// 1 when a column header click sorts instead of selecting the column.
@@ -349,6 +353,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             grid_pk_sort_desc: 0,
+            grid_copy_column_names: 0,
             grid_review_before_save: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
@@ -414,6 +419,7 @@ mod tests {
                 table_alias_use_as: 0,
                 grid_fk_labels: 0,
                 grid_pk_sort_desc: 0,
+                grid_copy_column_names: 0,
                 grid_review_before_save: 0,
                 grid_header_click_sorts: 0,
                 updated_at: String::new(),
@@ -499,6 +505,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             grid_pk_sort_desc: 0,
+            grid_copy_column_names: 0,
             grid_review_before_save: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
@@ -606,6 +613,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             grid_pk_sort_desc: 0,
+            grid_copy_column_names: 0,
             grid_review_before_save: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
@@ -665,6 +673,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             grid_pk_sort_desc: 0,
+            grid_copy_column_names: 0,
             grid_review_before_save: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
@@ -756,6 +765,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             grid_pk_sort_desc: 0,
+            grid_copy_column_names: 0,
             grid_review_before_save: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
@@ -837,6 +847,9 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 1,
             grid_pk_sort_desc: 1,
+            grid_copy_column_names: 0,
+            grid_review_before_save: 0,
+            grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
 
@@ -895,6 +908,8 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            grid_pk_sort_desc: 0,
+            grid_copy_column_names: 0,
             grid_review_before_save: 1,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
@@ -956,6 +971,8 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            grid_pk_sort_desc: 0,
+            grid_copy_column_names: 0,
             grid_review_before_save: 0,
             grid_header_click_sorts: 1,
             updated_at: String::new(),

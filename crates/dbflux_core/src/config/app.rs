@@ -424,6 +424,10 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub grid_review_before_save: bool,
 
+    /// Start a plain copy from the data grid (Ctrl+C, tab-separated) with a
+    /// line of column names. Off by default, which keeps values only.
+    #[serde(default)]
+    pub grid_copy_column_names: bool,
     /// A primary click on a column header sorts the column, as before column
     /// selection. Off by default: the click selects the column and the
     /// header's arrow sorts.
@@ -561,6 +565,7 @@ impl Default for GeneralSettings {
             grid_fk_labels: false,
             grid_pk_sort_desc: false,
             grid_review_before_save: false,
+            grid_copy_column_names: false,
             grid_header_click_sorts: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
@@ -590,6 +595,7 @@ mod font_settings_tests {
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
         assert!(!legacy.grid_fk_labels);
         assert!(!legacy.grid_review_before_save);
+        assert!(!legacy.grid_copy_column_names);
         assert!(!legacy.grid_header_click_sorts);
         assert_eq!(legacy, settings);
     }

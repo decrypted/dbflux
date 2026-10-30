@@ -54,6 +54,7 @@ impl GeneralSection {
             current.grid_fk_labels != saved.grid_fk_labels,
             current.grid_pk_sort_desc != saved.grid_pk_sort_desc,
             current.grid_review_before_save != saved.grid_review_before_save,
+            current.grid_copy_column_names != saved.grid_copy_column_names,
             current.grid_header_click_sorts != saved.grid_header_click_sorts,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
@@ -131,6 +132,7 @@ impl GeneralSection {
             GeneralFormRow::GridFkLabels,
             GeneralFormRow::GridPkSortDesc,
             GeneralFormRow::GridReviewBeforeSave,
+            GeneralFormRow::GridCopyColumnNames,
             GeneralFormRow::GridHeaderClickSorts,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
@@ -293,6 +295,11 @@ impl GeneralSection {
             Some(GeneralFormRow::GridReviewBeforeSave) => {
                 self.gen_settings.grid_review_before_save =
                     !self.gen_settings.grid_review_before_save;
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridCopyColumnNames) => {
+                self.gen_settings.grid_copy_column_names =
+                    !self.gen_settings.grid_copy_column_names;
                 cx.notify();
             }
             Some(GeneralFormRow::GridHeaderClickSorts) => {
@@ -1062,6 +1069,17 @@ impl GeneralSection {
                 self.gen_settings.grid_review_before_save,
                 GeneralFormRow::GridReviewBeforeSave,
                 |this, value, _cx| this.gen_settings.grid_review_before_save = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-copy-column-names",
+                dbflux_i18n::t!("settings.general.grid_copy_column_names.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.grid_copy_column_names.hint"
+                )),
+                self.gen_settings.grid_copy_column_names,
+                GeneralFormRow::GridCopyColumnNames,
+                |this, value, _cx| this.gen_settings.grid_copy_column_names = value,
                 cx,
             ))
             .child(self.render_gen_checkbox(

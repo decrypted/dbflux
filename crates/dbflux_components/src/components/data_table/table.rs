@@ -18,7 +18,7 @@ use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
 
 use super::document::DocumentPresentation;
-use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge};
+use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge, SortState};
 use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
 use super::state::DataTableState;
@@ -783,7 +783,8 @@ impl DataTable {
         cx: &gpui::App,
     ) -> impl IntoElement {
         let model = state.model();
-        let sort = state.sort();
+        let sort_keys = state.sort_keys();
+        let rank_font_size = fonts::grid_px(cx, GridMetrics::SORT_RANK_FONT);
         let sortable = state.is_sortable();
         let font_size = fonts::grid_font_size(cx);
         let type_font_size = fonts::grid_type_font_size(cx);
@@ -803,9 +804,8 @@ impl DataTable {
             .enumerate()
             .map(|(col_ix, col_spec)| {
                 let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
-                let sort_direction = sort
-                    .filter(|sort| sort.column_ix == col_ix)
-                    .map(|sort| sort.direction);
+                let sort_direction = sort_direction_of(&sort_keys, col_ix);
+                let sort_rank = state.sort_rank(col_ix);
 
                 let is_pk = pk_cols.contains(&col_ix);
                 let is_fk = fk_cols.contains(&col_ix);
@@ -906,6 +906,8 @@ impl DataTable {
                             state_entity.clone(),
                             col_ix,
                             sort_direction,
+                            sort_rank,
+                            rank_font_size,
                             ChromeColors::tint(theme),
                             theme.muted_foreground,
                         ))
@@ -1006,7 +1008,8 @@ impl DataTable {
         let model = state.model();
         let column_widths = state.column_widths();
         let h_offset = state.horizontal_offset();
-        let sort = state.sort();
+        let sort_keys = state.sort_keys();
+        let rank_font_size = fonts::grid_px(cx, GridMetrics::SORT_RANK_FONT);
         let sortable = state.is_sortable();
         let tint = ChromeColors::tint(theme);
         let strong = ChromeColors::strong(theme);
@@ -1079,9 +1082,8 @@ impl DataTable {
                 let header = document.header(col_ix);
                 let is_child = header.is_some_and(|header| header.group.is_some());
                 let presence = header.and_then(|header| header.presence);
-                let sort_direction = sort
-                    .filter(|sort| sort.column_ix == col_ix)
-                    .map(|sort| sort.direction);
+                let sort_direction = sort_direction_of(&sort_keys, col_ix);
+                let sort_rank = state.sort_rank(col_ix);
                 let state_for_click = self.state.clone();
                 let state_for_menu = self.state.clone();
                 let state_for_sort = self.state.clone();
@@ -1115,6 +1117,8 @@ impl DataTable {
                             state_for_sort.clone(),
                             col_ix,
                             sort_direction,
+                            sort_rank,
+                            rank_font_size,
                             tint,
                             muted,
                         ))
@@ -2006,14 +2010,28 @@ fn drag_autoscroll_listener(state: Entity<DataTableState>, row_height: Pixels) -
     .size_full()
 }
 
+fn sort_direction_of(sort_keys: &[SortState], col_ix: usize) -> Option<SortDirection> {
+    sort_keys
+        .iter()
+        .find(|key| key.column_ix == col_ix)
+        .map(|key| key.direction)
+}
+
 /// The sort control at the right edge of a column header: the current
-/// direction, or a faint up/down arrow while the column is not sorted. A press
+/// direction, or a faint up/down arrow while the column is not sorted. A click
 /// cycles the sort and stops there, so it does not reach the header, whose
 /// click selects the column.
+///
+/// Alt+click adds the column as the next sort key instead, as in DataGrip:
+/// Shift and Ctrl/Cmd already extend and toggle the column selection on the
+/// header, so they would read as selection gestures here. With several keys
+/// the arrow carries the column's place among them.
 fn header_sort_control(
     state: Entity<DataTableState>,
     col_ix: usize,
     sort_direction: Option<SortDirection>,
+    sort_rank: Option<usize>,
+    rank_font_size: Pixels,
     tint: Hsla,
     muted: Hsla,
 ) -> impl IntoElement {
@@ -2025,16 +2043,35 @@ fn header_sort_control(
     div()
         .id(("header-sort", col_ix))
         .debug_selector(move || format!("header-sort-{col_ix}"))
+        .flex()
         .flex_shrink_0()
+        .items_center()
         .ml_auto()
         .cursor_pointer()
         // Stopping the click keeps the header's own click from selecting the
-        // column as well.
-        .on_click(move |_event: &ClickEvent, _window, cx| {
+        // column as well. Alt adds the column as the next sort key.
+        .on_click(move |event: &ClickEvent, _window, cx| {
             cx.stop_propagation();
-            state.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
+            let adds_key = event.modifiers().alt;
+            state.update(cx, |state, cx| {
+                if adds_key {
+                    state.cycle_sort_key(col_ix, cx);
+                } else {
+                    state.cycle_sort(col_ix, cx);
+                }
+            });
         })
         .child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
+        .when_some(sort_rank, |control, rank| {
+            control.child(
+                div()
+                    .debug_selector(move || format!("header-sort-rank-{col_ix}"))
+                    .text_size(rank_font_size)
+                    .line_height(rank_font_size)
+                    .text_color(color)
+                    .child(SharedString::from(rank.to_string())),
+            )
+        })
 }
 
 #[cfg(test)]
@@ -2368,6 +2405,196 @@ mod tests {
                 "sorting leaves the selection alone"
             );
         });
+    }
+
+    /// Alt+click on a second sort arrow adds that column as the next sort
+    /// key and numbers both headers; a plain click goes back to one key.
+    /// Without multi-sort the host sorts one column, so Alt+click replaces
+    /// the sort like a plain click.
+    #[gpui::test]
+    fn alt_click_on_a_sort_arrow_adds_a_sort_key(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("multi-sort-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+        let alt = gpui::Modifiers {
+            alt: true,
+            ..gpui::Modifiers::default()
+        };
+        let click_arrow = |visual: &mut VisualTestContext, arrow: &'static str, modifiers| {
+            let arrow = visual
+                .debug_bounds(arrow)
+                .expect("the sort control is drawn");
+            visual.simulate_click(arrow.center(), modifiers);
+            visual.run_until_parked();
+        };
+
+        click_arrow(&mut *visual, "header-sort-0", gpui::Modifiers::default());
+        click_arrow(&mut *visual, "header-sort-1", alt);
+        visual.update(|_, cx| {
+            assert_eq!(
+                state.read(cx).sort_keys(),
+                vec![SortState::ascending(1)],
+                "multi-sort is off, so Alt+click replaces the sort"
+            );
+        });
+
+        visual.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.set_multi_sort_enabled(true);
+                state.set_sort(Some(SortState::ascending(0)), cx);
+            });
+        });
+        visual.run_until_parked();
+        click_arrow(&mut *visual, "header-sort-1", alt);
+        visual.update(|_, cx| {
+            assert_eq!(
+                state.read(cx).sort_keys(),
+                vec![SortState::ascending(0), SortState::ascending(1)]
+            );
+        });
+        assert!(
+            visual.debug_bounds("header-sort-rank-1").is_some(),
+            "the second key shows its place"
+        );
+
+        click_arrow(&mut *visual, "header-sort-1", gpui::Modifiers::default());
+        visual.update(|_, cx| {
+            assert_eq!(
+                state.read(cx).sort_keys(),
+                vec![SortState::ascending(1)],
+                "a plain click sorts by its column alone, as on an unsorted column"
+            );
+        });
+        assert!(visual.debug_bounds("header-sort-rank-1").is_none());
+    }
+
+    /// With the header click set to sort, Alt+click on a header adds its
+    /// column as the next sort key, as Alt+click on the sort arrow does.
+    #[gpui::test]
+    fn alt_click_on_a_sorting_header_adds_a_sort_key(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        cx.update(|cx| super::super::set_header_click_sorts(cx, true));
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("multi-sort-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+        visual.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.set_multi_sort_enabled(true);
+                state.set_sort(Some(SortState::ascending(0)), cx);
+            });
+        });
+        visual.run_until_parked();
+
+        let second = element_center(visual, "header-col-1").expect("header 1 drawn");
+        visual.simulate_click(
+            second,
+            gpui::Modifiers {
+                alt: true,
+                ..gpui::Modifiers::default()
+            },
+        );
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(
+                state.sort_keys(),
+                vec![SortState::ascending(0), SortState::ascending(1)]
+            );
+            assert!(state.selection().is_empty(), "the click sorts, not selects");
+        });
+    }
+
+    /// Under a sort by several keys a plain click on the first key's arrow
+    /// keeps that column alone, in its direction, instead of cycling it off
+    /// and clearing every key; `set_sort` drops the secondary keys and the
+    /// rank badges with them.
+    #[gpui::test]
+    fn a_plain_click_on_the_first_key_narrows_a_multi_sort(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("narrow-sort-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+        let set_two_keys = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| {
+                state.update(cx, |state, cx| {
+                    state.set_multi_sort_enabled(true);
+                    state.set_sort_keys_without_emit(&[
+                        SortState::descending(0),
+                        SortState::ascending(1),
+                    ]);
+                    cx.notify();
+                });
+            });
+            visual.run_until_parked();
+        };
+
+        set_two_keys(&mut *visual);
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(state.sort_rank(0), Some(1));
+            assert_eq!(state.sort_rank(1), Some(2));
+            assert_eq!(state.sort_rank(5), None, "a column that is not a key");
+        });
+
+        let arrow = visual
+            .debug_bounds("header-sort-0")
+            .expect("the sort control is drawn");
+        visual.simulate_click(arrow.center(), gpui::Modifiers::default());
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(
+                state.sort_keys(),
+                vec![SortState::descending(0)],
+                "the clicked key stays, alone and in its direction"
+            );
+            assert_eq!(state.sort_rank(0), None, "one key carries no rank");
+        });
+        assert!(visual.debug_bounds("header-sort-rank-0").is_none());
+
+        set_two_keys(&mut *visual);
+        visual.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.set_sort(Some(SortState::descending(0)), cx);
+            });
+        });
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            assert_eq!(
+                state.read(cx).sort_keys(),
+                vec![SortState::descending(0)],
+                "set_sort drops the secondary keys even with the same first key"
+            );
+        });
+        assert!(visual.debug_bounds("header-sort-rank-1").is_none());
     }
 
     /// Ctrl+click (Cmd+click on macOS) on row numbers and cells adds them to

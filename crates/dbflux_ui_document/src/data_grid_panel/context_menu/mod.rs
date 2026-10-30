@@ -27,6 +27,7 @@ use gpui_component::ActiveTheme;
 use std::fs::File;
 use std::io::BufWriter;
 
+mod copy_extractors;
 mod items;
 mod sections;
 pub(super) mod toolbar;
@@ -805,15 +806,18 @@ impl DataGridPanel {
         let base_items = match self.context_menu.as_ref() {
             Some(menu) if !is_column_header => self.with_edit_as_expression(
                 self.with_find_similar_rows(
-                    self.adapt_menu_items_for_documents(
-                        Self::build_context_menu_items(
-                            is_editable,
+                    self.with_copy_extractors(
+                        self.adapt_menu_items_for_documents(
+                            Self::build_context_menu_items(
+                                is_editable,
+                                is_document_view,
+                                has_row_target,
+                                can_chart,
+                                inspect_row_enabled,
+                            ),
                             is_document_view,
-                            has_row_target,
-                            can_chart,
-                            inspect_row_enabled,
+                            cx,
                         ),
-                        is_document_view,
                         cx,
                     ),
                     menu,
@@ -1114,6 +1118,8 @@ impl DataGridPanel {
         let mut actions = vec![
             ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
             ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending),
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Descending),
             ContextMenuAction::RemoveOrdering,
         ];
         actions.extend(filter_items.into_iter().map(|(_, action)| action));
@@ -1501,6 +1507,17 @@ impl DataGridPanel {
     /// buffer: a pending insert copies its values, and a base row copies the
     /// result's value or, for a cell with an unsaved edit, the edited one.
     fn selection_result(&self, cx: &App) -> Option<dbflux_core::QueryResult> {
+        self.selection_values(cx, true)
+    }
+
+    /// [`Self::selection_result`], with every cell of the covered rows and
+    /// columns as the grid shows it when `mask_unselected` is false (Copy as
+    /// INSERT statements writes whole rows of the selected columns).
+    fn selection_values(
+        &self,
+        cx: &App,
+        mask_unselected: bool,
+    ) -> Option<dbflux_core::QueryResult> {
         use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
         use dbflux_components::components::data_table::selection::CellCoord;
         use std::collections::BTreeSet;
@@ -1555,7 +1572,7 @@ impl DataGridPanel {
             .map(|&row| {
                 cols.iter()
                     .map(|&col| {
-                        if selection.is_selected(CellCoord::new(row, col)) {
+                        if !mask_unselected || selection.is_selected(CellCoord::new(row, col)) {
                             shown_value(row, col)
                         } else {
                             Value::Null
@@ -1583,7 +1600,29 @@ impl DataGridPanel {
         row_count: Option<usize>,
         cx: &mut Context<Self>,
     ) {
-        let format_name = format.name();
+        self.finish_named_clipboard_copy(export_result, buffer, format.name(), row_count, cx);
+    }
+
+    /// `finish_clipboard_copy` for text built outside the exporter, so the
+    /// copy extractors report and audit the same way.
+    fn finish_clipboard_text(
+        &mut self,
+        text: String,
+        format_name: &str,
+        row_count: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.finish_named_clipboard_copy(Ok(()), text.into_bytes(), format_name, row_count, cx);
+    }
+
+    fn finish_named_clipboard_copy(
+        &mut self,
+        export_result: Result<(), dbflux_export::ExportError>,
+        buffer: Vec<u8>,
+        format_name: &str,
+        row_count: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         let audit_service = self.app_state.read(cx).audit_service().clone();
 
         match export_result {
@@ -1805,15 +1844,18 @@ impl DataGridPanel {
             let inspect_row_enabled = !self.is_grouped_result();
             let visible_items = self.with_edit_as_expression(
                 self.with_find_similar_rows(
-                    self.adapt_menu_items_for_documents(
-                        Self::build_context_menu_items(
-                            is_editable,
+                    self.with_copy_extractors(
+                        self.adapt_menu_items_for_documents(
+                            Self::build_context_menu_items(
+                                is_editable,
+                                menu.is_document_view,
+                                has_row_target,
+                                can_chart,
+                                inspect_row_enabled,
+                            ),
                             menu.is_document_view,
-                            has_row_target,
-                            can_chart,
-                            inspect_row_enabled,
+                            cx,
                         ),
-                        menu.is_document_view,
                         cx,
                     ),
                     menu,
@@ -1979,6 +2021,9 @@ impl DataGridPanel {
             ContextMenuAction::CopyAsJson => {
                 self.copy_selection_with_format(ExportFormat::JsonPretty, window, cx)
             }
+            ContextMenuAction::CopyAsSqlInList => self.copy_selection_as_in_list(cx),
+            ContextMenuAction::CopyAsInsertStatements => self.copy_selection_as_inserts(cx),
+            ContextMenuAction::CopyAsMarkdown => self.copy_selection_as_markdown(cx),
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
             ContextMenuAction::GenerateId(kind) => {
@@ -2073,6 +2118,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::Order(direction) => {
                 self.handle_sort_request(menu.col, direction, cx);
+            }
+            ContextMenuAction::AddToSort(direction) => {
+                self.handle_add_sort_key(menu.col, direction, cx);
             }
             ContextMenuAction::RemoveOrdering => {
                 self.handle_sort_clear(cx);

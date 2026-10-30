@@ -231,9 +231,40 @@ impl DataGridPanel {
         pagination: Pagination,
         order_by: Vec<OrderByColumn>,
         total_rows: Option<u64>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.run_table_query_in(
+            profile_id,
+            database,
+            table,
+            pagination,
+            order_by,
+            total_rows,
+            Some(window),
+            cx,
+        );
+    }
+
+    /// `run_table_query` for callers without a window: a first page held back
+    /// for the primary key is read when the key arrives, from a task. Only a
+    /// relational filter needs the window; without one that read waits for the
+    /// next frame instead.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn run_table_query_in(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        table: TableRef,
+        pagination: Pagination,
+        order_by: Vec<OrderByColumn>,
+        total_rows: Option<u64>,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        // Any page read ends the wait: a sort or filter chosen meanwhile reads
+        // the first page itself.
+        self.first_page_awaits_pk = false;
         let filter_value = self.filter_bar.filter_input.read(cx).value();
         let filter = if filter_value.trim().is_empty() {
             None
@@ -279,6 +310,11 @@ impl DataGridPanel {
         // with at least one FK. All other cases fall through to the raw path.
         if let Some(filter_text) = &filter {
             if classify_filter_input(filter_text) == FilterMode::Relational {
+                let Some(window) = window else {
+                    self.pending.refresh = true;
+                    cx.notify();
+                    return;
+                };
                 if self.try_relational_filter(
                     profile_id,
                     database.clone(),
@@ -286,7 +322,7 @@ impl DataGridPanel {
                     pagination.clone(),
                     order_by.clone(),
                     filter_text.clone(),
-                    _window,
+                    window,
                     cx,
                 ) {
                     // The visual query applies its result through the

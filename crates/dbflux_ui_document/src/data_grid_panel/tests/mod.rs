@@ -690,6 +690,7 @@ mod close_completion;
 mod collection_views;
 mod export_all;
 mod facets;
+mod first_page_order;
 mod fk_label_identity;
 mod fk_navigation;
 mod reload_pending_edits;

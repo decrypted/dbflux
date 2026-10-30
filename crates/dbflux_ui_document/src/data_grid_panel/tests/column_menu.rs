@@ -70,7 +70,9 @@ fn table_state(
 }
 
 /// `Shift+m` opens the column header menu of the active cell's column, and
-/// its Fit width entry sizes that column to its values.
+/// walking the menu with the keyboard reaches its Fit width entry, which
+/// sizes that column to its values. The walk goes through the same row list
+/// the menu dispatches on, so the rendered and the dispatched rows agree.
 #[gpui::test]
 fn shift_m_opens_the_column_menu_and_fit_width_fits_the_column(cx: &mut TestAppContext) {
     init_keyboard_runtime(cx);
@@ -88,23 +90,28 @@ fn shift_m_opens_the_column_menu_and_fit_width_fits_the_column(cx: &mut TestAppC
     });
     assert_eq!(menu, Some((true, 1)), "the menu of the `note` column opens");
 
-    let fit_entry = window.update(|_, cx| {
-        panel
-            .read(cx)
-            .column_menu_items(1, cx)
+    // Fit width is the Column section's first entry; the section closes
+    // the menu, so its rows are counted back from the last one.
+    let rows_from_end = window.update(|_, cx| {
+        let items = panel.read(cx).column_menu_items(1, cx);
+        let fit = items
             .iter()
-            .any(|item| item.action == ContextMenuAction::FitColumnWidth)
+            .position(|item| item.action == ContextMenuAction::FitColumnWidth)
+            .expect("the Column section offers Fit width");
+        items.len() - fit
     });
-    assert!(fit_entry, "the Column section offers Fit width");
 
     let before = window.update(|_, cx| table_state(&panel, cx).read(cx).column_widths()[1]);
-    window.update(|window, cx| {
-        panel.update(cx, |panel, cx| {
-            panel.handle_context_menu_action(ContextMenuAction::FitColumnWidth, window, cx);
-        });
-    });
-    let after = window.update(|_, cx| table_state(&panel, cx).read(cx).column_widths()[1]);
 
+    // Up from the first row wraps to the last one, then walks back to Fit
+    // width.
+    for _ in 0..rows_from_end {
+        window.simulate_keystrokes("up");
+    }
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+
+    let after = window.update(|_, cx| table_state(&panel, cx).read(cx).column_widths()[1]);
     assert!(
         after > before,
         "the 60-character values fit: {before} -> {after}"
@@ -255,4 +262,46 @@ fn a_table_reopens_with_its_column_layout(cx: &mut TestAppContext) {
             .expect("the store reads")
     });
     assert_eq!(stored, None, "the default layout keeps no row");
+}
+
+/// `Shift+m` opens nothing where the grid draws no column headers: the
+/// transposed record view and the document tree.
+#[gpui::test]
+fn shift_m_is_ignored_without_column_headers(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let (panel, window) = host_wide_result(cx);
+
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| panel.set_record_mode(true, cx));
+    });
+    window.run_until_parked();
+    assert!(
+        window.update(|_, cx| panel.read(cx).record_mode()),
+        "the result offers the record view"
+    );
+
+    window.simulate_keystrokes("shift-m");
+    window.run_until_parked();
+    assert!(
+        window.update(|_, cx| panel.read(cx).context_menu.is_none()),
+        "the record view opens no column menu"
+    );
+
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_record_mode(false, cx);
+            panel.view_config.mode = crate::data_view::DataViewMode::Document;
+            cx.notify();
+        });
+        let focus_handle = table_state(&panel, cx).read(cx).focus_handle().clone();
+        focus_handle.focus(window, cx);
+    });
+    window.run_until_parked();
+
+    window.simulate_keystrokes("shift-m");
+    window.run_until_parked();
+    assert!(
+        window.update(|_, cx| panel.read(cx).context_menu.is_none()),
+        "the document view opens no column menu"
+    );
 }

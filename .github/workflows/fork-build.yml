@@ -1,0 +1,50 @@
+# Fork-only: packages the integration branch (`local/build`) of decrypted/dbflux with upstream's
+# reusable build workflow, so every push yields an AppImage, .deb, .rpm, tarball and macOS DMGs as
+# run artifacts. Not meant for upstream; it never publishes a release.
+name: Fork build
+
+on:
+  push:
+    branches: [local/build]
+  workflow_dispatch:
+
+concurrency:
+  group: fork-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compute-version:
+    name: Compute fork version
+    if: github.repository == 'decrypted/dbflux'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.fork.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Compute version string
+        id: fork
+        run: |
+          # Same shape as upstream's nightly (`<base>-nightly+<sha>`), which the packaging scripts
+          # accept; the build metadata marks it as a fork build.
+          BASE=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/' | sed 's/-[^+]*//')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "version=${BASE}-nightly+fork.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: compute-version
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      actions: read  # required by the reusable build workflow's Windows signing job
+    with:
+      version: ${{ needs.compute-version.outputs.version }}
+      channel: nightly
+      prerelease: true
+    secrets: inherit

@@ -8,6 +8,7 @@ pub mod repositories;
 pub mod service_configs;
 pub mod sqlite;
 pub mod sqlite_tree_store;
+pub mod ssh_tunnel_profiles;
 
 pub use artifacts::ArtifactStore;
 pub use bootstrap::{OwnedConnection, StorageRuntime};
@@ -34,3 +35,4 @@ pub use repositories::{
     settings::SettingsRepository, ssh_tunnel_profiles::SshTunnelProfileRepository,
 };
 pub use service_configs::load_service_configs;
+pub use ssh_tunnel_profiles::load_ssh_tunnel_profiles;

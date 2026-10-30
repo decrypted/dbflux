@@ -87,6 +87,8 @@ el servidor MCP no estará disponible.
 
 El servidor carga los hooks de conexión en línea y las vinculaciones de hooks reutilizables desde la base de datos compartida. Ejecuta PreConnect y PostConnect al establecer una conexión, y PreDisconnect y PostDisconnect al desconectar una conexión abierta. Los resultados de los hooks se registran en el registro de auditoría. Un hook PreConnect independiente debe emitir su señal de preparación configurada; después de esa señal, el servidor espera el endpoint solo para perfiles directos. Los perfiles con pipeline o túnel SSH omiten esa espera porque el pipeline o el túnel resuelve su endpoint. El servidor MCP independiente no incluye un ejecutor de hooks Lua; un hook Lua habilitado devuelve un error que identifica su fase y el hook en lugar de omitirse.
 
+Una conexión que usa un perfil de túnel SSH abre el túnel igual que la app, incluido un host elegido de `~/.ssh/config`. Los perfiles de túnel se leen cuando arranca el servidor, así que reinícialo después de añadir o cambiar un túnel. La contraseña del túnel o la passphrase de la clave sale del keyring del sistema operativo, una clave que se deja al SSH agent necesita `SSH_AUTH_SOCK` en el entorno del servidor, y las claves de host se verifican contra el almacén propio de la app. Los perfiles de proxy se siguen rechazando.
+
 ## 3. Modelo de governance (conceptos centrales)
 
 Toda solicitud de IA se hace cumplir a través de todas estas capas, en orden:

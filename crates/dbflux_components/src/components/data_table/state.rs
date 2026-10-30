@@ -1000,8 +1000,36 @@ impl DataTableState {
 
     // --- Clipboard ---
 
+    /// The selection as tab-separated text, with the values the grid shows:
+    /// pending inserts at their place and unsaved edits applied.
     pub fn copy_selection(&self) -> Option<String> {
-        clipboard::copy_selection(&self.model, &self.selection)
+        let visual_order = self.edit_buffer.compute_visual_order();
+        clipboard::copy_selection_with(&self.selection, |row, col| {
+            self.displayed_cell(&visual_order, row, col)
+        })
+    }
+
+    /// The cell the grid shows at visual `row`: a pending insert's value, or
+    /// the base row's value with its unsaved edit applied. `visual_order` is
+    /// the edit buffer's [`EditBuffer::compute_visual_order`].
+    pub fn displayed_cell<'a>(
+        &'a self,
+        visual_order: &[super::model::VisualRowSource],
+        row: usize,
+        col: usize,
+    ) -> Option<&'a super::model::CellValue> {
+        use super::model::VisualRowSource;
+
+        match visual_order.get(row).copied()? {
+            VisualRowSource::Base(base_row) => {
+                let base = self.model.cell(base_row, col)?;
+                Some(self.edit_buffer.get_cell(base_row, col, base))
+            }
+            VisualRowSource::Insert(insert_idx) => self
+                .edit_buffer
+                .get_pending_insert_by_idx(insert_idx)?
+                .get(col),
+        }
     }
 
     // --- Focus ---

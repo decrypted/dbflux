@@ -1595,6 +1595,8 @@ document:
       header: "%{column} · row %{row}"
       item:
         copy: Copy
+        copy_as_csv: "Copy as CSV"
+        copy_as_json: "Copy as JSON"
         view_document: View document
         add_document: Add document
         duplicate_document: Duplicate document

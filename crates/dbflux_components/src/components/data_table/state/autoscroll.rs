@@ -163,6 +163,11 @@ impl DataTableState {
 
     /// The cell drawn under `pointer`, or the nearest one inside `body`
     /// when the pointer is outside it.
+    ///
+    /// Columns are hit in screen order (moved and hidden ones as the grid
+    /// draws them) and returned as model columns. The pinned strip at the
+    /// left does not scroll sideways, so a pointer over it hits a pinned
+    /// column whatever the horizontal offset.
     fn cell_at(
         &self,
         pointer: Point<Pixels>,
@@ -170,9 +175,9 @@ impl DataTableState {
         row_height: Pixels,
     ) -> Option<CellCoord> {
         let row_count = self.row_count();
-        let col_count = self.col_count();
+        let shown_count = self.column_layout.visible_count();
         if row_count == 0
-            || col_count == 0
+            || shown_count == 0
             || row_height <= px(0.0)
             || body.size.width < px(1.0)
             || body.size.height < px(1.0)
@@ -193,14 +198,20 @@ impl DataTableState {
         let content_y = f32::from(inside_y - body.top() - scroll_y);
         let row = ((content_y / f32::from(row_height)).max(0.0) as usize).min(row_count - 1);
 
-        // Rows are drawn shifted left by the horizontal offset, row number first.
-        let content_x =
-            f32::from(inside_x - body.left() + self.horizontal_offset - ROW_NUMBER_WIDTH);
-        let col = self
+        // Rows are drawn row number first, then the pinned strip, which stays
+        // put, then the other columns shifted left by the horizontal offset.
+        let cells_x = f32::from(inside_x - body.left() - ROW_NUMBER_WIDTH);
+        let content_x = if cells_x < self.pinned_width() {
+            cells_x
+        } else {
+            cells_x + f32::from(self.horizontal_offset)
+        };
+        let position = self
             .column_offsets
             .partition_point(|offset| *offset <= content_x)
             .saturating_sub(1)
-            .min(col_count - 1);
+            .min(shown_count - 1);
+        let col = self.column_layout.model_column(position)?;
 
         Some(CellCoord::new(row, col))
     }
@@ -232,6 +243,70 @@ mod tests {
         let above_left = edge_step(point(px(90.0), px(90.0)), body());
         assert!(above_left.x < px(0.0), "left of the body scrolls left");
         assert!(above_left.y < px(0.0), "above the body scrolls up");
+    }
+
+    /// With columns moved, hidden and pinned, the cell under the pointer is
+    /// found in screen order and named by its model column, and a pointer
+    /// over the pinned strip hits a pinned column however far the grid has
+    /// scrolled.
+    #[gpui::test]
+    fn the_cell_under_the_pointer_follows_the_column_layout(cx: &mut gpui::TestAppContext) {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::AppContext as _;
+
+        let columns = (0..4)
+            .map(|col| ColumnSpec {
+                id: format!("c{col}").into(),
+                title: format!("c{col}").into(),
+                kind: ColumnKind::Text,
+                align: gpui::TextAlign::Left,
+                type_name: "text".into(),
+            })
+            .collect();
+        let rows = (0..3)
+            .map(|_| RowData {
+                cells: (0..4).map(|_| CellValue::text("v")).collect(),
+            })
+            .collect();
+        let model = std::sync::Arc::new(TableModel::new(columns, rows));
+        let state = cx.new(|cx| DataTableState::new(model, cx));
+
+        let row_height = px(20.0);
+        // The body starts at the window's origin; the cells start after the
+        // row-number gutter.
+        let body = Bounds::new(point(px(0.0), px(0.0)), size(px(2000.0), px(60.0)));
+        let x = |cells_x: f32| ROW_NUMBER_WIDTH + px(cells_x);
+
+        state.update(cx, |state, cx| {
+            for col in 0..4 {
+                state.set_column_width(col, 100.0, cx);
+            }
+            // Screen order: c3, c0, c2 (c1 hidden), with c3 pinned.
+            assert!(state.move_column(3, 0, cx));
+            assert!(state.hide_column(1, cx));
+            assert!(state.pin_column(3, cx));
+        });
+
+        state.update(cx, |state, _| {
+            let at = |state: &DataTableState, cells_x: f32| {
+                state
+                    .cell_at(point(x(cells_x), px(30.0)), body, row_height)
+                    .map(|coord| (coord.row, coord.col))
+            };
+            assert_eq!(at(state, 50.0), Some((1, 3)), "the pinned first column");
+            assert_eq!(at(state, 150.0), Some((1, 0)), "the second on screen");
+            assert_eq!(at(state, 250.0), Some((1, 2)), "the hidden c1 is skipped");
+
+            state.horizontal_offset = px(100.0);
+            assert_eq!(
+                at(state, 50.0),
+                Some((1, 3)),
+                "the pinned strip does not scroll"
+            );
+            assert_eq!(at(state, 150.0), Some((1, 2)), "scrolled by one column");
+        });
     }
 
     #[test]

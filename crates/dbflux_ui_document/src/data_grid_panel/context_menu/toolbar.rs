@@ -11,7 +11,7 @@ use crate::chart::keyboard::step_time_range;
 use crate::data_grid_panel::documents::CollectionTab;
 use crate::data_grid_panel::documents::builder::BuilderSupport;
 use crate::data_grid_panel::table_views::TableTab;
-use crate::data_grid_panel::value_panel::ValuePanelButton;
+use crate::data_grid_panel::value_panel::{ValuePanelButton, ValueView};
 use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource, ReferencedRowTarget};
 use crate::result_view::ResultViewMode;
 use dbflux_app::keymap::{Command, ContextId};
@@ -200,6 +200,13 @@ impl ToolbarAction {
             ToolbarAction::ValuePanel(ValuePanelButton::Compact) => "value-compact",
             ToolbarAction::ValuePanel(ValuePanelButton::Revert) => "value-revert",
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => "value-save",
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Image)) => {
+                "value-view-image"
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Hex)) => "value-view-hex",
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Text)) => "value-view-text",
+            ToolbarAction::ValuePanel(ValuePanelButton::SaveImage) => "value-save-image",
+            ToolbarAction::ValuePanel(ValuePanelButton::CopyImage) => "value-copy-image",
             ToolbarAction::ToggleMaximize => "maximize",
             ToolbarAction::HidePanel => "hide",
             ToolbarAction::CountRows => "count-rows",
@@ -250,6 +257,10 @@ impl ToolbarAction {
             | ToolbarAction::ValuePanel(ValuePanelButton::Compact) => AppIcon::Braces,
             ToolbarAction::ValuePanel(ValuePanelButton::Revert) => AppIcon::RotateCcw,
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => AppIcon::Save,
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Image)) => AppIcon::Image,
+            ToolbarAction::ValuePanel(ValuePanelButton::View(_)) => AppIcon::ScrollText,
+            ToolbarAction::ValuePanel(ValuePanelButton::SaveImage) => AppIcon::Download,
+            ToolbarAction::ValuePanel(ValuePanelButton::CopyImage) => AppIcon::Copy,
             ToolbarAction::ToggleMaximize => AppIcon::Maximize2,
             ToolbarAction::HidePanel => AppIcon::PanelBottomClose,
             ToolbarAction::CountRows => AppIcon::Hash,
@@ -691,6 +702,21 @@ impl DataGridPanel {
             }
             ToolbarAction::ValuePanel(ValuePanelButton::Save) => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.value_save")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Image)) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_view_image")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Hex)) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_view_hex")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::View(ValueView::Text)) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_view_text")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::SaveImage) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_save_image")
+            }
+            ToolbarAction::ValuePanel(ValuePanelButton::CopyImage) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.value_copy_image")
             }
             ToolbarAction::ToggleMaximize if self.chrome.is_maximized => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.restore")

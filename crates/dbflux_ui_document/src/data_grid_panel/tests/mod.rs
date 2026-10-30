@@ -696,6 +696,7 @@ mod reload_pending_edits;
 mod reload_state;
 mod sources_and_keys;
 mod statement_outcome;
+mod value_panel_images;
 
 fn reload_columns(names: &[&str]) -> Vec<ColumnMeta> {
     names

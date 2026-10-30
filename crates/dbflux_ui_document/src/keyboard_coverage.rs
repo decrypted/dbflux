@@ -170,6 +170,15 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ("value-panel-compact", KeyboardPath::Menu("value-compact")),
         ("value-panel-revert", KeyboardPath::Menu("value-revert")),
         ("value-panel-save", KeyboardPath::Menu("value-save")),
+        ("value-panel-view-*", KeyboardPath::Menu("value-view-*")),
+        (
+            "value-panel-save-image",
+            KeyboardPath::Menu("value-save-image"),
+        ),
+        (
+            "value-panel-copy-image",
+            KeyboardPath::Menu("value-copy-image"),
+        ),
         // The footer's view switch (Grid / JSON / Chart): Shift+T, and the
         // Toolbar submenu's Show entries.
         (

@@ -348,6 +348,7 @@ impl DataGridPanel {
             if let Some(sort) = initial_sort {
                 state.set_sort_without_emit(sort);
             }
+            state.set_multi_sort_enabled(true);
             if read_only_keys {
                 state.set_read_only_pk_columns(pk_indices.clone());
             } else {
@@ -388,6 +389,9 @@ impl DataGridPanel {
                             this.handle_sort_clear(cx);
                         }
                     },
+                    DataTableEvent::SortKeysChanged(keys) => {
+                        this.handle_sort_keys_request(keys, cx);
+                    }
                     DataTableEvent::Focused => {
                         cx.emit(DataGridEvent::Focused);
                     }

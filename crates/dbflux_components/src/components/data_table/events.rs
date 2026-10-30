@@ -110,6 +110,9 @@ pub enum ContextMenuAction {
     RemoveFilter,
     /// Order by column (ASC or DESC).
     Order(SortDirection),
+    /// Add the column to the sort as its next key, or set its direction
+    /// where it is a key already.
+    AddToSort(SortDirection),
     /// Remove ordering.
     RemoveOrdering,
     /// Open the row inspector panel for the selected row.
@@ -129,6 +132,10 @@ pub enum ContextMenuAction {
 pub enum DataTableEvent {
     /// Sort state changed (None means no sort).
     SortChanged(Option<SortState>),
+
+    /// The sort now has several keys, first to last. Fewer than two keys
+    /// still arrive as `SortChanged`.
+    SortKeysChanged(Vec<SortState>),
 
     /// Selection changed.
     #[allow(dead_code)]

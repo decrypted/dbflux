@@ -73,6 +73,21 @@ esa columna: ordenar ascendente o descendente, quitar el orden y todos los
 operadores de filtro, en una sola lista plana. El clic izquierdo en la
 cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada.
 
+Para ordenar por varias columnas, haz `Alt`+clic en la flecha de otra columna:
+pasa a ser la siguiente clave de orden, ascendente, y otro `Alt`+clic la vuelve
+descendente y después la quita del orden. Con más de una clave, cada cabecera
+ordenada muestra su posición (1, 2, 3) junto a la flecha, y las filas que
+empatan en la primera clave se ordenan por la segunda, y así sucesivamente. Un
+clic normal en cualquier flecha vuelve a ordenar solo por esa columna. El menú
+de la columna ofrece lo mismo con **Añadir al orden: columna ASC** y **Añadir
+al orden: columna DESC**, que también cambian la dirección de una columna que ya
+es clave, y **Quitar orden** elimina todas las claves. Una tabla envía todas las
+claves a la base de datos en un único `ORDER BY`; un resultado de consulta se
+ordena en memoria. En una tabla que sigue en su orden por defecto (su clave
+primaria), la primera clave añadida sustituye ese orden, porque las filas
+ordenadas primero por la clave primaria no dejan empates que otra columna pueda
+ordenar; quitar el orden vuelve al orden por defecto.
+
 ## Panel de valor
 
 Haz clic derecho en una celda y elige **Ver valor**, o pulsa `v`, para abrir la

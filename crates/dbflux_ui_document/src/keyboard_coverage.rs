@@ -80,7 +80,8 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
-        // The table menu of the column carries Order ascending / descending.
+        // The table menu of the column carries Order ascending / descending
+        // and Add to sort, the keyboard path of Alt+click on a sort arrow.
         (
             "header-col-*",
             KeyboardPath::Command(Command::OpenContextMenu),

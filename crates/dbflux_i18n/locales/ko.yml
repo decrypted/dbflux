@@ -1633,6 +1633,7 @@ document:
       order:
         title: 정렬
         remove: 정렬 제거
+        add_to_sort: "정렬에 추가: %{column}"
       generate_sql:
         title: SQL 생성
       toolbar:

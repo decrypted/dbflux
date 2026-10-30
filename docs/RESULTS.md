@@ -68,6 +68,20 @@ Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
 list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted.
 
+To sort by several columns, `Alt`+click the arrow of another column: it becomes
+the next sort key, ascending, and a further `Alt`+click turns it descending and
+then takes it out of the sort. With more than one key, each sorted header shows
+its place (1, 2, 3) next to the arrow, and rows that tie on the first key are
+ordered by the second, and so on. A plain click on any arrow sorts by that
+column alone again. The column menu offers the same as **Add to sort: column
+ASC** and **Add to sort: column DESC**, which also change the direction of a
+column that is already a key, and **Remove ordering** drops every key. A table
+sends all keys to the database as one `ORDER BY`; a query result is sorted in
+memory. On a table still in its default order (its primary key), the first
+added key replaces that order, since rows sorted by the primary key first have
+no ties left for another column to order; removing the ordering returns to the
+default order.
+
 ## Value panel
 
 Right-click a cell and choose **View Value**, or press `v`, to open the cell

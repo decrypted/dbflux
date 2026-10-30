@@ -146,7 +146,19 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ("hide-panel", KeyboardPath::Menu("hide")),
         ("undo-btn", KeyboardPath::Command(Command::Undo)),
         ("redo-btn", KeyboardPath::Command(Command::Redo)),
+        ("review-btn", KeyboardPath::Command(Command::ReviewChanges)),
         ("save-btn", KeyboardPath::Menu("save-changes")),
+        // The change review: Enter saves, Escape cancels, Tab reaches Copy.
+        (
+            "review-changes-save",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "review-changes-cancel",
+            KeyboardPath::Command(Command::Cancel),
+        ),
+        ("review-changes-copy", KeyboardPath::TabStop),
+        ("modal-close", KeyboardPath::Command(Command::Cancel)),
         ("revert-btn", KeyboardPath::Menu("revert-changes")),
         (
             "row-inspector-close",

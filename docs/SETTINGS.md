@@ -85,6 +85,7 @@ converted crate by crate and stays in English for now.
 | Setting | Default | What it does |
 |---------|---------|--------------|
 | **Show referenced-row labels in foreign-key cells** | Off | Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after you save; the row inspector always resolves references. |
+| **Review changes before saving** | Off | Save in a table grid first shows the statements it will run, with Save, Copy SQL and Cancel, as the Review button does. See Working with Results. |
 
 ### Startup & session
 

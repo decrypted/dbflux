@@ -740,6 +740,32 @@ impl Connection for FakeConnection {
         }
     }
 
+    /// Built from the connection's dialect, so a test can render a recorded
+    /// [`CrudOp`] the same way and compare it with a preview.
+    fn update_row_statement(&self, patch: &RowPatch) -> Option<Result<String, DbError>> {
+        Some(
+            dbflux_core::SqlQueryBuilder::new(self.dialect())
+                .build_update(patch, false)
+                .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query")),
+        )
+    }
+
+    fn insert_row_statement(&self, insert: &RowInsert) -> Option<Result<String, DbError>> {
+        Some(
+            dbflux_core::SqlQueryBuilder::new(self.dialect())
+                .build_insert(insert, false)
+                .ok_or_else(|| DbError::query_failed("Failed to build INSERT query")),
+        )
+    }
+
+    fn delete_row_statement(&self, delete: &RowDelete) -> Option<Result<String, DbError>> {
+        Some(
+            dbflux_core::SqlQueryBuilder::new(self.dialect())
+                .build_delete(delete, false)
+                .ok_or_else(|| DbError::query_failed("Failed to build DELETE query")),
+        )
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         mutex_lock(&self.state.crud_ops).push(CrudOp::Update(patch.clone()));
         Ok(CrudResult::new(1, None))

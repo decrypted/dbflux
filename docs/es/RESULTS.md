@@ -213,6 +213,12 @@ En una tabla de MySQL, MariaDB, PostgreSQL, SQLite o SQL Server, una celda puede
 
 Una expresión pendiente se muestra en la celda como `fx NOW()` en cursiva hasta que se guarda; después de guardar, la fila muestra el valor que calculó la base de datos. Deshacer, rehacer y Revertir la tratan como cualquier otra edición, y las celdas de una fila nueva también la admiten. Una expresión con un comentario, un `;` o una `,` fuera de paréntesis se rechaza al confirmarla, porque podría cambiar más que la celda (un comentario podría ocultar el `WHERE` del `UPDATE`). Las demás bases de datos, los resultados de consultas y las colecciones de documentos no ofrecen expresiones.
 
+### Revisar los cambios antes de guardar
+
+**Revisar** en la barra de edición, junto a Guardar y Revertir, o `Ctrl+Alt+S` (`Cmd+Alt+S` en macOS), muestra las sentencias que Guardar ejecutará para los cambios sin guardar de la tabla, en el orden en que las ejecuta: eliminaciones, luego filas nuevas, luego filas editadas. Las construye el propio guardado y las genera el driver de la conexión, así que son lo que recibe la base de datos, con las expresiones SQL sin comillas. Los valores van en las sentencias como literales; los drivers de MySQL, MariaDB, PostgreSQL, SQLite y SQL Server no envían parámetros enlazados. Un cambio que no se puede guardar (una fila sin su clave) aparece como un comentario que explica por qué.
+
+Desde la revisión, **Guardar** (o `Enter`) ejecuta esas sentencias, sin la confirmación aparte que piden las eliminaciones; **Copiar SQL** las copia como script; **Cancelar** (o `Escape`) cierra la revisión y conserva los cambios. Con **Revisar los cambios antes de guardar** activado en Configuración > General > Cuadrícula de datos, cada Guardar en la cuadrícula de una tabla abre primero la revisión.
+
 ### Cuándo los resultados son editables
 
 Los browses de tabla planos son editables cuando la tabla tiene una primary key.

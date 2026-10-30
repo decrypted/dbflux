@@ -415,6 +415,10 @@ pub struct GeneralSettings {
     /// grid. Off by default; the row inspector always resolves references.
     #[serde(default)]
     pub grid_fk_labels: bool,
+    /// Show the statements Save runs before running them, with Save, Copy
+    /// SQL and Cancel. Off by default.
+    #[serde(default)]
+    pub grid_review_before_save: bool,
 
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
@@ -545,6 +549,7 @@ impl Default for GeneralSettings {
             table_alias_use_as: false,
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
+            grid_review_before_save: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -572,6 +577,7 @@ mod font_settings_tests {
 
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
         assert!(!legacy.grid_fk_labels);
+        assert!(!legacy.grid_review_before_save);
         assert_eq!(legacy, settings);
     }
 

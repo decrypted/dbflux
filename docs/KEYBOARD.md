@@ -403,6 +403,7 @@ A read-only delete does not change the clipboard.
 | `Esc` | Leave similar rows and return to the table page |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `Ctrl+Alt+c` / `Cmd+Alt+c` | Copy the selection as JSON, as the context menu's **Copy as JSON** does (table results) |
+| `Ctrl+Alt+s` / `Cmd+Alt+s` | Review the statements Save will run for the staged changes (table results) |
 | `z` | Maximize the results of a query document over the editor, or restore the split |
 | `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, show another view of the result, the value panel's and row inspector's buttons, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
 

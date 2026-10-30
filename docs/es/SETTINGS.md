@@ -92,6 +92,7 @@ y permanece en English por ahora.
 | Setting                      | Default | Qué hace |
 | ---------------------------- | ------- | -------- |
 | **Mostrar el valor del registro referenciado en celdas de clave foránea** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
+| **Revisar los cambios antes de guardar** | Off | Guardar en la cuadrícula de una tabla muestra primero las sentencias que ejecutará, con Guardar, Copiar SQL y Cancelar, como el botón Revisar. Ver Trabajar con resultados. |
 
 ### Inicio y sesión
 

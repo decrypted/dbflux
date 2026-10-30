@@ -688,6 +688,7 @@ mod fk_navigation;
 mod multi_edit;
 mod reload_pending_edits;
 mod reload_state;
+mod review_changes;
 mod selection_totals;
 mod sources_and_keys;
 mod statement_outcome;

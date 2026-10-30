@@ -122,6 +122,8 @@ pub enum Command {
     /// Edits the active cell as a SQL expression, or flips the open inline
     /// editor between a value and an expression.
     ToggleCellExpression,
+    /// Shows the statements Save would run for the grid's staged changes.
+    ReviewChanges,
     // Context menu
     OpenContextMenu,
     /// Opens the menu of the focused pane's actions (its toolbar buttons and
@@ -433,6 +435,7 @@ impl Command {
             Command::CopySelectionAsJson => "Copy selection as JSON",
             Command::ResultsSetNull => "Set cell to NULL",
             Command::ToggleCellExpression => "Edit cell as SQL expression",
+            Command::ReviewChanges => "Review changes",
             Command::OpenContextMenu => "Open context menu",
             Command::OpenPaneActions => "Open pane actions",
             Command::MenuUp => "Menu up",
@@ -637,6 +640,7 @@ impl Command {
             Command::CopySelectionAsJson => "copy_selection_as_json",
             Command::ResultsSetNull => "results_set_null",
             Command::ToggleCellExpression => "toggle_cell_expression",
+            Command::ReviewChanges => "review_changes",
             Command::OpenContextMenu => "open_context_menu",
             Command::OpenPaneActions => "open_pane_actions",
             Command::MenuUp => "menu_up",
@@ -858,6 +862,7 @@ impl Command {
             Command::CopySelectionAsJson,
             Command::ResultsSetNull,
             Command::ToggleCellExpression,
+            Command::ReviewChanges,
             Command::OpenContextMenu,
             Command::OpenPaneActions,
             Command::MenuUp,
@@ -1054,6 +1059,7 @@ impl Command {
             | Command::CopySelectionAsJson
             | Command::ResultsSetNull
             | Command::ToggleCellExpression
+            | Command::ReviewChanges
             | Command::OpenContextMenu
             | Command::MenuUp
             | Command::MenuDown

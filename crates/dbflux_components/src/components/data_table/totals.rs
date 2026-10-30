@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
 
-use super::model::{CellKind, CellValue, ColumnKind, EditBuffer, TableModel, VisualRowSource};
+use super::model::{CellKind, CellValue, ColumnKind, EditBuffer, TableModel};
 use super::selection::{CellCoord, CellRange, SelectionState};
 
 /// Most decimals a sum or average is written with. Past this the figure is
@@ -134,7 +134,8 @@ pub(super) fn selection_totals(
             if ranges.iter().take(index).any(|other| other.contains(coord)) {
                 continue;
             }
-            let Some(cell) = displayed_cell(model, edit_buffer, &visual_order, coord) else {
+            let Some(cell) = edit_buffer.displayed_cell(model, &visual_order, coord.row, coord.col)
+            else {
                 continue;
             };
             let numeric_column = model.columns.get(coord.col).is_some_and(|column| {
@@ -187,23 +188,6 @@ fn number_of(cell: &CellValue, numeric_column: bool) -> Option<(f64, Option<i128
                 .map(|value| (value, None, text.to_string()))
         }
         _ => None,
-    }
-}
-
-fn displayed_cell<'a>(
-    model: &'a TableModel,
-    edit_buffer: &'a EditBuffer,
-    visual_order: &[VisualRowSource],
-    coord: CellCoord,
-) -> Option<&'a CellValue> {
-    match visual_order.get(coord.row).copied()? {
-        VisualRowSource::Base(base_idx) => {
-            let base = model.cell(base_idx, coord.col)?;
-            Some(edit_buffer.get_cell(base_idx, coord.col, base))
-        }
-        VisualRowSource::Insert(insert_idx) => edit_buffer
-            .get_pending_insert_by_idx(insert_idx)?
-            .get(coord.col),
     }
 }
 

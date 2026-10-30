@@ -5174,7 +5174,7 @@ sidebar:
     connect: Connect
     retry_connect: Retry
     connect_on_startup: Connect on startup
-    connect_on_startup_overridden: "Off while Settings > General > Startup and session reconnects open connections"
+    connect_on_startup_overridden: "No effect while Settings > General > Startup and session reconnects open connections"
     disconnect: Disconnect
     edit: Edit
     duplicate: Duplicate
@@ -5275,6 +5275,8 @@ sidebar:
     edit_reconnect_later: Later
     connection_already_pending: Connection already pending
     startup_needs_password: "'%{name}' was not connected on startup because its password is not saved. Connect to enter it."
+    startup_needs_passwords: "%{names} were not connected on startup because their passwords are not saved. Connect to each one to enter it."
+    startup_needs_passphrase: "'%{name}' was not connected on startup because its SSH tunnel needs a passphrase that is not saved. Connect to enter it."
     operation_started_elsewhere: Operation started by another thread
     background_task_limit: Too many background tasks running, please wait
     connection_cancelled_by_hook: Connection cancelled by hook

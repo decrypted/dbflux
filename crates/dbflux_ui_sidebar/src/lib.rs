@@ -1166,6 +1166,10 @@ pub struct Sidebar {
     /// Connection password of the attempt waiting for the SSH passphrase, so
     /// the retry does not ask for it again.
     pub(crate) pending_tunnel_auth_password: Option<dbflux_core::secrecy::SecretString>,
+    /// Profiles whose next connect was started by "Connect on startup".
+    /// Nobody asked for those connects, so a tunnel passphrase they turn out
+    /// to need is reported instead of opening the single-profile modal.
+    pub(crate) startup_connects: HashSet<Uuid>,
     /// In-flight metric catalog fetch tasks, keyed by profile_id.
     ///
     /// Dropping the task on collapse abandons the await; the underlying cache fetch
@@ -1500,6 +1504,7 @@ impl Sidebar {
             hovered_item_id: None,
             pending_tunnel_auth_profile_id: None,
             pending_tunnel_auth_password: None,
+            startup_connects: HashSet::new(),
             pending_metric_namespace_fetches: HashMap::new(),
             pending_metric_fetches: HashMap::new(),
             pending_remote_dashboard_fetches: HashMap::new(),

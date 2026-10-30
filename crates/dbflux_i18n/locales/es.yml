@@ -5275,6 +5275,8 @@ sidebar:
     edit_reconnect_later: Más tarde
     connection_already_pending: Ya hay una conexión pendiente
     startup_needs_password: "'%{name}' no se conectó al iniciar porque su contraseña no está guardada. Conéctate para introducirla."
+    startup_needs_passwords: "%{names} no se conectaron al iniciar porque sus contraseñas no están guardadas. Conéctate a cada una para introducirla."
+    startup_needs_passphrase: "'%{name}' no se conectó al iniciar porque su túnel SSH necesita una frase de contraseña que no está guardada. Conéctate para introducirla."
     operation_started_elsewhere: Otro proceso ya inició la operación
     background_task_limit: Hay demasiadas tareas en segundo plano, espera un momento
     connection_cancelled_by_hook: Conexión cancelada por un hook

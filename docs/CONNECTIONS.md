@@ -57,7 +57,9 @@ background each time it starts, the same way a click on the connection does:
 SSH tunnels, proxies, hooks and keyring secrets apply, and a failed connect
 shows its usual error. A connection whose password is not saved is not
 connected at startup; it is marked as failed instead, and **Retry** asks for the
-password. The connection's menu in the sidebar (right-click, or the `…` button
+password. The same goes for a connection whose SSH tunnel needs a key passphrase
+that is not saved: **Retry** asks for the passphrase. One notice names every
+connection left out because its password is not saved. The connection's menu in the sidebar (right-click, or the `…` button
 on the row) has the same toggle, with a check mark while it is on.
 
 While **Reopen last connections** (Settings > General > Startup and session) is

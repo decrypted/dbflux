@@ -5173,7 +5173,7 @@ sidebar:
     connect: 연결
     retry_connect: 다시 시도
     connect_on_startup: 시작 시 연결
-    connect_on_startup_overridden: "설정 > 일반 > 시작 및 세션에서 열려 있던 연결에 다시 연결하는 동안 꺼짐"
+    connect_on_startup_overridden: "설정 > 일반 > 시작 및 세션에서 열려 있던 연결에 다시 연결하는 동안 효과 없음"
     disconnect: 연결 끊기
     edit: 편집
     duplicate: 복제
@@ -5274,6 +5274,8 @@ sidebar:
     edit_reconnect_later: 나중에
     connection_already_pending: 연결이 이미 대기 중입니다
     startup_needs_password: "'%{name}'의 비밀번호가 저장되어 있지 않아 시작 시 연결하지 않았습니다. 연결하여 비밀번호를 입력하세요."
+    startup_needs_passwords: "%{names}의 비밀번호가 저장되어 있지 않아 시작 시 연결하지 않았습니다. 각각 연결하여 비밀번호를 입력하세요."
+    startup_needs_passphrase: "'%{name}'의 SSH 터널에 저장되지 않은 암호 문구가 필요하여 시작 시 연결하지 않았습니다. 연결하여 암호 문구를 입력하세요."
     operation_started_elsewhere: 다른 스레드에서 시작한 작업입니다
     background_task_limit: 실행 중인 백그라운드 작업이 너무 많습니다. 잠시 기다려 주세요
     connection_cancelled_by_hook: 훅에 의해 연결이 취소되었습니다

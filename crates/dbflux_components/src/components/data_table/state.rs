@@ -2722,9 +2722,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn row_number_click_keeps_the_active_cell_in_the_first_column(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn row_number_click_keeps_the_active_cell_in_the_first_column(cx: &mut gpui::TestAppContext) {
         use super::super::selection::CellCoord;
 
         let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));

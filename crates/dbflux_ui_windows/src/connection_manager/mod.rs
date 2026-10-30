@@ -882,8 +882,7 @@ impl ConnectionManagerWindow {
                     InputEvent::PressEnter {
                         secondary: false, ..
                     } => {
-                        this.exit_edit_mode(window, cx);
-                        this.focus_down(cx);
+                        this.leave_input_on_enter(window, cx);
                     }
                     InputEvent::Blur => {
                         this.exit_edit_mode_on_blur(window, cx);
@@ -900,8 +899,7 @@ impl ConnectionManagerWindow {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
-                    this.exit_edit_mode(window, cx);
-                    this.focus_down(cx);
+                    this.leave_input_on_enter(window, cx);
                 }
                 InputEvent::Blur => {
                     this.exit_edit_mode_on_blur(window, cx);
@@ -1544,8 +1542,7 @@ impl ConnectionManagerWindow {
                     InputEvent::PressEnter {
                         secondary: false, ..
                     } => {
-                        this.exit_edit_mode(window, cx);
-                        this.focus_down(cx);
+                        this.leave_input_on_enter(window, cx);
                     }
                     InputEvent::Blur => {
                         this.exit_edit_mode_on_blur(window, cx);
@@ -5070,7 +5067,7 @@ mod accessible_name_tests {
     use super::keyboard_coverage_tests::open_manager;
     use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, cm_setting_id};
     use dbflux_components::accessibility::{accessibility_node, accessible_name};
-    use dbflux_components::controls::InputState;
+    use dbflux_components::controls::{InputEvent, InputState};
     use dbflux_ui_base::keyboard_coverage::FrameCapture;
     use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, point, px};
 
@@ -5147,6 +5144,19 @@ mod accessible_name_tests {
         })
     }
 
+    /// Sends the Blur the app delivers to the input a click left, after the
+    /// clicked input already has focus. Test windows deliver no input Blur.
+    fn send_late_blur(
+        window: &mut VisualTestContext,
+        manager: &Entity<ConnectionManagerWindow>,
+        input: impl Fn(&ConnectionManagerWindow) -> Entity<InputState>,
+    ) {
+        window.update(|_, cx| {
+            input(manager.read(cx)).update(cx, |_, cx| cx.emit(InputEvent::Blur));
+        });
+        window.run_until_parked();
+    }
+
     fn refresh_interval_input(manager: &ConnectionManagerWindow) -> Entity<InputState> {
         manager.settings_tab.conn_refresh_interval_input.clone()
     }
@@ -5193,6 +5203,47 @@ mod accessible_name_tests {
         assert!(!is_focused(window, &manager, refresh_interval_input));
     }
 
+    /// Enter in any form text field moves exactly one stop. The input also
+    /// hands Enter on to the window, and both used to move the cursor, so
+    /// Enter skipped fields.
+    #[gpui::test]
+    fn enter_in_a_hook_field_moves_one_stop(cx: &mut TestAppContext) {
+        let (manager, window) = open_settings_tab_with_refresh_override(cx);
+        click_drawn(window, &cm_setting_id("pre_connect_hook_extra"));
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let manager = manager.read(cx);
+            assert_eq!(manager.edit_state, EditState::Navigating);
+            assert_eq!(manager.form_focus, FormFocus::SettingsPostConnectHook);
+        });
+    }
+
+    /// When the refresh interval field loses focus to something that is not a
+    /// form input, the form goes back to navigating, so J and K move again.
+    #[gpui::test]
+    fn leaving_the_refresh_interval_for_no_input_returns_to_navigation(cx: &mut TestAppContext) {
+        let (manager, window) = open_settings_tab_with_refresh_override(cx);
+        click_drawn(window, &cm_setting_id("refresh_interval"));
+        assert_eq!(
+            window.update(|_, cx| manager.read(cx).edit_state),
+            EditState::Editing
+        );
+
+        window.update(|window, cx| {
+            let root = manager.read(cx).focus_handle.clone();
+            window.focus(&root, cx);
+        });
+        send_late_blur(window, &manager, refresh_interval_input);
+
+        assert_eq!(
+            window.update(|_, cx| manager.read(cx).edit_state),
+            EditState::Navigating
+        );
+    }
+
     /// Clicking from another text field into the refresh interval field keeps
     /// the form editing: the old field's blur arrives after the new one has
     /// focus and must not drop the form back to navigation.
@@ -5205,6 +5256,9 @@ mod accessible_name_tests {
         assert!(is_focused(window, &manager, pre_hook_extra_input));
 
         click_drawn(window, &cm_setting_id("refresh_interval"));
+        send_late_blur(window, &manager, pre_hook_extra_input);
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
 
         assert!(is_focused(window, &manager, refresh_interval_input));
         assert_eq!(
@@ -5212,6 +5266,13 @@ mod accessible_name_tests {
             EditState::Editing,
             "the hook field's late blur keeps the form editing"
         );
+        let value = window.update(|_, cx| {
+            refresh_interval_input(manager.read(cx))
+                .read(cx)
+                .value()
+                .to_string()
+        });
+        assert!(value.contains('j'), "the key reaches the field: {value:?}");
     }
 
     /// Clicking from the refresh interval field into another text field and
@@ -5224,6 +5285,7 @@ mod accessible_name_tests {
         click_drawn(window, &cm_setting_id("refresh_interval"));
 
         click_drawn(window, &cm_setting_id("pre_connect_hook_extra"));
+        send_late_blur(window, &manager, refresh_interval_input);
         window.simulate_keystrokes("j");
         window.run_until_parked();
 

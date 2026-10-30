@@ -449,6 +449,9 @@ CSV 또는 TSV 탭의 테이블은 [데이터 테이블](#데이터-테이블) �
 | `Enter` | 주 버튼이 활성화되어 있으면 확인 |
 | `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | 긴 대화 상자 내용 스크롤 |
 | `Escape` / `Ctrl+s` / `Cmd+s` | 셀 편집기와 문서 미리보기 닫기 / 저장 |
+| `Ctrl+Shift+k` / `Ctrl+Shift+h` (macOS에서는 `Cmd`) | 셀 편집기 텍스트를 보이는 그대로 / 압축하여 복사 |
+| `Ctrl+Shift+u` / `Ctrl+Shift+j` (macOS에서는 `Cmd`) | 셀 편집기의 JSON 또는 XML 서식 / 압축 |
+| `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) | 셀 편집기 최대화 또는 복원 |
 
 ## 폼과 설정 창
 

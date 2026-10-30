@@ -639,6 +639,9 @@ CSV 或 TSV 标签页的表格接收[数据表格](#数据表格)按键以及以
 | `Enter` | 主按钮可用时确认 |
 | `Up` / `Down`，`PageUp` / `PageDown`，`Home` / `End` | 滚动较长的对话框内容 |
 | `Escape` / `Ctrl+s` / `Cmd+s` | 关闭 / 保存单元格编辑器和文档预览 |
+| `Ctrl+Shift+k` / `Ctrl+Shift+h`（macOS 上为 `Cmd`） | 按显示原样 / 紧凑复制单元格编辑器的文本 |
+| `Ctrl+Shift+u` / `Ctrl+Shift+j`（macOS 上为 `Cmd`） | 格式化 / 紧凑单元格编辑器中的 JSON 或 XML |
+| `Ctrl+Shift+Enter`（`Cmd+Shift+Enter`） | 最大化或恢复单元格编辑器 |
 | `Tab` / `Shift+Tab` | 移到对话框内的下一个 / 上一个控件 |
 
 在打开的对话框中，`Tab` 和 `Shift+Tab` 会循环：从最后一个控件回到第一个，焦点不会移到对话框后面的面板。

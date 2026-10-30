@@ -167,11 +167,16 @@ components:
     valid:
       one: "valid JSON · %{count} line"
       many: "valid JSON · %{count} lines"
+    valid_xml:
+      one: "valid XML · %{count} line"
+      many: "valid XML · %{count} lines"
     empty_error: Document cannot be empty
     format: Format
     compact: Compact
     cancel: Cancel
     save: Save
+    copy: Copy
+    copy_compact: Copy compact
   value_source:
     literal: Literal
     env: Environment Variable
@@ -3730,6 +3735,12 @@ modals:
     title_column: "Edit %{column} (%{type_name})"
     title_json: Edit JSON
     title_text: Edit Text
+    title_xml: Edit XML
+    maximize: Maximize
+    restore: Restore size
+    invalid_warning: "Not valid %{format} any more: %{error}. Save again to store it as plain text."
+    copied: Value copied to the clipboard
+    copied_compact: Compact value copied to the clipboard
   create_dashboard:
     name_label: Dashboard name
     title: New dashboard
@@ -4418,6 +4429,11 @@ settings:
       load_more: Load more
       edit_expiry: Edit expiry…
       copy_preview: Copy preview
+      copy_editor_text: Copy editor text
+      copy_editor_text_compact: Copy editor text compacted
+      format_editor_text: Format editor text
+      compact_editor_text: Compact editor text
+      toggle_dialog_maximized: Maximize or restore dialog
       import_items: "Import…"
       import_from_client: "Import from another client…"
       reset_binding: "Reset binding"

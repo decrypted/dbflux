@@ -37,7 +37,9 @@ use dbflux_components::components::data_table::model::{
 };
 use dbflux_components::components::data_table::{DataTableEvent, DataTableState, ModelSwap};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::{CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent};
+use dbflux_components::modals::{
+    CellEditorClosedEvent, CellEditorCopiedEvent, CellEditorModal, CellEditorSaveEvent,
+};
 use dbflux_core::observability::EventSeverity;
 use dbflux_delimited::EditSet;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -427,9 +429,10 @@ impl DelimitedDocument {
         cx.notify();
     }
 
-    /// Opens the cell asked for since the last render in the modal editor,
-    /// in its plain-text mode: a delimited field is text. Does nothing when
-    /// the rows cannot be edited any more.
+    /// Opens the cell asked for since the last render in the modal editor.
+    /// A delimited field is text, which the editor shows as JSON or XML when
+    /// it parses as one. Does nothing when the rows cannot be edited any
+    /// more.
     pub(super) fn open_pending_cell_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(request) = self.pending_cell_edit.take() else {
             return;
@@ -484,6 +487,15 @@ impl DelimitedDocument {
         }
 
         let editor = cx.new(|cx| CellEditorModal::new(window, cx));
+
+        if let Some(app_state) = &self.app_state {
+            crate::cell_editor_host::install_geometry_store(app_state, cx);
+        }
+
+        cx.subscribe(&editor, |_, _, event: &CellEditorCopiedEvent, cx| {
+            crate::cell_editor_host::copied_toast(event, cx);
+        })
+        .detach();
 
         cx.subscribe_in(
             &editor,

@@ -173,6 +173,38 @@ In the data grid:
   <img src="images/results/editing-light.webp" alt="The customers table with one edited cell not yet saved, and the Save and Revert buttons enabled">
 </picture>
 
+### Editing long values
+
+JSON columns and long values open in the modal cell editor. A text cell whose
+content parses as a JSON object or array, or as XML, opens there in the same
+editor a JSON column gets, detected the same way the value panel detects it:
+pretty-printed, with syntax highlighting, line numbers and folding, a status
+line that says whether the text still parses, and **Format** and **Compact**.
+The title names both the column type and the format, for example
+`Edit raw_result (TEXT · JSON)`. Bare numbers and strings stay plain text.
+
+Showing a value pretty does not change how it is stored. A value stored on one
+line is saved compact again, with only the whitespace between tokens removed,
+so key order, numbers such as `2312.64496440` and strings such as
+`"2725.8328350479"` stay exactly as written. A value stored over several lines
+is saved as edited, and **Save** without a change creates no pending edit. If
+the text of a text column no longer parses, the first **Save** shows a warning
+and the second saves it as typed; a JSON column refuses it.
+
+**Copy** puts the editor's text on the clipboard as shown, unsaved edits
+included, and **Copy compact** copies it compacted. Drag the editor's right or
+bottom edge or its bottom-right corner to resize it, or maximize it with the
+button next to the close button. The size is remembered for the next value.
+
+| Keys | Action |
+|------|--------|
+| `Ctrl+s` (`Cmd+s`) | Save |
+| `Ctrl+Shift+k` / `Ctrl+Shift+h` | Copy / Copy compact (`Cmd` on macOS) |
+| `Ctrl+Shift+u` / `Ctrl+Shift+j` | Format / Compact |
+| `Ctrl+Shift+Enter` | Maximize or restore the editor |
+
+`Ctrl+c` (`Cmd+c`) keeps copying the selected text.
+
 ### When results are editable
 
 Plain table browses are editable when the table has a primary key. Results

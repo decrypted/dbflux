@@ -823,7 +823,42 @@ fn the_column_controls_and_dialogs_are_covered(cx: &mut TestAppContext) {
 
     assert!(start_cell_edit(&document, window, 0, 1));
     let checked = covered_ids(&document, window);
-    for control in ["cell-editor-cancel", "cell-editor-save"] {
+    for control in [
+        "cell-editor-cancel",
+        "cell-editor-save",
+        "cell-editor-copy",
+        "cell-editor-maximize",
+    ] {
+        assert!(checked.iter().any(|id| id == control), "{checked:?}");
+    }
+    press(window, "escape");
+    assert!(!cell_editor_is_open(&document, window));
+}
+
+/// A field holding JSON opens in the JSON editor, whose Copy compact,
+/// Format and Compact are covered as well.
+#[gpui::test]
+fn the_json_editor_controls_are_covered(cx: &mut TestAppContext) {
+    let directory = TestDirectory::new("column-coverage-json");
+    let json = format!(
+        r#"{{"success":true,"msg":"ok","data":{{"amount":"2725.8328350479","usd":2312.64496440,"note":"{}"}}}}"#,
+        "x".repeat(60)
+    );
+    let bytes = format!("name,raw\nAna,\"{}\"\n", json.replace('"', "\"\""));
+    let path = local_file(&directory, "responses.csv", bytes.as_bytes());
+
+    let (document, window) = open_local(cx, path);
+
+    assert!(start_cell_edit(&document, window, 0, 1));
+    let checked = covered_ids(&document, window);
+    for control in [
+        "cell-editor-copy",
+        "cell-editor-copy-compact",
+        "cell-editor-format",
+        "cell-editor-compact",
+        "cell-editor-maximize",
+        "cell-editor-save",
+    ] {
         assert!(checked.iter().any(|id| id == control), "{checked:?}");
     }
     press(window, "escape");

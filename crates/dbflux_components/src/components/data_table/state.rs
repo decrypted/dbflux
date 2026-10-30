@@ -51,6 +51,36 @@ pub enum ModelSwap {
     ResetCursor,
 }
 
+/// What a primary click on a column header does, from Settings > General >
+/// Data grid: select the column (the default), or sort it as the header did
+/// before column selection. Published by the app so the table, which has no
+/// access to the settings, can follow them.
+///
+/// Absent means select: component tests that never publish it keep the
+/// default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeaderClickSetting {
+    pub sorts: bool,
+}
+
+impl gpui::Global for HeaderClickSetting {}
+
+/// Publishes whether a header click sorts.
+pub fn set_header_click_sorts(cx: &mut App, sorts: bool) {
+    if header_click_sorts(cx) == sorts && cx.has_global::<HeaderClickSetting>() {
+        return;
+    }
+
+    cx.set_global(HeaderClickSetting { sorts });
+}
+
+/// Whether a header click sorts, as last published with
+/// [`set_header_click_sorts`].
+pub fn header_click_sorts(cx: &App) -> bool {
+    cx.try_global::<HeaderClickSetting>()
+        .is_some_and(|setting| setting.sorts)
+}
+
 /// Main state for the DataTable component.
 pub struct DataTableState {
     /// The data model (Arc to avoid cloning).
@@ -71,6 +101,11 @@ pub struct DataTableState {
 
     /// Current sort state.
     sort: Option<SortState>,
+
+    /// Whether the table sorts: a header offers the sort arrow and the sort
+    /// can be set. A host that keeps rows in source order (a file opened as a
+    /// table) turns it off.
+    sortable: bool,
 
     /// Viewport size (updated on layout).
     viewport_size: Size<Pixels>,
@@ -196,6 +231,7 @@ impl DataTableState {
             auto_width_metrics,
             column_offsets,
             sort: None,
+            sortable: true,
             viewport_size: Size::default(),
             selection: SelectionState::new(),
             focus_handle: cx.focus_handle(),
@@ -296,8 +332,8 @@ impl DataTableState {
         }
     }
 
-    /// The width a column opens with: wide enough for its header (name, type
-    /// and a key or sort icon) and for the longest value among the first
+    /// The width a column opens with: wide enough for its header (name, type,
+    /// a key icon and the sort control) and for the longest value among the first
     /// `AUTO_WIDTH_SAMPLE_ROWS` rows, so short values are not cut while the
     /// pane has room. Content counts up to `MAX_AUTO_COLUMN_WIDTH`; a header
     /// wider than that still gets its full width.
@@ -321,7 +357,10 @@ impl DataTableState {
         } else {
             gap + type_chars as f32 * type_char
         };
-        let icon_width = gap + f32::from(GridMetrics::HEADER_ICON);
+        // Two icons: a key column draws its key icon and, on a table that
+        // sorts, every header draws the sort control. The keys are not known
+        // yet when the widths are first worked out, so both are budgeted.
+        let icon_width = 2.0 * (gap + f32::from(GridMetrics::HEADER_ICON));
         let header_width =
             padding + column.title.chars().count() as f32 * cell_char + type_width + icon_width;
 
@@ -623,7 +662,25 @@ impl DataTableState {
         self.sort.as_ref()
     }
 
+    pub fn is_sortable(&self) -> bool {
+        self.sortable
+    }
+
+    /// Turning sorting off drops the current sort, and from then on
+    /// [`Self::set_sort`] and [`Self::cycle_sort`] keep the rows in order.
+    pub fn set_sortable(&mut self, sortable: bool) {
+        self.sortable = sortable;
+        if !sortable {
+            self.sort = None;
+        }
+    }
+
+    /// Sets the sort and reports it. A table that does not sort ignores a
+    /// new sort.
     pub fn set_sort(&mut self, sort: Option<SortState>, cx: &mut Context<Self>) {
+        if sort.is_some() && !self.sortable {
+            return;
+        }
         if self.sort != sort {
             self.sort = sort;
             cx.emit(DataTableEvent::SortChanged(sort));
@@ -748,6 +805,37 @@ impl DataTableState {
             self.selection.toggle_row(row, col_count);
         } else {
             self.selection.select_row(row, col_count);
+        }
+        cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
+    /// A primary click on a column header. It selects the column (see
+    /// [`Self::click_column`]); with the header click set to sort, a plain
+    /// click on a table that sorts cycles the sort instead, while Shift and
+    /// Ctrl (Cmd on macOS) still select.
+    pub fn click_header(&mut self, col: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        let plain = !modifiers.shift && !modifiers.secondary();
+        if plain && self.sortable && header_click_sorts(cx) {
+            self.cycle_sort(col, cx);
+        } else {
+            self.click_column(col, modifiers, cx);
+        }
+    }
+
+    /// Selection change for a primary click on a column header: the whole
+    /// column, with Shift every column from the anchor's column to this one,
+    /// and with Ctrl (Cmd on macOS) the column added to, or taken out of, the
+    /// selection.
+    pub fn click_column(&mut self, col: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        self.commit_edit_in_progress(cx);
+        let row_count = self.row_count();
+        if modifiers.shift {
+            self.selection.extend_to_column(col, row_count);
+        } else if modifiers.secondary() {
+            self.selection.toggle_column(col, row_count);
+        } else {
+            self.selection.select_column(col, row_count);
         }
         cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
@@ -3289,6 +3377,28 @@ mod tests {
         );
     }
 
+    /// A header opens wide enough for its name, its type and two icons: the
+    /// key icon of a key column and the sort control, which every header of
+    /// a sorting table draws.
+    #[test]
+    fn a_header_budgets_a_key_icon_and_the_sort_control() {
+        let metrics = default_metrics();
+        let model = model_with_values("customer_id", &[]);
+        let width = super::DataTableState::initial_column_width(&model, 0, &metrics);
+
+        let gap = f32::from(crate::tokens::GridMetrics::HEADER_GAP);
+        let icon = f32::from(crate::tokens::GridMetrics::HEADER_ICON);
+        let text = f32::from(CELL_PADDING_X) * 2.0
+            + "customer_id".chars().count() as f32 * metrics.cell_char_advance
+            + gap
+            + "text".chars().count() as f32 * metrics.type_char_advance;
+
+        assert!(
+            width >= text + 2.0 * (gap + icon),
+            "{width} leaves no room for both icons beside {text}"
+        );
+    }
+
     #[test]
     fn long_values_widen_a_column_only_up_to_the_cap() {
         let long_value = "x".repeat(400);
@@ -3303,14 +3413,14 @@ mod tests {
 
     #[test]
     fn column_width_scales_with_the_grid_font_size() {
-        let model = model_with_values("title", &["medium value"]);
+        let model = model_with_values("title", &["medium value text"]);
 
         let default_width =
             super::DataTableState::initial_column_width(&model, 0, &default_metrics());
         let larger_width =
             super::DataTableState::initial_column_width(&model, 0, &metrics_at(18.0));
 
-        let value_chars = "medium value".chars().count() as f32;
+        let value_chars = "medium value text".chars().count() as f32;
         let expected_growth = value_chars * (18.0 - 12.5) * 0.6;
 
         assert!(

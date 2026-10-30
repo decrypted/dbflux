@@ -23,7 +23,10 @@ impl DataTableState {
     /// every other selected cell that takes the same kind of value. Empty
     /// when `coord` is outside the selection or the only cell in it.
     ///
-    /// Skipped are rows marked for deletion, read-only columns, rows the
+    /// Skipped are columns of another type than `coord`'s (text typed into
+    /// a name must not land in an integer or date column), key columns when
+    /// the selection spans several rows (one value in every row's key could
+    /// never be saved), rows marked for deletion, read-only columns, rows the
     /// table cannot edit, values the inline editor does not edit (JSON,
     /// long or multi-line text, unsupported types, nested documents), and
     /// columns whose list of allowed values differs from `coord`'s, since a
@@ -38,8 +41,10 @@ impl DataTableState {
         let col_count = self.col_count();
         let ranges: Vec<CellRange> = self.selection.ranges();
         let options = self.enum_options.get(&coord.col);
+        let kind_of = |col: usize| self.model.columns.get(col).map(|column| column.kind);
+        let anchor_kind = kind_of(coord.col);
 
-        let mut targets = vec![coord];
+        let mut others = Vec::new();
         for (index, range) in ranges.iter().enumerate() {
             for target in range.iter() {
                 if target == coord
@@ -52,17 +57,25 @@ impl DataTableState {
                 {
                     continue;
                 }
-                if self.enum_options.get(&target.col) == options
+                if kind_of(target.col) == anchor_kind
+                    && self.enum_options.get(&target.col) == options
                     && self.takes_multi_edit(target, &visual_order)
                 {
-                    targets.push(target);
+                    others.push(target);
                 }
             }
         }
 
-        if targets.len() < 2 {
+        if others.iter().any(|target| target.row != coord.row) {
+            others.retain(|target| !self.pk_columns.contains(&target.col));
+        }
+
+        if others.is_empty() {
             return Vec::new();
         }
+        let mut targets = Vec::with_capacity(others.len() + 1);
+        targets.push(coord);
+        targets.extend(others);
         targets
     }
 
@@ -167,15 +180,17 @@ impl DataTableState {
     }
 }
 
-/// Selected cells counted per range, stopping at two: enough to tell one
-/// cell from several without walking a large selection.
+/// Selected cells counted range by range, stopping once there are two:
+/// enough to tell one cell from several.
 fn selected_cell_count(selection: &SelectionState) -> usize {
-    selection
-        .ranges()
-        .iter()
-        .map(|range| range.row_count() * range.col_count())
-        .sum::<usize>()
-        .min(2)
+    let mut count = 0;
+    for range in selection.ranges() {
+        count += range.row_count() * range.col_count();
+        if count >= 2 {
+            return 2;
+        }
+    }
+    count
 }
 
 #[cfg(test)]
@@ -355,5 +370,253 @@ mod tests {
         let count = edit(&state, window, CellCoord::new(1, 1), "x");
         assert_eq!(count, 0);
         assert_eq!(dirty(&state, window), vec![(1, 1)]);
+    }
+
+    /// A table of `columns` holding `rows`, set up by `setup`.
+    fn state_with(
+        cx: &mut TestAppContext,
+        columns: Vec<ColumnSpec>,
+        rows: Vec<Vec<CellValue>>,
+        setup: impl FnOnce(&mut DataTableState) + 'static,
+    ) -> (Entity<DataTableState>, &mut VisualTestContext) {
+        let holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_for_view = holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let rows = rows.into_iter().map(|cells| RowData { cells }).collect();
+            let model = Arc::new(TableModel::new(columns, rows));
+            let state = cx.new(|cx| {
+                let mut state = DataTableState::new(model, cx);
+                setup(&mut state);
+                state
+            });
+            holder_for_view.replace(Some(state.clone()));
+            Harness { _state: state }
+        });
+        let state = holder.borrow().clone().expect("state entity");
+        (state, window)
+    }
+
+    /// Selects the cells from `from` to `to`, as a click and a Shift+click.
+    fn select(
+        state: &Entity<DataTableState>,
+        window: &mut VisualTestContext,
+        from: CellCoord,
+        to: CellCoord,
+    ) {
+        window.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.click_cell(from, gpui::Modifiers::default(), cx);
+                state.click_cell(
+                    to,
+                    gpui::Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            })
+        });
+    }
+
+    fn staged_text(
+        state: &Entity<DataTableState>,
+        window: &mut VisualTestContext,
+        row: usize,
+        col: usize,
+    ) -> Option<String> {
+        window.update(|_, cx| {
+            let state = state.read(cx);
+            let base = state.model.cell(row, col)?;
+            state.edit_buffer().is_cell_dirty(row, col).then(|| {
+                state
+                    .edit_buffer()
+                    .get_cell(row, col, base)
+                    .display_text()
+                    .to_string()
+            })
+        })
+    }
+
+    #[gpui::test]
+    fn columns_of_another_type_are_skipped(cx: &mut TestAppContext) {
+        let (state, window) = editable_state(cx);
+        select(&state, window, CellCoord::new(0, 0), CellCoord::new(3, 1));
+
+        let count = edit(&state, window, CellCoord::new(1, 1), "same");
+        assert_eq!(count, 4, "the integer id column takes no text");
+        assert_eq!(dirty(&state, window), vec![(0, 1), (1, 1), (2, 1), (3, 1)]);
+    }
+
+    fn text_key_columns() -> Vec<ColumnSpec> {
+        vec![
+            column("code", ColumnKind::Text),
+            column("name", ColumnKind::Text),
+        ]
+    }
+
+    fn text_key_rows() -> Vec<Vec<CellValue>> {
+        (0..2)
+            .map(|row| {
+                vec![
+                    CellValue::text(&format!("k{row}")),
+                    CellValue::text(&format!("name {row}")),
+                ]
+            })
+            .collect()
+    }
+
+    #[gpui::test]
+    fn key_columns_are_skipped_when_the_edit_spans_rows(cx: &mut TestAppContext) {
+        let (state, window) = state_with(cx, text_key_columns(), text_key_rows(), |state| {
+            state.set_pk_columns(vec![0])
+        });
+        select(&state, window, CellCoord::new(0, 0), CellCoord::new(1, 1));
+
+        let count = edit(&state, window, CellCoord::new(0, 1), "same");
+        assert_eq!(
+            count, 2,
+            "one value in every row's key could never be saved"
+        );
+        assert_eq!(staged_text(&state, window, 0, 0), None);
+        assert_eq!(staged_text(&state, window, 1, 0), None);
+        assert_eq!(staged_text(&state, window, 1, 1).as_deref(), Some("same"));
+    }
+
+    #[gpui::test]
+    fn key_columns_of_the_edited_row_alone_are_written(cx: &mut TestAppContext) {
+        let (state, window) = state_with(cx, text_key_columns(), text_key_rows(), |state| {
+            state.set_pk_columns(vec![0])
+        });
+        select(&state, window, CellCoord::new(0, 0), CellCoord::new(0, 1));
+
+        let count = edit(&state, window, CellCoord::new(0, 1), "same");
+        assert_eq!(count, 2, "one row cannot collide with another row's key");
+        assert_eq!(staged_text(&state, window, 0, 0).as_deref(), Some("same"));
+    }
+
+    #[gpui::test]
+    fn pending_inserts_in_the_selection_are_written(cx: &mut TestAppContext) {
+        let (state, window) = editable_state(cx);
+        window.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.edit_buffer_mut().add_pending_insert(vec![
+                    CellValue::null(),
+                    CellValue::text(""),
+                    CellValue::text("note"),
+                ]);
+                state.click_column(1, gpui::Modifiers::default(), cx);
+            })
+        });
+
+        let count = edit(&state, window, CellCoord::new(0, 1), "same");
+        assert_eq!(count, 5, "four rows and the pending insert after them");
+        let inserted = window.update(|_, cx| {
+            state
+                .read(cx)
+                .edit_buffer()
+                .get_pending_insert_by_idx(0)
+                .and_then(|cells| cells.get(1))
+                .map(|cell| cell.display_text().to_string())
+        });
+        assert_eq!(inserted.as_deref(), Some("same"));
+    }
+
+    #[gpui::test]
+    fn values_the_inline_editor_does_not_edit_are_skipped(cx: &mut TestAppContext) {
+        let rows = vec![
+            vec![CellValue::text("x"), CellValue::text("line 1\nline 2")],
+            vec![CellValue::text("y"), CellValue::json("{\"a\": 1}")],
+            vec![CellValue::text("z"), CellValue::nested(false, 2)],
+        ];
+        let (state, window) = state_with(
+            cx,
+            vec![column("a", ColumnKind::Text), column("b", ColumnKind::Text)],
+            rows,
+            |state| state.set_positional_editing(true),
+        );
+        select(&state, window, CellCoord::new(0, 0), CellCoord::new(2, 1));
+
+        let count = edit(&state, window, CellCoord::new(0, 0), "v");
+        assert_eq!(
+            count, 3,
+            "multi-line text, JSON and a nested document are left out"
+        );
+        for row in 0..3 {
+            assert_eq!(staged_text(&state, window, row, 0).as_deref(), Some("v"));
+            assert_eq!(staged_text(&state, window, row, 1), None);
+        }
+    }
+
+    /// A dropdown choice goes to every selected cell of a column with the
+    /// same allowed values, also when the dropdown reports its dismissal
+    /// before the selection, as its auto-close can.
+    #[gpui::test]
+    fn an_enum_choice_is_written_to_columns_with_the_same_values(cx: &mut TestAppContext) {
+        use crate::controls::{DropdownDismissed, DropdownItem, DropdownSelectionChanged};
+
+        let rows = (0..2)
+            .map(|_| {
+                vec![
+                    CellValue::text("a"),
+                    CellValue::text("a"),
+                    CellValue::text("a"),
+                ]
+            })
+            .collect();
+        let (state, window) = state_with(
+            cx,
+            vec![
+                column("status", ColumnKind::Text),
+                column("backup", ColumnKind::Text),
+                column("other", ColumnKind::Text),
+            ],
+            rows,
+            |state| {
+                state.set_positional_editing(true);
+                let options = vec!["a".to_string(), "b".to_string()];
+                state.set_enum_options(0, options.clone());
+                state.set_enum_options(1, options);
+                state.set_enum_options(2, vec!["a".to_string(), "c".to_string()]);
+            },
+        );
+        select(&state, window, CellCoord::new(0, 0), CellCoord::new(1, 2));
+
+        let (dropdown, count) = window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                assert!(state.start_editing(CellCoord::new(0, 0), window, cx));
+                (
+                    state.enum_dropdown().cloned().expect("an enum dropdown"),
+                    state.multi_edit_count(),
+                )
+            })
+        });
+        assert_eq!(count, 4, "the column with other allowed values is left out");
+
+        window.update(|_, cx| {
+            dropdown.update(cx, |_, cx| {
+                cx.emit(DropdownDismissed);
+                cx.emit(DropdownSelectionChanged {
+                    index: 1,
+                    item: DropdownItem::new("b"),
+                });
+            })
+        });
+        window.run_until_parked();
+
+        for row in 0..2 {
+            assert_eq!(staged_text(&state, window, row, 0).as_deref(), Some("b"));
+            assert_eq!(staged_text(&state, window, row, 1).as_deref(), Some("b"));
+            assert_eq!(staged_text(&state, window, row, 2), None);
+        }
+        window.update(|_, cx| {
+            state.update(cx, |state, _| {
+                assert_eq!(state.multi_edit_count(), 0, "the edit is closed");
+                assert!(state.edit_buffer_mut().undo());
+                assert!(
+                    !state.edit_buffer().has_changes(),
+                    "one undo takes back the whole choice"
+                );
+            })
+        });
     }
 }

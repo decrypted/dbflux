@@ -2315,7 +2315,11 @@ mod tests {
             assert_eq!(state.editing_cell(), Some(CellCoord::new(2, 1)));
             assert!(state.selection().is_full_row_selected(1, 2));
             assert!(state.selection().is_full_row_selected(3, 2));
-            assert_eq!(state.multi_edit_count(), 6, "rows 1 to 3, both columns");
+            assert_eq!(
+                state.multi_edit_count(),
+                3,
+                "rows 1 to 3 of the text column; the integer key column is skipped"
+            );
         });
     }
 

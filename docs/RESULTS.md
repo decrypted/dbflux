@@ -172,7 +172,7 @@ In the data grid:
 - `y` — copy the selected row.
 - `Ctrl+c` (`Cmd+c`) — copy the selected cell(s) to the clipboard.
 
-With several cells selected, `Enter`, `F2` or a double-click on one of them opens the editor for all of them, and the status bar says how many cells the edit will change. The value you commit is written to every selected cell that can take it, as unsaved changes that Save and Revert handle like any other edit, and one undo (`u` or `Ctrl+z`) takes the whole edit back. Cells in read-only columns, rows marked for deletion and values the inline editor does not edit (JSON, long or multi-line text) are skipped; a value picked from a column's list of allowed values goes only to columns with the same list.
+With several cells selected, `Enter`, `F2` or a double-click on one of them opens the editor for all of them, and the status bar says how many cells the edit will change. The value you commit is written to every selected cell of the same column type that can take it, as unsaved changes that Save and Revert handle like any other edit, and one undo (`u` or `Ctrl+z`) takes the whole edit back. Cells in read-only columns, rows marked for deletion and values the inline editor does not edit (JSON, long or multi-line text) are skipped, and so are key columns when the selection spans several rows, since one value in every row's key could never be saved; a value picked from a column's list of allowed values goes only to columns with the same list.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/results/editing-dark.webp">

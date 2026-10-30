@@ -1471,6 +1471,9 @@ impl DataTableState {
     fn cancel_enum_edit(&mut self, cx: &mut Context<Self>) {
         self.editing_cell = None;
         self.enum_dropdown = None;
+        // A selection delivered after this dismissal brings back its own
+        // copy of the targets.
+        self.edit_targets.clear();
         cx.notify();
     }
 

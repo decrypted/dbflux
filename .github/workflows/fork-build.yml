@@ -47,4 +47,5 @@ jobs:
       version: ${{ needs.compute-version.outputs.version }}
       channel: nightly
       prerelease: true
+      cache: true
     secrets: inherit

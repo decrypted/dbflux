@@ -16,6 +16,15 @@ on:
         required: false
         type: boolean
         default: false
+      cache:
+        # Off for upstream's release and nightly runs, which build Linux and
+        # macOS cold to stay inside the 10 GB cache limit (see the Windows
+        # job). A caller with room to spare (the fork build) turns it on for
+        # Linux amd64 and macOS arm64 only.
+        description: 'Cache cargo dependencies and target for Linux amd64 and macOS arm64'
+        required: false
+        type: boolean
+        default: false
     secrets:
       GPG_PRIVATE_KEY:
         required: true
@@ -147,6 +156,19 @@ jobs:
           sudo swapon /swapfile
           free -h
           df -h /
+
+      - name: Setup Rust cache
+        # The build runs in an ubuntu:22.04 container with this checkout's
+        # target/ and the runner's ~/.cargo mounted, so the host-side cache
+        # covers what the container compiles. Restored after the disk is
+        # cleared and the swap file exists, so it does not crowd them out.
+        if: inputs.cache && matrix.arch == 'amd64'
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
+        with:
+          prefix-key: "v0-rust"
+          shared-key: linux-amd64
+          cache-targets: true
+          cache-on-failure: true
 
       - name: Build DBFlux
         # No --locked here: the version stamp above mutates Cargo.toml, so cargo must
@@ -565,6 +587,15 @@ jobs:
         # Apple Silicon runner. Add it to the pinned toolchain. No-op for the
         # native arm64 target.
         run: rustup target add ${{ matrix.target }}
+
+      - name: Setup Rust cache
+        if: inputs.cache && matrix.arch == 'arm64'
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
+        with:
+          prefix-key: "v0-rust"
+          shared-key: macos-arm64
+          cache-targets: true
+          cache-on-failure: true
 
       - name: Stamp workspace version
         env:

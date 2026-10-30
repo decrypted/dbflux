@@ -1828,6 +1828,36 @@ mod tests {
         std::sync::Arc::new(TableModel::new(columns, rows))
     }
 
+    fn three_column_model() -> std::sync::Arc<super::super::model::TableModel> {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::TextAlign;
+
+        let column = |id: &str, kind: ColumnKind| ColumnSpec {
+            id: id.into(),
+            title: id.into(),
+            kind,
+            align: TextAlign::Left,
+            type_name: "text".into(),
+        };
+        let columns = vec![
+            column("id", ColumnKind::Integer),
+            column("name", ColumnKind::Text),
+            column("city", ColumnKind::Text),
+        ];
+        let rows = (0..4)
+            .map(|i| RowData {
+                cells: vec![
+                    CellValue::int(i),
+                    CellValue::text("name"),
+                    CellValue::text("city"),
+                ],
+            })
+            .collect();
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
     fn two_row_model() -> std::sync::Arc<super::super::model::TableModel> {
         use crate::components::data_table::model::{
             CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
@@ -2686,6 +2716,47 @@ mod tests {
             assert!(selection.is_full_row_selected(1, 2));
             assert!(!selection.is_selected(CellCoord::new(0, 0)));
             assert!(!selection.is_selected(CellCoord::new(0, 1)));
+        });
+    }
+
+    #[gpui::test]
+    fn row_number_click_keeps_the_active_cell_in_the_first_column(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| super::DataTableState::new(three_column_model(), cx));
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_row(1, gpui::Modifiers::default(), cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(1, 0)));
+            assert!(selection.is_full_row_selected(1, 3));
+        });
+
+        // Shift+click upward: rows 0 and 1, the cursor on the clicked row.
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_row(0, shift, cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(0, 0)));
+            assert!(selection.is_full_row_selected(0, 3));
+            assert!(selection.is_full_row_selected(1, 3));
+            assert!(!selection.is_full_row_selected(2, 3));
         });
     }
 

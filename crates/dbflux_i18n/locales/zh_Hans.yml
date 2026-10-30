@@ -1636,6 +1636,8 @@ document:
       column:
         title: 列
         fit_width: 适应宽度
+        pin: 固定列
+        unpin: 取消固定列
         hide: 隐藏列
         choose: "列…"
         move_left: 左移

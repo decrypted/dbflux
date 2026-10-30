@@ -5,7 +5,7 @@
 
 use super::sections::MenuRowCursor;
 use super::{DataGridEvent, DataGridPanel, TableContextMenu};
-use dbflux_components::components::data_table::{ContextMenuAction, ROW_NUMBER_WIDTH};
+use dbflux_components::components::data_table::ContextMenuAction;
 use dbflux_components::composites::{MenuItem, render_menu_header, render_separator};
 use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
@@ -56,8 +56,29 @@ impl DataGridPanel {
         let position = layout.view_position(col);
         let shown = layout.visible_count();
 
+        items.push(if layout.is_pinned(col) {
+            item(
+                dbflux_i18n::t!("document.data.context_menu.column.unpin"),
+                ContextMenuAction::UnpinColumn,
+                AppIcon::Pin,
+            )
+        } else {
+            item(
+                dbflux_i18n::t!("document.data.context_menu.column.pin"),
+                ContextMenuAction::PinColumn,
+                AppIcon::Pin,
+            )
+        });
+
         // Entries that would do nothing are left out rather than disabled,
-        // so the keyboard never lands on a dead row.
+        // so the keyboard never lands on a dead row. Moving stops at the
+        // pinned edge, which Pin and Unpin cross.
+        let neighbor_on_same_side = |step: isize| {
+            position
+                .and_then(|position| position.checked_add_signed(step))
+                .and_then(|target| layout.model_column(target))
+                .is_some_and(|target| layout.is_pinned(target) == layout.is_pinned(col))
+        };
         if shown > 1 && position.is_some() {
             items.push(item(
                 dbflux_i18n::t!("document.data.context_menu.column.hide"),
@@ -70,14 +91,14 @@ impl DataGridPanel {
             ContextMenuAction::ChooseColumns,
             AppIcon::Columns,
         ));
-        if position.is_some_and(|position| position > 0) {
+        if neighbor_on_same_side(-1) {
             items.push(item(
                 dbflux_i18n::t!("document.data.context_menu.column.move_left"),
                 ContextMenuAction::MoveColumnLeft,
                 AppIcon::ChevronLeft,
             ));
         }
-        if position.is_some_and(|position| position + 1 < shown) {
+        if neighbor_on_same_side(1) {
             items.push(item(
                 dbflux_i18n::t!("document.data.context_menu.column.move_right"),
                 ContextMenuAction::MoveColumnRight,
@@ -149,6 +170,13 @@ impl DataGridPanel {
                 }
                 ContextMenuAction::MoveColumnLeft => state.move_column_by(col, -1, cx),
                 ContextMenuAction::MoveColumnRight => state.move_column_by(col, 1, cx),
+                ContextMenuAction::PinColumn => {
+                    state.pin_column(col, cx);
+                    false
+                }
+                // Unpinned, the column joins the scrolling ones, which may
+                // be scrolled past it.
+                ContextMenuAction::UnpinColumn => state.unpin_column(col, cx),
                 _ => false,
             };
 
@@ -171,22 +199,21 @@ impl DataGridPanel {
             return false;
         };
 
-        let (row, col, column_left, horizontal_offset) = {
+        let (row, col, column_left) = {
             let state = table_state.read(cx);
             let active = state.selection().active;
             let (row, col) = active.map_or((0, 0), |cell| (cell.row, cell.col));
-            let Some(column_left) = state.column_left(col) else {
+            let Some(column_left) = state.column_screen_left(col) else {
                 return false;
             };
 
-            (row, col, column_left, state.horizontal_offset())
+            (row, col, column_left)
         };
 
         // The toolbar height is the same estimate the cell menu uses.
         let toolbar_height = px(36.0);
         let position = Point {
-            x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(column_left) - horizontal_offset
-                + px(20.0),
+            x: self.panel_origin.x + column_left + px(20.0),
             y: self.panel_origin.y + toolbar_height + fonts::grid_header_height(cx),
         };
 

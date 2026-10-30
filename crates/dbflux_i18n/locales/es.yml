@@ -1636,6 +1636,8 @@ document:
       column:
         title: Columna
         fit_width: Ajustar ancho
+        pin: Fijar columna
+        unpin: Soltar columna
         hide: Ocultar columna
         choose: "Columnas…"
         move_left: Mover a la izquierda

@@ -145,6 +145,13 @@ pub struct DataTable {
 }
 
 impl DataTable {
+    fn drag_tracking(&self) -> DragTracking {
+        DragTracking {
+            resize: self.resize_drag.clone(),
+            state: self.state.clone(),
+        }
+    }
+
     pub fn new(
         id: impl Into<ElementId>,
         state: Entity<DataTableState>,
@@ -471,12 +478,7 @@ impl gpui::Render for DataTable {
 
         // Resize drag handlers live on the root div so they keep firing
         // even when the cursor leaves the narrow 6px resize handle.
-        let resize_drag_for_move = self.resize_drag.clone();
-        let state_for_resize_move = self.state.clone();
-        let resize_drag_for_up = self.resize_drag.clone();
-        let state_for_drag_up = self.state.clone();
-        let resize_drag_for_up_out = self.resize_drag.clone();
-        let state_for_drag_up_out = self.state.clone();
+        let drag_tracking = self.drag_tracking();
 
         // Forward horizontal wheel/trackpad deltas to the horizontal scroll
         // handle. The handle is owned by a 1px phantom scroller at the bottom
@@ -616,44 +618,7 @@ impl gpui::Render for DataTable {
             .on_action(on_step_out)
             // Column resize: move and up handlers on the root div so the drag
             // continues even when the cursor leaves the 6px handle area.
-            .on_mouse_move(move |event, _window, cx| {
-                let (col, new_width) = {
-                    let drag = resize_drag_for_move.lock().ok();
-                    if let Some(drag) = drag {
-                        if let Some(col) = drag.col {
-                            let delta = event.position.x - drag.start_x;
-                            let delta_f32: f32 = delta.into();
-                            let new_width = drag.original_width + delta_f32;
-                            (Some(col), new_width.max(super::theme::MIN_COLUMN_WIDTH))
-                        } else {
-                            (None, 0.0)
-                        }
-                    } else {
-                        (None, 0.0)
-                    }
-                };
-                if let Some(col) = col {
-                    state_for_resize_move.update(cx, |state, cx| {
-                        state.set_column_width(col, new_width, cx);
-                    });
-                }
-            })
-            .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
-                if let Ok(mut drag) = resize_drag_for_up.lock() {
-                    drag.col = None;
-                }
-                state_for_drag_up.update(cx, |state, _| state.end_drag_select());
-            })
-            // A release outside the table (another pane, outside the window)
-            // never reaches the handler above; without this the drag would
-            // still be running when the pointer comes back with the button
-            // pressed for something else.
-            .on_mouse_up_out(MouseButton::Left, move |_event, _window, cx| {
-                if let Ok(mut drag) = resize_drag_for_up_out.lock() {
-                    drag.col = None;
-                }
-                state_for_drag_up_out.update(cx, |state, _| state.end_drag_select());
-            })
+            .map(|root| drag_tracking.attach(root))
             .child(inner_table)
             // Measure viewport size and sync horizontal scroll offset using canvas
             .child({
@@ -784,9 +749,11 @@ impl DataTable {
         let fk_cols = state.fk_columns().clone();
         let annotated = state.has_header_annotations();
         let header_height = state.header_height(cx);
+        let pinned_width = state.pinned_width();
+        let pinned_count = state.pinned_shown_count();
         let reorderable = state.columns_reorderable();
 
-        let header_cells: Vec<_> = state
+        let mut header_cells: Vec<AnyElement> = state
             .visible_columns()
             .iter()
             .filter_map(|&col_ix| model.columns.get(col_ix).map(|spec| (col_ix, spec)))
@@ -798,6 +765,7 @@ impl DataTable {
 
                 let is_pk = pk_cols.contains(&col_ix);
                 let is_fk = fk_cols.contains(&col_ix);
+                let is_pinned = state.column_layout().is_pinned(col_ix);
 
                 let key_icon = if is_pk {
                     Some((AppIcon::KeyRound, theme.warning))
@@ -863,6 +831,14 @@ impl DataTable {
                                 });
                             });
                         }
+                    })
+                    // A pin marks a column that stays at the left edge.
+                    .when(is_pinned, |d| {
+                        d.child(
+                            Icon::new(AppIcon::Pin)
+                                .size(GridMetrics::HEADER_ICON)
+                                .color(theme.muted_foreground),
+                        )
                     })
                     // PK / FK key icon: amber key for a primary key, blue
                     // cable for a foreign key.
@@ -947,6 +923,7 @@ impl DataTable {
                         ChromeColors::tint(theme),
                     ))
             })
+            .map(IntoElement::into_any_element)
             .collect();
 
         // Header uses overflow_hidden and applies horizontal offset via margin.
@@ -961,15 +938,29 @@ impl DataTable {
             .border_b_1()
             .border_color(theme.input)
             .font_family(fonts::grid_family(cx))
-            .child(
+            .child({
+                let scrolled = header_cells.split_off(pinned_count.min(header_cells.len()));
+
                 div()
+                    .relative()
                     .flex()
                     .h_full()
                     .min_w(px(total_width))
                     .ml(-h_offset)
-                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
-                    .children(header_cells),
-            )
+                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH + px(pinned_width)))
+                    .children(scrolled)
+                    .when(pinned_count > 0, |row| {
+                        row.child(pinned_strip(
+                            h_offset,
+                            theme.table_head,
+                            None,
+                            div().flex_shrink_0().w(ROW_NUMBER_WIDTH).into_any_element(),
+                            header_cells,
+                            &self.drag_tracking(),
+                            theme,
+                        ))
+                    })
+            })
     }
 
     /// Header of a document grid: an optional row of column-group labels over
@@ -1218,6 +1209,7 @@ impl DataTable {
         let model = Arc::clone(state.model_arc());
 
         let state_entity = self.state.clone();
+        let drag_tracking = self.drag_tracking();
 
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
@@ -1244,6 +1236,12 @@ impl DataTable {
                     visible_range,
                     &model,
                     state.visible_columns(),
+                    PinnedColumns {
+                        count: state.pinned_shown_count(),
+                        width: state.pinned_width(),
+                        h_offset: state.horizontal_offset(),
+                        drag: drag_tracking.clone(),
+                    },
                     state.column_widths(),
                     state.selection(),
                     editing_cell,
@@ -1292,6 +1290,7 @@ fn render_rows(
     visible_range: Range<usize>,
     model: &TableModel,
     columns: &[usize],
+    pinned: PinnedColumns,
     column_widths: &[f32],
     selection: &SelectionState,
     editing_cell: Option<CellCoord>,
@@ -1363,7 +1362,7 @@ fn render_rows(
             // number reads as their rank.
             let row_number = if reference_row { row_ix } else { row_ix + 1 };
 
-            let cells: Vec<AnyElement> = columns
+            let mut cells: Vec<AnyElement> = columns
                 .iter()
                 .map(|&col_ix| {
                     // Get cell either from model or from pending insert
@@ -1625,8 +1624,69 @@ fn render_rows(
                 })
                 .collect();
 
-            div()
+            // Row state background (dirty=yellow, error=red); otherwise the
+            // row holding the focused cell gets the selected-row wash and
+            // clean rows alternate. The pinned strip repeats it over its
+            // own opaque base.
+            let row_fill = row_bg.or(if is_reference_row {
+                Some(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
+            } else if is_active_row {
+                Some(theme.table_active)
+            } else if row_ix % 2 == 1 {
+                Some(theme.table_even)
+            } else {
+                None
+            });
+
+            let gutter = div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_end()
+                .w(ROW_NUMBER_WIDTH)
+                .id(("row-number", row_ix))
+                .role(gpui::Role::Button)
+                .aria_label(SharedString::from(row_number.to_string()))
+                .cursor_pointer()
+                // The row is selected on press, before the release a click
+                // needs, so a drag can start from it.
+                .on_mouse_down(MouseButton::Left, {
+                    let state = state_entity.clone();
+                    move |event: &MouseDownEvent, window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.focus(window, cx);
+                            state.click_row(row_ix, event.modifiers, cx);
+                        });
+                    }
+                })
+                .on_a11y_action(gpui::AccessibleAction::Click, {
+                    let state = state_entity.clone();
+                    move |_, window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.focus(window, cx);
+                            state.click_row(row_ix, gpui::Modifiers::default(), cx);
+                        });
+                    }
+                })
+                .h_full()
+                .pr(CELL_PADDING_X)
+                .text_size(font_size)
+                .text_color(if is_active_row || is_reference_row {
+                    tint
+                } else {
+                    theme.input
+                })
+                .map(|gutter| {
+                    if is_reference_row {
+                        gutter.child(Icon::new(AppIcon::Crosshair).size(nested_icon).color(tint))
+                    } else {
+                        gutter.child(row_number.to_string())
+                    }
+                });
+
+            let row = div()
                 .id(("row", row_ix))
+                .relative()
                 .flex()
                 .flex_shrink_0()
                 .w(px(total_width))
@@ -1634,75 +1694,131 @@ fn render_rows(
                 .overflow_hidden()
                 .border_b_1()
                 .border_color(theme.table_row_border)
-                // Row state background (dirty=yellow, error=red)
-                .when_some(row_bg, |d, bg| d.bg(bg))
-                // The row holding the focused cell gets the selected-row
-                // wash; clean rows otherwise alternate.
+                .when_some(row_fill, |d, fill| d.bg(fill))
                 .when(row_bg.is_none() && is_reference_row, |d| {
-                    d.bg(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
-                        .border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
-                })
-                .when(
-                    row_bg.is_none() && !is_reference_row && is_active_row,
-                    |d| d.bg(theme.table_active),
-                )
-                .when(
-                    row_bg.is_none() && !is_reference_row && !is_active_row && row_ix % 2 == 1,
-                    |d| d.bg(theme.table_even),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .justify_end()
-                        .w(ROW_NUMBER_WIDTH)
-                        .id(("row-number", row_ix))
-                        .role(gpui::Role::Button)
-                        .aria_label(SharedString::from(row_number.to_string()))
-                        .cursor_pointer()
-                        // The row is selected on press, before the release a
-                        // click needs, so a drag can start from it.
-                        .on_mouse_down(MouseButton::Left, {
-                            let state = state_entity.clone();
-                            move |event: &MouseDownEvent, window, cx| {
-                                state.update(cx, |state, cx| {
-                                    state.focus(window, cx);
-                                    state.click_row(row_ix, event.modifiers, cx);
-                                });
-                            }
-                        })
-                        .on_a11y_action(gpui::AccessibleAction::Click, {
-                            let state = state_entity.clone();
-                            move |_, window, cx| {
-                                state.update(cx, |state, cx| {
-                                    state.focus(window, cx);
-                                    state.click_row(row_ix, gpui::Modifiers::default(), cx);
-                                });
-                            }
-                        })
-                        .h_full()
-                        .pr(CELL_PADDING_X)
-                        .text_size(font_size)
-                        .text_color(if is_active_row || is_reference_row {
-                            tint
-                        } else {
-                            theme.input
-                        })
-                        .map(|gutter| {
-                            if is_reference_row {
-                                gutter.child(
-                                    Icon::new(AppIcon::Crosshair).size(nested_icon).color(tint),
-                                )
-                            } else {
-                                gutter.child(row_number.to_string())
-                            }
-                        }),
-                )
-                .children(cells)
+                    d.border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
+                });
+
+            if pinned.count == 0 {
+                return row.child(gutter).children(cells).into_any_element();
+            }
+
+            // With pinned columns the gutter and those columns move into a
+            // strip that cancels the horizontal scroll; a spacer of the same
+            // width keeps the scrolling cells where they were.
+            let scrolled = cells.split_off(pinned.count.min(cells.len()));
+            row.child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH + px(pinned.width)))
+                .children(scrolled)
+                .child(pinned_strip(
+                    pinned.h_offset,
+                    theme.table,
+                    row_fill,
+                    gutter.into_any_element(),
+                    cells,
+                    &pinned.drag,
+                    theme,
+                ))
                 .into_any_element()
         })
         .collect()
+}
+
+/// The pointer tracking a column resize and a drag selection need while the
+/// button is held: a move resizes the column being dragged, a release ends
+/// both. The table root carries it so a resize survives the cursor leaving
+/// the narrow handle. Each pinned strip carries it too: a strip blocks the
+/// mouse from everything under it, the root included.
+#[derive(Clone)]
+struct DragTracking {
+    resize: Arc<Mutex<ResizeDragState>>,
+    state: Entity<DataTableState>,
+}
+
+impl DragTracking {
+    fn attach<E: InteractiveElement>(&self, element: E) -> E {
+        let (resize_for_move, state_for_move) = (self.resize.clone(), self.state.clone());
+        let (resize_for_up, state_for_up) = (self.resize.clone(), self.state.clone());
+        let (resize_for_up_out, state_for_up_out) = (self.resize.clone(), self.state.clone());
+
+        element
+            .on_mouse_move(move |event, _window, cx| {
+                let resized = resize_for_move.lock().ok().and_then(|drag| {
+                    let col = drag.col?;
+                    let delta: f32 = (event.position.x - drag.start_x).into();
+                    let width = drag.original_width + delta;
+                    Some((col, width.max(super::theme::MIN_COLUMN_WIDTH)))
+                });
+                if let Some((col, width)) = resized {
+                    state_for_move.update(cx, |state, cx| {
+                        state.set_column_width(col, width, cx);
+                    });
+                }
+            })
+            .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
+                if let Ok(mut drag) = resize_for_up.lock() {
+                    drag.col = None;
+                }
+                state_for_up.update(cx, |state, _| state.end_drag_select());
+            })
+            // A release outside the table (another pane, outside the window)
+            // never reaches the handler above; without this the drag would
+            // still be running when the pointer comes back with the button
+            // pressed for something else.
+            .on_mouse_up_out(MouseButton::Left, move |_event, _window, cx| {
+                if let Ok(mut drag) = resize_for_up_out.lock() {
+                    drag.col = None;
+                }
+                state_for_up_out.update(cx, |state, _| state.end_drag_select());
+            })
+    }
+}
+
+/// What the body needs to draw the pinned columns: how many of the shown
+/// columns are pinned, their total width, the horizontal scroll the strip
+/// holding them cancels, and the drag tracking the strip repeats.
+#[derive(Clone)]
+struct PinnedColumns {
+    count: usize,
+    width: f32,
+    h_offset: Pixels,
+    drag: DragTracking,
+}
+
+/// The strip that keeps the row-number gutter and the pinned columns at the
+/// grid's left edge, like a frozen pane. It sits inside a row (or the header
+/// row) that scrolls by `-h_offset`, so it is placed `h_offset` in to stay
+/// put. Drawn after the scrolling cells, it covers the ones passing under it,
+/// on an opaque `base` with the row's own `fill` on top. It also blocks the
+/// mouse from them: without that a click on a pinned cell or the gutter
+/// would reach the hidden scrolling cell under it as well. Wheel scrolling
+/// still passes through.
+fn pinned_strip(
+    h_offset: Pixels,
+    base: Hsla,
+    fill: Option<Hsla>,
+    gutter: AnyElement,
+    cells: Vec<AnyElement>,
+    drag: &DragTracking,
+    theme: &gpui_component::theme::Theme,
+) -> impl IntoElement {
+    drag.attach(div())
+        .debug_selector(|| "pinned-columns".to_string())
+        .block_mouse_except_scroll()
+        .absolute()
+        .top_0()
+        .left(h_offset)
+        .h_full()
+        .bg(base)
+        .border_r_2()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex()
+                .h_full()
+                .when_some(fill, |strip, fill| strip.bg(fill))
+                .child(gutter)
+                .children(cells),
+        )
 }
 
 /// What a header carries while it is dragged onto another header to move

@@ -1636,6 +1636,8 @@ document:
       column:
         title: 열
         fit_width: 너비 맞춤
+        pin: 열 고정
+        unpin: 열 고정 해제
         hide: 열 숨기기
         choose: "열…"
         move_left: 왼쪽으로 이동

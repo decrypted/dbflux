@@ -10,7 +10,10 @@ on:
 
 concurrency:
   group: fork-build-${{ github.ref }}
-  cancel-in-progress: true
+  # A push waits for the running build instead of cancelling it: a cancelled run saves no cache
+  # and leaves no artifacts, and pushes often come minutes apart. GitHub keeps only the newest
+  # pending run per group, so a burst of pushes still builds just the latest one next.
+  cancel-in-progress: false
 
 permissions:
   contents: read

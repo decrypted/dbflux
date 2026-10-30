@@ -145,6 +145,13 @@ pub struct DataTable {
 }
 
 impl DataTable {
+    fn drag_tracking(&self) -> DragTracking {
+        DragTracking {
+            resize: self.resize_drag.clone(),
+            state: self.state.clone(),
+        }
+    }
+
     pub fn new(
         id: impl Into<ElementId>,
         state: Entity<DataTableState>,
@@ -471,10 +478,7 @@ impl gpui::Render for DataTable {
 
         // Resize drag handlers live on the root div so they keep firing
         // even when the cursor leaves the narrow 6px resize handle.
-        let resize_drag_for_move = self.resize_drag.clone();
-        let state_for_resize_move = self.state.clone();
-        let resize_drag_for_up = self.resize_drag.clone();
-        let state_for_drag_up = self.state.clone();
+        let drag_tracking = self.drag_tracking();
 
         // Forward horizontal wheel/trackpad deltas to the horizontal scroll
         // handle. The handle is owned by a 1px phantom scroller at the bottom
@@ -614,34 +618,7 @@ impl gpui::Render for DataTable {
             .on_action(on_step_out)
             // Column resize: move and up handlers on the root div so the drag
             // continues even when the cursor leaves the 6px handle area.
-            .on_mouse_move(move |event, _window, cx| {
-                let (col, new_width) = {
-                    let drag = resize_drag_for_move.lock().ok();
-                    if let Some(drag) = drag {
-                        if let Some(col) = drag.col {
-                            let delta = event.position.x - drag.start_x;
-                            let delta_f32: f32 = delta.into();
-                            let new_width = drag.original_width + delta_f32;
-                            (Some(col), new_width.max(super::theme::MIN_COLUMN_WIDTH))
-                        } else {
-                            (None, 0.0)
-                        }
-                    } else {
-                        (None, 0.0)
-                    }
-                };
-                if let Some(col) = col {
-                    state_for_resize_move.update(cx, |state, cx| {
-                        state.set_column_width(col, new_width, cx);
-                    });
-                }
-            })
-            .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
-                if let Ok(mut drag) = resize_drag_for_up.lock() {
-                    drag.col = None;
-                }
-                state_for_drag_up.update(cx, |state, _| state.end_drag_select());
-            })
+            .map(|root| drag_tracking.attach(root))
             .child(inner_table)
             // Measure viewport size and sync horizontal scroll offset using canvas
             .child({
@@ -773,7 +750,8 @@ impl DataTable {
         let annotated = state.has_header_annotations();
         let header_height = state.header_height(cx);
         let pinned_width = state.pinned_width();
-        let pinned_count = state.column_layout().pinned_count();
+        let pinned_count = state.pinned_shown_count();
+        let reorderable = state.columns_reorderable();
 
         let mut header_cells: Vec<AnyElement> = state
             .visible_columns()
@@ -820,7 +798,13 @@ impl DataTable {
                     .hover(|s| s.bg(theme.table_hover))
                     .cursor_pointer();
 
-                header_reorder(header, &state_entity, col_spec.title.clone(), col_ix, theme)
+                let header = if reorderable {
+                    header_reorder(header, &state_entity, col_spec.title.clone(), col_ix, theme)
+                } else {
+                    header
+                };
+
+                header
                     .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.focus(window, cx);
@@ -971,6 +955,7 @@ impl DataTable {
                             None,
                             div().flex_shrink_0().w(ROW_NUMBER_WIDTH).into_any_element(),
                             header_cells,
+                            &self.drag_tracking(),
                             theme,
                         ))
                     })
@@ -1223,6 +1208,7 @@ impl DataTable {
         let model = Arc::clone(state.model_arc());
 
         let state_entity = self.state.clone();
+        let drag_tracking = self.drag_tracking();
 
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
@@ -1250,9 +1236,10 @@ impl DataTable {
                     &model,
                     state.visible_columns(),
                     PinnedColumns {
-                        count: state.column_layout().pinned_count(),
+                        count: state.pinned_shown_count(),
                         width: state.pinned_width(),
                         h_offset: state.horizontal_offset(),
+                        drag: drag_tracking.clone(),
                     },
                     state.column_widths(),
                     state.selection(),
@@ -1701,6 +1688,7 @@ fn render_rows(
                     row_fill,
                     gutter.into_any_element(),
                     cells,
+                    &pinned.drag,
                     theme,
                 ))
                 .into_any_element()
@@ -1708,31 +1696,76 @@ fn render_rows(
         .collect()
 }
 
+/// The pointer tracking a column resize and a drag selection need while the
+/// button is held: a move resizes the column being dragged, a release ends
+/// both. The table root carries it so a resize survives the cursor leaving
+/// the narrow handle. Each pinned strip carries it too: a strip blocks the
+/// mouse from everything under it, the root included.
+#[derive(Clone)]
+struct DragTracking {
+    resize: Arc<Mutex<ResizeDragState>>,
+    state: Entity<DataTableState>,
+}
+
+impl DragTracking {
+    fn attach<E: InteractiveElement>(&self, element: E) -> E {
+        let (resize_for_move, state_for_move) = (self.resize.clone(), self.state.clone());
+        let (resize_for_up, state_for_up) = (self.resize.clone(), self.state.clone());
+
+        element
+            .on_mouse_move(move |event, _window, cx| {
+                let resized = resize_for_move.lock().ok().and_then(|drag| {
+                    let col = drag.col?;
+                    let delta: f32 = (event.position.x - drag.start_x).into();
+                    let width = drag.original_width + delta;
+                    Some((col, width.max(super::theme::MIN_COLUMN_WIDTH)))
+                });
+                if let Some((col, width)) = resized {
+                    state_for_move.update(cx, |state, cx| {
+                        state.set_column_width(col, width, cx);
+                    });
+                }
+            })
+            .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
+                if let Ok(mut drag) = resize_for_up.lock() {
+                    drag.col = None;
+                }
+                state_for_up.update(cx, |state, _| state.end_drag_select());
+            })
+    }
+}
+
 /// What the body needs to draw the pinned columns: how many of the shown
-/// columns are pinned, their total width, and the horizontal scroll the
-/// strip holding them cancels.
-#[derive(Clone, Copy)]
+/// columns are pinned, their total width, the horizontal scroll the strip
+/// holding them cancels, and the drag tracking the strip repeats.
+#[derive(Clone)]
 struct PinnedColumns {
     count: usize,
     width: f32,
     h_offset: Pixels,
+    drag: DragTracking,
 }
 
 /// The strip that keeps the row-number gutter and the pinned columns at the
 /// grid's left edge, like a frozen pane. It sits inside a row (or the header
 /// row) that scrolls by `-h_offset`, so it is placed `h_offset` in to stay
 /// put. Drawn after the scrolling cells, it covers the ones passing under it,
-/// on an opaque `base` with the row's own `fill` on top.
+/// on an opaque `base` with the row's own `fill` on top. It also blocks the
+/// mouse from them: without that a click on a pinned cell or the gutter
+/// would reach the hidden scrolling cell under it as well. Wheel scrolling
+/// still passes through.
 fn pinned_strip(
     h_offset: Pixels,
     base: Hsla,
     fill: Option<Hsla>,
     gutter: AnyElement,
     cells: Vec<AnyElement>,
+    drag: &DragTracking,
     theme: &gpui_component::theme::Theme,
 ) -> impl IntoElement {
-    div()
+    drag.attach(div())
         .debug_selector(|| "pinned-columns".to_string())
+        .block_mouse_except_scroll()
         .absolute()
         .top_0()
         .left(h_offset)

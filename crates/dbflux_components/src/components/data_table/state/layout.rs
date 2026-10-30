@@ -14,6 +14,10 @@ use super::super::selection::CellCoord;
 use super::super::theme::ROW_NUMBER_WIDTH;
 use super::DataTableState;
 
+/// The largest share of the grid's width the pinned strip, row-number gutter
+/// included, may cover; the rest stays for the scrolling columns.
+const MAX_PINNED_SHARE: f32 = 2.0 / 3.0;
+
 impl DataTableState {
     pub fn column_layout(&self) -> &ColumnLayout {
         &self.column_layout
@@ -79,11 +83,36 @@ impl DataTableState {
         self.change_column_layout(cx, |layout| layout.unpin(col))
     }
 
-    /// Total width of the shown pinned columns, the row-number gutter not
-    /// included.
+    /// How many of the shown columns the grid draws in the pinned strip: the
+    /// pinned ones, as many as fit, with the row-number gutter, in
+    /// [`MAX_PINNED_SHARE`] of the grid's width. Pinned columns past that
+    /// scroll with the others until the grid is wide enough again, so wide
+    /// pinned columns never cover every scrolling one. All of them before the
+    /// grid has been measured.
+    pub fn pinned_shown_count(&self) -> usize {
+        let pinned = self.column_layout.pinned_count();
+        let viewport: f32 = self.viewport_size.width.into();
+        if viewport <= 0.0 {
+            return pinned;
+        }
+
+        let gutter: f32 = ROW_NUMBER_WIDTH.into();
+        let budget = viewport * MAX_PINNED_SHARE - gutter;
+        (0..=pinned)
+            .rev()
+            .find(|count| {
+                self.column_offsets
+                    .get(*count)
+                    .is_some_and(|width| *width <= budget)
+            })
+            .unwrap_or(0)
+    }
+
+    /// Total width of the columns drawn in the pinned strip, the row-number
+    /// gutter not included.
     pub fn pinned_width(&self) -> f32 {
         self.column_offsets
-            .get(self.column_layout.pinned_count())
+            .get(self.pinned_shown_count())
             .copied()
             .unwrap_or(0.0)
     }
@@ -96,7 +125,7 @@ impl DataTableState {
         let pinned = self
             .column_layout
             .view_position(col)
-            .is_some_and(|position| position < self.column_layout.pinned_count());
+            .is_some_and(|position| position < self.pinned_shown_count());
 
         Some(if pinned {
             left

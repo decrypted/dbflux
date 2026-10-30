@@ -34,6 +34,8 @@ pub(crate) enum ToolbarAction {
     Export,
     /// The × in the WHERE field.
     ClearFilter,
+    /// The history toggle of the WHERE field: opens its popup.
+    FilterHistory,
     /// The table / tree view switch.
     ToggleView,
     /// A view of the result's view switch (Data, JSON, Chart and the other
@@ -138,6 +140,7 @@ impl ToolbarAction {
         match self {
             ToolbarAction::Export => "export",
             ToolbarAction::ClearFilter => "clear-filter",
+            ToolbarAction::FilterHistory => "filter-history",
             ToolbarAction::ToggleView => "toggle-view",
             ToolbarAction::ResultView(ResultViewMode::Table) => "result-view-table",
             ToolbarAction::ResultView(ResultViewMode::Chart) => "result-view-chart",
@@ -211,6 +214,7 @@ impl ToolbarAction {
         match self {
             ToolbarAction::Export => AppIcon::FileSpreadsheet,
             ToolbarAction::ClearFilter => AppIcon::X,
+            ToolbarAction::FilterHistory => AppIcon::History,
             ToolbarAction::ToggleView => AppIcon::Braces,
             ToolbarAction::ResultView(mode) => DataGridPanel::result_mode_icon(mode),
             ToolbarAction::OpenBuilder => AppIcon::ListFilter,
@@ -327,6 +331,10 @@ impl DataGridPanel {
 
         if filter_controls_shown && self.can_toggle_view(cx) {
             actions.push(ToolbarAction::ToggleView);
+        }
+
+        if filter_controls_shown && self.offers_filter_history() {
+            actions.push(ToolbarAction::FilterHistory);
         }
 
         if filter_controls_shown && !self.builder.builder_open && self.can_open_builder(cx) {
@@ -625,6 +633,9 @@ impl DataGridPanel {
             ToolbarAction::QueryHistory => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.query_history")
             }
+            ToolbarAction::FilterHistory => {
+                dbflux_i18n::t!("document.data.grid.filter.history.toggle")
+            }
             ToolbarAction::StepToRoot => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.step_to_root")
             }
@@ -859,6 +870,7 @@ impl DataGridPanel {
             }
             ToolbarAction::Find => self.find_documents(window, cx),
             ToolbarAction::QueryHistory => self.open_query_history(window, cx),
+            ToolbarAction::FilterHistory => self.open_filter_history(window, cx),
             ToolbarAction::StepToRoot => self.step_to_depth(0, cx),
             ToolbarAction::CollectionView(tab) => self.set_collection_tab(tab, cx),
             ToolbarAction::TableView(tab) => {

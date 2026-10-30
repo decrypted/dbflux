@@ -1813,6 +1813,12 @@ document:
         builder_notice: Rows come from the builder query
         edit_in_builder: Edit in builder
         reset_builder: Reset
+        history:
+          toggle: "Filter history"
+          delete: "Remove from history"
+          clear: "Clear history"
+          empty: "No filters yet for this table"
+          no_match: "No filter matches"
       nearest:
         summary: "Similar to %{anchor} by %{column}"
         similar_to: "Similar to"

@@ -1813,6 +1813,12 @@ document:
         builder_notice: 행은 빌더 쿼리에서 가져옵니다
         edit_in_builder: 빌더에서 편집
         reset_builder: 초기화
+        history:
+          toggle: "필터 기록"
+          delete: "기록에서 제거"
+          clear: "기록 지우기"
+          empty: "이 테이블의 필터가 아직 없습니다"
+          no_match: "일치하는 필터가 없습니다"
       nearest:
         summary: "%{column} 기준 %{anchor}와 유사"
         similar_to: "유사 대상"

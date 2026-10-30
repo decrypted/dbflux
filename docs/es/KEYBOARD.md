@@ -437,6 +437,14 @@ consultas abre el menú del historial con el teclado dentro: las teclas del men�
 contextual se mueven, `Enter` vuelve a ejecutar la consulta resaltada y `Escape`
 lo cierra.
 
+En el campo `WHERE` de una tabla, `Up` o `Down` abre el historial de filtros de
+la tabla mientras el campo está vacío o el cursor está al principio; **Filter
+history** en el submenú Barra de herramientas también lo abre. Con la lista
+abierta, escribir la reduce, `Up` / `Down` mueven el resaltado, `Enter` aplica el
+filtro resaltado, `Shift+Delete` lo quita y `Escape` cierra la lista; su última
+fila borra el historial de la tabla. Ver [Historial de
+filtros](RESULTS.md#historial-de-filtros).
+
 Cuando los resultados no tienen menú contextual propio, `m` abre en su lugar el
 menú de acciones del panel, el mismo que muestra **Open pane actions** en la
 command palette.

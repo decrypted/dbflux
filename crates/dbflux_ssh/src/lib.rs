@@ -405,7 +405,7 @@ fn establish_resolved_session(
     let phase_start = std::time::Instant::now();
     match &config.proxy_command {
         Some(command) => {
-            log::info!("[SSH] Phase 1/3: Starting ProxyCommand: {command}");
+            log::info!("[SSH] Phase 1/3: ProxyCommand transport");
             attach_proxy_command(&mut session, command)?;
         }
         None => {

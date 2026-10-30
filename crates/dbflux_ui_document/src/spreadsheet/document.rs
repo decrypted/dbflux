@@ -1103,6 +1103,7 @@ impl SpreadsheetDocument {
         let table_model = model.table_model();
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(table_model, cx);
+            state.set_sortable(false);
             state.set_positional_editing(editable);
             state.set_insertable(editable);
             state

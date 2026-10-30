@@ -1628,9 +1628,6 @@ document:
         copy: Copiar
         copy_as_csv: "Copiar como CSV"
         copy_as_json: "Copiar como JSON"
-        copy_as_sql_in_list: "Copiar como lista IN de SQL"
-        copy_as_insert_statements: "Copiar como sentencias INSERT"
-        copy_as_markdown: "Copiar como tabla Markdown"
         view_document: Ver documento
         add_document: Agregar documento
         duplicate_document: Duplicar documento
@@ -1667,18 +1664,6 @@ document:
       order:
         title: Orden
         remove: Quitar orden
-        add_to_sort: "Añadir al orden: %{column}"
-      column:
-        title: Columna
-        fit_width: Ajustar ancho
-        pin: Fijar columna
-        unpin: Soltar columna
-        hide: Ocultar columna
-        choose: "Columnas…"
-        move_left: Mover a la izquierda
-        move_right: Mover a la derecha
-        chooser_title: Columnas
-        show_all: Mostrar todas las columnas
       generate_sql:
         title: Generar SQL
       toolbar:
@@ -1815,15 +1800,6 @@ document:
         pending_changes:
           one: "%{count} cambio pendiente"
           many: "%{count} cambios pendientes"
-        multi_edit: "Editando %{count} celdas"
-        selection:
-          cells: "%{count} celdas"
-          sum: "Suma %{value}"
-          average: "Media %{value}"
-          min: "Mín %{value}"
-          max: "Máx %{value}"
-          nulls_skipped: "%{count} NULL omitidos"
-          non_numeric_skipped: "%{count} no numéricos omitidos"
       export:
         trigger: Exportar
         save_as_file: Guardar filas cargadas como archivo
@@ -4179,9 +4155,9 @@ settings:
     grid_pk_sort_desc:
       label: "Ordenar las tablas por clave primaria descendente"
       hint: "Las tablas se abren ordenadas por su clave primaria de forma descendente, así con una clave autoincremental las filas más recientes aparecen primero. Se aplica a las tablas abiertas después de guardar y, en las tablas ya abiertas, al quitar el orden de una columna. Un clic en el encabezado de la columna clave desde este orden la ordena de forma ascendente."
-    grid_copy_column_names:
-      label: "Incluir los nombres de columna al copiar"
-      hint: "Copiar (Ctrl+C) en la cuadrícula de datos empieza el texto separado por tabulaciones con una línea de nombres de columna. Copiar como CSV, JSON y las demás entradas Copiar como no cambian."
+    grid_header_click_sorts:
+      label: "Hacer clic en la cabecera de una columna la ordena"
+      hint: "Desactivado: un clic en la cabecera de una columna selecciona la columna entera y la flecha de su borde derecho ordena. Activado: el clic ordena la columna; Shift+clic y Ctrl+clic siguen seleccionando columnas."
     vim_mode:
       label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."
@@ -4412,7 +4388,6 @@ settings:
       copy_selection_as_json: "Copiar la selección como JSON"
       results_set_null: Establecer celda en NULL
       open_context_menu: Abrir menú contextual
-      open_column_menu: Abrir menú de columna
       open_pane_actions: Abrir acciones del panel
       menu_up: "Menú: arriba"
       menu_down: "Menú: abajo"

@@ -27,8 +27,6 @@ use gpui_component::ActiveTheme;
 use std::fs::File;
 use std::io::BufWriter;
 
-mod columns;
-mod copy_extractors;
 mod items;
 mod sections;
 pub(super) mod toolbar;
@@ -222,7 +220,7 @@ impl DataGridPanel {
             return;
         };
 
-        let (row, col, cell_x) = {
+        let (row, col, cell_x, horizontal_offset) = {
             let ts = table_state.read(cx);
 
             let (row, col) = ts
@@ -231,11 +229,12 @@ impl DataGridPanel {
                 .map(|c| (c.row, c.col))
                 .unwrap_or((0, 0));
 
-            // Left edge of the cell's column as the screen draws it, scroll
-            // and pinned columns included.
-            let cell_x = ts.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH);
+            let widths = ts.column_widths();
 
-            (row, col, cell_x)
+            // Calculate cell x position: sum of column widths up to col
+            let cell_x: f32 = widths.iter().take(col).sum();
+
+            (row, col, cell_x, ts.horizontal_offset())
         };
 
         // Calculate position in window coordinates:
@@ -243,7 +242,7 @@ impl DataGridPanel {
         // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
         let toolbar_height = px(36.0); // Approximate toolbar height
         let position = Point {
-            x: self.panel_origin.x + cell_x + px(20.0),
+            x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(cell_x) - horizontal_offset + px(20.0),
             y: self.panel_origin.y
                 + toolbar_height
                 + fonts::grid_header_height(cx)
@@ -746,7 +745,6 @@ impl DataGridPanel {
             .unwrap_or(false);
 
         if self.context_menu.is_some()
-            || self.column_chooser.is_some()
             || self.chrome.export_menu_open
             || self.collection.history_open
         {
@@ -806,18 +804,15 @@ impl DataGridPanel {
 
         let base_items = match self.context_menu.as_ref() {
             Some(menu) if !is_column_header => self.with_find_similar_rows(
-                self.with_copy_extractors(
-                    self.adapt_menu_items_for_documents(
-                        Self::build_context_menu_items(
-                            is_editable,
-                            is_document_view,
-                            has_row_target,
-                            can_chart,
-                            inspect_row_enabled,
-                        ),
+                self.adapt_menu_items_for_documents(
+                    Self::build_context_menu_items(
+                        is_editable,
                         is_document_view,
-                        cx,
+                        has_row_target,
+                        can_chart,
+                        inspect_row_enabled,
                     ),
+                    is_document_view,
                     cx,
                 ),
                 menu,
@@ -1115,16 +1110,9 @@ impl DataGridPanel {
         let mut actions = vec![
             ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
             ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
-            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending),
-            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Descending),
             ContextMenuAction::RemoveOrdering,
         ];
         actions.extend(filter_items.into_iter().map(|(_, action)| action));
-        actions.extend(
-            self.column_menu_items(menu.col, cx)
-                .into_iter()
-                .map(|item| item.action),
-        );
 
         match cmd {
             Command::MenuDown => {
@@ -1499,15 +1487,23 @@ impl DataGridPanel {
     }
 
     /// The part of the result the grid selection covers: every row that holds
-    /// a selected cell and every column that does, in result order. A cell in
-    /// that grid but outside the selection is `Null`, where the plain copy
-    /// leaves it empty.
+    /// a selected cell and every column that does, in the order the grid
+    /// shows them. A cell in that grid but outside the selection is `Null`,
+    /// where the plain copy leaves it empty.
+    ///
+    /// The selection names visual rows, so each is resolved through the edit
+    /// buffer: a pending insert copies its values, and a base row copies the
+    /// result's value or, for a cell with an unsaved edit, the edited one.
     fn selection_result(&self, cx: &App) -> Option<dbflux_core::QueryResult> {
+        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
         use dbflux_components::components::data_table::selection::CellCoord;
         use std::collections::BTreeSet;
 
         let table_state = self.grid_table.table_state.as_ref()?;
-        let selection = table_state.read(cx).selection();
+        let state = table_state.read(cx);
+        let selection = state.selection();
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
         let ranges = selection.ranges();
         if ranges.is_empty() {
             return None;
@@ -1515,37 +1511,51 @@ impl DataGridPanel {
         let rows: BTreeSet<usize> = ranges
             .iter()
             .flat_map(|range| range.start.row..=range.end.row)
-            .filter(|&row| row < self.result.rows.len())
+            .filter(|&row| row < visual_order.len())
             .collect();
-        // Columns in the order the grid shows them, as the plain copy does.
-        let mut cols: Vec<usize> = ranges
+        let cols: BTreeSet<usize> = ranges
             .iter()
             .flat_map(|range| range.start.col..=range.end.col)
             .filter(|&col| col < self.result.columns.len())
-            .collect::<BTreeSet<usize>>()
-            .into_iter()
             .collect();
-        selection.sort_by_screen_order(&mut cols);
 
         let columns = cols
             .iter()
             .filter_map(|&col| self.result.columns.get(col).cloned())
             .collect();
+        let shown_value = |row: usize, col: usize| -> Value {
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_row)) if buffer.is_cell_dirty(base_row, col) => {
+                    let null = CellValue::null();
+                    buffer.get_cell(base_row, col, &null).to_value()
+                }
+                Some(VisualRowSource::Base(base_row)) => self
+                    .result
+                    .rows
+                    .get(base_row)
+                    .and_then(|values| values.get(col))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                Some(VisualRowSource::Insert(insert_idx)) => buffer
+                    .get_pending_insert_by_idx(insert_idx)
+                    .and_then(|cells| cells.get(col))
+                    .map(CellValue::to_value)
+                    .unwrap_or(Value::Null),
+                None => Value::Null,
+            }
+        };
         let rows = rows
             .iter()
-            .filter_map(|&row| {
-                let values = self.result.rows.get(row)?;
-                Some(
-                    cols.iter()
-                        .map(|&col| {
-                            if selection.is_selected(CellCoord::new(row, col)) {
-                                values.get(col).cloned().unwrap_or(Value::Null)
-                            } else {
-                                Value::Null
-                            }
-                        })
-                        .collect(),
-                )
+            .map(|&row| {
+                cols.iter()
+                    .map(|&col| {
+                        if selection.is_selected(CellCoord::new(row, col)) {
+                            shown_value(row, col)
+                        } else {
+                            Value::Null
+                        }
+                    })
+                    .collect()
             })
             .collect();
 
@@ -1567,29 +1577,7 @@ impl DataGridPanel {
         row_count: Option<usize>,
         cx: &mut Context<Self>,
     ) {
-        self.finish_named_clipboard_copy(export_result, buffer, format.name(), row_count, cx);
-    }
-
-    /// `finish_clipboard_copy` for text built outside the exporter, so the
-    /// copy extractors report and audit the same way.
-    fn finish_clipboard_text(
-        &mut self,
-        text: String,
-        format_name: &str,
-        row_count: Option<usize>,
-        cx: &mut Context<Self>,
-    ) {
-        self.finish_named_clipboard_copy(Ok(()), text.into_bytes(), format_name, row_count, cx);
-    }
-
-    fn finish_named_clipboard_copy(
-        &mut self,
-        export_result: Result<(), dbflux_export::ExportError>,
-        buffer: Vec<u8>,
-        format_name: &str,
-        row_count: Option<usize>,
-        cx: &mut Context<Self>,
-    ) {
+        let format_name = format.name();
         let audit_service = self.app_state.read(cx).audit_service().clone();
 
         match export_result {
@@ -1810,18 +1798,15 @@ impl DataGridPanel {
             let can_chart = self.can_chart_from_context_menu(cx);
             let inspect_row_enabled = !self.is_grouped_result();
             let visible_items = self.with_find_similar_rows(
-                self.with_copy_extractors(
-                    self.adapt_menu_items_for_documents(
-                        Self::build_context_menu_items(
-                            is_editable,
-                            menu.is_document_view,
-                            has_row_target,
-                            can_chart,
-                            inspect_row_enabled,
-                        ),
+                self.adapt_menu_items_for_documents(
+                    Self::build_context_menu_items(
+                        is_editable,
                         menu.is_document_view,
-                        cx,
+                        has_row_target,
+                        can_chart,
+                        inspect_row_enabled,
                     ),
+                    menu.is_document_view,
                     cx,
                 ),
                 menu,
@@ -1984,9 +1969,6 @@ impl DataGridPanel {
             ContextMenuAction::CopyAsJson => {
                 self.copy_selection_with_format(ExportFormat::JsonPretty, window, cx)
             }
-            ContextMenuAction::CopyAsSqlInList => self.copy_selection_as_in_list(cx),
-            ContextMenuAction::CopyAsInsertStatements => self.copy_selection_as_inserts(cx),
-            ContextMenuAction::CopyAsMarkdown => self.copy_selection_as_markdown(cx),
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
             ContextMenuAction::ViewValue => {
@@ -2071,9 +2053,6 @@ impl DataGridPanel {
             ContextMenuAction::Order(direction) => {
                 self.handle_sort_request(menu.col, direction, cx);
             }
-            ContextMenuAction::AddToSort(direction) => {
-                self.handle_add_sort_key(menu.col, direction, cx);
-            }
             ContextMenuAction::RemoveOrdering => {
                 self.handle_sort_clear(cx);
             }
@@ -2082,20 +2061,6 @@ impl DataGridPanel {
             }
             ContextMenuAction::FindSimilarRows => {
                 self.find_similar_rows_at(menu.row, menu.col, cx);
-            }
-            // The chooser takes the keyboard, so focus stays with it rather
-            // than going back to the grid.
-            ContextMenuAction::ChooseColumns => {
-                self.open_column_chooser(menu.position, window, cx);
-                return;
-            }
-            ContextMenuAction::FitColumnWidth
-            | ContextMenuAction::HideColumn
-            | ContextMenuAction::MoveColumnLeft
-            | ContextMenuAction::MoveColumnRight
-            | ContextMenuAction::PinColumn
-            | ContextMenuAction::UnpinColumn => {
-                self.handle_column_menu_action(action, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {
                 let query = self.chart_host_current_query(cx);

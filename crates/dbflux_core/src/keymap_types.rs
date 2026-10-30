@@ -121,8 +121,6 @@ pub enum Command {
     ResultsSetNull,
     // Context menu
     OpenContextMenu,
-    /// Opens the column header menu of the active cell's column.
-    OpenColumnMenu,
     /// Opens the menu of the focused pane's actions (its toolbar buttons and
     /// other pointer-only controls).
     OpenPaneActions,
@@ -442,7 +440,6 @@ impl Command {
             Command::CopySelectionAsJson => "Copy selection as JSON",
             Command::ResultsSetNull => "Set cell to NULL",
             Command::OpenContextMenu => "Open context menu",
-            Command::OpenColumnMenu => "Open column menu",
             Command::OpenPaneActions => "Open pane actions",
             Command::MenuUp => "Menu up",
             Command::MenuDown => "Menu down",
@@ -651,7 +648,6 @@ impl Command {
             Command::CopySelectionAsJson => "copy_selection_as_json",
             Command::ResultsSetNull => "results_set_null",
             Command::OpenContextMenu => "open_context_menu",
-            Command::OpenColumnMenu => "open_column_menu",
             Command::OpenPaneActions => "open_pane_actions",
             Command::MenuUp => "menu_up",
             Command::MenuDown => "menu_down",
@@ -877,7 +873,6 @@ impl Command {
             Command::CopySelectionAsJson,
             Command::ResultsSetNull,
             Command::OpenContextMenu,
-            Command::OpenColumnMenu,
             Command::OpenPaneActions,
             Command::MenuUp,
             Command::MenuDown,
@@ -1078,7 +1073,6 @@ impl Command {
             | Command::CopySelectionAsJson
             | Command::ResultsSetNull
             | Command::OpenContextMenu
-            | Command::OpenColumnMenu
             | Command::MenuUp
             | Command::MenuDown
             | Command::MenuSelect

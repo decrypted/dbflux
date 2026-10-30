@@ -423,7 +423,6 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `Ctrl+Alt+c` / `Cmd+Alt+c` | Copiar la selección como JSON, como **Copiar como JSON** del menú contextual (resultados de tabla) |
 | `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, mostrar otra vista del resultado, los botones del panel de valor y del inspector de fila, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
-| `Shift+m` | Abrir el menú de la cabecera de la columna de la celda seleccionada, como un clic derecho en su cabecera: orden, filtro y la sección Columna |
 
 Una pestaña de inspector de instancia también toma estas teclas: `m` abre el
 menú contextual de la fila elegida con las acciones de fila del driver (por
@@ -446,8 +445,8 @@ command palette.
 Una pestaña de análisis de dump toma las teclas de tabla en cada una de sus dos
 tablas: `Alt+l` y `Alt+h` pasan de Claves más grandes a Por prefijo y viceversa,
 `Escape` cancela un análisis que todavía lee el archivo, y `m` lista la otra
-tabla, un orden por columna de la tabla donde está el teclado (como lo hace un
-clic en la cabecera) y Cancelar mientras se lee el archivo.
+tabla, un orden por columna de la tabla donde está el teclado (como lo hace la
+flecha de orden de la cabecera) y Cancelar mientras se lee el archivo.
 
 La vista Columnas de una tabla toma `j` / `k` para moverse entre columnas,
 `Space` para agregar a la vista Datos la columna bajo el cursor o quitarla,

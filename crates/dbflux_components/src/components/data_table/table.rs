@@ -18,7 +18,7 @@ use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
 
 use super::document::DocumentPresentation;
-use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge, SortState};
+use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge};
 use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
 use super::state::DataTableState;
@@ -475,6 +475,8 @@ impl gpui::Render for DataTable {
         let state_for_resize_move = self.state.clone();
         let resize_drag_for_up = self.resize_drag.clone();
         let state_for_drag_up = self.state.clone();
+        let resize_drag_for_up_out = self.resize_drag.clone();
+        let state_for_drag_up_out = self.state.clone();
 
         // Forward horizontal wheel/trackpad deltas to the horizontal scroll
         // handle. The handle is owned by a 1px phantom scroller at the bottom
@@ -642,6 +644,16 @@ impl gpui::Render for DataTable {
                 }
                 state_for_drag_up.update(cx, |state, _| state.end_drag_select());
             })
+            // A release outside the table (another pane, outside the window)
+            // never reaches the handler above; without this the drag would
+            // still be running when the pointer comes back with the button
+            // pressed for something else.
+            .on_mouse_up_out(MouseButton::Left, move |_event, _window, cx| {
+                if let Ok(mut drag) = resize_drag_for_up_out.lock() {
+                    drag.col = None;
+                }
+                state_for_drag_up_out.update(cx, |state, _| state.end_drag_select());
+            })
             .child(inner_table)
             // Measure viewport size and sync horizontal scroll offset using canvas
             .child({
@@ -759,8 +771,7 @@ impl DataTable {
         cx: &gpui::App,
     ) -> impl IntoElement {
         let model = state.model();
-        let sort_keys = state.sort_keys();
-        let rank_font_size = fonts::grid_px(cx, GridMetrics::SORT_RANK_FONT);
+        let sort = state.sort();
         let sortable = state.is_sortable();
         let font_size = fonts::grid_font_size(cx);
         let type_font_size = fonts::grid_type_font_size(cx);
@@ -773,21 +784,19 @@ impl DataTable {
         let fk_cols = state.fk_columns().clone();
         let annotated = state.has_header_annotations();
         let header_height = state.header_height(cx);
-        let pinned_width = state.pinned_width();
-        let pinned_count = state.column_layout().pinned_count();
 
-        let mut header_cells: Vec<AnyElement> = state
-            .visible_columns()
+        let header_cells: Vec<_> = model
+            .columns
             .iter()
-            .filter_map(|&col_ix| model.columns.get(col_ix).map(|spec| (col_ix, spec)))
+            .enumerate()
             .map(|(col_ix, col_spec)| {
                 let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
-                let sort_direction = sort_direction_of(&sort_keys, col_ix);
-                let sort_rank = state.sort_rank(col_ix);
+                let sort_direction = sort
+                    .filter(|sort| sort.column_ix == col_ix)
+                    .map(|sort| sort.direction);
 
                 let is_pk = pk_cols.contains(&col_ix);
                 let is_fk = fk_cols.contains(&col_ix);
-                let is_pinned = state.column_layout().is_pinned(col_ix);
 
                 let key_icon = if is_pk {
                     Some((AppIcon::KeyRound, theme.warning))
@@ -803,9 +812,8 @@ impl DataTable {
                 let state_for_click = state_entity.clone();
                 let resize_drag_for_down = resize_drag.clone();
 
-                let header = div()
+                div()
                     .id(("header-col", col_ix))
-                    .debug_selector(move || format!("header-col-{col_ix}"))
                     .relative()
                     .flex()
                     .flex_shrink_0()
@@ -818,19 +826,18 @@ impl DataTable {
                     .border_r_1()
                     .border_color(theme.border)
                     .hover(|s| s.bg(theme.table_hover))
-                    .cursor_pointer();
-
-                header_reorder(header, &state_entity, col_spec.title.clone(), col_ix, theme)
+                    .cursor_pointer()
                     .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.focus(window, cx);
-                            state.click_column(col_ix, event.modifiers(), cx);
+                            state.click_header(col_ix, event.modifiers(), cx);
                         });
                     })
                     // Right-click opens the menu scoped to this column: its
                     // ordering and filtering in one flat list. Left click
-                    // selects the column, as in a database IDE's grid; the
-                    // sort control at the right edge sorts.
+                    // selects the column, as in a database IDE's grid, or
+                    // sorts it with the header click set to sort; the sort
+                    // control at the right edge always sorts.
                     .on_mouse_down(MouseButton::Right, {
                         let state_for_menu = state_entity.clone();
                         move |event: &MouseDownEvent, window, cx| {
@@ -846,14 +853,6 @@ impl DataTable {
                                 });
                             });
                         }
-                    })
-                    // A pin marks a column that stays at the left edge.
-                    .when(is_pinned, |d| {
-                        d.child(
-                            Icon::new(AppIcon::Pin)
-                                .size(GridMetrics::HEADER_ICON)
-                                .color(theme.muted_foreground),
-                        )
                     })
                     // PK / FK key icon: amber key for a primary key, blue
                     // cable for a foreign key.
@@ -895,8 +894,6 @@ impl DataTable {
                             state_entity.clone(),
                             col_ix,
                             sort_direction,
-                            sort_rank,
-                            rank_font_size,
                             ChromeColors::tint(theme),
                             theme.muted_foreground,
                         ))
@@ -932,15 +929,32 @@ impl DataTable {
                                 }),
                         )
                     })
-                    .child(column_resize_handle(
-                        state_entity.clone(),
-                        resize_drag_for_down,
-                        col_ix,
-                        width,
-                        ChromeColors::tint(theme),
-                    ))
+                    // Resize handle: mouse-down starts the drag; move/up are
+                    // handled on the DataTable root div so the drag survives
+                    // the cursor leaving this 6px strip.
+                    .child(
+                        div()
+                            .id(("resize-handle", col_ix))
+                            .absolute()
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
+                            .cursor_col_resize()
+                            .hover(|s| s.bg(ChromeColors::tint(theme).opacity(0.3)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                move |event: &MouseDownEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    if let Ok(mut drag) = resize_drag_for_down.lock() {
+                                        drag.col = Some(col_ix);
+                                        drag.start_x = event.position.x;
+                                        drag.original_width = width;
+                                    }
+                                },
+                            ),
+                    )
             })
-            .map(IntoElement::into_any_element)
             .collect();
 
         // Header uses overflow_hidden and applies horizontal offset via margin.
@@ -955,28 +969,15 @@ impl DataTable {
             .border_b_1()
             .border_color(theme.input)
             .font_family(fonts::grid_family(cx))
-            .child({
-                let scrolled = header_cells.split_off(pinned_count.min(header_cells.len()));
-
+            .child(
                 div()
-                    .relative()
                     .flex()
                     .h_full()
                     .min_w(px(total_width))
                     .ml(-h_offset)
-                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH + px(pinned_width)))
-                    .children(scrolled)
-                    .when(pinned_count > 0, |row| {
-                        row.child(pinned_strip(
-                            h_offset,
-                            theme.table_head,
-                            None,
-                            div().flex_shrink_0().w(ROW_NUMBER_WIDTH).into_any_element(),
-                            header_cells,
-                            theme,
-                        ))
-                    })
-            })
+                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
+                    .children(header_cells),
+            )
     }
 
     /// Header of a document grid: an optional row of column-group labels over
@@ -993,8 +994,7 @@ impl DataTable {
         let model = state.model();
         let column_widths = state.column_widths();
         let h_offset = state.horizontal_offset();
-        let sort_keys = state.sort_keys();
-        let rank_font_size = fonts::grid_px(cx, GridMetrics::SORT_RANK_FONT);
+        let sort = state.sort();
         let sortable = state.is_sortable();
         let tint = ChromeColors::tint(theme);
         let strong = ChromeColors::strong(theme);
@@ -1067,8 +1067,9 @@ impl DataTable {
                 let header = document.header(col_ix);
                 let is_child = header.is_some_and(|header| header.group.is_some());
                 let presence = header.and_then(|header| header.presence);
-                let sort_direction = sort_direction_of(&sort_keys, col_ix);
-                let sort_rank = state.sort_rank(col_ix);
+                let sort_direction = sort
+                    .filter(|sort| sort.column_ix == col_ix)
+                    .map(|sort| sort.direction);
                 let state_for_click = self.state.clone();
                 let state_for_menu = self.state.clone();
                 let state_for_sort = self.state.clone();
@@ -1102,8 +1103,6 @@ impl DataTable {
                             state_for_sort.clone(),
                             col_ix,
                             sort_direction,
-                            sort_rank,
-                            rank_font_size,
                             tint,
                             muted,
                         ))
@@ -1165,7 +1164,7 @@ impl DataTable {
                     .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.focus(window, cx);
-                            state.click_column(col_ix, event.modifiers(), cx);
+                            state.click_header(col_ix, event.modifiers(), cx);
                         });
                     })
                     .on_mouse_down(
@@ -1186,13 +1185,28 @@ impl DataTable {
                     )
                     .child(name_line)
                     .when_some(presence_line, |cell, line| cell.child(line))
-                    .child(column_resize_handle(
-                        self.state.clone(),
-                        resize_drag_for_down,
-                        col_ix,
-                        width,
-                        tint,
-                    ))
+                    .child(
+                        div()
+                            .id(("resize-handle", col_ix))
+                            .absolute()
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
+                            .cursor_col_resize()
+                            .hover(|handle| handle.bg(tint.opacity(0.3)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                move |event: &MouseDownEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    if let Ok(mut drag) = resize_drag_for_down.lock() {
+                                        drag.col = Some(col_ix);
+                                        drag.start_x = event.position.x;
+                                        drag.original_width = width;
+                                    }
+                                },
+                            ),
+                    )
             })
             .collect::<Vec<_>>();
 
@@ -1227,8 +1241,6 @@ impl DataTable {
         let model = Arc::clone(state.model_arc());
 
         let state_entity = self.state.clone();
-        let drag_selecting = state.is_drag_selecting();
-        let row_height = fonts::grid_row_height(cx);
 
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
@@ -1254,12 +1266,6 @@ impl DataTable {
                     &state_entity,
                     visible_range,
                     &model,
-                    state.visible_columns(),
-                    PinnedColumns {
-                        count: state.column_layout().pinned_count(),
-                        width: state.pinned_width(),
-                        h_offset: state.horizontal_offset(),
-                    },
                     state.column_widths(),
                     state.selection(),
                     editing_cell,
@@ -1294,14 +1300,10 @@ impl DataTable {
 
         div()
             .id("table-body")
-            .relative()
             .flex_1()
             .min_h_0()
             .overflow_hidden()
             .child(list)
-            .when(drag_selecting, |body| {
-                body.child(drag_autoscroll_listener(self.state.clone(), row_height))
-            })
     }
 }
 
@@ -1311,8 +1313,6 @@ fn render_rows(
     state_entity: &Entity<DataTableState>,
     visible_range: Range<usize>,
     model: &TableModel,
-    columns: &[usize],
-    pinned: PinnedColumns,
     column_widths: &[f32],
     selection: &SelectionState,
     editing_cell: Option<CellCoord>,
@@ -1384,9 +1384,8 @@ fn render_rows(
             // number reads as their rank.
             let row_number = if reference_row { row_ix } else { row_ix + 1 };
 
-            let mut cells: Vec<AnyElement> = columns
-                .iter()
-                .map(|&col_ix| {
+            let cells: Vec<AnyElement> = (0..model.col_count())
+                .map(|col_ix| {
                     // Get cell either from model or from pending insert
                     let cell = if let Some(insert_data) = pending_insert_data {
                         insert_data.get(col_ix)
@@ -1535,7 +1534,13 @@ fn render_rows(
                             move |event: &MouseDownEvent, window, cx| {
                                 state.update(cx, |state, cx| {
                                     state.focus(window, cx);
-                                    state.press_cell(coord, event.modifiers, event.click_count, cx);
+                                    // The second press of a Ctrl+double-click
+                                    // opens the editor on release; toggling
+                                    // again would take the cell back out first.
+                                    if event.click_count >= 2 && event.modifiers.secondary() {
+                                        return;
+                                    }
+                                    state.begin_drag_select(coord, event.modifiers, cx);
                                 });
                             }
                         })
@@ -1554,6 +1559,11 @@ fn render_rows(
 
                             if event.click_count() == 2 {
                                 state_for_click.update(cx, |state, cx| {
+                                    // A Ctrl+double-click on the cell selected
+                                    // on its own took it out on the first press.
+                                    if !state.selection().is_selected(coord) {
+                                        state.select_cell(coord, cx);
+                                    }
                                     state.start_editing(coord, window, cx);
                                 });
                                 return;
@@ -1561,7 +1571,8 @@ fn render_rows(
 
                             // A mouse press already selected the cell (see
                             // `begin_drag_select`); selecting again on release
-                            // would undo a Ctrl+click toggle. Keyboard and touch
+                            // would undo a Ctrl+click toggle, and emit the
+                            // selection events twice. Keyboard and touch
                             // activation have no press, so they select here.
                             if !matches!(event, ClickEvent::Mouse(_)) {
                                 let modifiers = event.modifiers();
@@ -1634,55 +1645,8 @@ fn render_rows(
                 })
                 .collect();
 
-            // Row state background (dirty=yellow, error=red); otherwise the
-            // row holding the focused cell gets the selected-row wash and
-            // clean rows alternate. The pinned strip repeats it over its
-            // own opaque base.
-            let row_fill = row_bg.or(if is_reference_row {
-                Some(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
-            } else if is_active_row {
-                Some(theme.table_active)
-            } else if row_ix % 2 == 1 {
-                Some(theme.table_even)
-            } else {
-                None
-            });
-
-            let gutter = div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_end()
-                .w(ROW_NUMBER_WIDTH)
-                .cursor_pointer()
-                .on_mouse_down(MouseButton::Left, {
-                    let state = state_entity.clone();
-                    move |event: &MouseDownEvent, window, cx| {
-                        state.update(cx, |state, cx| {
-                            state.focus(window, cx);
-                            state.click_row(row_ix, event.modifiers, cx);
-                        });
-                    }
-                })
-                .h_full()
-                .pr(CELL_PADDING_X)
-                .text_size(font_size)
-                .text_color(if is_active_row || is_reference_row {
-                    tint
-                } else {
-                    theme.input
-                })
-                .map(|gutter| {
-                    if is_reference_row {
-                        gutter.child(Icon::new(AppIcon::Crosshair).size(nested_icon).color(tint))
-                    } else {
-                        gutter.child(row_number.to_string())
-                    }
-                });
-
-            let row = div()
+            div()
                 .id(("row", row_ix))
-                .relative()
                 .flex()
                 .flex_shrink_0()
                 .w(px(total_width))
@@ -1690,271 +1654,85 @@ fn render_rows(
                 .overflow_hidden()
                 .border_b_1()
                 .border_color(theme.table_row_border)
-                .when_some(row_fill, |d, fill| d.bg(fill))
+                // Row state background (dirty=yellow, error=red)
+                .when_some(row_bg, |d, bg| d.bg(bg))
+                // The row holding the focused cell gets the selected-row
+                // wash; clean rows otherwise alternate.
                 .when(row_bg.is_none() && is_reference_row, |d| {
-                    d.border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
-                });
-
-            if pinned.count == 0 {
-                return row.child(gutter).children(cells).into_any_element();
-            }
-
-            // With pinned columns the gutter and those columns move into a
-            // strip that cancels the horizontal scroll; a spacer of the same
-            // width keeps the scrolling cells where they were.
-            let scrolled = cells.split_off(pinned.count.min(cells.len()));
-            row.child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH + px(pinned.width)))
-                .children(scrolled)
-                .child(pinned_strip(
-                    pinned.h_offset,
-                    theme.table,
-                    row_fill,
-                    gutter.into_any_element(),
-                    cells,
-                    theme,
-                ))
+                    d.bg(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
+                        .border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
+                })
+                .when(
+                    row_bg.is_none() && !is_reference_row && is_active_row,
+                    |d| d.bg(theme.table_active),
+                )
+                .when(
+                    row_bg.is_none() && !is_reference_row && !is_active_row && row_ix % 2 == 1,
+                    |d| d.bg(theme.table_even),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_end()
+                        .w(ROW_NUMBER_WIDTH)
+                        .id(("row-number", row_ix))
+                        .role(gpui::Role::Button)
+                        .aria_label(SharedString::from(row_number.to_string()))
+                        .cursor_pointer()
+                        // The row is selected on press, before the release a
+                        // click needs, so a drag can start from it.
+                        .on_mouse_down(MouseButton::Left, {
+                            let state = state_entity.clone();
+                            move |event: &MouseDownEvent, window, cx| {
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.click_row(row_ix, event.modifiers, cx);
+                                });
+                            }
+                        })
+                        .on_a11y_action(gpui::AccessibleAction::Click, {
+                            let state = state_entity.clone();
+                            move |_, window, cx| {
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.click_row(row_ix, gpui::Modifiers::default(), cx);
+                                });
+                            }
+                        })
+                        .h_full()
+                        .pr(CELL_PADDING_X)
+                        .text_size(font_size)
+                        .text_color(if is_active_row || is_reference_row {
+                            tint
+                        } else {
+                            theme.input
+                        })
+                        .map(|gutter| {
+                            if is_reference_row {
+                                gutter.child(
+                                    Icon::new(AppIcon::Crosshair).size(nested_icon).color(tint),
+                                )
+                            } else {
+                                gutter.child(row_number.to_string())
+                            }
+                        }),
+                )
+                .children(cells)
                 .into_any_element()
         })
         .collect()
 }
 
-fn sort_direction_of(sort_keys: &[SortState], col_ix: usize) -> Option<SortDirection> {
-    sort_keys
-        .iter()
-        .find(|key| key.column_ix == col_ix)
-        .map(|key| key.direction)
-}
-
-/// Window-level pointer listeners for a running drag selection, laid over
-/// the grid body to learn its bounds.
-///
-/// The cells' own move handlers stop firing once the pointer leaves them,
-/// so past the body's edge only a window listener still sees it; that is
-/// where the grid has to scroll. Releasing the button outside the table
-/// ends the drag here too.
-fn drag_autoscroll_listener(state: Entity<DataTableState>, row_height: Pixels) -> impl IntoElement {
-    canvas(
-        |bounds, _, _| bounds,
-        move |_, bounds: gpui::Bounds<Pixels>, window, _| {
-            // The scrollbars overlay the body's right and bottom strips, so
-            // the cells visibly end where they start.
-            let cells = gpui::Bounds::new(
-                bounds.origin,
-                gpui::size(
-                    (bounds.size.width - SCROLLBAR_WIDTH).max(px(0.0)),
-                    (bounds.size.height - SCROLLBAR_WIDTH).max(px(0.0)),
-                ),
-            );
-
-            window.on_mouse_event({
-                let state = state.clone();
-                move |event: &MouseMoveEvent, phase, _, cx| {
-                    if !phase.bubble() {
-                        return;
-                    }
-                    state.update(cx, |state, cx| {
-                        if event.pressed_button == Some(MouseButton::Left) {
-                            state.drag_pointer_moved(event.position, cells, row_height, cx);
-                        } else {
-                            state.end_drag_select();
-                        }
-                    });
-                }
-            });
-
-            window.on_mouse_event({
-                let state = state.clone();
-                move |event: &gpui::MouseUpEvent, phase, _, cx| {
-                    if phase.bubble() && event.button == MouseButton::Left {
-                        state.update(cx, |state, cx| {
-                            state.end_drag_select();
-                            cx.notify();
-                        });
-                    }
-                }
-            });
-        },
-    )
-    .absolute()
-    .top_0()
-    .left_0()
-    .size_full()
-}
-
-/// What the body needs to draw the pinned columns: how many of the shown
-/// columns are pinned, their total width, and the horizontal scroll the
-/// strip holding them cancels.
-#[derive(Clone, Copy)]
-struct PinnedColumns {
-    count: usize,
-    width: f32,
-    h_offset: Pixels,
-}
-
-/// The strip that keeps the row-number gutter and the pinned columns at the
-/// grid's left edge, like a frozen pane. It sits inside a row (or the header
-/// row) that scrolls by `-h_offset`, so it is placed `h_offset` in to stay
-/// put. Drawn after the scrolling cells, it covers the ones passing under it,
-/// on an opaque `base` with the row's own `fill` on top.
-fn pinned_strip(
-    h_offset: Pixels,
-    base: Hsla,
-    fill: Option<Hsla>,
-    gutter: AnyElement,
-    cells: Vec<AnyElement>,
-    theme: &gpui_component::theme::Theme,
-) -> impl IntoElement {
-    div()
-        .debug_selector(|| "pinned-columns".to_string())
-        .absolute()
-        .top_0()
-        .left(h_offset)
-        .h_full()
-        .bg(base)
-        .border_r_2()
-        .border_color(theme.border)
-        .child(
-            div()
-                .flex()
-                .h_full()
-                .when_some(fill, |strip, fill| strip.bg(fill))
-                .child(gutter)
-                .children(cells),
-        )
-}
-
-/// What a header carries while it is dragged onto another header to move
-/// its column there.
-#[derive(Clone)]
-struct ColumnDrag {
-    /// The table the header belongs to, so a drop on another table's header
-    /// (another result tab, a split) does nothing.
-    table: gpui::EntityId,
-    col: usize,
-    title: SharedString,
-}
-
-/// The floating label a dragged header shows under the pointer.
-struct ColumnDragPreview {
-    title: SharedString,
-}
-
-impl gpui::Render for ColumnDragPreview {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        div()
-            .px(CELL_PADDING_X)
-            .py(Spacing::XS)
-            .bg(theme.popover)
-            .border_1()
-            .border_color(ChromeColors::tint(theme))
-            .text_size(fonts::grid_font_size(cx))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(ChromeColors::strong(theme))
-            .child(self.title.clone())
-    }
-}
-
-/// Lets a header be dragged onto another header of the same table, which
-/// moves its column into that place, as in a database IDE's grid. A press
-/// without a drag stays a click, so selecting the column still works.
-fn header_reorder(
-    header: gpui::Stateful<gpui::Div>,
-    state: &Entity<DataTableState>,
-    title: Arc<str>,
-    col_ix: usize,
-    theme: &gpui_component::theme::Theme,
-) -> gpui::Stateful<gpui::Div> {
-    let table = state.entity_id();
-    let drag = ColumnDrag {
-        table,
-        col: col_ix,
-        title: SharedString::from(title.to_string()),
-    };
-    let state_for_drop = state.clone();
-    let drop_tint = ChromeColors::tint(theme).opacity(0.25);
-
-    header
-        .on_drag(drag, |drag, _offset, _window, cx| {
-            gpui::AppContext::new(cx, |_| ColumnDragPreview {
-                title: drag.title.clone(),
-            })
-        })
-        .drag_over::<ColumnDrag>(move |style, drag, _window, _cx| {
-            if drag.table == table && drag.col != col_ix {
-                style.bg(drop_tint)
-            } else {
-                style
-            }
-        })
-        .on_drop(move |drag: &ColumnDrag, _window, cx| {
-            if drag.table == table {
-                state_for_drop.update(cx, |state, cx| state.move_column(drag.col, col_ix, cx));
-            }
-        })
-}
-
-/// The strip at a header's right edge that resizes its column.
-///
-/// A press starts a drag; the move and release are handled on the table root
-/// so the drag survives the cursor leaving the 6px strip. A double-click fits
-/// the column to its header and its loaded values instead, as in a database
-/// IDE's grid: the second press arrives with a click count of two and starts
-/// no drag, so the first press's drag (ended by its release) cannot fight the
-/// fitted width.
-fn column_resize_handle(
-    state: Entity<DataTableState>,
-    resize_drag: Arc<Mutex<ResizeDragState>>,
-    col_ix: usize,
-    width: f32,
-    tint: Hsla,
-) -> impl IntoElement {
-    div()
-        .id(("resize-handle", col_ix))
-        .debug_selector(move || format!("resize-handle-{col_ix}"))
-        .absolute()
-        .right_0()
-        .top_0()
-        .bottom_0()
-        .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
-        .cursor_col_resize()
-        .hover(|handle| handle.bg(tint.opacity(0.3)))
-        .on_mouse_down(
-            MouseButton::Left,
-            move |event: &MouseDownEvent, _window, cx| {
-                cx.stop_propagation();
-                if event.click_count >= 2 {
-                    if let Ok(mut drag) = resize_drag.lock() {
-                        drag.col = None;
-                    }
-                    state.update(cx, |state, cx| state.fit_column_width(col_ix, cx));
-                    return;
-                }
-                if let Ok(mut drag) = resize_drag.lock() {
-                    drag.col = Some(col_ix);
-                    drag.start_x = event.position.x;
-                    drag.original_width = width;
-                }
-            },
-        )
-}
-
 /// The sort control at the right edge of a column header: the current
-/// direction, or a faint up/down arrow while the column is not sorted. A click
+/// direction, or a faint up/down arrow while the column is not sorted. A press
 /// cycles the sort and stops there, so it does not reach the header, whose
 /// click selects the column.
-///
-/// Alt+click adds the column as the next sort key instead, as in DataGrip:
-/// Shift and Ctrl/Cmd already extend and toggle the column selection on the
-/// header, so they would read as selection gestures here. With several keys
-/// the arrow carries the column's place among them.
 fn header_sort_control(
     state: Entity<DataTableState>,
     col_ix: usize,
     sort_direction: Option<SortDirection>,
-    sort_rank: Option<usize>,
-    rank_font_size: Pixels,
     tint: Hsla,
     muted: Hsla,
 ) -> impl IntoElement {
@@ -1966,35 +1744,16 @@ fn header_sort_control(
     div()
         .id(("header-sort", col_ix))
         .debug_selector(move || format!("header-sort-{col_ix}"))
-        .flex()
         .flex_shrink_0()
-        .items_center()
         .ml_auto()
         .cursor_pointer()
         // Stopping the click keeps the header's own click from selecting the
-        // column as well. Alt adds the column as the next sort key.
-        .on_click(move |event: &ClickEvent, _window, cx| {
+        // column as well.
+        .on_click(move |_event: &ClickEvent, _window, cx| {
             cx.stop_propagation();
-            let adds_key = event.modifiers().alt;
-            state.update(cx, |state, cx| {
-                if adds_key {
-                    state.cycle_sort_key(col_ix, cx);
-                } else {
-                    state.cycle_sort(col_ix, cx);
-                }
-            });
+            state.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
         })
         .child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
-        .when_some(sort_rank, |control, rank| {
-            control.child(
-                div()
-                    .debug_selector(move || format!("header-sort-rank-{col_ix}"))
-                    .text_size(rank_font_size)
-                    .line_height(rank_font_size)
-                    .text_color(color)
-                    .child(SharedString::from(rank.to_string())),
-            )
-        })
 }
 
 #[cfg(test)]
@@ -2054,6 +1813,207 @@ mod tests {
             let horizontal = state.read(cx).horizontal_scroll_handle().offset().x;
             (vertical, horizontal)
         })
+    }
+
+    /// The bounds of the element `id` in the latest frame of `visual`.
+    fn element_bounds(visual: &mut VisualTestContext, id: &str) -> Option<gpui::Bounds<Pixels>> {
+        let capture = crate::accessibility::FrameCapture::observe(visual);
+        let frame = capture.frame(visual);
+        frame
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .map(|(_, node)| node.bounds())
+    }
+
+    /// The center of the element `id` in the latest frame of `visual`.
+    fn element_center(visual: &mut VisualTestContext, id: &str) -> Option<gpui::Point<Pixels>> {
+        element_bounds(visual, id).map(|bounds| bounds.center())
+    }
+
+    /// A header table over the overflow model, with or without the document
+    /// presentation (whose header is drawn by `render_document_header`).
+    fn header_table(
+        cx: &mut TestAppContext,
+        document: bool,
+        sortable: bool,
+    ) -> (Entity<DataTableState>, &mut VisualTestContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut state = DataTableState::new(overflow_model(), cx);
+                state.set_sortable(sortable);
+                if document {
+                    state.set_document_presentation(
+                        Some(super::super::document::DocumentPresentation::default()),
+                        cx,
+                    );
+                }
+                state
+            });
+            let table = cx.new(|cx| DataTable::new("header-paths-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+        (state, visual)
+    }
+
+    /// Ctrl+click (Cmd+click on macOS) on a header adds the column and takes
+    /// it out again, in the plain header and in the document header.
+    #[gpui::test]
+    fn ctrl_click_on_a_header_adds_and_removes_the_column(cx: &mut TestAppContext) {
+        for document in [false, true] {
+            let (state, visual) = header_table(cx, document, true);
+            let row_count = visual.update(|_, cx| state.read(cx).row_count());
+            let first = element_center(visual, "header-col-0").expect("header 0 drawn");
+            let second = element_center(visual, "header-col-1").expect("header 1 drawn");
+            let secondary = gpui::Modifiers::secondary_key();
+
+            visual.simulate_click(first, gpui::Modifiers::default());
+            visual.simulate_click(second, secondary);
+            visual.run_until_parked();
+            visual.update(|_, cx| {
+                let selection = state.read(cx).selection();
+                assert!(
+                    selection.is_full_column_selected(0, row_count),
+                    "{document}"
+                );
+                assert!(
+                    selection.is_full_column_selected(1, row_count),
+                    "{document}"
+                );
+                assert_eq!(selection.ranges().len(), 2, "{document}");
+            });
+
+            visual.simulate_click(second, secondary);
+            visual.run_until_parked();
+            visual.update(|_, cx| {
+                let selection = state.read(cx).selection();
+                assert!(
+                    selection.is_full_column_selected(0, row_count),
+                    "{document}"
+                );
+                assert!(
+                    !selection.is_full_column_selected(1, row_count),
+                    "{document}"
+                );
+            });
+        }
+    }
+
+    /// A table that does not sort draws no sort control, ignores a sort and
+    /// still selects the column on a header click.
+    #[gpui::test]
+    fn an_unsortable_table_has_no_sort_control_and_keeps_its_order(cx: &mut TestAppContext) {
+        let (state, visual) = header_table(cx, false, false);
+        assert!(element_center(visual, "header-sort-0").is_none());
+
+        visual.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.cycle_sort(0, cx);
+                state.set_sort(Some(super::super::events::SortState::ascending(1)), cx);
+            });
+        });
+        assert!(visual.update(|_, cx| state.read(cx).sort().is_none()));
+
+        let header = element_center(visual, "header-col-0").expect("header drawn");
+        visual.simulate_click(header, gpui::Modifiers::default());
+        visual.run_until_parked();
+        let row_count = visual.update(|_, cx| state.read(cx).row_count());
+        visual.update(|_, cx| {
+            assert!(
+                state
+                    .read(cx)
+                    .selection()
+                    .is_full_column_selected(0, row_count)
+            );
+            assert!(state.read(cx).sort().is_none());
+        });
+    }
+
+    /// With Settings > General > Data grid > Column header click sorts on, a
+    /// plain header click cycles the sort (in both header renderings) while
+    /// Shift+click still selects; a table that does not sort still selects.
+    #[gpui::test]
+    fn the_header_click_setting_sorts_on_a_plain_click(cx: &mut TestAppContext) {
+        cx.update(|cx| super::super::set_header_click_sorts(cx, true));
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        for document in [false, true] {
+            let (state, visual) = header_table(cx, document, true);
+            let first = element_center(visual, "header-col-0").expect("header 0 drawn");
+            let second = element_center(visual, "header-col-1").expect("header 1 drawn");
+
+            visual.simulate_click(first, gpui::Modifiers::default());
+            visual.run_until_parked();
+            visual.update(|_, cx| {
+                let state = state.read(cx);
+                assert_eq!(
+                    state.sort().map(|sort| sort.column_ix),
+                    Some(0),
+                    "{document}"
+                );
+                assert!(state.selection().is_empty(), "{document}");
+            });
+
+            visual.simulate_click(second, shift);
+            visual.run_until_parked();
+            let row_count = visual.update(|_, cx| state.read(cx).row_count());
+            visual.update(|_, cx| {
+                let state = state.read(cx);
+                assert!(
+                    state.selection().is_full_column_selected(1, row_count),
+                    "{document}"
+                );
+                assert_eq!(
+                    state.sort().map(|sort| sort.column_ix),
+                    Some(0),
+                    "{document}"
+                );
+            });
+        }
+
+        let (state, visual) = header_table(cx, false, false);
+        let first = element_center(visual, "header-col-0").expect("header drawn");
+        visual.simulate_click(first, gpui::Modifiers::default());
+        visual.run_until_parked();
+        let row_count = visual.update(|_, cx| state.read(cx).row_count());
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert!(state.sort().is_none());
+            assert!(state.selection().is_full_column_selected(0, row_count));
+        });
+    }
+
+    /// A press on a header's resize handle resizes; it neither selects the
+    /// column nor sorts it.
+    #[gpui::test]
+    fn pressing_the_resize_handle_does_not_select_the_column(cx: &mut TestAppContext) {
+        let (state, visual) = header_table(cx, false, true);
+        // The handle is the 6px strip at the header cell's right edge.
+        let header = element_bounds(visual, "header-col-0").expect("header drawn");
+        let grip = gpui::point(
+            header.origin.x + header.size.width - px(2.0),
+            header.origin.y + header.size.height / 2.0,
+        );
+
+        visual.simulate_mouse_down(grip, MouseButton::Left, gpui::Modifiers::default());
+        visual.simulate_mouse_up(grip, MouseButton::Left, gpui::Modifiers::default());
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert!(state.selection().is_empty(), "{:?}", state.selection());
+            assert!(state.sort().is_none());
+        });
     }
 
     /// A click on a column header selects the whole column, and Shift+click
@@ -2127,77 +2087,6 @@ mod tests {
                 "sorting leaves the selection alone"
             );
         });
-    }
-
-    /// Alt+click on a second sort arrow adds that column as the next sort
-    /// key and numbers both headers; a plain click goes back to one key.
-    /// Without multi-sort the host sorts one column, so Alt+click replaces
-    /// the sort like a plain click.
-    #[gpui::test]
-    fn alt_click_on_a_sort_arrow_adds_a_sort_key(cx: &mut TestAppContext) {
-        cx.update(crate::theme::init);
-
-        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
-            std::rc::Rc::default();
-        let holder_for_view = state_holder.clone();
-        let (_, visual) = cx.add_window_view(move |_window, cx| {
-            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
-            let table = cx.new(|cx| DataTable::new("multi-sort-table", state.clone(), cx));
-            holder_for_view.replace(Some(state));
-            ScrollHarness { table }
-        });
-        visual.run_until_parked();
-        let state = state_holder.borrow().clone().expect("state entity");
-        let alt = gpui::Modifiers {
-            alt: true,
-            ..gpui::Modifiers::default()
-        };
-        let click_arrow = |visual: &mut VisualTestContext, arrow: &'static str, modifiers| {
-            let arrow = visual
-                .debug_bounds(arrow)
-                .expect("the sort control is drawn");
-            visual.simulate_click(arrow.center(), modifiers);
-            visual.run_until_parked();
-        };
-
-        click_arrow(&mut *visual, "header-sort-0", gpui::Modifiers::default());
-        click_arrow(&mut *visual, "header-sort-1", alt);
-        visual.update(|_, cx| {
-            assert_eq!(
-                state.read(cx).sort_keys(),
-                vec![SortState::ascending(1)],
-                "multi-sort is off, so Alt+click replaces the sort"
-            );
-        });
-
-        visual.update(|_, cx| {
-            state.update(cx, |state, cx| {
-                state.set_multi_sort_enabled(true);
-                state.set_sort(Some(SortState::ascending(0)), cx);
-            });
-        });
-        visual.run_until_parked();
-        click_arrow(&mut *visual, "header-sort-1", alt);
-        visual.update(|_, cx| {
-            assert_eq!(
-                state.read(cx).sort_keys(),
-                vec![SortState::ascending(0), SortState::ascending(1)]
-            );
-        });
-        assert!(
-            visual.debug_bounds("header-sort-rank-1").is_some(),
-            "the second key shows its place"
-        );
-
-        click_arrow(&mut *visual, "header-sort-1", gpui::Modifiers::default());
-        visual.update(|_, cx| {
-            assert_eq!(
-                state.read(cx).sort_keys(),
-                vec![SortState::ascending(1)],
-                "a plain click sorts by its column alone, as on an unsorted column"
-            );
-        });
-        assert!(visual.debug_bounds("header-sort-rank-1").is_none());
     }
 
     /// Ctrl+click (Cmd+click on macOS) on row numbers and cells adds them to
@@ -2329,162 +2218,280 @@ mod tests {
         });
     }
 
-    /// Holding a drag selection below the grid body scrolls the grid down
-    /// and keeps extending the range, as in a database IDE's grid; bringing
-    /// the pointer back in stops the scrolling, and so does releasing it.
-    #[gpui::test]
-    fn dragging_past_the_bottom_edge_scrolls_and_extends(cx: &mut TestAppContext) {
-        use super::super::selection::CellCoord;
-        use std::time::Duration;
-
-        cx.update(crate::theme::init);
-
-        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
-            std::rc::Rc::default();
-        let holder_for_view = state_holder.clone();
-        let (_, visual) = cx.add_window_view(move |_window, cx| {
-            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
-            let table = cx.new(|cx| DataTable::new("drag-autoscroll-table", state.clone(), cx));
-            holder_for_view.replace(Some(state));
-            ScrollHarness { table }
-        });
-        visual.run_until_parked();
-        let state = state_holder.borrow().clone().expect("state entity");
-
-        let harness = visual
-            .debug_bounds("scroll-harness")
-            .expect("harness must render");
-        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
-        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
-        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
-        let x = harness.origin.x + ROW_NUMBER_WIDTH + px(first_col_width / 2.0);
-        let start = gpui::point(x, harness.origin.y + header_height + row_height * 1.5);
-        let below = gpui::point(x, harness.bottom() + px(40.0));
-        let none = gpui::Modifiers::default();
-        let vertical = |visual: &mut VisualTestContext| offsets(visual, &state).0;
-        let active_row = |visual: &mut VisualTestContext| {
-            visual.update(|_, cx| state.read(cx).selection().active.map(|active| active.row))
-        };
-
-        visual.simulate_mouse_down(start, MouseButton::Left, none);
-        visual.run_until_parked();
-        visual.simulate_mouse_move(below, MouseButton::Left, none);
-        visual.executor().advance_clock(Duration::from_millis(400));
-        visual.run_until_parked();
-
-        let scrolled = vertical(visual);
-        assert!(
-            scrolled < px(0.0),
-            "held below the body, the grid scrolls down"
-        );
-        let visible_rows = (f32::from(harness.size.height) / f32::from(row_height)) as usize;
-        let reached = active_row(visual).expect("the drag keeps a cursor");
-        assert!(
-            reached > visible_rows,
-            "the range grows past the rows that were on screen (reached row {reached})"
-        );
-        visual.update(|_, cx| {
-            let range = state
-                .read(cx)
-                .selection()
-                .selected_range()
-                .expect("a range");
-            assert_eq!(range.start, CellCoord::new(1, 0), "the anchor stays put");
-        });
-
-        // Back inside the body the grid stops scrolling.
-        let inside = gpui::point(x, harness.origin.y + header_height + row_height * 3.5);
-        visual.simulate_mouse_move(inside, MouseButton::Left, none);
-        visual.run_until_parked();
-        let stopped = vertical(visual);
-        visual.executor().advance_clock(Duration::from_millis(400));
-        visual.run_until_parked();
-        assert_eq!(vertical(visual), stopped, "inside the body nothing scrolls");
-
-        // Out again and released: the drag ends and so does the scrolling.
-        visual.simulate_mouse_move(below, MouseButton::Left, none);
-        visual.executor().advance_clock(Duration::from_millis(100));
-        visual.run_until_parked();
-        visual.simulate_mouse_up(below, MouseButton::Left, none);
-        visual.run_until_parked();
-        let released = vertical(visual);
-        visual.executor().advance_clock(Duration::from_millis(400));
-        visual.run_until_parked();
-        assert_eq!(vertical(visual), released, "releasing stops the scrolling");
-        assert!(!visual.update(|_, cx| state.read(cx).is_drag_selecting()));
+    /// A render of the overflow model with a counter of the selection
+    /// events the state emits, and the screen point of a cell's center.
+    struct DragFixture {
+        visual: VisualTestContext,
+        state: Entity<DataTableState>,
+        selection_events: std::rc::Rc<std::cell::Cell<usize>>,
+        harness: gpui::Bounds<Pixels>,
+        header_height: Pixels,
+        row_height: Pixels,
+        first_col_width: f32,
     }
 
-    /// A double-click on a cell of a larger selection opens the editor for
-    /// the whole selection: the first press collapses it, as any press does,
-    /// and the second brings it back.
-    #[gpui::test]
-    fn double_click_inside_a_selection_edits_all_of_it(cx: &mut TestAppContext) {
-        use super::super::selection::CellCoord;
-        use gpui::{MouseDownEvent, MouseUpEvent};
+    impl DragFixture {
+        fn new(cx: &mut TestAppContext) -> Self {
+            cx.update(crate::theme::init);
 
-        cx.update(crate::theme::init);
-
-        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
-            std::rc::Rc::default();
-        let holder_for_view = state_holder.clone();
-        let (_, visual) = cx.add_window_view(move |_window, cx| {
-            let state = cx.new(|cx| {
-                let mut state = DataTableState::new(overflow_model(), cx);
-                state.set_pk_columns(vec![0]);
-                state
+            let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+                std::rc::Rc::default();
+            let selection_events = std::rc::Rc::new(std::cell::Cell::new(0));
+            let holder_for_view = state_holder.clone();
+            let events_for_view = selection_events.clone();
+            let (_, visual) = cx.add_window_view(move |_window, cx| {
+                let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+                let table = cx.new(|cx| DataTable::new("drag-fixture-table", state.clone(), cx));
+                cx.subscribe(&state, move |_, _, event: &DataTableEvent, _| {
+                    if matches!(event, DataTableEvent::SelectionChanged(_)) {
+                        events_for_view.set(events_for_view.get() + 1);
+                    }
+                })
+                .detach();
+                holder_for_view.replace(Some(state));
+                ScrollHarness { table }
             });
-            let table = cx.new(|cx| DataTable::new("multi-edit-table", state.clone(), cx));
-            holder_for_view.replace(Some(state));
-            ScrollHarness { table }
-        });
-        visual.run_until_parked();
-        let state = state_holder.borrow().clone().expect("state entity");
+            visual.run_until_parked();
+            let state = state_holder.borrow().clone().expect("state entity");
+            let harness = visual
+                .debug_bounds("scroll-harness")
+                .expect("harness must render");
+            let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+            let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+            let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
 
-        let harness = visual
-            .debug_bounds("scroll-harness")
-            .expect("harness must render");
-        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
-        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
-        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
-        let y = |row: usize| harness.origin.y + header_height + row_height * (row as f32 + 0.5);
-        let gutter = |row: usize| gpui::point(harness.origin.x + ROW_NUMBER_WIDTH / 2.0, y(row));
-        let cell = gpui::point(
-            harness.origin.x + ROW_NUMBER_WIDTH + px(first_col_width + 10.0),
-            y(2),
-        );
+            Self {
+                visual: visual.clone(),
+                state,
+                selection_events,
+                harness,
+                header_height,
+                row_height,
+                first_col_width,
+            }
+        }
+
+        fn y(&self, row: usize) -> Pixels {
+            self.harness.origin.y + self.header_height + self.row_height * (row as f32 + 0.5)
+        }
+
+        fn cell(&self, row: usize, col: usize) -> gpui::Point<Pixels> {
+            let x = if col == 0 {
+                ROW_NUMBER_WIDTH + px(self.first_col_width / 2.0)
+            } else {
+                ROW_NUMBER_WIDTH + px(self.first_col_width + 10.0)
+            };
+            gpui::point(self.harness.origin.x + x, self.y(row))
+        }
+
+        fn gutter(&self, row: usize) -> gpui::Point<Pixels> {
+            gpui::point(self.harness.origin.x + ROW_NUMBER_WIDTH / 2.0, self.y(row))
+        }
+
+        /// A point in the window, below the table.
+        fn outside(&self) -> gpui::Point<Pixels> {
+            gpui::point(
+                self.harness.origin.x + px(100.0),
+                self.harness.origin.y + self.harness.size.height + px(100.0),
+            )
+        }
+
+        fn range(&mut self) -> super::super::selection::CellRange {
+            let state = self.state.clone();
+            self.visual.update(|_, cx| {
+                state
+                    .read(cx)
+                    .selection()
+                    .selected_range()
+                    .expect("a selection")
+            })
+        }
+    }
+
+    /// A plain click selects one cell, once: the press selects it and the
+    /// release does not select it again.
+    #[gpui::test]
+    fn a_plain_click_selects_one_cell_once(cx: &mut TestAppContext) {
+        use super::super::selection::{CellCoord, CellRange};
+
+        let mut fx = DragFixture::new(cx);
+        let target = fx.cell(2, 1);
+        fx.visual.simulate_click(target, gpui::Modifiers::default());
+        fx.visual.run_until_parked();
+
+        assert_eq!(fx.range(), CellRange::single(CellCoord::new(2, 1)));
+        assert_eq!(fx.selection_events.get(), 1, "one SelectionChanged");
+    }
+
+    /// Shift+press extends from the anchor, and dragging on from there keeps
+    /// that anchor; a drag that comes back to its start cell ends on it.
+    #[gpui::test]
+    fn shift_press_then_drag_extends_from_the_anchor(cx: &mut TestAppContext) {
+        use super::super::selection::{CellCoord, CellRange};
+
+        let mut fx = DragFixture::new(cx);
         let none = gpui::Modifiers::default();
         let shift = gpui::Modifiers {
             shift: true,
             ..gpui::Modifiers::default()
         };
 
-        visual.simulate_click(gutter(1), none);
-        visual.simulate_click(gutter(3), shift);
-        visual.run_until_parked();
+        let (a, b, c) = (fx.cell(1, 0), fx.cell(2, 0), fx.cell(3, 1));
+        fx.visual.simulate_click(a, none);
+        fx.visual.simulate_mouse_down(b, MouseButton::Left, shift);
+        fx.visual.simulate_mouse_move(c, MouseButton::Left, shift);
+        fx.visual.simulate_mouse_up(c, MouseButton::Left, shift);
+        fx.visual.run_until_parked();
+        assert_eq!(
+            fx.range(),
+            CellRange::new(CellCoord::new(1, 0), CellCoord::new(3, 1))
+        );
 
-        for click_count in [1, 2] {
-            visual.simulate_event(MouseDownEvent {
-                button: MouseButton::Left,
-                position: cell,
-                modifiers: none,
-                click_count,
-                first_mouse: false,
-            });
-            visual.simulate_event(MouseUpEvent {
-                button: MouseButton::Left,
-                position: cell,
-                modifiers: none,
-                click_count,
-            });
-        }
-        visual.run_until_parked();
+        // Out to another cell and back: the release on the start cell keeps
+        // the cell the drag ended on.
+        let (start, away) = (fx.cell(4, 0), fx.cell(5, 1));
+        fx.visual
+            .simulate_mouse_down(start, MouseButton::Left, none);
+        fx.visual.simulate_mouse_move(away, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_move(start, MouseButton::Left, none);
+        fx.visual.simulate_mouse_up(start, MouseButton::Left, none);
+        fx.visual.run_until_parked();
+        assert_eq!(fx.range(), CellRange::single(CellCoord::new(4, 0)));
+    }
 
-        visual.update(|_, cx| {
+    /// A Ctrl+press that takes a cell out starts no drag: a jitter inside the
+    /// cell or a move to another before the release selects nothing again.
+    #[gpui::test]
+    fn a_deselecting_ctrl_press_does_not_drag(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let mut fx = DragFixture::new(cx);
+        let secondary = gpui::Modifiers::secondary_key();
+        let (a, b, other) = (fx.cell(0, 0), fx.cell(5, 1), fx.cell(2, 1));
+        fx.visual.simulate_click(a, gpui::Modifiers::default());
+        fx.visual.simulate_click(b, secondary);
+        fx.visual.run_until_parked();
+
+        let jitter = gpui::point(b.x + px(1.0), b.y + px(1.0));
+        fx.visual
+            .simulate_mouse_down(b, MouseButton::Left, secondary);
+        fx.visual
+            .simulate_mouse_move(jitter, MouseButton::Left, secondary);
+        fx.visual
+            .simulate_mouse_move(other, MouseButton::Left, secondary);
+        fx.visual
+            .simulate_mouse_up(other, MouseButton::Left, secondary);
+        fx.visual.run_until_parked();
+
+        let state = fx.state.clone();
+        fx.visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(selection.is_selected(CellCoord::new(0, 0)), "A kept");
+            assert!(!selection.is_selected(CellCoord::new(5, 1)), "B out");
+            assert!(!selection.is_selected(CellCoord::new(2, 1)));
+            assert!(!selection.is_selected(CellCoord::new(3, 0)), "no block");
+        });
+    }
+
+    /// Ctrl+double-click opens the editor on the cell, selected: the second
+    /// press does not toggle it out again, and a cell the first press took
+    /// out is selected for the edit.
+    #[gpui::test]
+    fn ctrl_double_click_edits_the_cell(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let mut fx = DragFixture::new(cx);
+        let state = fx.state.clone();
+        fx.visual
+            .update(|_, cx| state.update(cx, |s, _| s.set_pk_columns(vec![0])));
+        let secondary = gpui::Modifiers::secondary_key();
+
+        let double_click = |fx: &mut DragFixture, at: gpui::Point<Pixels>| {
+            for click_count in 1..=2 {
+                fx.visual.simulate_event(MouseDownEvent {
+                    position: at,
+                    modifiers: secondary,
+                    button: MouseButton::Left,
+                    click_count,
+                    first_mouse: false,
+                });
+                fx.visual.simulate_event(gpui::MouseUpEvent {
+                    position: at,
+                    modifiers: secondary,
+                    button: MouseButton::Left,
+                    click_count,
+                });
+            }
+            fx.visual.run_until_parked();
+        };
+
+        let (a, b) = (fx.cell(0, 0), fx.cell(3, 1));
+        fx.visual.simulate_click(a, gpui::Modifiers::default());
+        double_click(&mut fx, b);
+        fx.visual.update(|_, cx| {
             let state = state.read(cx);
-            assert_eq!(state.editing_cell(), Some(CellCoord::new(2, 1)));
-            assert!(state.selection().is_full_row_selected(1, 2));
-            assert!(state.selection().is_full_row_selected(3, 2));
-            assert_eq!(state.multi_edit_count(), 6, "rows 1 to 3, both columns");
+            assert_eq!(state.editing_cell(), Some(CellCoord::new(3, 1)));
+            assert!(state.selection().is_selected(CellCoord::new(3, 1)));
+            assert!(
+                state.selection().is_selected(CellCoord::new(0, 0)),
+                "A kept"
+            );
+        });
+
+        // The cell selected on its own: the first press takes it out.
+        let c = fx.cell(6, 1);
+        fx.visual.simulate_click(c, gpui::Modifiers::default());
+        fx.visual.run_until_parked();
+        double_click(&mut fx, c);
+        fx.visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(state.editing_cell(), Some(CellCoord::new(6, 1)));
+            assert!(state.selection().is_selected(CellCoord::new(6, 1)));
+        });
+    }
+
+    /// A release outside the table ends the drag: moving back over the cells
+    /// with the button down (a drag from elsewhere, or a press on a row
+    /// number) does not move the selection.
+    #[gpui::test]
+    fn a_release_outside_the_table_ends_the_drag(cx: &mut TestAppContext) {
+        use super::super::selection::{CellCoord, CellRange};
+
+        let mut fx = DragFixture::new(cx);
+        let none = gpui::Modifiers::default();
+
+        let (start, end, outside) = (fx.cell(1, 0), fx.cell(2, 1), fx.outside());
+        fx.visual
+            .simulate_mouse_down(start, MouseButton::Left, none);
+        fx.visual.simulate_mouse_move(end, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_move(outside, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_up(outside, MouseButton::Left, none);
+        fx.visual.run_until_parked();
+        let dragged = CellRange::new(CellCoord::new(1, 0), CellCoord::new(2, 1));
+        assert_eq!(fx.range(), dragged);
+
+        let later = fx.cell(4, 1);
+        fx.visual
+            .simulate_mouse_move(later, MouseButton::Left, none);
+        fx.visual.run_until_parked();
+        assert_eq!(fx.range(), dragged, "no drag runs after the release");
+
+        let (row_number, over_cells) = (fx.gutter(6), fx.cell(7, 1));
+        fx.visual
+            .simulate_mouse_down(row_number, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_move(over_cells, MouseButton::Left, none);
+        fx.visual
+            .simulate_mouse_up(over_cells, MouseButton::Left, none);
+        fx.visual.run_until_parked();
+        let state = fx.state.clone();
+        fx.visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            assert!(selection.is_full_row_selected(6, 2), "the pressed row");
+            assert!(!selection.is_selected(CellCoord::new(7, 1)));
         });
     }
 

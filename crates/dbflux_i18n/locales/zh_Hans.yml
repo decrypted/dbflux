@@ -1628,9 +1628,6 @@ document:
         copy: 复制
         copy_as_csv: "复制为 CSV"
         copy_as_json: "复制为 JSON"
-        copy_as_sql_in_list: "复制为 SQL IN 列表"
-        copy_as_insert_statements: "复制为 INSERT 语句"
-        copy_as_markdown: "复制为 Markdown 表格"
         view_document: 查看文档
         add_document: 添加文档
         duplicate_document: 复制文档
@@ -1667,18 +1664,6 @@ document:
       order:
         title: 排序
         remove: 移除排序
-        add_to_sort: "添加到排序：%{column}"
-      column:
-        title: 列
-        fit_width: 适应宽度
-        pin: 固定列
-        unpin: 取消固定列
-        hide: 隐藏列
-        choose: "列…"
-        move_left: 左移
-        move_right: 右移
-        chooser_title: 列
-        show_all: 显示所有列
       generate_sql:
         title: 生成 SQL
       toolbar:
@@ -1815,15 +1800,6 @@ document:
         pending_changes:
           one: "%{count} 处待处理更改"
           many: "%{count} 处待处理更改"
-        multi_edit: "正在编辑 %{count} 个单元格"
-        selection:
-          cells: "%{count} 个单元格"
-          sum: "总和 %{value}"
-          average: "平均 %{value}"
-          min: "最小 %{value}"
-          max: "最大 %{value}"
-          nulls_skipped: "已跳过 %{count} 个 NULL"
-          non_numeric_skipped: "已跳过 %{count} 个非数字值"
       export:
         trigger: 导出
         save_as_file: 将已加载的行保存为文件
@@ -4179,9 +4155,9 @@ settings:
     grid_pk_sort_desc:
       label: "按主键降序排序表格"
       hint: "表格按主键降序打开，使用自增主键时最新的行显示在最前面。适用于保存后打开的表格，以及已打开表格中清除列排序的操作。在此顺序下点击主键列的标题会改为升序。"
-    grid_copy_column_names:
-      label: "复制时包含列名"
-      hint: "从数据网格复制（Ctrl+C）时，制表符分隔的文本以一行列名开头。复制为 CSV、JSON 及其他“复制为”项不受影响。"
+    grid_header_click_sorts:
+      label: "点击列标题时对该列排序"
+      hint: "关：点击列标题选择整列，标题右侧的箭头用于排序。开：点击即对该列排序；Shift+单击和 Ctrl+单击仍然选择列。"
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"
@@ -4412,7 +4388,6 @@ settings:
       copy_selection_as_json: "将选区复制为 JSON"
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
-      open_column_menu: 打开列菜单
       open_pane_actions: 打开面板操作
       menu_up: 菜单上移
       menu_down: 菜单下移

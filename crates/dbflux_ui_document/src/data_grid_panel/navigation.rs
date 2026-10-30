@@ -4,7 +4,7 @@ use super::{
 };
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::{Direction, Edge, SortState as TableSortState};
-use dbflux_core::{Pagination, SortDirection, TableRef};
+use dbflux_core::{OrderByColumn, Pagination, SortDirection, TableRef};
 use gpui::*;
 use std::cmp::Ordering;
 
@@ -24,8 +24,15 @@ impl DataGridPanel {
             return false;
         }
 
-        let loaded_keys = self.sort_keys_for_order_by(order_by);
-        self.show_sort_keys(&loaded_keys, cx);
+        let loaded_sort = order_by.first().and_then(|column| {
+            self.result
+                .columns
+                .iter()
+                .position(|meta| meta.name == column.column.name)
+                .map(|column_ix| TableSortState::new(column_ix, column.direction))
+        });
+
+        self.restore_sort_indicator(loaded_sort, cx);
         true
     }
 
@@ -38,9 +45,29 @@ impl DataGridPanel {
             return false;
         }
 
-        let current_keys = self.local_sort_keys();
-        self.show_sort_keys(&current_keys, cx);
+        let current_sort = self
+            .grid_table
+            .local_sort_state
+            .map(|sort| TableSortState::new(sort.column_ix, sort.direction));
+
+        self.restore_sort_indicator(current_sort, cx);
         true
+    }
+
+    /// Puts the table's header arrow back to `sort` after a refused sort
+    /// request: the table moves the arrow before it asks the panel to sort.
+    fn restore_sort_indicator(&mut self, sort: Option<TableSortState>, cx: &mut Context<Self>) {
+        let Some(table_state) = self.grid_table.table_state.clone() else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            match sort {
+                Some(sort) => state.set_sort_without_emit(sort),
+                None => state.clear_sort_without_emit(),
+            }
+            cx.notify();
+        });
     }
 
     pub(super) fn handle_sort_request(
@@ -49,21 +76,6 @@ impl DataGridPanel {
         direction: SortDirection,
         cx: &mut Context<Self>,
     ) {
-        self.handle_sort_keys_request(&[TableSortState::new(col_ix, direction)], cx);
-    }
-
-    /// Sorts by `keys`, first to last: in the query for a table, in memory
-    /// otherwise. No keys returns to the default order.
-    pub(super) fn handle_sort_keys_request(
-        &mut self,
-        keys: &[TableSortState],
-        cx: &mut Context<Self>,
-    ) {
-        if keys.is_empty() {
-            self.handle_sort_clear(cx);
-            return;
-        }
-
         if self.server_sort_blocked(cx) {
             return;
         }
@@ -73,6 +85,13 @@ impl DataGridPanel {
         if self.nearest_neighbors.is_some() {
             return;
         }
+
+        let col_name = self
+            .result
+            .columns
+            .get(col_ix)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
 
         // Extract values before mutating self.source
         let table_info = match &self.source {
@@ -96,7 +115,7 @@ impl DataGridPanel {
 
         if let Some((profile_id, database, table, new_pagination, total_rows)) = table_info {
             // Server-side sort: update source and queue re-query
-            let new_order_by = self.order_by_for_sort_keys(keys, cx);
+            let new_order_by = vec![OrderByColumn::from_name(&col_name, direction)];
 
             let filter_value = self.filter_bar.filter_input.read(cx).value();
             let filter = if filter_value.trim().is_empty() {
@@ -129,14 +148,7 @@ impl DataGridPanel {
             cx.notify();
         } else if !self.local_sort_blocked(cx) {
             // Client-side sort: sort in memory
-            let local_keys: Vec<LocalSortState> = keys
-                .iter()
-                .map(|key| LocalSortState {
-                    column_ix: key.column_ix,
-                    direction: key.direction,
-                })
-                .collect();
-            self.apply_local_sort_keys(&local_keys, cx);
+            self.apply_local_sort(col_ix, direction, cx);
         }
     }
 
@@ -305,34 +317,12 @@ impl DataGridPanel {
         }
     }
 
-    /// One-key form of `apply_local_sort_keys`, for tests.
-    #[cfg(test)]
     pub(super) fn apply_local_sort(
         &mut self,
         col_ix: usize,
         direction: SortDirection,
         cx: &mut Context<Self>,
     ) {
-        self.apply_local_sort_keys(
-            &[LocalSortState {
-                column_ix: col_ix,
-                direction,
-            }],
-            cx,
-        );
-    }
-
-    /// Sorts the rows in memory by `keys`, first to last; a later key only
-    /// orders the rows the earlier ones leave tied.
-    pub(super) fn apply_local_sort_keys(
-        &mut self,
-        keys: &[LocalSortState],
-        cx: &mut Context<Self>,
-    ) {
-        let Some((&first, then)) = keys.split_first() else {
-            return;
-        };
-
         // Save original order if this is the first sort
         if self.grid_table.original_row_order.is_none() {
             self.grid_table.original_row_order = Some((0..self.result.rows.len()).collect());
@@ -347,25 +337,20 @@ impl DataGridPanel {
             reason = "a and b come from indices, a permutation of 0..result.rows.len()"
         )]
         indices.sort_by(|&a, &b| {
-            keys.iter()
-                .map(|key| {
-                    let val_a = self.result.rows[a].get(key.column_ix);
-                    let val_b = self.result.rows[b].get(key.column_ix);
+            let val_a = self.result.rows[a].get(col_ix);
+            let val_b = self.result.rows[b].get(col_ix);
 
-                    let cmp = match (val_a, val_b) {
-                        (Some(a), Some(b)) => a.cmp(b),
-                        (None, Some(_)) => Ordering::Greater,
-                        (Some(_), None) => Ordering::Less,
-                        (None, None) => Ordering::Equal,
-                    };
+            let cmp = match (val_a, val_b) {
+                (Some(a), Some(b)) => a.cmp(b),
+                (None, Some(_)) => Ordering::Greater,
+                (Some(_), None) => Ordering::Less,
+                (None, None) => Ordering::Equal,
+            };
 
-                    match key.direction {
-                        SortDirection::Ascending => cmp,
-                        SortDirection::Descending => cmp.reverse(),
-                    }
-                })
-                .find(|cmp| cmp.is_ne())
-                .unwrap_or(Ordering::Equal)
+            match direction {
+                SortDirection::Ascending => cmp,
+                SortDirection::Descending => cmp.reverse(),
+            }
         });
 
         // Reorder rows according to sorted indices. i comes from indices, a
@@ -395,8 +380,10 @@ impl DataGridPanel {
             *orig = indices.iter().map(|&i| orig[i]).collect();
         }
 
-        self.grid_table.local_sort_state = Some(first);
-        self.grid_table.local_sort_then = then.to_vec();
+        self.grid_table.local_sort_state = Some(LocalSortState {
+            column_ix: col_ix,
+            direction,
+        });
         // The rows only move, so the edits staged on them follow by primary key.
         self.pending.rebuild = true;
         self.pending.rebuild_keeps_edits = true;
@@ -773,10 +760,6 @@ impl DataGridPanel {
             }
         }
 
-        if self.column_chooser.is_some() {
-            return self.dispatch_column_chooser_command(cmd, window, cx);
-        }
-
         // Handle context menu commands when menu is open
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);
@@ -983,10 +966,6 @@ impl DataGridPanel {
                     self.open_context_menu_at_selection(window, cx);
                 }
                 true
-            }
-            // The document view draws no column headers.
-            Command::OpenColumnMenu if self.view_config.mode != crate::DataViewMode::Document => {
-                self.open_column_menu_at_selection(window, cx)
             }
             Command::ResultsCopyCell => {
                 self.handle_copy(window, cx);

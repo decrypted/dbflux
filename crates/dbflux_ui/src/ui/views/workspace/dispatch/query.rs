@@ -135,7 +135,7 @@ impl Workspace {
             }
 
             // Unclaimed outside a table grid, so the key propagates.
-            Command::CopySelectionAsJson | Command::OpenColumnMenu => Some(
+            Command::CopySelectionAsJson => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),

@@ -45,74 +45,40 @@ pub fn copy_row(model: &TableModel, row: usize) -> Option<String> {
 /// Copy the current selection to clipboard format (TSV).
 ///
 /// With several ranges (Ctrl+click), the text covers every row that holds a
-/// selected cell and every column that does, the columns in the order the
-/// grid shows them; a cell outside the selection inside that grid is left
-/// empty. For one range this is the range itself. A hidden column is never
-/// part of a selection, so it is never copied.
+/// selected cell and every column that does, in table order; a cell outside
+/// the selection inside that grid is left empty. For one range this is the
+/// range itself.
 pub fn copy_selection(model: &TableModel, selection: &SelectionState) -> Option<String> {
-    let (rows, cols) = selection_grid(selection)?;
-    Some(selection_lines(model, selection, &rows, &cols).join("\n"))
+    copy_selection_with(selection, |row, col| model.cell(row, col))
 }
 
-/// `copy_selection` led by a line with the titles of the copied columns.
-pub fn copy_selection_with_column_names(
-    model: &TableModel,
+/// [`copy_selection`] with the cell at each visual position looked up by
+/// `cell`, for a table whose shown rows are not the model's rows one to one
+/// (pending inserts, unsaved edits).
+pub fn copy_selection_with<'a>(
     selection: &SelectionState,
+    cell: impl Fn(usize, usize) -> Option<&'a CellValue>,
 ) -> Option<String> {
-    let (rows, cols) = selection_grid(selection)?;
-    let header = cols
-        .iter()
-        .map(|&col| {
-            model
-                .columns
-                .get(col)
-                .map(|column| escape_tsv(&column.title))
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join("\t");
-
-    let mut lines = vec![header];
-    lines.extend(selection_lines(model, selection, &rows, &cols));
-    Some(lines.join("\n"))
-}
-
-/// The rows holding a selected cell, top to bottom, and the columns holding
-/// one, in the order the grid shows them.
-type SelectionGrid = (std::collections::BTreeSet<usize>, Vec<usize>);
-
-/// Every row and every column that holds a selected cell.
-fn selection_grid(selection: &SelectionState) -> Option<SelectionGrid> {
     let ranges = selection.ranges();
     if ranges.is_empty() {
         return None;
     }
-    let rows = ranges
+    let rows: std::collections::BTreeSet<usize> = ranges
         .iter()
         .flat_map(|range| range.start.row..=range.end.row)
         .collect();
-    let mut cols: Vec<usize> = ranges
+    let cols: std::collections::BTreeSet<usize> = ranges
         .iter()
         .flat_map(|range| range.start.col..=range.end.col)
-        .collect::<std::collections::BTreeSet<usize>>()
-        .into_iter()
         .collect();
-    selection.sort_by_screen_order(&mut cols);
-    Some((rows, cols))
-}
 
-fn selection_lines(
-    model: &TableModel,
-    selection: &SelectionState,
-    rows: &std::collections::BTreeSet<usize>,
-    cols: &[usize],
-) -> Vec<String> {
-    rows.iter()
+    let lines: Vec<String> = rows
+        .iter()
         .map(|&row| {
             cols.iter()
                 .map(|&col| {
                     if selection.is_selected(CellCoord::new(row, col)) {
-                        model.cell(row, col).map(format_cell).unwrap_or_default()
+                        cell(row, col).map(format_cell).unwrap_or_default()
                     } else {
                         String::new()
                     }
@@ -120,7 +86,9 @@ fn selection_lines(
                 .collect::<Vec<_>>()
                 .join("\t")
         })
-        .collect()
+        .collect();
+
+    Some(lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -160,46 +128,6 @@ mod tests {
     }
 
     #[test]
-    fn copy_with_column_names_leads_with_the_copied_titles() {
-        use super::super::model::{ColumnKind, ColumnSpec, RowData};
-
-        let columns = ["id", "name", "city"]
-            .into_iter()
-            .map(|name| ColumnSpec {
-                id: name.into(),
-                title: name.into(),
-                kind: ColumnKind::Text,
-                align: gpui::TextAlign::Left,
-                type_name: "text".into(),
-            })
-            .collect();
-        let rows = (0..3)
-            .map(|i| RowData {
-                cells: vec![
-                    CellValue::int(i),
-                    CellValue::text(&format!("row{i}")),
-                    CellValue::text("Oslo"),
-                ],
-            })
-            .collect();
-        let model = TableModel::new(columns, rows);
-
-        let mut selection = SelectionState::new();
-        selection.select_cell(CellCoord::new(0, 1));
-        selection.extend_to(CellCoord::new(1, 2));
-
-        assert_eq!(
-            copy_selection_with_column_names(&model, &selection).as_deref(),
-            Some("name\tcity\nrow0\tOslo\nrow1\tOslo")
-        );
-        assert_eq!(
-            copy_selection(&model, &selection).as_deref(),
-            Some("row0\tOslo\nrow1\tOslo"),
-            "the plain copy stays values only"
-        );
-    }
-
-    #[test]
     fn copy_of_separate_rows_holds_only_those_rows() {
         use super::super::model::{ColumnKind, ColumnSpec, RowData};
 
@@ -235,6 +163,16 @@ mod tests {
         assert_eq!(
             copy_selection(&model, &selection).as_deref(),
             Some("0\t\n\trow2")
+        );
+
+        // Overlapping ranges copy each cell once.
+        let mut selection = SelectionState::new();
+        selection.select_cell(CellCoord::new(0, 0));
+        selection.extend_to(CellCoord::new(1, 1));
+        selection.toggle_cell(CellCoord::new(1, 1));
+        assert_eq!(
+            copy_selection(&model, &selection).as_deref(),
+            Some("0\trow0\n1\trow1")
         );
     }
 }

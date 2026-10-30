@@ -1628,9 +1628,6 @@ document:
         copy: 복사
         copy_as_csv: "CSV로 복사"
         copy_as_json: "JSON으로 복사"
-        copy_as_sql_in_list: "SQL IN 목록으로 복사"
-        copy_as_insert_statements: "INSERT 문으로 복사"
-        copy_as_markdown: "Markdown 표로 복사"
         view_document: 문서 보기
         add_document: 문서 추가
         duplicate_document: 문서 복제
@@ -1667,18 +1664,6 @@ document:
       order:
         title: 정렬
         remove: 정렬 제거
-        add_to_sort: "정렬에 추가: %{column}"
-      column:
-        title: 열
-        fit_width: 너비 맞춤
-        pin: 열 고정
-        unpin: 열 고정 해제
-        hide: 열 숨기기
-        choose: "열…"
-        move_left: 왼쪽으로 이동
-        move_right: 오른쪽으로 이동
-        chooser_title: 열
-        show_all: 모든 열 표시
       generate_sql:
         title: SQL 생성
       toolbar:
@@ -1815,15 +1800,6 @@ document:
         pending_changes:
           one: "대기 중인 변경 사항 %{count}개"
           many: "대기 중인 변경 사항 %{count}개"
-        multi_edit: "셀 %{count}개 편집 중"
-        selection:
-          cells: "셀 %{count}개"
-          sum: "합계 %{value}"
-          average: "평균 %{value}"
-          min: "최소 %{value}"
-          max: "최대 %{value}"
-          nulls_skipped: "NULL %{count}개 제외"
-          non_numeric_skipped: "숫자가 아닌 값 %{count}개 제외"
       export:
         trigger: 내보내기
         save_as_file: 불러온 행을 파일로 저장
@@ -4179,9 +4155,9 @@ settings:
     grid_pk_sort_desc:
       label: "기본 키 내림차순으로 테이블 정렬"
       hint: "테이블을 기본 키 내림차순으로 열어 자동 증가 키라면 최신 행이 먼저 표시됩니다. 저장한 이후에 여는 테이블과, 이미 열린 테이블에서 열 정렬을 해제할 때 적용됩니다. 이 순서에서 키 열의 머리글을 클릭하면 오름차순으로 정렬됩니다."
-    grid_copy_column_names:
-      label: "복사할 때 열 이름 포함"
-      hint: "데이터 그리드에서 복사(Ctrl+C)하면 탭으로 구분된 텍스트가 열 이름 한 줄로 시작합니다. CSV, JSON 등 다른 형식으로 복사 항목에는 영향을 주지 않습니다."
+    grid_header_click_sorts:
+      label: "열 헤더를 클릭하면 열 정렬"
+      hint: "끔: 열 헤더를 클릭하면 열 전체가 선택되고, 헤더 오른쪽 끝의 화살표로 정렬합니다. 켬: 클릭하면 열이 정렬됩니다. Shift+클릭과 Ctrl+클릭은 계속 열을 선택합니다."
     vim_mode:
       label: "편집기에서 Vim 모드 사용"
       hint: "노멀 모드와 삽입 모드: h, j, k, l, Enter로 이동하고, i로 입력을 시작하고, Esc로 노멀 모드로 돌아가고, x로 문자를 삭제하고, u로 실행을 취소합니다. 저장하면 열려 있는 편집기에 적용됩니다."
@@ -4412,7 +4388,6 @@ settings:
       copy_selection_as_json: "선택 영역을 JSON으로 복사"
       results_set_null: 셀을 NULL로 설정
       open_context_menu: 상황에 맞는 메뉴 열기
-      open_column_menu: 열 메뉴 열기
       open_pane_actions: 패널 작업 열기
       menu_up: 메뉴 위로
       menu_down: 메뉴 아래로

@@ -193,7 +193,7 @@ impl MigrationRegistry {
         registry.register(mod_048_general_settings_grid_pk_sort_desc::MigrationImpl);
         registry.register(mod_049_connection_profile_connect_on_startup::MigrationImpl);
         registry.register(mod_050_session_tab_view_state::MigrationImpl);
-        registry.register(mod_052_general_settings_grid_copy_column_names::MigrationImpl);
+        registry.register(mod_058_general_settings_grid_header_click_sorts::MigrationImpl);
         registry
     }
 
@@ -434,7 +434,7 @@ mod mod_047_general_settings_grid_fk_labels;
 mod mod_048_general_settings_grid_pk_sort_desc;
 mod mod_049_connection_profile_connect_on_startup;
 mod mod_050_session_tab_view_state;
-mod mod_052_general_settings_grid_copy_column_names;
+mod mod_058_general_settings_grid_header_click_sorts;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1228,7 +1228,7 @@ mod tests {
             "048_general_settings_grid_pk_sort_desc",
             "049_connection_profile_connect_on_startup",
             "050_session_tab_view_state",
-            "052_general_settings_grid_copy_column_names",
+            "058_general_settings_grid_header_click_sorts",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

@@ -64,9 +64,7 @@ pub(super) fn render_record(
     cx: &App,
 ) -> AnyElement {
     let row_count = state.row_count();
-    // Fields follow the grid's screen order, hidden columns left out, so
-    // walking them matches walking the grid's columns.
-    let col_count = state.visible_columns().len();
+    let col_count = state.col_count();
 
     if row_count == 0 || col_count == 0 {
         return div()
@@ -232,10 +230,7 @@ fn render_fields(
     let null_value = CellValue::null();
     let null_color = SyntaxColors::for_current(cx).number;
 
-    let columns = state.visible_columns();
-
     visible_range
-        .filter_map(|field_ix| columns.get(field_ix).copied())
         .map(|col_ix| {
             let coord = CellCoord::new(record.visual_ix, col_ix);
             let is_active = selection.active == Some(coord);

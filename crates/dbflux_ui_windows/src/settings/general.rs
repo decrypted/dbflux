@@ -53,7 +53,7 @@ impl GeneralSection {
             current.table_alias_use_as != saved.table_alias_use_as,
             current.grid_fk_labels != saved.grid_fk_labels,
             current.grid_pk_sort_desc != saved.grid_pk_sort_desc,
-            current.grid_copy_column_names != saved.grid_copy_column_names,
+            current.grid_header_click_sorts != saved.grid_header_click_sorts,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
 
@@ -129,7 +129,7 @@ impl GeneralSection {
             GeneralFormRow::TableAliasUseAs,
             GeneralFormRow::GridFkLabels,
             GeneralFormRow::GridPkSortDesc,
-            GeneralFormRow::GridCopyColumnNames,
+            GeneralFormRow::GridHeaderClickSorts,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -288,9 +288,9 @@ impl GeneralSection {
                 self.gen_settings.grid_pk_sort_desc = !self.gen_settings.grid_pk_sort_desc;
                 cx.notify();
             }
-            Some(GeneralFormRow::GridCopyColumnNames) => {
-                self.gen_settings.grid_copy_column_names =
-                    !self.gen_settings.grid_copy_column_names;
+            Some(GeneralFormRow::GridHeaderClickSorts) => {
+                self.gen_settings.grid_header_click_sorts =
+                    !self.gen_settings.grid_header_click_sorts;
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -1047,14 +1047,14 @@ impl GeneralSection {
                 cx,
             ))
             .child(self.render_gen_checkbox(
-                "grid-copy-column-names",
-                dbflux_i18n::t!("settings.general.grid_copy_column_names.label"),
+                "grid-header-click-sorts",
+                dbflux_i18n::t!("settings.general.grid_header_click_sorts.label"),
                 Some(dbflux_i18n::t!(
-                    "settings.general.grid_copy_column_names.hint"
+                    "settings.general.grid_header_click_sorts.hint"
                 )),
-                self.gen_settings.grid_copy_column_names,
-                GeneralFormRow::GridCopyColumnNames,
-                |this, value, _cx| this.gen_settings.grid_copy_column_names = value,
+                self.gen_settings.grid_header_click_sorts,
+                GeneralFormRow::GridHeaderClickSorts,
+                |this, value, _cx| this.gen_settings.grid_header_click_sorts = value,
                 cx,
             ));
 

@@ -46,9 +46,7 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
-With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. Dragging past an edge of the grid scrolls it that way, faster the further out the pointer is, and keeps extending the range until the button is released or the pointer comes back.
-
-When the selection covers more than one cell, the status bar shows how many cells it holds and, for the numbers among them, their sum, average, minimum and maximum. NULLs and text are counted but left out of the figures, and the status bar says how many it skipped. The totals are worked out from the rows already loaded, unsaved edits included, without querying the database again.
+With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. The extra ranges are for copying: delete, duplicate, save and the other row actions act on the row of the cursor, a right-click selects the cell under the pointer, and the record view treats `Ctrl`+click as a plain click.
 
 ## Record view
 
@@ -68,56 +66,7 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted.
-
-To sort by several columns, `Alt`+click the arrow of another column: it becomes
-the next sort key, ascending, and a further `Alt`+click turns it descending and
-then takes it out of the sort. With more than one key, each sorted header shows
-its place (1, 2, 3) next to the arrow, and rows that tie on the first key are
-ordered by the second, and so on. A plain click on any arrow sorts by that
-column alone again. The column menu offers the same as **Add to sort: column
-ASC** and **Add to sort: column DESC**, which also change the direction of a
-column that is already a key, and **Remove ordering** drops every key. A table
-sends all keys to the database as one `ORDER BY`; a query result is sorted in
-memory. On a table still in its default order (its primary key), the first
-added key replaces that order, since rows sorted by the primary key first have
-no ties left for another column to order; removing the ordering returns to the
-default order.
-
-`Shift+m` opens the same menu from the keyboard, for the column of the selected
-cell. The menu ends with a **Column** section of view settings, which change
-how the grid shows the column and never the query. **Fit width** sizes the
-column to its header and its loaded values, up to 640 pixels so one long JSON
-value does not push the rest of the grid off screen; a double-click on the
-resize edge at the header's right border does the same.
-
-**Hide column** takes the column off the screen, and **Columns…** lists every
-column with a check mark on the shown ones: `Enter`, `Space` or a click shows
-or hides the highlighted column while the list stays open, **Show all
-columns** brings every hidden one back, and `Escape` closes it. **Move left**
-and **Move right** move the column one place; dragging a header onto another
-header moves its column into that place.
-
-**Pin column** keeps the column at the left edge, right after the row numbers,
-while the grid scrolls sideways, like a frozen pane: pin `id` and `created_at`
-to keep them in view on a wide log table. Pinned columns lead the grid in the
-order they were pinned and show a pin in their header; **Unpin column** lets
-the column scroll again, as the first of the others. Selecting, editing,
-sorting, resizing and the row numbers work the same on pinned columns. Move
-left and Move right stay on their side of the pinned edge; dragging a header
-across it pins or unpins its column.
-
-The query keeps reading every column (a table still runs `SELECT *`); to leave
-a column out of the query itself, use the query builder's projection. Copy
-(with or without column names), Copy as CSV, Copy as JSON, Copy as SQL IN list,
-Copy as INSERT statements and Copy as Markdown table follow the screen: the
-shown columns, in the order the grid shows them, and the IN list takes the
-leftmost of them. Copy row, Copy as Query and Export use the whole row in
-the result's own order, hidden columns included. A table remembers its layout
-for its connection, database, schema and table, across closing it and
-restarting DBFlux; moving every column back to the table's own order with all
-of them shown forgets it. A query result keeps its layout while its tab is
-open. A document grid keeps the order of its fields and offers only Fit width.
+list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does.
 
 ## Value panel
 
@@ -236,8 +185,6 @@ In the data grid:
 - `y` — copy the selected row.
 - `Ctrl+c` (`Cmd+c`) — copy the selected cell(s) to the clipboard.
 
-With several cells selected, `Enter`, `F2` or a double-click on one of them opens the editor for all of them, and the status bar says how many cells the edit will change. The value you commit is written to every selected cell that can take it, as unsaved changes that Save and Revert handle like any other edit, and one undo (`u` or `Ctrl+z`) takes the whole edit back. Cells in read-only columns, rows marked for deletion and values the inline editor does not edit (JSON, long or multi-line text) are skipped; a value picked from a column's list of allowed values goes only to columns with the same list.
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/results/editing-dark.webp">
   <img src="images/results/editing-light.webp" alt="The customers table with one edited cell not yet saved, and the Save and Revert buttons enabled">
@@ -316,27 +263,13 @@ clipboard**: CSV starts with a header row of the column names, and JSON is an
 array with one object per row, keyed by column name, with numbers, booleans and
 `null` kept as such. Every row and column the selection covers is included; a
 cell inside that area but outside the selection is empty in CSV and `null` in
-JSON. Plain **Copy** (`Ctrl+c`) copies tab-separated text, without a header
-unless **Include column names when copying** is on in Settings → General →
-Data grid, which starts it with a line of the copied columns' names.
+JSON. The copies follow what the grid shows: an unsaved edit is copied with
+its new value and an added row that is not saved yet at its place. In JSON,
+columns that share a name (`a.id` and `b.id` of a join) share one key, which
+takes the value of the last of them. Plain **Copy** (`Ctrl+c`) still copies
+tab-separated text without a header.
 `Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
 the menu shows it next to the item.
-
-Below them the menu has three more extractors:
-
-- **Copy as SQL IN list** copies the selected values of one column as a list
-  for a `WHERE ... IN`, such as `('a', 'O''Brien')` or `(1, 2, 3)`, quoted the
-  way the connection's driver writes literals (ANSI quoting for a result
-  without a connection). A value selected more than once is listed once and
-  `NULL` is left out, since `IN (NULL)` matches nothing. With several columns
-  selected it lists the leftmost one.
-- **Copy as INSERT statements**, on a table, copies one `INSERT` per selected
-  row with the selected columns, written by the same driver generator as
-  **Copy as Query**. Each row gives its own values for those columns, even
-  where a cell inside the selected area is not itself selected.
-- **Copy as Markdown table** copies the same rows and columns as Copy as CSV as
-  a Markdown table with a header row; `NULL` and unselected cells are empty and
-  `|` and line breaks inside values are escaped.
 
 ## Copy as Query
 

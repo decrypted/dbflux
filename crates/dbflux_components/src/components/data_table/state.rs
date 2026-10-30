@@ -10,7 +10,6 @@ use gpui::{
 
 use super::annotation::HeaderAnnotation;
 use super::clipboard;
-use super::column_layout::ColumnLayout;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, KeyedPendingEdits, TableModel};
 use super::selection::{CellCoord, SelectionState};
@@ -18,15 +17,9 @@ use super::theme::{
     AUTO_WIDTH_SAMPLE_ROWS, AUTO_WIDTH_SLACK, CELL_PADDING_X, MAX_AUTO_COLUMN_WIDTH,
     MIN_COLUMN_WIDTH, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
 };
-use super::totals::{self, SelectionTotals, TotalsCache};
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 use crate::fonts;
 use crate::tokens::GridMetrics;
-
-mod autoscroll;
-mod fit;
-mod layout;
-mod multi_edit;
 
 /// Grid face and glyph advances an auto-sized column width was estimated
 /// with. A change in any of them re-estimates the auto-sized columns.
@@ -58,6 +51,36 @@ pub enum ModelSwap {
     ResetCursor,
 }
 
+/// What a primary click on a column header does, from Settings > General >
+/// Data grid: select the column (the default), or sort it as the header did
+/// before column selection. Published by the app so the table, which has no
+/// access to the settings, can follow them.
+///
+/// Absent means select: component tests that never publish it keep the
+/// default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeaderClickSetting {
+    pub sorts: bool,
+}
+
+impl gpui::Global for HeaderClickSetting {}
+
+/// Publishes whether a header click sorts.
+pub fn set_header_click_sorts(cx: &mut App, sorts: bool) {
+    if header_click_sorts(cx) == sorts && cx.has_global::<HeaderClickSetting>() {
+        return;
+    }
+
+    cx.set_global(HeaderClickSetting { sorts });
+}
+
+/// Whether a header click sorts, as last published with
+/// [`set_header_click_sorts`].
+pub fn header_click_sorts(cx: &App) -> bool {
+    cx.try_global::<HeaderClickSetting>()
+        .is_some_and(|setting| setting.sorts)
+}
+
 /// Main state for the DataTable component.
 pub struct DataTableState {
     /// The data model (Arc to avoid cloning).
@@ -73,34 +96,15 @@ pub struct DataTableState {
     /// Metrics the auto-sized column widths were last estimated with.
     auto_width_metrics: GridTextMetrics,
 
-    /// Prefix sums of the shown columns' widths in screen order, for
-    /// hit-testing: [0, w0, w0+w1, ...].
+    /// Prefix sums of column widths for hit-testing: [0, w0, w0+w1, ...].
     column_offsets: Vec<f32>,
-
-    /// Screen order and visibility of the columns. Everything else keeps
-    /// addressing columns by model index.
-    column_layout: Arc<ColumnLayout>,
 
     /// Current sort state.
     sort: Option<SortState>,
 
-    /// Sort keys that follow `sort`, in order. Only a modifier click on a
-    /// sort arrow fills it, and every single-column sort clears it, so the
-    /// hosts that sort one column at a time never see it.
-    then_sorts: Vec<SortState>,
-
-    /// Whether a plain copy starts with a line of column names. The host
-    /// sets it from its settings; off keeps the values-only TSV.
-    copy_column_names: bool,
-
-    /// Whether a modifier click on a sort arrow adds a sort key. Off unless
-    /// the host sorts by several keys; without it the click sorts as a plain
-    /// click does.
-    multi_sort: bool,
-
-    /// Whether a header offers the sort arrow. A host that keeps rows in
-    /// source order (a file opened as a table) turns it off rather than
-    /// undoing every sort it receives.
+    /// Whether the table sorts: a header offers the sort arrow and the sort
+    /// can be set. A host that keeps rows in source order (a file opened as a
+    /// table) turns it off.
     sortable: bool,
 
     /// Viewport size (updated on layout).
@@ -136,21 +140,9 @@ pub struct DataTableState {
     /// other cells extends the selection to them.
     drag_selecting: bool,
 
-    /// Pointer of the running drag selection and the task scrolling the
-    /// grid while it is held past an edge of the body.
-    drag_autoscroll: Option<autoscroll::DragAutoscroll>,
-
     // --- Edit Mode ---
     /// Cell currently being edited (inline editor is open).
     editing_cell: Option<CellCoord>,
-
-    /// Every cell the open editor writes to when committed, the edited one
-    /// first; empty unless the edit started on a selection of several cells.
-    edit_targets: Vec<CellCoord>,
-
-    /// The selection a plain press on one of its cells collapsed, kept so
-    /// the second press of a double-click can bring it back for the edit.
-    selection_before_press: Option<(CellCoord, SelectionState)>,
 
     /// Input state for the inline cell editor.
     cell_input: Option<Entity<InputState>>,
@@ -215,10 +207,6 @@ pub struct DataTableState {
     /// Facts drawn under each column header, indexed like the model's
     /// columns. Empty, or all `None`, keeps the header one line tall.
     header_annotations: Vec<Option<HeaderAnnotation>>,
-
-    /// Totals of the selected cells, dropped whenever the table notifies.
-    selection_totals: TotalsCache,
-    _totals_invalidation: Subscription,
 }
 
 impl DataTableState {
@@ -236,20 +224,13 @@ impl DataTableState {
         let mut edit_buffer = EditBuffer::new();
         edit_buffer.set_base_row_count(row_count);
 
-        let totals_invalidation =
-            cx.observe_self(|this: &mut Self, _cx| this.selection_totals.invalidate());
-
         Self {
             model,
             column_widths,
             manually_sized: vec![false; col_count],
             auto_width_metrics,
             column_offsets,
-            column_layout: Arc::new(ColumnLayout::identity(col_count)),
             sort: None,
-            then_sorts: Vec::new(),
-            multi_sort: false,
-            copy_column_names: false,
             sortable: true,
             viewport_size: Size::default(),
             selection: SelectionState::new(),
@@ -260,10 +241,7 @@ impl DataTableState {
             horizontal_scroll_handle: ScrollHandle::new(),
             horizontal_offset: px(0.0),
             drag_selecting: false,
-            drag_autoscroll: None,
             editing_cell: None,
-            edit_targets: Vec::new(),
-            selection_before_press: None,
             cell_input: None,
             enum_dropdown: None,
             _editing_subs: Vec::new(),
@@ -279,8 +257,6 @@ impl DataTableState {
             enum_options: std::collections::HashMap::new(),
             document: None,
             header_annotations: Vec::new(),
-            selection_totals: TotalsCache::default(),
-            _totals_invalidation: totals_invalidation,
         }
     }
 
@@ -356,8 +332,8 @@ impl DataTableState {
         }
     }
 
-    /// The width a column opens with: wide enough for its header (name, type
-    /// and a key or sort icon) and for the longest value among the first
+    /// The width a column opens with: wide enough for its header (name, type,
+    /// a key icon and the sort control) and for the longest value among the first
     /// `AUTO_WIDTH_SAMPLE_ROWS` rows, so short values are not cut while the
     /// pane has room. Content counts up to `MAX_AUTO_COLUMN_WIDTH`; a header
     /// wider than that still gets its full width.
@@ -370,6 +346,24 @@ impl DataTableState {
             return MIN_COLUMN_WIDTH;
         };
 
+        let cell_char = metrics.cell_char_advance;
+        let type_char = metrics.type_char_advance;
+        let padding = f32::from(CELL_PADDING_X) * 2.0;
+        let gap = f32::from(GridMetrics::HEADER_GAP);
+
+        let type_chars = column.type_name.chars().count();
+        let type_width = if type_chars == 0 {
+            0.0
+        } else {
+            gap + type_chars as f32 * type_char
+        };
+        // Two icons: a key column draws its key icon and, on a table that
+        // sorts, every header draws the sort control. The keys are not known
+        // yet when the widths are first worked out, so both are budgeted.
+        let icon_width = 2.0 * (gap + f32::from(GridMetrics::HEADER_ICON));
+        let header_width =
+            padding + column.title.chars().count() as f32 * cell_char + type_width + icon_width;
+
         let longest_value = model
             .rows
             .iter()
@@ -378,38 +372,10 @@ impl DataTableState {
             .map(|cell| cell.display_text().chars().count())
             .max()
             .unwrap_or(0);
-        let content_width = Self::content_width(longest_value, metrics).min(MAX_AUTO_COLUMN_WIDTH);
+        let content_width = (padding + longest_value as f32 * cell_char + AUTO_WIDTH_SLACK)
+            .min(MAX_AUTO_COLUMN_WIDTH);
 
-        Self::header_width(column, metrics)
-            .max(content_width)
-            .max(MIN_COLUMN_WIDTH)
-            .ceil()
-    }
-
-    /// Width a header needs for its name, type label and a key or sort icon.
-    fn header_width(column: &super::model::ColumnSpec, metrics: &GridTextMetrics) -> f32 {
-        let padding = f32::from(CELL_PADDING_X) * 2.0;
-        let gap = f32::from(GridMetrics::HEADER_GAP);
-
-        let type_chars = column.type_name.chars().count();
-        let type_width = if type_chars == 0 {
-            0.0
-        } else {
-            gap + type_chars as f32 * metrics.type_char_advance
-        };
-        let icon_width = gap + f32::from(GridMetrics::HEADER_ICON);
-
-        padding
-            + column.title.chars().count() as f32 * metrics.cell_char_advance
-            + type_width
-            + icon_width
-    }
-
-    /// Width a cell needs for a value of `chars` characters.
-    fn content_width(chars: usize, metrics: &GridTextMetrics) -> f32 {
-        let padding = f32::from(CELL_PADDING_X) * 2.0;
-
-        padding + chars as f32 * metrics.cell_char_advance + AUTO_WIDTH_SLACK
+        header_width.max(content_width).max(MIN_COLUMN_WIDTH).ceil()
     }
 
     fn calculate_offsets(widths: &[f32]) -> Vec<f32> {
@@ -455,16 +421,8 @@ impl DataTableState {
             .map(|column| column.title.clone())
             .collect();
 
-        let previous_layout = (!self.column_layout.is_identity())
-            .then(|| self.column_layout.to_spec(&previous_titles));
-
         self.close_editor(false, false, cx);
         self.model = model;
-        let layout = match previous_layout {
-            Some(spec) => ColumnLayout::from_spec(&spec, &self.column_titles()),
-            None => ColumnLayout::identity(self.model.col_count()),
-        };
-        self.install_column_layout(layout);
         self.reload_column_widths(previous_widths);
         self.reload_header_annotations(&previous_titles);
         self.edit_buffer.reset_for_base(self.model.row_count());
@@ -578,7 +536,7 @@ impl DataTableState {
 
         self.column_widths = widths;
         self.manually_sized = manual;
-        self.column_offsets = self.layout_offsets();
+        self.column_offsets = Self::calculate_offsets(&self.column_widths);
     }
 
     /// Re-estimates every column the user has not resized when the grid
@@ -600,7 +558,7 @@ impl DataTableState {
         }
 
         self.auto_width_metrics = metrics;
-        self.column_offsets = self.layout_offsets();
+        self.column_offsets = Self::calculate_offsets(&self.column_widths);
     }
 
     /// Keep the cursor inside the new model's bounds. A model with no rows (or
@@ -618,7 +576,6 @@ impl DataTableState {
         };
         self.selection.active = self.selection.active.map(clamp);
         self.selection.anchor = self.selection.anchor.map(clamp);
-        self.keep_selection_on_screen();
         // Ctrl+click ranges name rows of the previous model.
         self.selection.clear_extra();
     }
@@ -676,16 +633,9 @@ impl DataTableState {
                 *manual = true;
             }
 
-            self.column_offsets = self.layout_offsets();
+            self.column_offsets = Self::calculate_offsets(&self.column_widths);
             cx.notify();
         }
-    }
-
-    /// Distance from the first column's left edge to `col`'s, before any
-    /// horizontal scroll; `None` past the last column.
-    pub fn column_left(&self, col: usize) -> Option<f32> {
-        let position = self.column_layout.view_position(col)?;
-        self.column_offsets.get(position).copied()
     }
 
     /// Width of a row: the row-number column plus every data column.
@@ -716,16 +666,23 @@ impl DataTableState {
         self.sortable
     }
 
+    /// Turning sorting off drops the current sort, and from then on
+    /// [`Self::set_sort`] and [`Self::cycle_sort`] keep the rows in order.
     pub fn set_sortable(&mut self, sortable: bool) {
         self.sortable = sortable;
+        if !sortable {
+            self.sort = None;
+        }
     }
 
+    /// Sets the sort and reports it. A table that does not sort ignores a
+    /// new sort.
     pub fn set_sort(&mut self, sort: Option<SortState>, cx: &mut Context<Self>) {
-        // Dropping the secondary keys is a change even when the first key
-        // stays the same.
-        if self.sort != sort || !self.then_sorts.is_empty() {
+        if sort.is_some() && !self.sortable {
+            return;
+        }
+        if self.sort != sort {
             self.sort = sort;
-            self.then_sorts.clear();
             cx.emit(DataTableEvent::SortChanged(sort));
             cx.notify();
         }
@@ -734,74 +691,12 @@ impl DataTableState {
     /// Set sort state without emitting an event (for initial state).
     pub fn set_sort_without_emit(&mut self, sort: SortState) {
         self.sort = Some(sort);
-        self.then_sorts.clear();
     }
 
     /// Drop sort state without emitting an event, for a reload that replaces
     /// the columns the sort index points at.
     pub fn clear_sort_without_emit(&mut self) {
         self.sort = None;
-        self.then_sorts.clear();
-    }
-
-    /// Every sort key in order: the first one, then the ones added with a
-    /// modifier click.
-    pub fn sort_keys(&self) -> Vec<SortState> {
-        self.sort
-            .iter()
-            .chain(self.then_sorts.iter())
-            .copied()
-            .collect()
-    }
-
-    /// Set every sort key without emitting an event, for a reload whose rows
-    /// arrive sorted by them.
-    pub fn set_sort_keys_without_emit(&mut self, keys: &[SortState]) {
-        let mut keys = keys.iter().copied();
-        self.sort = keys.next();
-        self.then_sorts = keys.collect();
-    }
-
-    /// The position (1 for the first) of a column among the sort keys, while
-    /// there are several; a single sort has no order worth showing.
-    pub fn sort_rank(&self, col_ix: usize) -> Option<usize> {
-        if self.then_sorts.is_empty() {
-            return None;
-        }
-
-        self.sort_keys()
-            .iter()
-            .position(|key| key.column_ix == col_ix)
-            .map(|position| position + 1)
-    }
-
-    pub fn multi_sort_enabled(&self) -> bool {
-        self.multi_sort
-    }
-
-    pub fn set_multi_sort_enabled(&mut self, enabled: bool) {
-        self.multi_sort = enabled;
-    }
-
-    /// Adds a column as the next sort key or cycles it where it already is:
-    /// asc -> desc -> dropped. One remaining key (or none) goes out as the
-    /// plain `SortChanged` hosts already handle; only several keys need
-    /// `SortKeysChanged`.
-    pub fn cycle_sort_key(&mut self, col_ix: usize, cx: &mut Context<Self>) {
-        if !self.multi_sort {
-            self.cycle_sort(col_ix, cx);
-            return;
-        }
-
-        let keys = next_sort_keys(&self.sort_keys(), col_ix);
-        self.set_sort_keys_without_emit(&keys);
-
-        if keys.len() > 1 {
-            cx.emit(DataTableEvent::SortKeysChanged(keys));
-        } else {
-            cx.emit(DataTableEvent::SortChanged(keys.first().copied()));
-        }
-        cx.notify();
     }
 
     /// Cycle sort state for a column: none -> asc -> desc -> none
@@ -836,37 +731,52 @@ impl DataTableState {
     /// Shift extends the range from the anchor, as Shift with the arrow keys
     /// does; Ctrl (Cmd on macOS) adds the cell to the selection, or takes it
     /// out when it is selected on its own; a plain click starts a new
-    /// selection there. The grid and the
-    /// record view both route their clicks here so the modifier means the same
-    /// thing in either layout.
+    /// selection there. The grid and the record view both route their clicks
+    /// here so Shift means the same thing in either layout. The record view
+    /// shows one field range only, so there Ctrl+click is a plain click.
     pub fn click_cell(
         &mut self,
         coord: CellCoord,
         modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) {
+        self.apply_cell_click(coord, modifiers, cx);
+    }
+
+    /// `click_cell`, returning whether `coord` ended up as the start of the
+    /// range being made (false after a Ctrl+click that deselected).
+    fn apply_cell_click(
+        &mut self,
+        coord: CellCoord,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if modifiers.shift {
             self.extend_selection(coord, cx);
-        } else if modifiers.secondary() {
+            true
+        } else if modifiers.secondary() && !self.record_mode {
             self.commit_edit_in_progress(cx);
-            self.selection.toggle_cell(coord);
+            let added = self.selection.toggle_cell(coord);
             cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
             cx.notify();
+            added
         } else {
             self.select_cell(coord, cx);
+            true
         }
     }
 
     /// Left button pressed on a cell: select it, or extend to it with Shift,
-    /// and start a drag selection from there.
+    /// and start a drag selection from there. A Ctrl+press that took the cell
+    /// out starts no drag, so a small move before the release does not select
+    /// it again or stretch a restored range.
     pub fn begin_drag_select(
         &mut self,
         coord: CellCoord,
         modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) {
-        self.click_cell(coord, modifiers, cx);
-        self.drag_selecting = true;
+        self.drag_selecting = self.apply_cell_click(coord, modifiers, cx);
     }
 
     /// The pointer moved onto `coord` with the left button held: extend the
@@ -879,13 +789,14 @@ impl DataTableState {
 
     pub fn end_drag_select(&mut self) {
         self.drag_selecting = false;
-        self.drag_autoscroll = None;
     }
 
     /// Selection change for a primary click on a row number: the whole row,
     /// with Shift every row from the anchor's row to this one, and with
     /// Ctrl (Cmd on macOS) the row added to, or taken out of, the selection.
     pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        // A press on a row number never starts a cell drag.
+        self.drag_selecting = false;
         self.commit_edit_in_progress(cx);
         let col_count = self.col_count();
         if modifiers.shift {
@@ -897,6 +808,19 @@ impl DataTableState {
         }
         cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
+    }
+
+    /// A primary click on a column header. It selects the column (see
+    /// [`Self::click_column`]); with the header click set to sort, a plain
+    /// click on a table that sorts cycles the sort instead, while Shift and
+    /// Ctrl (Cmd on macOS) still select.
+    pub fn click_header(&mut self, col: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        let plain = !modifiers.shift && !modifiers.secondary();
+        if plain && self.sortable && header_click_sorts(cx) {
+            self.cycle_sort(col, cx);
+        } else {
+            self.click_column(col, modifiers, cx);
+        }
     }
 
     /// Selection change for a primary click on a column header: the whole
@@ -931,15 +855,6 @@ impl DataTableState {
         }
     }
 
-    /// Count, sum, average, minimum and maximum of the selected cells as the
-    /// grid shows them, for a host's status bar. `None` while fewer than two
-    /// cells are selected.
-    pub fn selection_totals(&self) -> Option<SelectionTotals> {
-        self.selection_totals.get_or_compute(|| {
-            totals::selection_totals(&self.model, &self.edit_buffer, &self.selection)
-        })
-    }
-
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         if !self.selection.is_empty() {
             self.selection.clear();
@@ -968,16 +883,17 @@ impl DataTableState {
             return;
         }
         self.record_mode = record_mode;
+        // The record view draws one field range; Ctrl+click ranges kept from
+        // the grid would be invisible there and still be copied.
+        if record_mode {
+            self.selection.clear_extra();
+        }
 
         // The record view highlights the active field, and Enter edits it, so
         // entering the mode without a selection would leave both with nothing
         // to act on.
-        if record_mode
-            && self.selection.active.is_none()
-            && self.row_count() > 0
-            && let Some((first, _)) = self.screen_edge_columns()
-        {
-            self.select_cell(CellCoord::new(0, first), cx);
+        if record_mode && self.selection.active.is_none() && self.row_count() > 0 {
+            self.select_cell(CellCoord::new(0, 0), cx);
         }
 
         if let Some(active) = self.selection.active {
@@ -1025,27 +941,24 @@ impl DataTableState {
     /// Move active cell in a direction. If extend is true, extend selection instead of moving.
     pub fn move_active(&mut self, direction: Direction, extend: bool, cx: &mut Context<Self>) {
         let row_count = self.row_count();
-        let Some((first_col, _)) = self.screen_edge_columns() else {
-            return;
-        };
+        let col_count = self.col_count();
 
-        if row_count == 0 {
+        if row_count == 0 || col_count == 0 {
             return;
         }
 
         // No selection yet - select first cell
         let Some(current) = self.selection.active else {
-            self.select_cell(CellCoord::new(0, first_col), cx);
-            self.scroll_to_cell(0, first_col);
+            self.select_cell(CellCoord::new(0, 0), cx);
+            self.scroll_to_cell(0, 0);
             return;
         };
 
-        // Left and right walk the columns as the screen shows them.
         let new_coord = match self.effective_direction(direction) {
             Direction::Up => CellCoord::new(current.row.saturating_sub(1), current.col),
             Direction::Down => CellCoord::new((current.row + 1).min(row_count - 1), current.col),
-            Direction::Left => CellCoord::new(current.row, self.screen_neighbor(current.col, -1)),
-            Direction::Right => CellCoord::new(current.row, self.screen_neighbor(current.col, 1)),
+            Direction::Left => CellCoord::new(current.row, current.col.saturating_sub(1)),
+            Direction::Right => CellCoord::new(current.row, (current.col + 1).min(col_count - 1)),
         };
 
         if extend {
@@ -1060,25 +973,20 @@ impl DataTableState {
     /// Move to an edge of the table.
     pub fn move_to_edge(&mut self, edge: Edge, extend: bool, cx: &mut Context<Self>) {
         let row_count = self.row_count();
-        let Some((first_col, last_col)) = self.screen_edge_columns() else {
-            return;
-        };
+        let col_count = self.col_count();
 
-        if row_count == 0 {
+        if row_count == 0 || col_count == 0 {
             return;
         }
 
-        let current = self
-            .selection
-            .active
-            .unwrap_or(CellCoord::new(0, first_col));
+        let current = self.selection.active.unwrap_or(CellCoord::new(0, 0));
         let new_coord = match self.effective_edge(edge) {
             Edge::Top => CellCoord::new(0, current.col),
             Edge::Bottom => CellCoord::new(row_count - 1, current.col),
-            Edge::Left => CellCoord::new(current.row, first_col),
-            Edge::Right => CellCoord::new(current.row, last_col),
-            Edge::Home => CellCoord::new(0, first_col),
-            Edge::End => CellCoord::new(row_count - 1, last_col),
+            Edge::Left => CellCoord::new(current.row, 0),
+            Edge::Right => CellCoord::new(current.row, col_count - 1),
+            Edge::Home => CellCoord::new(0, 0),
+            Edge::End => CellCoord::new(row_count - 1, col_count - 1),
         };
 
         if extend {
@@ -1092,20 +1000,36 @@ impl DataTableState {
 
     // --- Clipboard ---
 
+    /// The selection as tab-separated text, with the values the grid shows:
+    /// pending inserts at their place and unsaved edits applied.
     pub fn copy_selection(&self) -> Option<String> {
-        if self.copy_column_names {
-            clipboard::copy_selection_with_column_names(&self.model, &self.selection)
-        } else {
-            clipboard::copy_selection(&self.model, &self.selection)
+        let visual_order = self.edit_buffer.compute_visual_order();
+        clipboard::copy_selection_with(&self.selection, |row, col| {
+            self.displayed_cell(&visual_order, row, col)
+        })
+    }
+
+    /// The cell the grid shows at visual `row`: a pending insert's value, or
+    /// the base row's value with its unsaved edit applied. `visual_order` is
+    /// the edit buffer's [`EditBuffer::compute_visual_order`].
+    pub fn displayed_cell<'a>(
+        &'a self,
+        visual_order: &[super::model::VisualRowSource],
+        row: usize,
+        col: usize,
+    ) -> Option<&'a super::model::CellValue> {
+        use super::model::VisualRowSource;
+
+        match visual_order.get(row).copied()? {
+            VisualRowSource::Base(base_row) => {
+                let base = self.model.cell(base_row, col)?;
+                Some(self.edit_buffer.get_cell(base_row, col, base))
+            }
+            VisualRowSource::Insert(insert_idx) => self
+                .edit_buffer
+                .get_pending_insert_by_idx(insert_idx)?
+                .get(col),
         }
-    }
-
-    pub fn copy_column_names(&self) -> bool {
-        self.copy_column_names
-    }
-
-    pub fn set_copy_column_names(&mut self, enabled: bool) {
-        self.copy_column_names = enabled;
     }
 
     // --- Focus ---
@@ -1171,10 +1095,6 @@ impl DataTableState {
 
     /// Scroll to ensure the given column is visible.
     pub fn scroll_to_column(&self, col: usize) {
-        // Offsets are laid out by screen position; a hidden column has none.
-        let Some(col) = self.column_layout.view_position(col) else {
-            return;
-        };
         if col >= self.column_offsets.len() {
             return;
         }
@@ -1205,25 +1125,12 @@ impl DataTableState {
             return;
         }
 
-        // Pinned columns never scroll out of view, and the strip holding them
-        // and the gutter covers the left of the viewport, so a scrolling
-        // column must clear it to be seen.
-        let pinned = self.column_layout.pinned_count();
-        if col < pinned {
-            return;
-        }
-        let fixed = if pinned > 0 {
-            ROW_NUMBER_WIDTH + px(self.pinned_width())
-        } else {
-            px(0.0)
-        };
-
         let current_offset = self.horizontal_offset;
-        let visible_left = current_offset + fixed;
+        let visible_left = current_offset;
         let visible_right = current_offset + viewport_width;
 
         let new_offset = if col_left < visible_left {
-            col_left - fixed
+            col_left
         } else if col_right > visible_right {
             col_right - viewport_width
         } else {
@@ -1245,10 +1152,8 @@ impl DataTableState {
     /// offsets for when the user switches back.
     pub fn scroll_to_cell(&self, row: usize, col: usize) {
         if self.record_mode {
-            if let Some(field) = self.column_layout.view_position(col) {
-                self.record_scroll_handle
-                    .scroll_to_item(field, gpui::ScrollStrategy::Center);
-            }
+            self.record_scroll_handle
+                .scroll_to_item(col, gpui::ScrollStrategy::Center);
             return;
         }
 
@@ -1436,8 +1341,6 @@ impl DataTableState {
     ) -> bool {
         use super::model::{ColumnKind, VisualRowSource};
 
-        self.edit_targets.clear();
-
         if self.document.is_some() && self.is_nested_cell(coord) {
             cx.emit(DataTableEvent::StepIntoRequested {
                 row: coord.row,
@@ -1561,15 +1464,10 @@ impl DataTableState {
             // be silently discarded.
             self._editing_subs.clear();
 
-            // Captured for the same reason as `coord`: the dismissal may have
-            // closed the editor, and with it the targets, by now.
-            let targets = self.multi_edit_targets(coord);
-            let targets_for_selection = targets.clone();
             self._editing_subs.push(cx.subscribe(
                 &dropdown,
                 move |this, _dropdown, event: &DropdownSelectionChanged, cx| {
                     let value = event.item.value.to_string();
-                    this.edit_targets = targets_for_selection.clone();
                     this.apply_enum_selection_at(coord, &value, cx);
                 },
             ));
@@ -1582,7 +1480,6 @@ impl DataTableState {
             ));
 
             self.editing_cell = Some(coord);
-            self.edit_targets = targets;
             self.enum_dropdown = Some(dropdown);
             self.cell_input = None;
             self.scroll_to_cell(coord.row, coord.col);
@@ -1613,7 +1510,6 @@ impl DataTableState {
         );
 
         self.editing_cell = Some(coord);
-        self.edit_targets = self.multi_edit_targets(coord);
         self.cell_input = Some(input);
         self.enum_dropdown = None;
         self.scroll_to_cell(coord.row, coord.col);
@@ -1647,7 +1543,7 @@ impl DataTableState {
             super::model::CellValue::text(value)
         };
 
-        self.stage_edit_value(coord, cell_value);
+        self.stage_cell_value(coord.row, coord.col, cell_value);
 
         cx.notify();
     }
@@ -1813,12 +1709,15 @@ impl DataTableState {
             if let Some(input) = self.cell_input.take() {
                 let value_str = input.read(cx).value().to_string();
 
-                self.stage_edit_value(coord, super::model::CellValue::text(&value_str));
+                self.stage_cell_value(
+                    coord.row,
+                    coord.col,
+                    super::model::CellValue::text(&value_str),
+                );
             }
         } else {
             self.cell_input = None;
         }
-        self.edit_targets.clear();
 
         // The input and dropdown these watch are gone; they are re-subscribed
         // when the next edit starts.
@@ -2007,28 +1906,6 @@ fn next_sort_state(current: Option<SortState>, col_ix: usize) -> Option<SortStat
     }
 }
 
-/// The sort keys after a modifier click on `col_ix`: a column not yet sorted
-/// joins at the end ascending, a sorted one flips to descending in place, and
-/// a descending one leaves, so the keys after it move up.
-fn next_sort_keys(keys: &[SortState], col_ix: usize) -> Vec<SortState> {
-    let mut next = keys.to_vec();
-
-    match next.iter().position(|key| key.column_ix == col_ix) {
-        Some(position) => {
-            if let Some(key) = next.get_mut(position)
-                && key.direction == dbflux_core::SortDirection::Ascending
-            {
-                key.direction = dbflux_core::SortDirection::Descending;
-            } else {
-                next.remove(position);
-            }
-        }
-        None => next.push(SortState::ascending(col_ix)),
-    }
-
-    next
-}
-
 impl EventEmitter<DataTableEvent> for DataTableState {}
 
 impl Focusable for DataTableState {
@@ -2054,28 +1931,6 @@ mod tests {
 
         let step3 = next_sort_state(step2, column);
         assert_eq!(step3, None);
-    }
-
-    #[test]
-    fn next_sort_keys_appends_flips_and_drops_a_column() {
-        use super::next_sort_keys;
-
-        let keys = next_sort_keys(&[SortState::ascending(1)], 4);
-        assert_eq!(keys, vec![SortState::ascending(1), SortState::ascending(4)]);
-
-        let keys = next_sort_keys(&keys, 1);
-        assert_eq!(
-            keys,
-            vec![SortState::descending(1), SortState::ascending(4)],
-            "the first key flips where it is"
-        );
-
-        let keys = next_sort_keys(&keys, 1);
-        assert_eq!(
-            keys,
-            vec![SortState::ascending(4)],
-            "a descending key leaves and the next one moves up"
-        );
     }
 
     #[test]
@@ -2137,6 +1992,36 @@ mod tests {
         let rows = vec![RowData {
             cells: vec![CellValue::int(1), CellValue::text("alice")],
         }];
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
+    fn three_column_model() -> std::sync::Arc<super::super::model::TableModel> {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::TextAlign;
+
+        let column = |id: &str, kind: ColumnKind| ColumnSpec {
+            id: id.into(),
+            title: id.into(),
+            kind,
+            align: TextAlign::Left,
+            type_name: "text".into(),
+        };
+        let columns = vec![
+            column("id", ColumnKind::Integer),
+            column("name", ColumnKind::Text),
+            column("city", ColumnKind::Text),
+        ];
+        let rows = (0..4)
+            .map(|i| RowData {
+                cells: vec![
+                    CellValue::int(i),
+                    CellValue::text("name"),
+                    CellValue::text("city"),
+                ],
+            })
+            .collect();
         std::sync::Arc::new(TableModel::new(columns, rows))
     }
 
@@ -3002,6 +2887,45 @@ mod tests {
     }
 
     #[gpui::test]
+    fn row_number_click_keeps_the_active_cell_in_the_first_column(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| super::DataTableState::new(three_column_model(), cx));
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_row(1, gpui::Modifiers::default(), cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(1, 0)));
+            assert!(selection.is_full_row_selected(1, 3));
+        });
+
+        // Shift+click upward: rows 0 and 1, the cursor on the clicked row.
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_row(0, shift, cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(0, 0)));
+            assert!(selection.is_full_row_selected(0, 3));
+            assert!(selection.is_full_row_selected(1, 3));
+            assert!(!selection.is_full_row_selected(2, 3));
+        });
+    }
+
+    #[gpui::test]
     fn record_mode_shift_click_extends_the_field_range(cx: &mut gpui::TestAppContext) {
         use super::super::selection::CellCoord;
 
@@ -3038,6 +2962,88 @@ mod tests {
         window.update(|_, app| {
             let selection = state.read(app).selection();
             assert_eq!(selection.active, Some(CellCoord::new(1, 1)));
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+        });
+    }
+
+    /// The record view shows one field range: Ctrl+click there is a plain
+    /// click, and entering the mode drops the grid's Ctrl+click ranges.
+    #[gpui::test]
+    fn record_mode_ctrl_click_is_a_plain_click(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, window) = record_mode_state(cx);
+        let secondary = gpui::Modifiers::secondary_key();
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 1), secondary, cx)
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(0, 1)));
+            assert_eq!(selection.ranges().len(), 1);
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+        });
+
+        // Ctrl+click on the only selected field keeps it, no jump to row 0.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
+        });
+        window.update(|_, app| {
+            assert_eq!(
+                state.read(app).selection().active,
+                Some(CellCoord::new(1, 1))
+            );
+        });
+
+        // Ranges added in the grid are dropped on the way into the mode.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.set_record_mode(false, cx);
+                s.click_cell(CellCoord::new(0, 0), secondary, cx);
+                assert_eq!(s.selection().ranges().len(), 2);
+                s.set_record_mode(true, cx);
+            });
+        });
+        window.update(|_, app| {
+            assert_eq!(state.read(app).selection().ranges().len(), 1);
+        });
+    }
+
+    /// A new model drops the Ctrl+click ranges, which name rows of the old one.
+    #[gpui::test]
+    fn a_new_model_drops_the_ctrl_click_ranges(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| super::DataTableState::new(three_column_model(), cx));
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        let secondary = gpui::Modifiers::secondary_key();
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 0), gpui::Modifiers::default(), cx);
+                s.click_cell(CellCoord::new(2, 2), secondary, cx);
+                assert_eq!(s.selection().ranges().len(), 2);
+                s.set_model(three_column_model(), super::ModelSwap::KeepCursor, cx);
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.ranges().len(), 1);
+            assert!(selection.is_selected(CellCoord::new(2, 2)), "cursor kept");
             assert!(!selection.is_selected(CellCoord::new(0, 0)));
         });
     }
@@ -3416,6 +3422,28 @@ mod tests {
         );
     }
 
+    /// A header opens wide enough for its name, its type and two icons: the
+    /// key icon of a key column and the sort control, which every header of
+    /// a sorting table draws.
+    #[test]
+    fn a_header_budgets_a_key_icon_and_the_sort_control() {
+        let metrics = default_metrics();
+        let model = model_with_values("customer_id", &[]);
+        let width = super::DataTableState::initial_column_width(&model, 0, &metrics);
+
+        let gap = f32::from(crate::tokens::GridMetrics::HEADER_GAP);
+        let icon = f32::from(crate::tokens::GridMetrics::HEADER_ICON);
+        let text = f32::from(CELL_PADDING_X) * 2.0
+            + "customer_id".chars().count() as f32 * metrics.cell_char_advance
+            + gap
+            + "text".chars().count() as f32 * metrics.type_char_advance;
+
+        assert!(
+            width >= text + 2.0 * (gap + icon),
+            "{width} leaves no room for both icons beside {text}"
+        );
+    }
+
     #[test]
     fn long_values_widen_a_column_only_up_to_the_cap() {
         let long_value = "x".repeat(400);
@@ -3430,14 +3458,14 @@ mod tests {
 
     #[test]
     fn column_width_scales_with_the_grid_font_size() {
-        let model = model_with_values("title", &["medium value"]);
+        let model = model_with_values("title", &["medium value text"]);
 
         let default_width =
             super::DataTableState::initial_column_width(&model, 0, &default_metrics());
         let larger_width =
             super::DataTableState::initial_column_width(&model, 0, &metrics_at(18.0));
 
-        let value_chars = "medium value".chars().count() as f32;
+        let value_chars = "medium value text".chars().count() as f32;
         let expected_growth = value_chars * (18.0 - 12.5) * 0.6;
 
         assert!(

@@ -130,24 +130,6 @@ impl DataGridPanel {
                 false,
             ),
             (
-                dbflux_i18n::t!(
-                    "document.data.context_menu.order.add_to_sort",
-                    column = format!("{} ASC", col_name)
-                ),
-                ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending),
-                AppIcon::ArrowUp,
-                false,
-            ),
-            (
-                dbflux_i18n::t!(
-                    "document.data.context_menu.order.add_to_sort",
-                    column = format!("{} DESC", col_name)
-                ),
-                ContextMenuAction::AddToSort(dbflux_core::SortDirection::Descending),
-                AppIcon::ArrowDown,
-                false,
-            ),
-            (
                 remove_ordering,
                 ContextMenuAction::RemoveOrdering,
                 AppIcon::X,
@@ -156,7 +138,7 @@ impl DataGridPanel {
         ];
 
         for (idx, (label, action, icon, is_danger)) in order_items.into_iter().enumerate() {
-            if idx == 2 || matches!(action, ContextMenuAction::RemoveOrdering) {
+            if idx == 2 {
                 rows.push(render_separator(cx).into_any_element());
             }
             rows.push(Self::column_menu_action_row(
@@ -202,20 +184,10 @@ impl DataGridPanel {
             action_index += 1;
         }
 
-        self.push_column_menu_rows(
-            menu,
-            MenuRowCursor {
-                rows: &mut rows,
-                visual_index: &mut action_index,
-                selected_index: menu.selected_index,
-            },
-            cx,
-        );
-
         rows
     }
 
-    pub(super) fn column_menu_action_row(
+    fn column_menu_action_row(
         label: String,
         action: ContextMenuAction,
         icon: AppIcon,
@@ -986,6 +958,22 @@ impl DataGridPanel {
 
 #[cfg(test)]
 mod tests {
+    /// Copy as JSON shows its Results-layer shortcut on the menu row, so the
+    /// label cannot drop off silently if the binding or the lookup changes.
+    #[gpui::test]
+    fn copy_as_json_shows_its_shortcut(cx: &mut gpui::TestAppContext) {
+        use dbflux_components::components::data_table::ContextMenuAction;
+
+        let shortcut = cx.update(|cx| super::action_shortcut(ContextMenuAction::CopyAsJson, cx));
+
+        assert!(
+            shortcut
+                .as_ref()
+                .is_some_and(|label| label.to_lowercase().contains('c')),
+            "{shortcut:?}"
+        );
+    }
+
     /// The menu panel must not clip its contents: submenus are absolutely
     /// positioned children of their rows and hang past the panel's right
     /// edge, so a clip on the panel hides every one of them.

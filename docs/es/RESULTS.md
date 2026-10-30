@@ -49,9 +49,7 @@ Cuando el panel de resultados tiene el foco:
 - `z` alterna el colapso del panel.
 - `m` (o `Shift+F10`) abre el menú contextual de fila/celda.
 
-Con el ratón, un clic selecciona una celda y `Shift`+clic, o pulsar y arrastrar, selecciona el rango hasta otra celda. Un clic en un número de fila selecciona la fila entera, y `Shift`+clic en otro número de fila selecciona todas las filas intermedias. `Ctrl`+clic (`Cmd`+clic en macOS) en una celda o un número de fila la añade a la selección, o la quita cuando está seleccionada sola; al copiar varios rangos se copian las filas y columnas que abarcan, con las celdas fuera de la selección vacías. Al arrastrar más allá de un borde de la cuadrícula, esta se desplaza en esa dirección, más deprisa cuanto más lejos esté el puntero, y el rango sigue creciendo hasta soltar el botón o volver con el puntero.
-
-Cuando la selección abarca más de una celda, la barra de estado muestra cuántas celdas contiene y, para los números entre ellas, su suma, media, mínimo y máximo. Los NULL y el texto se cuentan pero quedan fuera de las cifras, y la barra de estado indica cuántos ha omitido. Los totales se calculan con las filas ya cargadas, incluidas las ediciones sin guardar, sin volver a consultar la base de datos.
+Con el ratón, un clic selecciona una celda y `Shift`+clic, o pulsar y arrastrar, selecciona el rango hasta otra celda. Un clic en un número de fila selecciona la fila entera, y `Shift`+clic en otro número de fila selecciona todas las filas intermedias. `Ctrl`+clic (`Cmd`+clic en macOS) en una celda o un número de fila la añade a la selección, o la quita cuando está seleccionada sola; al copiar varios rangos se copian las filas y columnas que abarcan, con las celdas fuera de la selección vacías. Los rangos añadidos sirven para copiar: borrar, duplicar, guardar y las demás acciones de fila actúan sobre la fila del cursor, un clic derecho selecciona la celda bajo el puntero y la vista de registro trata `Ctrl`+clic como un clic normal.
 
 ## Vista de registro
 
@@ -73,62 +71,7 @@ modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
 esa columna: ordenar ascendente o descendente, quitar el orden y todos los
 operadores de filtro, en una sola lista plana. El clic izquierdo en la
-cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada.
-
-Para ordenar por varias columnas, haz `Alt`+clic en la flecha de otra columna:
-pasa a ser la siguiente clave de orden, ascendente, y otro `Alt`+clic la vuelve
-descendente y después la quita del orden. Con más de una clave, cada cabecera
-ordenada muestra su posición (1, 2, 3) junto a la flecha, y las filas que
-empatan en la primera clave se ordenan por la segunda, y así sucesivamente. Un
-clic normal en cualquier flecha vuelve a ordenar solo por esa columna. El menú
-de la columna ofrece lo mismo con **Añadir al orden: columna ASC** y **Añadir
-al orden: columna DESC**, que también cambian la dirección de una columna que ya
-es clave, y **Quitar orden** elimina todas las claves. Una tabla envía todas las
-claves a la base de datos en un único `ORDER BY`; un resultado de consulta se
-ordena en memoria. En una tabla que sigue en su orden por defecto (su clave
-primaria), la primera clave añadida sustituye ese orden, porque las filas
-ordenadas primero por la clave primaria no dejan empates que otra columna pueda
-ordenar; quitar el orden vuelve al orden por defecto.
-
-`Shift+m` abre el mismo menú desde el teclado, para la columna de la celda
-seleccionada. El menú termina con una sección **Columna** de ajustes de vista,
-que cambian cómo la grilla muestra la columna y nunca la consulta. **Ajustar
-ancho** ajusta la columna a su cabecera y a sus valores cargados, hasta 640
-píxeles para que un valor JSON largo no saque el resto de la grilla de la
-pantalla; un doble clic en el borde de redimensionado, a la derecha de la
-cabecera, hace lo mismo.
-
-**Ocultar columna** quita la columna de la pantalla, y **Columnas…** lista todas
-las columnas con una marca en las visibles: `Enter`, `Space` o un clic muestra u
-oculta la columna resaltada mientras la lista sigue abierta, **Mostrar todas las
-columnas** devuelve todas las ocultas, y `Escape` la cierra. **Mover a la
-izquierda** y **Mover a la derecha** mueven la columna un lugar; arrastrar una
-cabecera sobre otra mueve su columna a ese lugar.
-
-**Fijar columna** mantiene la columna en el borde izquierdo, justo después de
-los números de fila, mientras la grilla se desplaza en horizontal, como un panel
-inmovilizado: fija `id` y `created_at` para tenerlas a la vista en una tabla de
-logs ancha. Las columnas fijadas van al principio de la grilla en el orden en
-que se fijaron y muestran un alfiler en su cabecera; **Soltar columna** deja que
-la columna vuelva a desplazarse, como la primera de las demás. Seleccionar,
-editar, ordenar, redimensionar y los números de fila funcionan igual en las
-columnas fijadas. Mover a la izquierda y Mover a la derecha se quedan en su lado
-del borde de las fijadas; arrastrar una cabecera a través de él fija o suelta su
-columna.
-
-La consulta sigue leyendo todas las columnas (una tabla sigue ejecutando
-`SELECT *`); para dejar una columna fuera de la consulta misma, usa la
-proyección del constructor de consultas. Copiar (con o sin nombres de columna),
-Copiar como CSV, Copiar como JSON, Copiar como lista IN de SQL, Copiar como
-sentencias INSERT y Copiar como tabla Markdown siguen la pantalla: las columnas
-visibles, en el orden en que la grilla las muestra, y la lista IN toma la que
-está más a la izquierda. Copiar fila, Copiar como consulta y Exportar usan la fila completa en
-el orden propio del resultado, columnas ocultas incluidas. Una tabla recuerda su
-disposición para su conexión, base de datos, esquema y tabla, al cerrarla y al
-reiniciar DBFlux; volver a poner todas las columnas en el orden propio de la
-tabla, todas visibles, la olvida. Un resultado de consulta conserva su
-disposición mientras su pestaña está abierta. Una grilla de documentos mantiene
-el orden de sus campos y solo ofrece Ajustar ancho.
+cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic, `Cmd`+clic en macOS, la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada. Con **Hacer clic en la cabecera de una columna la ordena** activado (Settings > General > Data grid), un clic normal en la cabecera la ordena, como la flecha.
 
 ## Panel de valor
 
@@ -259,8 +202,6 @@ En el data grid:
 - `y` — copiar la fila seleccionada.
 - `Ctrl+c` (`Cmd+c`) — copiar la(s) celda(s) seleccionada(s) al portapapeles.
 
-Con varias celdas seleccionadas, `Enter`, `F2` o un doble clic en una de ellas abre el editor para todas, y la barra de estado indica cuántas celdas cambiará la edición. El valor que confirmas se escribe en cada celda seleccionada que lo admita, como cambios sin guardar que Guardar y Revertir tratan igual que cualquier otra edición, y un solo deshacer (`u` o `Ctrl+z`) revierte la edición entera. Se omiten las celdas de columnas de solo lectura, las filas marcadas para eliminar y los valores que el editor en línea no edita (JSON, texto largo o de varias líneas); un valor elegido de la lista de valores permitidos de una columna solo va a columnas con la misma lista.
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/results/editing-dark.webp">
   <img src="../images/results/editing-light.webp" alt="La tabla customers con una celda editada aún sin guardar y los botones Save y Revert habilitados">
@@ -345,31 +286,14 @@ cargadas al portapapeles**: el CSV empieza con una fila de cabecera con los
 nombres de las columnas, y el JSON es un array con un objeto por fila, con las
 columnas como claves y los números, booleanos y `null` como tales. Se incluyen
 todas las filas y columnas que abarca la selección; una celda dentro de esa área
-pero fuera de la selección queda vacía en CSV y `null` en JSON. **Copiar**
-(`Ctrl+c`) copia texto separado por tabulaciones, sin cabecera salvo que
-**Incluir los nombres de columna al copiar** esté activado en Ajustes → General
-→ Cuadrícula de datos, que lo empieza con una línea con los nombres de las
-columnas copiadas.
+pero fuera de la selección queda vacía en CSV y `null` en JSON. Las copias
+siguen lo que muestra la cuadrícula: una edición sin guardar se copia con su
+valor nuevo y una fila añadida aún sin guardar, en su lugar. En JSON, las
+columnas con el mismo nombre (`a.id` y `b.id` de un join) comparten una clave,
+que toma el valor de la última. **Copiar** (`Ctrl+c`) sigue copiando texto
+separado por tabulaciones sin cabecera.
 `Ctrl+Alt+c` (`Cmd+Alt+c` en macOS) ejecuta **Copiar como JSON** desde el
 teclado; el menú lo muestra junto a la entrada.
-
-Debajo, el menú tiene tres extractores más:
-
-- **Copiar como lista IN de SQL** copia los valores seleccionados de una
-  columna como lista para un `WHERE ... IN`, por ejemplo `('a', 'O''Brien')` o
-  `(1, 2, 3)`, con las comillas que usa el driver de la conexión (comillas ANSI
-  en un resultado sin conexión). Un valor seleccionado varias veces aparece una
-  sola vez y `NULL` se omite, porque `IN (NULL)` no coincide con nada. Con
-  varias columnas seleccionadas usa la de más a la izquierda.
-- **Copiar como sentencias INSERT**, en una tabla, copia un `INSERT` por cada
-  fila seleccionada con las columnas seleccionadas, escrito por el mismo
-  generador del driver que **Copiar como query**. Cada fila aporta sus propios
-  valores para esas columnas, aunque una celda dentro del área no esté
-  seleccionada.
-- **Copiar como tabla Markdown** copia las mismas filas y columnas que Copiar
-  como CSV como una tabla Markdown con fila de cabecera; las celdas `NULL` y
-  las no seleccionadas quedan vacías, y `|` y los saltos de línea dentro de los
-  valores se escapan.
 
 ## Copiar como query
 

@@ -93,7 +93,7 @@ y permanece en English por ahora.
 | ---------------------------- | ------- | -------- |
 | **Mostrar el valor del registro referenciado en celdas de clave foránea** | Off | Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias. |
 | **Ordenar las tablas por clave primaria descendente** | Off | Las tablas se abren ordenadas por su clave primaria de forma descendente en lugar de ascendente, así con una clave autoincremental las filas más recientes aparecen primero. Al quitar el orden de una columna se vuelve a este orden, y un clic en el encabezado de la columna clave desde este orden la ordena de forma ascendente. Se aplica a las tablas abiertas después de guardar; en una tabla ya abierta, también al quitar el orden de una columna. |
-| **Incluir los nombres de columna al copiar** | Off | Copiar (`Ctrl+C`) en la cuadrícula de datos empieza el texto separado por tabulaciones con una línea con los nombres de las columnas copiadas. Copiar como CSV, JSON y las demás entradas Copiar como no cambian. Se aplica a las cuadrículas abiertas al guardar. |
+| **Hacer clic en la cabecera de una columna la ordena** | Off | Desactivado: un clic en la cabecera de una columna selecciona la columna entera, y la flecha del borde derecho de la cabecera ordena. Activado: un clic normal ordena la columna (sin orden, ascendente, descendente), y `Shift`+clic y `Ctrl`+clic siguen seleccionando columnas. Las tablas que mantienen el orden del archivo (CSV, Parquet, hojas de cálculo) siempre seleccionan. |
 
 ### Inicio y sesión
 

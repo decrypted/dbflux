@@ -1,8 +1,6 @@
 mod builder;
 mod chart;
 mod chrome;
-mod column_chooser;
-mod column_layout_store;
 pub(crate) mod context_menu;
 mod document_view;
 mod documents;
@@ -11,8 +9,6 @@ mod facets;
 pub(crate) mod filter_bar;
 mod fk_display;
 mod grid;
-mod multi_edit;
-mod multi_sort;
 pub(crate) mod mutation_confirm;
 pub(crate) mod mutation_executor;
 mod mutations;
@@ -24,7 +20,6 @@ mod refresh;
 mod render;
 mod result_search;
 pub(crate) mod row_inspector;
-mod selection_totals;
 mod session;
 pub(crate) mod side_island;
 mod table_documents;
@@ -608,10 +603,6 @@ struct GridTableState {
     table_state: Option<Entity<DataTableState>>,
     table_subscription: Option<Subscription>,
     local_sort_state: Option<LocalSortState>,
-    /// The in-memory sort keys after `local_sort_state`. Read only while
-    /// `local_sort_state` is set, and rewritten by every in-memory sort, so
-    /// the resets that drop `local_sort_state` alone leave nothing stale.
-    local_sort_then: Vec<LocalSortState>,
     original_row_order: Option<Vec<usize>>,
     /// Read by the next `rebuild_table` and reset to `Preserve` there.
     reload: TableReload,
@@ -907,8 +898,6 @@ pub struct DataGridPanel {
     nearest: nearest_neighbors::NearestNeighborsUi,
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
-    /// The Columns chooser, while it is open.
-    column_chooser: Option<column_chooser::ColumnChooser>,
     is_active_tab: bool,
     /// The hosting document hands this grid's side panels (the chart stats
     /// rail) to the workspace through `side_panels`, so the grid does not
@@ -1448,7 +1437,6 @@ impl DataGridPanel {
                 table_state: None,
                 table_subscription: None,
                 local_sort_state: None,
-                local_sort_then: Vec::new(),
                 original_row_order: None,
                 reload: TableReload::default(),
                 keep_edits_on_reload: false,
@@ -1551,7 +1539,6 @@ impl DataGridPanel {
             nearest,
             view_config,
             context_menu: None,
-            column_chooser: None,
             is_active_tab: true,
             side_panels_hosted: false,
             pending: PendingActions::default(),

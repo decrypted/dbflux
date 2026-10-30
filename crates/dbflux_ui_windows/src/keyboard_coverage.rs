@@ -171,7 +171,7 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
         ("grid-fk-labels", KeyboardPath::Command(Command::Execute)),
         ("grid-pk-sort-desc", KeyboardPath::Command(Command::Execute)),
         (
-            "grid-copy-column-names",
+            "grid-header-click-sorts",
             KeyboardPath::Command(Command::Execute),
         ),
         ("pause-on-error", KeyboardPath::Command(Command::Execute)),

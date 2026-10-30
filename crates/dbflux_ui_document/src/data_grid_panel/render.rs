@@ -335,9 +335,6 @@ impl Render for DataGridPanel {
             .when_some(self.context_menu.as_ref(), |d, menu| {
                 d.child(self.render_context_menu(menu, st.is_editable, cx))
             })
-            .when_some(self.column_chooser.as_ref(), |d, chooser| {
-                d.child(self.render_column_chooser(chooser, cx))
-            })
             .when(self.chrome.export_menu_open, |d| {
                 d.child(self.render_export_backdrop(cx))
             })
@@ -408,10 +405,7 @@ impl DataGridPanel {
                 .local_sort_state
                 .map(|s| TableSortState::new(s.column_ix, s.direction));
             self.rebuild_table(sort, cx);
-            self.show_local_secondary_sort_keys(cx);
         }
-
-        self.sync_copy_column_names(cx);
 
         if std::mem::take(&mut self.pending.refresh) {
             if std::mem::take(&mut self.pending.refresh_keeps_edits) {
@@ -3820,39 +3814,6 @@ impl DataGridPanel {
             .justify_end()
             .items_center()
             .gap(ResultMetrics::FOOTER_GAP)
-            .when_some(self.multi_edit_footer(cx), |d, note| {
-                d.child(
-                    div()
-                        .debug_selector(|| "footer-multi-edit".to_string())
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap(ResultMetrics::FOOTER_ITEM_GAP)
-                        .text_color(theme.warning)
-                        .child(
-                            Icon::new(AppIcon::Pencil)
-                                .size(ResultMetrics::FOOTER_ICON)
-                                .color(theme.warning),
-                        )
-                        .child(note),
-                )
-            })
-            .when_some(self.selection_totals_footer(cx), |d, totals| {
-                d.child(
-                    div()
-                        .debug_selector(|| "footer-selection-totals".to_string())
-                        .flex()
-                        .min_w_0()
-                        .items_center()
-                        .gap(ResultMetrics::FOOTER_ITEM_GAP)
-                        .child(
-                            Icon::new(AppIcon::Sigma)
-                                .size(ResultMetrics::FOOTER_ICON)
-                                .color(muted),
-                        )
-                        .child(div().min_w_0().truncate().child(totals)),
-                )
-            })
             .when(has_data, |d| d.child(self.render_export_button(cx)))
             .child(
                 div()

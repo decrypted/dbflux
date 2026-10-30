@@ -2201,27 +2201,27 @@ fn primary_alt_c_copies_the_selection_as_json_and_leaves_open_saved_chart() {
     }
 }
 
-/// Shift+m opens the column header menu from the results and from the grid
-/// inside them, beside `m` for the cell menu.
+/// Ctrl+Alt is AltGr on Windows, where AltGr+C types a character on some
+/// layouts. A text field inside the results (the filter bar, an inline cell
+/// editor in the grid) roots the keyboard in `TextInput`, so the Results
+/// layer's primary+Alt+C does not reach it and the key stays typed text.
 #[test]
-fn shift_m_opens_the_column_menu_from_the_results() {
+fn primary_alt_c_is_typed_text_in_a_field_inside_the_results() {
     let keymap = native_keymap();
-    let results = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
-    let grid = element_stack(results.clone(), &[data_table::CONTEXT]);
-    let column_menu = gpui_keystrokes(&KeySequence::from(KeyChord::new("m", Modifiers::shift())));
-    let cell_menu = gpui_keystrokes(&KeySequence::from(KeyChord::new("m", Modifiers::none())));
+    let copy_json = gpui_keystrokes(&KeySequence::from(KeyChord::new(
+        "c",
+        Modifiers::primary_alt(),
+    )));
+    let text_root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
 
-    for stack in [vec![results], grid] {
-        for (keys, command) in [
-            (&column_menu, Command::OpenColumnMenu),
-            (&cell_menu, Command::OpenContextMenu),
-        ] {
-            let action = top_action(&keymap, keys, &stack).expect("bound");
-            assert!(
-                runs_command(action.as_ref(), command),
-                "`{keys}` must run {command:?} in {stack:?}"
-            );
-        }
+    for stack in [
+        element_stack(text_root.clone(), &["Input"]),
+        element_stack(text_root, &[data_table::CONTEXT, "Input"]),
+    ] {
+        assert!(
+            top_action(&keymap, &copy_json, &stack).is_none(),
+            "`{copy_json}` must stay typed text in {stack:?}"
+        );
     }
 }
 

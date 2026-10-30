@@ -93,9 +93,7 @@ impl DataGridPanel {
         // The rows put back keep the order they had when the search started,
         // so an active sort is applied again over what is now shown.
         if let Some(sort) = self.grid_table.local_sort_state {
-            let mut keys = vec![sort];
-            keys.extend(self.grid_table.local_sort_then.iter().copied());
-            self.apply_local_sort_keys(&keys, cx);
+            self.apply_local_sort(sort.column_ix, sort.direction, cx);
         }
 
         self.chrome.derived_json = None;

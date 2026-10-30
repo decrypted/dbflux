@@ -339,7 +339,6 @@ impl DataGridPanel {
                 .push(cx);
             }
 
-            self.restore_column_layout(cx);
             self.rebuild_result_views(cx);
             return;
         }
@@ -349,7 +348,6 @@ impl DataGridPanel {
             if let Some(sort) = initial_sort {
                 state.set_sort_without_emit(sort);
             }
-            state.set_multi_sort_enabled(true);
             if read_only_keys {
                 state.set_read_only_pk_columns(pk_indices.clone());
             } else {
@@ -390,9 +388,6 @@ impl DataGridPanel {
                             this.handle_header_sort_off(cx);
                         }
                     },
-                    DataTableEvent::SortKeysChanged(keys) => {
-                        this.handle_sort_keys_request(keys, cx);
-                    }
                     DataTableEvent::Focused => {
                         cx.emit(DataGridEvent::Focused);
                     }
@@ -429,9 +424,6 @@ impl DataGridPanel {
                     }
                     DataTableEvent::StepOutRequested => {
                         this.step_out_of_document_value(cx);
-                    }
-                    DataTableEvent::ColumnLayoutChanged => {
-                        this.save_column_layout(cx);
                     }
                     DataTableEvent::ContextMenuRequested {
                         row,
@@ -529,7 +521,6 @@ impl DataGridPanel {
         self.grid_table.data_table = Some(data_table);
         self.grid_table.table_subscription = Some(subscription);
 
-        self.restore_column_layout(cx);
         self.rebuild_result_views(cx);
     }
 

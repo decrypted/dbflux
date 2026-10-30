@@ -1128,6 +1128,7 @@ impl ParquetDocument {
 
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(model, cx);
+            state.set_sortable(false);
             state.set_header_annotations(annotations, cx);
             state
         });

@@ -479,3 +479,78 @@ fn the_columns_chooser_toggles_from_the_keyboard_and_keeps_its_row_in_view(
     window.run_until_parked();
     assert_eq!(scroll_y(window), gpui::px(0.0), "back at the top");
 }
+
+/// Pinning the leading column keeps the model order, yet it is a layout to
+/// keep: the store holds it, a reopened table comes back with it, and a
+/// re-run of the same query keeps it.
+#[gpui::test]
+fn pinning_the_first_column_is_kept(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let app_state = isolated_test_app_state(cx);
+
+    let (first, window) = table_panel(cx, app_state.clone());
+    let key = window.update(|_, cx| first.read(cx).column_layout_key().expect("a table key"));
+    window.update(|_, cx| {
+        table_state(&first, cx).update(cx, |state, cx| assert!(state.pin_column(0, cx)));
+    });
+    window.run_until_parked();
+
+    let stored = window.update(|_, cx| {
+        app_state
+            .read(cx)
+            .storage_runtime()
+            .ui_state()
+            .get(&key)
+            .expect("the store reads")
+    });
+    assert!(
+        stored.is_some_and(|json| json.contains("\"pinned\":[\"id\"]")),
+        "the pin on `id` is stored"
+    );
+
+    let pinned = |panel: &gpui::Entity<DataGridPanel>, window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            let state = table_state(panel, cx);
+            let state = state.read(cx);
+            (
+                state.visible_columns().to_vec(),
+                state.column_layout().pinned_count(),
+            )
+        })
+    };
+
+    let (second, window) = table_panel(cx, app_state);
+    assert_eq!(
+        pinned(&second, window),
+        (vec![0, 1, 2], 1),
+        "the reopened table keeps the pin"
+    );
+
+    window.update(|_, cx| {
+        second.update(cx, |panel, cx| {
+            panel.set_result(
+                QueryResult::table(
+                    vec![
+                        key_column("id", true),
+                        key_column("name", false),
+                        key_column("email", false),
+                    ],
+                    vec![vec![
+                        dbflux_core::Value::Int(2),
+                        dbflux_core::Value::Text("bob".into()),
+                        dbflux_core::Value::Text("bob@example.com".into()),
+                    ]],
+                    None,
+                    Duration::ZERO,
+                ),
+                cx,
+            );
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        pinned(&second, window),
+        (vec![0, 1, 2], 1),
+        "a re-run keeps the pin"
+    );
+}

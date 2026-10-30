@@ -106,9 +106,12 @@ impl ColumnLayout {
         layout
     }
 
-    /// Whether the layout shows every column in model order.
+    /// Whether the layout shows every column in model order with none
+    /// pinned. Pinning the leading columns keeps the order, so the pins are
+    /// checked on their own.
     pub fn is_identity(&self) -> bool {
-        self.visible.len() == self.order.len()
+        !self.pinned.iter().any(|pinned| *pinned)
+            && self.visible.len() == self.order.len()
             && self
                 .visible
                 .iter()
@@ -476,6 +479,16 @@ mod tests {
         let old: ColumnLayoutSpec =
             serde_json::from_str(r#"{"order":["id"],"hidden":[]}"#).expect("decodes");
         assert!(old.pinned.is_empty());
+    }
+
+    #[test]
+    fn pinning_the_leading_column_is_not_the_identity_layout() {
+        let mut layout = ColumnLayout::identity(3);
+        assert!(layout.pin(0));
+        assert_eq!(layout.visible_columns(), &[0, 1, 2], "the order stays");
+        assert!(!layout.is_identity(), "but the pin is a layout to keep");
+        assert!(layout.unpin(0));
+        assert!(layout.is_identity());
     }
 
     #[test]

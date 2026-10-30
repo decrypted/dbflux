@@ -1241,6 +1241,8 @@ impl DataTable {
         let model = Arc::clone(state.model_arc());
 
         let state_entity = self.state.clone();
+        let drag_selecting = state.is_drag_selecting();
+        let row_height = fonts::grid_row_height(cx);
 
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
@@ -1300,10 +1302,14 @@ impl DataTable {
 
         div()
             .id("table-body")
+            .relative()
             .flex_1()
             .min_h_0()
             .overflow_hidden()
             .child(list)
+            .when(drag_selecting, |body| {
+                body.child(drag_autoscroll_listener(self.state.clone(), row_height))
+            })
     }
 }
 
@@ -1723,6 +1729,62 @@ fn render_rows(
                 .into_any_element()
         })
         .collect()
+}
+
+/// Window-level pointer listeners for a running drag selection, laid over
+/// the grid body to learn its bounds.
+///
+/// The cells' own move handlers stop firing once the pointer leaves them,
+/// so past the body's edge only a window listener still sees it; that is
+/// where the grid has to scroll. Releasing the button outside the table
+/// ends the drag here too.
+fn drag_autoscroll_listener(state: Entity<DataTableState>, row_height: Pixels) -> impl IntoElement {
+    canvas(
+        |bounds, _, _| bounds,
+        move |_, bounds: gpui::Bounds<Pixels>, window, _| {
+            // The scrollbars overlay the body's right and bottom strips, so
+            // the cells visibly end where they start.
+            let cells = gpui::Bounds::new(
+                bounds.origin,
+                gpui::size(
+                    (bounds.size.width - SCROLLBAR_WIDTH).max(px(0.0)),
+                    (bounds.size.height - SCROLLBAR_WIDTH).max(px(0.0)),
+                ),
+            );
+
+            window.on_mouse_event({
+                let state = state.clone();
+                move |event: &MouseMoveEvent, phase, _, cx| {
+                    if !phase.bubble() {
+                        return;
+                    }
+                    state.update(cx, |state, cx| {
+                        if event.pressed_button == Some(MouseButton::Left) {
+                            state.drag_pointer_moved(event.position, cells, row_height, cx);
+                        } else {
+                            state.end_drag_select();
+                        }
+                    });
+                }
+            });
+
+            window.on_mouse_event({
+                let state = state.clone();
+                move |event: &gpui::MouseUpEvent, phase, _, cx| {
+                    if phase.bubble() && event.button == MouseButton::Left {
+                        state.update(cx, |state, cx| {
+                            state.end_drag_select();
+                            cx.notify();
+                        });
+                    }
+                }
+            });
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }
 
 /// The sort control at the right edge of a column header: the current
@@ -2216,6 +2278,212 @@ mod tests {
             assert_eq!(range.start, super::super::selection::CellCoord::new(1, 0));
             assert_eq!(range.end, super::super::selection::CellCoord::new(3, 1));
         });
+    }
+
+    /// Holding a drag selection below the grid body scrolls the grid down
+    /// and keeps extending the range, as in a database IDE's grid; bringing
+    /// the pointer back in stops the scrolling, and so does releasing it.
+    #[gpui::test]
+    fn dragging_past_the_bottom_edge_scrolls_and_extends(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::time::Duration;
+
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("drag-autoscroll-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        let x = harness.origin.x + ROW_NUMBER_WIDTH + px(first_col_width / 2.0);
+        let start = gpui::point(x, harness.origin.y + header_height + row_height * 1.5);
+        let below = gpui::point(x, harness.bottom() + px(40.0));
+        let none = gpui::Modifiers::default();
+        let vertical = |visual: &mut VisualTestContext| offsets(visual, &state).0;
+        let active_row = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| state.read(cx).selection().active.map(|active| active.row))
+        };
+
+        visual.simulate_mouse_down(start, MouseButton::Left, none);
+        visual.run_until_parked();
+        visual.simulate_mouse_move(below, MouseButton::Left, none);
+        visual.executor().advance_clock(Duration::from_millis(400));
+        visual.run_until_parked();
+
+        let scrolled = vertical(visual);
+        assert!(
+            scrolled < px(0.0),
+            "held below the body, the grid scrolls down"
+        );
+        let visible_rows = (f32::from(harness.size.height) / f32::from(row_height)) as usize;
+        let reached = active_row(visual).expect("the drag keeps a cursor");
+        assert!(
+            reached > visible_rows,
+            "the range grows past the rows that were on screen (reached row {reached})"
+        );
+        visual.update(|_, cx| {
+            let range = state
+                .read(cx)
+                .selection()
+                .selected_range()
+                .expect("a range");
+            assert_eq!(range.start, CellCoord::new(1, 0), "the anchor stays put");
+        });
+
+        // Back inside the body the grid stops scrolling.
+        let inside = gpui::point(x, harness.origin.y + header_height + row_height * 3.5);
+        visual.simulate_mouse_move(inside, MouseButton::Left, none);
+        visual.run_until_parked();
+        let stopped = vertical(visual);
+        visual.executor().advance_clock(Duration::from_millis(400));
+        visual.run_until_parked();
+        assert_eq!(vertical(visual), stopped, "inside the body nothing scrolls");
+
+        // Out again and released: the drag ends and so does the scrolling.
+        visual.simulate_mouse_move(below, MouseButton::Left, none);
+        visual.executor().advance_clock(Duration::from_millis(100));
+        visual.run_until_parked();
+        visual.simulate_mouse_up(below, MouseButton::Left, none);
+        visual.run_until_parked();
+        let released = vertical(visual);
+        visual.executor().advance_clock(Duration::from_millis(400));
+        visual.run_until_parked();
+        assert_eq!(vertical(visual), released, "releasing stops the scrolling");
+        assert!(!visual.update(|_, cx| state.read(cx).is_drag_selecting()));
+    }
+
+    /// Twelve text columns, far wider together than the scroll harness.
+    fn wide_model() -> Arc<TableModel> {
+        use super::super::model::{CellValue, ColumnKind, ColumnSpec, RowData};
+        use gpui::TextAlign;
+
+        let columns = (0..12)
+            .map(|col| ColumnSpec {
+                id: format!("c{col}").into(),
+                title: format!("c{col}").into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            })
+            .collect();
+        let rows = (0..10)
+            .map(|_| RowData {
+                cells: (0..12).map(|_| CellValue::text("v")).collect(),
+            })
+            .collect();
+        Arc::new(TableModel::new(columns, rows))
+    }
+
+    /// Holding a drag selection right of the grid body scrolls the grid
+    /// right and extends the range into columns that were off screen; held
+    /// left of it, the grid scrolls back to the first column. Covers the
+    /// column hit-test under a horizontal offset.
+    #[gpui::test]
+    fn dragging_past_the_side_edges_scrolls_and_extends_columns(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::time::Duration;
+
+        const COLUMN_WIDTH: f32 = 200.0;
+
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(wide_model(), cx));
+            let table = cx.new(|cx| DataTable::new("drag-autoscroll-wide", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        visual.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                for col in 0..12 {
+                    state.set_column_width(col, COLUMN_WIDTH, cx);
+                }
+            })
+        });
+        visual.run_until_parked();
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let y = harness.origin.y + header_height + row_height * 1.5;
+        let start = gpui::point(harness.origin.x + ROW_NUMBER_WIDTH + px(20.0), y);
+        let right = gpui::point(harness.right() + px(40.0), y);
+        let left = gpui::point(harness.origin.x - px(40.0), y);
+        let none = gpui::Modifiers::default();
+        let horizontal = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| state.read(cx).horizontal_offset())
+        };
+        let range = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| {
+                let selection = state.read(cx).selection();
+                (
+                    selection.anchor,
+                    selection.active.expect("the drag keeps a cursor"),
+                )
+            })
+        };
+        // Columns 0 and 1 are fully on screen at the start; column 3 starts
+        // past the harness's right edge.
+        let first_hidden_col = ((f32::from(harness.size.width) - f32::from(ROW_NUMBER_WIDTH))
+            / COLUMN_WIDTH) as usize
+            + 1;
+
+        visual.simulate_mouse_down(start, MouseButton::Left, none);
+        visual.run_until_parked();
+        assert_eq!(horizontal(visual), px(0.0), "the grid starts unscrolled");
+
+        visual.simulate_mouse_move(right, MouseButton::Left, none);
+        visual.executor().advance_clock(Duration::from_millis(400));
+        visual.run_until_parked();
+
+        assert!(
+            horizontal(visual) > px(0.0),
+            "held right of the body, the grid scrolls right"
+        );
+        let (anchor, active) = range(visual);
+        assert_eq!(anchor, Some(CellCoord::new(1, 0)), "the anchor stays put");
+        assert_eq!(active.row, 1, "a sideways drag keeps its row");
+        assert!(
+            active.col >= first_hidden_col,
+            "the range grows into a column that was off screen (reached column {}, first hidden {first_hidden_col})",
+            active.col
+        );
+
+        visual.simulate_mouse_move(left, MouseButton::Left, none);
+        visual.executor().advance_clock(Duration::from_millis(3000));
+        visual.run_until_parked();
+
+        assert_eq!(
+            horizontal(visual),
+            px(0.0),
+            "held left of the body, the grid scrolls back to the start"
+        );
+        let (anchor, active) = range(visual);
+        assert_eq!(anchor, Some(CellCoord::new(1, 0)));
+        assert_eq!(active, CellCoord::new(1, 0), "back at the first column");
+
+        visual.simulate_mouse_up(left, MouseButton::Left, none);
+        visual.run_until_parked();
+        assert!(!visual.update(|_, cx| state.read(cx).is_drag_selecting()));
     }
 
     /// A render of the overflow model with a counter of the selection

@@ -22,6 +22,8 @@ use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelecti
 use crate::fonts;
 use crate::tokens::GridMetrics;
 
+mod autoscroll;
+
 /// Grid face and glyph advances an auto-sized column width was estimated
 /// with. A change in any of them re-estimates the auto-sized columns.
 #[derive(Debug, Clone, PartialEq)]
@@ -141,6 +143,10 @@ pub struct DataTableState {
     /// other cells extends the selection to them.
     drag_selecting: bool,
 
+    /// Pointer of the running drag selection and the task scrolling the
+    /// grid while it is held past an edge of the body.
+    drag_autoscroll: Option<autoscroll::DragAutoscroll>,
+
     // --- Edit Mode ---
     /// Cell currently being edited (inline editor is open).
     editing_cell: Option<CellCoord>,
@@ -245,6 +251,7 @@ impl DataTableState {
             horizontal_scroll_handle: ScrollHandle::new(),
             horizontal_offset: px(0.0),
             drag_selecting: false,
+            drag_autoscroll: None,
             editing_cell: None,
             cell_input: None,
             enum_dropdown: None,
@@ -782,6 +789,7 @@ impl DataTableState {
         cx: &mut Context<Self>,
     ) {
         self.drag_selecting = self.apply_cell_click(coord, modifiers, cx);
+        self.drag_autoscroll = None;
     }
 
     /// The pointer moved onto `coord` with the left button held: extend the
@@ -794,6 +802,7 @@ impl DataTableState {
 
     pub fn end_drag_select(&mut self) {
         self.drag_selecting = false;
+        self.drag_autoscroll = None;
     }
 
     /// Selection change for a primary click on a row number: the whole row,
@@ -801,7 +810,7 @@ impl DataTableState {
     /// Ctrl (Cmd on macOS) the row added to, or taken out of, the selection.
     pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
         // A press on a row number never starts a cell drag.
-        self.drag_selecting = false;
+        self.end_drag_select();
         self.commit_edit_in_progress(cx);
         let col_count = self.col_count();
         if modifiers.shift {

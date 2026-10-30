@@ -153,7 +153,9 @@ impl DataTableState {
     /// The first press of a double-click on a cell of a larger selection
     /// collapses it to that cell, as any plain press does; the second press
     /// brings the selection back so the edit the double-click opens covers
-    /// all of it.
+    /// all of it. The second press of a Ctrl+double-click changes nothing:
+    /// the release opens the editor, and toggling again would take the cell
+    /// back out first.
     pub fn press_cell(
         &mut self,
         coord: CellCoord,
@@ -169,6 +171,9 @@ impl DataTableState {
             self.selection = selection;
             cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
             cx.notify();
+            return;
+        }
+        if click_count >= 2 && modifiers.secondary() {
             return;
         }
 

@@ -49,7 +49,7 @@ Cuando el panel de resultados tiene el foco:
 - `z` alterna el colapso del panel.
 - `m` (o `Shift+F10`) abre el menú contextual de fila/celda.
 
-Con el ratón, un clic selecciona una celda y `Shift`+clic, o pulsar y arrastrar, selecciona el rango hasta otra celda. Un clic en un número de fila selecciona la fila entera, y `Shift`+clic en otro número de fila selecciona todas las filas intermedias. `Ctrl`+clic (`Cmd`+clic en macOS) en una celda o un número de fila la añade a la selección, o la quita cuando está seleccionada sola; al copiar varios rangos se copian las filas y columnas que abarcan, con las celdas fuera de la selección vacías. Al arrastrar más allá de un borde de la cuadrícula, esta se desplaza en esa dirección, más deprisa cuanto más lejos esté el puntero, y el rango sigue creciendo hasta soltar el botón o volver con el puntero.
+Con el ratón, un clic selecciona una celda y `Shift`+clic, o pulsar y arrastrar, selecciona el rango hasta otra celda. Un clic en un número de fila selecciona la fila entera, y `Shift`+clic en otro número de fila selecciona todas las filas intermedias. `Ctrl`+clic (`Cmd`+clic en macOS) en una celda o un número de fila la añade a la selección, o la quita cuando está seleccionada sola; al copiar varios rangos se copian las filas y columnas que abarcan, con las celdas fuera de la selección vacías. Los rangos añadidos sirven para copiar: borrar, duplicar, guardar y las demás acciones de fila actúan sobre la fila del cursor, un clic derecho selecciona la celda bajo el puntero y la vista de registro trata `Ctrl`+clic como un clic normal. Al arrastrar más allá de un borde de la cuadrícula, esta se desplaza en esa dirección, más deprisa cuanto más lejos esté el puntero, y el rango sigue creciendo hasta soltar el botón o volver con el puntero.
 
 Cuando la selección abarca más de una celda, la barra de estado muestra cuántas celdas contiene y, para los números entre ellas, su suma, media, mínimo y máximo. Los NULL y el texto se cuentan pero quedan fuera de las cifras, y la barra de estado indica cuántos ha omitido. Los totales se calculan con las filas ya cargadas, incluidas las ediciones sin guardar, sin volver a consultar la base de datos.
 
@@ -73,7 +73,7 @@ modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
 esa columna: ordenar ascendente o descendente, quitar el orden y todos los
 operadores de filtro, en una sola lista plana. El clic izquierdo en la
-cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada.
+cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic, `Cmd`+clic en macOS, la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada. Con **Hacer clic en la cabecera de una columna la ordena** activado (Settings > General > Data grid), un clic normal en la cabecera la ordena, como la flecha.
 
 ## Panel de valor
 
@@ -237,8 +237,12 @@ cargadas al portapapeles**: el CSV empieza con una fila de cabecera con los
 nombres de las columnas, y el JSON es un array con un objeto por fila, con las
 columnas como claves y los números, booleanos y `null` como tales. Se incluyen
 todas las filas y columnas que abarca la selección; una celda dentro de esa área
-pero fuera de la selección queda vacía en CSV y `null` en JSON. **Copiar**
-(`Ctrl+c`) sigue copiando texto separado por tabulaciones sin cabecera.
+pero fuera de la selección queda vacía en CSV y `null` en JSON. Las copias
+siguen lo que muestra la cuadrícula: una edición sin guardar se copia con su
+valor nuevo y una fila añadida aún sin guardar, en su lugar. En JSON, las
+columnas con el mismo nombre (`a.id` y `b.id` de un join) comparten una clave,
+que toma el valor de la última. **Copiar** (`Ctrl+c`) sigue copiando texto
+separado por tabulaciones sin cabecera.
 `Ctrl+Alt+c` (`Cmd+Alt+c` en macOS) ejecuta **Copiar como JSON** desde el
 teclado; el menú lo muestra junto a la entrada.
 

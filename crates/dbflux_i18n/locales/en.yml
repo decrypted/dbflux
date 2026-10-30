@@ -158,6 +158,8 @@ components:
     title: Value
     wrap: Wrap
   data_table:
+    expression:
+      toggle: "Edit as SQL expression"
     record:
       empty: No rows to show
       name_header: Name
@@ -1521,6 +1523,8 @@ document:
       mode_view: "View"
       mode_edit: "Edit"
   data:
+    expression:
+      rejected: "The expression cannot be saved: %{reason}"
     chart_dock:
       toolbar:
         apply: Apply
@@ -1604,6 +1608,7 @@ document:
         paste: Paste
         edit: Edit
         edit_in_modal: Edit in modal…
+        edit_as_expression: "Edit as SQL expression…"
         set_default: Set to default
         set_null: Set to NULL
         add_row: Add row
@@ -4355,6 +4360,7 @@ settings:
       find_similar_rows: Find similar rows
       copy_selection_as_json: "Copy selection as JSON"
       results_set_null: Set cell to NULL
+      toggle_cell_expression: "Edit cell as SQL expression"
       open_context_menu: Open context menu
       open_pane_actions: Open pane actions
       menu_up: Menu up

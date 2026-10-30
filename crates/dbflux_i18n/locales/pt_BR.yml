@@ -158,6 +158,8 @@ components:
     title: Valor
     wrap: Quebrar linha
   data_table:
+    expression:
+      toggle: "Editar como expressão SQL"
     record:
       empty: Nenhuma linha para exibir
       name_header: Nome
@@ -1521,6 +1523,8 @@ document:
       mode_view: "Visualização"
       mode_edit: "Edição"
   data:
+    expression:
+      rejected: "A expressão não pode ser salva: %{reason}"
     chart_dock:
       toolbar:
         apply: Aplicar
@@ -1604,6 +1608,7 @@ document:
         paste: Colar
         edit: Editar
         edit_in_modal: Editar em janela…
+        edit_as_expression: "Editar como expressão SQL…"
         set_default: Definir como padrão
         set_null: Definir como NULL
         add_row: Adicionar linha
@@ -4355,6 +4360,7 @@ settings:
       find_similar_rows: Encontrar linhas semelhantes
       copy_selection_as_json: "Copiar a seleção como JSON"
       results_set_null: Definir célula como NULL
+      toggle_cell_expression: "Editar célula como expressão SQL"
       open_context_menu: Abrir menu de contexto
       open_pane_actions: Abrir ações do painel
       menu_up: Menu para cima

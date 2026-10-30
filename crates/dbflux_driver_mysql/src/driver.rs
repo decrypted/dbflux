@@ -369,7 +369,35 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
 /// MySQL/MariaDB SQL dialect implementation.
 pub struct MysqlDialect;
 
+/// Cell expressions MySQL and MariaDB both accept. A 16-byte uuid is packed
+/// with `UNHEX(REPLACE(..))` because MariaDB has no `UUID_TO_BIN`.
+static MYSQL_CELL_EXPRESSIONS: dbflux_core::CellExpressionVocabulary =
+    dbflux_core::CellExpressionVocabulary {
+        timestamp: &[
+            "NOW()",
+            "CURRENT_TIMESTAMP",
+            "UTC_TIMESTAMP()",
+            "DATE_ADD(NOW(), INTERVAL 1 DAY)",
+        ],
+        date: &["CURDATE()", "CURRENT_DATE", "UTC_DATE()"],
+        time: &["CURTIME()", "CURRENT_TIME", "UTC_TIME()"],
+        uuid: &["UUID()"],
+        uuid_text: &["UUID()"],
+        uuid_binary: &["UNHEX(REPLACE(UUID(), '-', ''))"],
+        text: &[
+            "CONCAT({col}, '')",
+            "UPPER({col})",
+            "LOWER({col})",
+            "TRIM({col})",
+        ],
+        supports_default: true,
+    };
+
 impl SqlDialect for MysqlDialect {
+    fn cell_expression_vocabulary(&self) -> Option<&'static dbflux_core::CellExpressionVocabulary> {
+        Some(&MYSQL_CELL_EXPRESSIONS)
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         mysql_quote_ident(name)
     }
@@ -2802,7 +2830,15 @@ impl Connection for MysqlConnection {
                 table, first_col, last_id
             )
         } else {
-            let identity = RecordIdentity::composite(insert.column_names(), insert.values());
+            // An expression's value is only known to the server, so the row is
+            // found by the literal columns alone.
+            let (columns, values) = insert
+                .assignments
+                .iter()
+                .filter(|a| a.sql_expression().is_none())
+                .map(|a| (a.name.clone(), a.value.clone()))
+                .unzip();
+            let identity = RecordIdentity::composite(columns, values);
             builder
                 .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
                 .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?
@@ -6052,3 +6088,86 @@ fn is_tls_negotiation_failure(error: &mysql::Error) -> bool {
 
 #[cfg(test)]
 mod preferred_fallback_tests;
+
+#[cfg(test)]
+mod cell_expression_tests {
+    use super::*;
+    use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch, SqlQueryBuilder};
+
+    fn suggestions(column: &str, type_name: &str) -> Vec<String> {
+        MYSQL_DIALECT
+            .cell_expression_suggestions(column, type_name)
+            .expect("MySQL offers cell expressions")
+    }
+
+    #[test]
+    fn cell_expressions_are_suggested_per_column_type() {
+        assert_eq!(
+            suggestions("created_at", "datetime"),
+            [
+                "NOW()",
+                "CURRENT_TIMESTAMP",
+                "UTC_TIMESTAMP()",
+                "DATE_ADD(NOW(), INTERVAL 1 DAY)",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+        assert_eq!(
+            suggestions("born", "date"),
+            ["CURDATE()", "CURRENT_DATE", "UTC_DATE()", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("id", "char(36)"),
+            [
+                "UUID()",
+                "CONCAT(`id`, '')",
+                "UPPER(`id`)",
+                "LOWER(`id`)",
+                "TRIM(`id`)",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+        assert_eq!(
+            suggestions("id", "binary(16)"),
+            ["UNHEX(REPLACE(UUID(), '-', ''))", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("qty", "int unsigned"),
+            ["`qty` + 1", "`qty` - 1", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("name", "varchar(64)"),
+            [
+                "CONCAT(`name`, '')",
+                "UPPER(`name`)",
+                "LOWER(`name`)",
+                "TRIM(`name`)",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+        assert_eq!(suggestions("doc", "json"), ["NULL", "DEFAULT"]);
+    }
+
+    #[test]
+    fn a_row_update_writes_an_expression_unquoted_and_its_text_as_a_literal() {
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "events".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("seen_at", "NOW()", None),
+                ColumnAssignment::new("note", Value::Text("NOW()".to_string())),
+            ],
+        );
+
+        let sql = SqlQueryBuilder::new(&MYSQL_DIALECT)
+            .build_update(&patch, false)
+            .unwrap();
+
+        assert!(sql.contains("`seen_at` = NOW()"), "{sql}");
+        assert!(!sql.contains("`note` = NOW()"), "{sql}");
+    }
+}

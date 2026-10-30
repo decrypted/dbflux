@@ -470,6 +470,7 @@ Alt 拖动鼠标选择一样，按顺序用换行符连接非空行片段；若�
 | `d d` / `Delete` | 删除行 |
 | `a a` / `Shift+a Shift+a` | 添加 / 复制一行 |
 | `Ctrl+n` | 将单元格设为 NULL |
+| `Ctrl+Alt+e` / `Cmd+Alt+e` | 将单元格作为 SQL 表达式编辑；编辑器打开时在值和表达式之间切换（`fx`） |
 | `u` / `Ctrl+z` / `Cmd+z` | 撤销 |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | 重做 |
 | `e` | 展开或折叠嵌套列（文档网格） |

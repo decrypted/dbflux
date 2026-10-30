@@ -192,7 +192,30 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
 /// SQLite SQL dialect implementation.
 pub struct SqliteDialect;
 
+/// Cell expressions for SQLite. SQLite has no uuid function, and it rejects
+/// `DEFAULT` inside `UPDATE ... SET` and `INSERT ... VALUES`.
+static SQLITE_CELL_EXPRESSIONS: dbflux_core::CellExpressionVocabulary =
+    dbflux_core::CellExpressionVocabulary {
+        timestamp: &[
+            "CURRENT_TIMESTAMP",
+            "datetime('now')",
+            "datetime('now', 'localtime')",
+            "datetime('now', '+1 day')",
+        ],
+        date: &["CURRENT_DATE", "date('now')"],
+        time: &["CURRENT_TIME", "time('now')"],
+        uuid: &[],
+        uuid_text: &[],
+        uuid_binary: &[],
+        text: &["{col} || ''", "upper({col})", "lower({col})", "trim({col})"],
+        supports_default: false,
+    };
+
 impl SqlDialect for SqliteDialect {
+    fn cell_expression_vocabulary(&self) -> Option<&'static dbflux_core::CellExpressionVocabulary> {
+        Some(&SQLITE_CELL_EXPRESSIONS)
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         sqlite_quote_ident(name)
     }
@@ -3868,5 +3891,69 @@ mod read_only_tests {
 
         assert!(state.lock().expect("state mutex").is_autocommit());
         assert!(!query_only_enabled(&state));
+    }
+}
+
+#[cfg(test)]
+mod cell_expression_tests {
+    use super::*;
+    use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch, SqlQueryBuilder};
+
+    fn suggestions(column: &str, type_name: &str) -> Vec<String> {
+        SQLITE_DIALECT
+            .cell_expression_suggestions(column, type_name)
+            .expect("SQLite offers cell expressions")
+    }
+
+    #[test]
+    fn cell_expressions_are_suggested_per_column_type() {
+        assert_eq!(
+            suggestions("created_at", "DATETIME"),
+            [
+                "CURRENT_TIMESTAMP",
+                "datetime('now')",
+                "datetime('now', 'localtime')",
+                "datetime('now', '+1 day')",
+                "NULL"
+            ]
+        );
+        assert_eq!(
+            suggestions("born", "DATE"),
+            ["CURRENT_DATE", "date('now')", "NULL"]
+        );
+        assert_eq!(
+            suggestions("qty", "INTEGER"),
+            ["\"qty\" + 1", "\"qty\" - 1", "NULL"]
+        );
+        assert_eq!(
+            suggestions("name", "TEXT"),
+            [
+                "\"name\" || ''",
+                "upper(\"name\")",
+                "lower(\"name\")",
+                "trim(\"name\")",
+                "NULL"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_row_update_writes_an_expression_unquoted_and_its_text_as_a_literal() {
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "events".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("seen_at", "CURRENT_TIMESTAMP", None),
+                ColumnAssignment::new("note", Value::Text("CURRENT_TIMESTAMP".to_string())),
+            ],
+        );
+
+        let sql = SqlQueryBuilder::new(&SQLITE_DIALECT)
+            .build_update(&patch, false)
+            .unwrap();
+
+        assert!(sql.contains("\"seen_at\" = CURRENT_TIMESTAMP"), "{sql}");
+        assert!(!sql.contains("\"note\" = CURRENT_TIMESTAMP"), "{sql}");
     }
 }

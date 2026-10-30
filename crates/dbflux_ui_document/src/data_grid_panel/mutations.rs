@@ -552,11 +552,10 @@ impl DataGridPanel {
         let change_values: Vec<ColumnAssignment> = changes
             .iter()
             .filter_map(|&(col_idx, cell_value)| {
-                model.columns.get(col_idx).map(|col| ColumnAssignment {
-                    name: col.title.to_string(),
-                    value: cell_value.to_value(),
-                    type_name: Some(col.type_name.to_string()),
-                })
+                model
+                    .columns
+                    .get(col_idx)
+                    .map(|col| super::cell_expressions::column_assignment(col, cell_value))
             })
             .collect();
 
@@ -842,17 +841,35 @@ impl DataGridPanel {
                     )
                 });
 
-                table_state.update(cx, |state, cx| {
-                    match returned_row {
-                        Some(returned_row) => state.apply_returning_row(row_idx, &returned_row),
-                        None if crud_result.returning_row.is_some() => {
-                            state.keep_row_edits(row_idx)
+                // Only the database knows what an expression computed, so a
+                // row saved with one and not returned is read back instead
+                // of keeping the edits as its values.
+                let needs_reload = table_state.update(cx, |state, cx| {
+                    let saved_expression = state
+                        .edit_buffer()
+                        .row_changes(row_idx)
+                        .iter()
+                        .any(|(_, cell)| cell.is_expression());
+
+                    let needs_reload = match returned_row {
+                        Some(returned_row) => {
+                            state.apply_returning_row(row_idx, &returned_row);
+                            false
                         }
-                        None => {}
-                    }
+                        None if saved_expression => true,
+                        None if crud_result.returning_row.is_some() => {
+                            state.keep_row_edits(row_idx);
+                            false
+                        }
+                        None => false,
+                    };
                     state.edit_buffer_mut().clear_row(row_idx);
                     cx.notify();
+                    needs_reload
                 });
+                if needs_reload {
+                    self.queue_reload_after_mutation(cx);
+                }
                 self.pending.toast = Some(PendingToast {
                     message: dbflux_i18n::t!("document.data.mutation.toast.saved"),
                     is_error: false,
@@ -1087,18 +1104,14 @@ impl DataGridPanel {
             let mut assignments = Vec::new();
 
             for (col_idx, cell) in cells.iter().enumerate() {
-                let value = cell.to_value();
-
-                if matches!(value, Value::Null) {
+                // A null or a column default is left to the database by
+                // naming no value for the column.
+                if matches!(cell.to_value(), Value::Null) {
                     continue;
                 }
 
                 if let Some(col) = model.columns.get(col_idx) {
-                    assignments.push(ColumnAssignment {
-                        name: col.title.to_string(),
-                        value,
-                        type_name: Some(col.type_name.to_string()),
-                    });
+                    assignments.push(super::cell_expressions::column_assignment(col, cell));
                 }
             }
 

@@ -158,6 +158,8 @@ components:
     title: 값
     wrap: 줄바꿈
   data_table:
+    expression:
+      toggle: "SQL 식으로 편집"
     record:
       empty: 표시할 행이 없습니다
       name_header: 이름
@@ -1521,6 +1523,8 @@ document:
       mode_view: "보기"
       mode_edit: "편집"
   data:
+    expression:
+      rejected: "식을 저장할 수 없습니다: %{reason}"
     chart_dock:
       toolbar:
         apply: 적용
@@ -1604,6 +1608,7 @@ document:
         paste: 붙여넣기
         edit: 편집
         edit_in_modal: 모달에서 편집…
+        edit_as_expression: "SQL 식으로 편집…"
         set_default: 기본값으로 설정
         set_null: NULL로 설정
         add_row: 행 추가
@@ -4355,6 +4360,7 @@ settings:
       find_similar_rows: 유사한 행 찾기
       copy_selection_as_json: "선택 영역을 JSON으로 복사"
       results_set_null: 셀을 NULL로 설정
+      toggle_cell_expression: "셀을 SQL 식으로 편집"
       open_context_menu: 상황에 맞는 메뉴 열기
       open_pane_actions: 패널 작업 열기
       menu_up: 메뉴 위로

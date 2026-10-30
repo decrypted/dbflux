@@ -158,6 +158,8 @@ components:
     title: Valor
     wrap: Ajuste de línea
   data_table:
+    expression:
+      toggle: "Editar como expresión SQL"
     record:
       empty: No hay filas que mostrar
       name_header: Nombre
@@ -1521,6 +1523,8 @@ document:
       mode_view: "Ver"
       mode_edit: "Editar"
   data:
+    expression:
+      rejected: "La expresión no se puede guardar: %{reason}"
     chart_dock:
       toolbar:
         apply: Aplicar
@@ -1604,6 +1608,7 @@ document:
         paste: Pegar
         edit: Editar
         edit_in_modal: Editar en modal…
+        edit_as_expression: "Editar como expresión SQL…"
         set_default: Establecer valor predeterminado
         set_null: Establecer NULL
         add_row: Agregar fila
@@ -4355,6 +4360,7 @@ settings:
       find_similar_rows: Buscar filas similares
       copy_selection_as_json: "Copiar la selección como JSON"
       results_set_null: Establecer celda en NULL
+      toggle_cell_expression: "Editar celda como expresión SQL"
       open_context_menu: Abrir menú contextual
       open_pane_actions: Abrir acciones del panel
       menu_up: "Menú: arriba"

@@ -1,9 +1,14 @@
+pub(crate) mod cell_expression;
 pub(crate) mod code_generation;
 pub(crate) mod dialect;
 pub(crate) mod generation;
 pub(crate) mod query_builder;
 mod transaction_control;
 
+pub use cell_expression::{
+    CellExpressionColumn, CellExpressionError, CellExpressionVocabulary,
+    cell_expression_suggestions, validate_cell_expression,
+};
 pub use code_generation::{
     AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
     CodeGenCapabilities, CodeGenerator, CreateIndexRequest, CreateTypeRequest, DdlRejection,

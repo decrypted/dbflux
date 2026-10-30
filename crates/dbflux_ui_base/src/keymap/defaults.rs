@@ -1530,6 +1530,13 @@ fn data_table_layer() -> KeymapLayer {
         KeyChord::new("n", Modifiers::ctrl()),
         Command::ResultsSetNull,
     );
+    // Primary+Alt like Copy as JSON: primary+Shift+E is a workspace command,
+    // and Alt alone types characters on macOS. It also reaches the open
+    // inline editor, which sits inside the table's context.
+    layer.bind(
+        KeyChord::new("e", Modifiers::primary_alt()),
+        Command::ToggleCellExpression,
+    );
 
     // Undo / redo: the standard primary chords plus the vim-style `u` and
     // `ctrl-r`, kept literal as familiar editor aliases.

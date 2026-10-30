@@ -23,6 +23,7 @@ use crate::fonts;
 use crate::tokens::GridMetrics;
 
 mod autoscroll;
+mod expression_edit;
 mod multi_edit;
 
 /// Grid face and glyph advances an auto-sized column width was estimated
@@ -216,6 +217,19 @@ pub struct DataTableState {
     /// Enum/set options per column index.
     enum_options: std::collections::HashMap<usize, Vec<String>>,
 
+    /// The expressions offered per column when a cell is edited as a SQL
+    /// expression. A column the map lacks cannot hold an expression, so an
+    /// empty map turns expression editing off.
+    expression_suggestions: HashMap<usize, Vec<String>>,
+
+    /// Whether the open inline editor writes a SQL expression instead of a
+    /// value.
+    editing_expression: bool,
+
+    /// The suggestion of the open expression editor last stepped to with
+    /// the arrow keys.
+    expression_highlight: Option<usize>,
+
     /// Document extras (column groups, presence bars, stepping into nested
     /// values). `None` for relational grids.
     document: Option<super::document::DocumentPresentation>,
@@ -277,6 +291,9 @@ impl DataTableState {
             positional_rows: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
+            expression_suggestions: HashMap::new(),
+            editing_expression: false,
+            expression_highlight: None,
             document: None,
             header_annotations: Vec::new(),
             selection_totals: TotalsCache::default(),
@@ -450,6 +467,7 @@ impl DataTableState {
         self.reload_header_annotations(&previous_titles);
         self.edit_buffer.reset_for_base(self.model.row_count());
         self.enum_options.clear();
+        self.expression_suggestions.clear();
 
         match swap {
             ModelSwap::KeepCursor => self.clamp_selection(),
@@ -1350,6 +1368,13 @@ impl DataTableState {
         use super::model::{ColumnKind, VisualRowSource};
 
         self.edit_targets.clear();
+        self.editing_expression = false;
+        self.expression_highlight = None;
+
+        // A staged expression is edited as one, not as the text it spells.
+        if self.staged_expression(coord).is_some() {
+            return self.start_editing_expression(coord, window, cx);
+        }
 
         if self.document.is_some() && self.is_nested_cell(coord) {
             cx.emit(DataTableEvent::StepIntoRequested {
@@ -1503,9 +1528,22 @@ impl DataTableState {
             return true;
         }
 
+        self.open_inline_input(coord, &initial_value, window, cx);
+        true
+    }
+
+    /// Opens the text editor on `coord` holding `initial_value`, for the
+    /// cell or, when `coord` is part of a larger selection, for all of it.
+    fn open_inline_input(
+        &mut self,
+        coord: CellCoord,
+        initial_value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
-            state.set_value(&initial_value, window, cx);
+            state.set_value(initial_value, window, cx);
             state
         });
 
@@ -1531,7 +1569,6 @@ impl DataTableState {
         self.enum_dropdown = None;
         self.scroll_to_cell(coord.row, coord.col);
         cx.notify();
-        true
     }
 
     /// Get the cell input state if currently editing.
@@ -1729,12 +1766,36 @@ impl DataTableState {
             if let Some(input) = self.cell_input.take() {
                 let value_str = input.read(cx).value().to_string();
 
-                self.stage_edit_value(coord, super::model::CellValue::text(&value_str));
+                if self.editing_expression {
+                    if let Err(error) = dbflux_core::validate_cell_expression(&value_str) {
+                        // Enter on an expression the save would refuse keeps
+                        // the editor open on it; a host closing the table
+                        // drops it instead of staging it.
+                        if refocus {
+                            self.editing_cell = Some(coord);
+                            self.cell_input = Some(input);
+                            cx.emit(DataTableEvent::CellExpressionRejected {
+                                message: error.to_string(),
+                            });
+                            cx.notify();
+                            return;
+                        }
+                    } else {
+                        self.stage_edit_value(
+                            coord,
+                            super::model::CellValue::expression(&value_str),
+                        );
+                    }
+                } else {
+                    self.stage_edit_value(coord, super::model::CellValue::text(&value_str));
+                }
             }
         } else {
             self.cell_input = None;
         }
         self.edit_targets.clear();
+        self.editing_expression = false;
+        self.expression_highlight = None;
 
         // The input and dropdown these watch are gone; they are re-subscribed
         // when the next edit starts.

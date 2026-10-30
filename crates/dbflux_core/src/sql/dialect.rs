@@ -243,6 +243,33 @@ pub trait SqlDialect: Send + Sync {
     ) -> Option<String> {
         None
     }
+
+    /// The expressions a grid cell of this dialect can be set to in place of
+    /// a literal, or `None` when the dialect's drivers do not write
+    /// [`crate::ColumnAssignment::expression`] assignments into their row
+    /// UPDATE and INSERT statements.
+    ///
+    /// `None` by default: an expression is only offered where the driver's
+    /// save path is known to carry it unquoted, never quietly as text.
+    fn cell_expression_vocabulary(&self) -> Option<&'static crate::CellExpressionVocabulary> {
+        None
+    }
+
+    /// The expressions offered for a cell of `column`, whose driver-reported
+    /// type is `type_name`, or `None` when cells of this dialect cannot hold
+    /// an expression. The user may still type any other expression.
+    ///
+    /// The default builds the list from
+    /// [`Self::cell_expression_vocabulary`]; a dialect overrides this to
+    /// offer suggestions the vocabulary cannot express.
+    fn cell_expression_suggestions(&self, column: &str, type_name: &str) -> Option<Vec<String>> {
+        let vocabulary = self.cell_expression_vocabulary()?;
+        Some(crate::cell_expression_suggestions(
+            vocabulary,
+            &self.quote_identifier(column),
+            type_name,
+        ))
+    }
 }
 
 /// The error returned when a drop asks for CASCADE on a dialect without it.

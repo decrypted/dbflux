@@ -193,6 +193,26 @@ Con varias celdas seleccionadas, `Enter`, `F2` o un doble clic en una de ellas a
   <img src="../images/results/editing-light.webp" alt="La tabla customers con una celda editada aún sin guardar y los botones Save y Revert habilitados">
 </picture>
 
+### Expresiones SQL en celdas
+
+En una tabla de MySQL, MariaDB, PostgreSQL, SQLite o SQL Server, una celda puede tomar una expresión SQL en lugar de un valor, como `NOW()`, `"qty" + 1` o `DEFAULT`. La expresión se guarda sin comillas en el `UPDATE` o `INSERT` de la fila, y la base de datos calcula el valor.
+
+- **Editar como expresión SQL…** en el menú contextual de la celda, o `Ctrl+Alt+E` (`Cmd+Alt+E` en macOS), abre el editor con su interruptor `fx` activado. En una celda de una selección mayor, la expresión va a cada celda seleccionada, como en una edición de varias celdas.
+- Con el editor abierto, un clic en `fx` o el mismo atajo alterna entre valor y expresión, conservando lo escrito.
+- Mientras `fx` está activado, una lista bajo el editor sugiere expresiones para el tipo de la columna y la base de datos, y `Abajo` / `Arriba` las escriben en el editor una a una. Se puede escribir cualquier otra expresión.
+
+| Tipo de columna | MySQL / MariaDB | PostgreSQL | SQLite | SQL Server |
+|---|---|---|---|---|
+| Fecha y hora | `NOW()`, `CURRENT_TIMESTAMP`, `UTC_TIMESTAMP()`, `DATE_ADD(NOW(), INTERVAL 1 DAY)` | `now()`, `current_timestamp`, `now() + interval '1 day'` | `CURRENT_TIMESTAMP`, `datetime('now')`, `datetime('now', 'localtime')`, `datetime('now', '+1 day')` | `GETDATE()`, `CURRENT_TIMESTAMP`, `SYSDATETIME()`, `GETUTCDATE()`, `DATEADD(day, 1, GETDATE())` |
+| Fecha | `CURDATE()`, `CURRENT_DATE`, `UTC_DATE()` | `current_date`, `current_date + 1` | `CURRENT_DATE`, `date('now')` | `CAST(GETDATE() AS date)` |
+| Hora | `CURTIME()`, `CURRENT_TIME`, `UTC_TIME()` | `current_time`, `localtime` | `CURRENT_TIME`, `time('now')` | `CAST(GETDATE() AS time)` |
+| uuid | `UUID()` (`char(36)`), `UNHEX(REPLACE(UUID(), '-', ''))` (`binary(16)`) | `gen_random_uuid()` | | `NEWID()` |
+| Número | `col + 1`, `col - 1` | igual | igual | igual |
+| Texto | `CONCAT(col, '')`, `UPPER`, `LOWER`, `TRIM` | `col \|\| ''`, `upper`, `lower`, `trim` | `col \|\| ''`, `upper`, `lower`, `trim` | `CONCAT(col, '')`, `UPPER`, `LOWER`, `LTRIM(RTRIM(col))` |
+| Cualquiera | `NULL`, `DEFAULT` | `NULL`, `DEFAULT` | `NULL` | `NULL`, `DEFAULT` |
+
+Una expresión pendiente se muestra en la celda como `fx NOW()` en cursiva hasta que se guarda; después de guardar, la fila muestra el valor que calculó la base de datos. Deshacer, rehacer y Revertir la tratan como cualquier otra edición, y las celdas de una fila nueva también la admiten. Una expresión con un comentario, un `;` o una `,` fuera de paréntesis se rechaza al confirmarla, porque podría cambiar más que la celda (un comentario podría ocultar el `WHERE` del `UPDATE`). Las demás bases de datos, los resultados de consultas y las colecciones de documentos no ofrecen expresiones.
+
 ### Cuándo los resultados son editables
 
 Los browses de tabla planos son editables cuando la tabla tiene una primary key.

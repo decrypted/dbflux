@@ -289,6 +289,8 @@ impl DataGridPanel {
         );
         let document_presentation = self.document_presentation();
         let enum_options = enum_options_for_result(&self.result, column_details.as_deref());
+        let expression_suggestions =
+            self.cell_expression_suggestions_by_column(column_details.as_deref(), cx);
 
         if let Some(table_state) = self.grid_table.table_state.clone() {
             // A reload reuses the state entity, so column widths, sort, scroll
@@ -327,6 +329,7 @@ impl DataGridPanel {
                 for (col_ix, options) in enum_options {
                     state.set_enum_options(col_ix, options);
                 }
+                state.set_cell_expression_suggestions(expression_suggestions);
 
                 carried_edits.map_or(0, |edits| state.restore_pending_edits(edits, cx))
             });
@@ -368,6 +371,7 @@ impl DataGridPanel {
             for (col_ix, options) in enum_options {
                 state.set_enum_options(col_ix, options);
             }
+            state.set_cell_expression_suggestions(expression_suggestions);
 
             state
         });
@@ -496,6 +500,16 @@ impl DataGridPanel {
                     }
                     DataTableEvent::CommitDeleteRequested(row_idx) => {
                         this.handle_commit_delete(*row_idx, cx);
+                    }
+                    DataTableEvent::CellExpressionRejected { message } => {
+                        this.pending.toast = Some(PendingToast {
+                            message: dbflux_i18n::t!(
+                                "document.data.expression.rejected",
+                                reason = message
+                            ),
+                            is_error: true,
+                        });
+                        cx.notify();
                     }
                     DataTableEvent::SaveAllRequested { .. }
                         if this.commits_document_patches(cx) =>

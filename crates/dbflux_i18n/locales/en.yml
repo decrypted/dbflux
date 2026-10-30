@@ -1521,6 +1521,10 @@ document:
       mode_view: "View"
       mode_edit: "Edit"
   data:
+    restored:
+      waiting_title: Not connected
+      waiting_connection: "Connect to %{profile} to load %{object}."
+      waiting_database: "Expand the database %{database} in the sidebar to load %{object}."
     chart_dock:
       toolbar:
         apply: Apply

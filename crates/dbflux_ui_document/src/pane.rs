@@ -205,7 +205,8 @@ pub struct ObjectEditorRequest {
 /// `tab_kind` column in `WorkspaceTab` (values: `"FileBacked"`, `"Scratch"`).
 #[derive(Clone)]
 pub struct CodeSessionTabSnapshot {
-    /// `"FileBacked"` or `"Scratch"` — maps to `WorkspaceTab::tab_kind`.
+    /// Maps to `WorkspaceTab::tab_kind`; each restorable document owns its
+    /// kind string (`"FileBacked"`, `"Scratch"`, `"Table"`, ...).
     pub kind: &'static str,
     pub id: super::types::DocumentId,
     pub title: String,
@@ -214,6 +215,9 @@ pub struct CodeSessionTabSnapshot {
     pub file_path: Option<std::path::PathBuf>,
     pub scratch_path: Option<std::path::PathBuf>,
     pub shadow_path: Option<std::path::PathBuf>,
+    /// Serialized view state the document reopens with (a table tab's filter,
+    /// limit and sort); `None` for documents that keep none.
+    pub view_state_json: Option<String>,
 }
 
 /// Type-erased shell for an open document.
@@ -806,6 +810,7 @@ mod tests {
             file_path: None,
             scratch_path: Some(std::path::PathBuf::from("/tmp/scratch.sql")),
             shadow_path: None,
+            view_state_json: None,
         };
 
         let cloned = snap.clone();

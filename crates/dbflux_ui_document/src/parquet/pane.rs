@@ -133,6 +133,7 @@ impl ParquetDocument {
                     file_path: Some(path.clone()),
                     scratch_path: None,
                     shadow_path: None,
+                    view_state_json: None,
                 })
             })
         });

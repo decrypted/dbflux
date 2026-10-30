@@ -97,7 +97,7 @@ y permanece en English por ahora.
 
 | Setting                        | Default | Qué hace                                                         |
 | ------------------------------ | ------- | ---------------------------------------------------------------- |
-| **Restore session on startup** | On      | Reabre las tabs que tenías abiertas la última vez.               |
+| **Restore session on startup** | On      | Reabre las tabs que tenías abiertas la última vez. Las tabs de tablas y colecciones vuelven con el filtro, el límite de filas y el orden con los que se cargaron por última vez; si su conexión aún no está abierta, lo indican y cargan sus filas cuando la conexión está lista (con **Reopen last connections**, o cuando te conectas). Una tab de una conexión que borraste no se reabre, y los resultados de queries abiertos en su propia tab no se restauran. |
 | **Reopen last connections**    | Off     | Al iniciar, reconecta las conexiones que estaban abiertas al salir la última vez y las que usan las tabs restauradas. Funciona aunque la sesión no se restaure. |
 | **Default focus**              | Sidebar | Dónde cae el focus al iniciar (Sidebar o la última tab).         |
 | **Max history entries**        | 1000    | Tope del historial de queries (mínimo 10).                       |

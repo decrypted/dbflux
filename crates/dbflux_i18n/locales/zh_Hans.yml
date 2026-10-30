@@ -1521,6 +1521,10 @@ document:
       mode_view: "查看"
       mode_edit: "编辑"
   data:
+    restored:
+      waiting_title: 未连接
+      waiting_connection: "连接到 %{profile} 以加载 %{object}。"
+      waiting_database: "在侧边栏展开数据库 %{database} 以加载 %{object}。"
     chart_dock:
       toolbar:
         apply: 应用

@@ -1521,6 +1521,10 @@ document:
       mode_view: "Ver"
       mode_edit: "Editar"
   data:
+    restored:
+      waiting_title: Sin conexión
+      waiting_connection: "Conéctate a %{profile} para cargar %{object}."
+      waiting_database: "Expande la base de datos %{database} en la barra lateral para cargar %{object}."
     chart_dock:
       toolbar:
         apply: Aplicar

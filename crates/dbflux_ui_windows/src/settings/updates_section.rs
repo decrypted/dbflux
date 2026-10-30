@@ -1,7 +1,9 @@
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId};
 use dbflux_app::keymap::Modifiers;
-use dbflux_app::updates::{CheckedAgo, UpdateCheckOutcome, UpdateCheckState, UpdateSettings};
+use dbflux_app::updates::{
+    CheckedAgo, UPDATE_CHECK_ENABLED, UpdateCheckOutcome, UpdateCheckState, UpdateSettings,
+};
 use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
@@ -47,6 +49,28 @@ const ROWS: [UpdatesRow; 7] = [
     UpdatesRow::Reset,
     UpdatesRow::Save,
 ];
+
+/// A build without the update check draws neither the startup checkbox nor
+/// Check now, so the ring must not stop on them.
+const ROWS_WITHOUT_CHECKS: [UpdatesRow; 5] = [
+    UpdatesRow::ShowWhatsNew,
+    UpdatesRow::OpenWhatsNew,
+    UpdatesRow::ShowWelcome,
+    UpdatesRow::Reset,
+    UpdatesRow::Save,
+];
+
+fn rows() -> &'static [UpdatesRow] {
+    if UPDATE_CHECK_ENABLED {
+        &ROWS
+    } else {
+        &ROWS_WITHOUT_CHECKS
+    }
+}
+
+/// Element id of the line that replaces the check controls in a build
+/// without the update check.
+const CHECKS_DISABLED_ID: &str = "updates-checks-disabled";
 
 /// Settings › Updates: the update-check and changelog preferences, the
 /// result of the latest check, and entry points to the two dialogs.
@@ -123,7 +147,11 @@ impl UpdatesSection {
 
     fn reset_to_defaults(&mut self, cx: &mut Context<Self>) {
         let defaults = UpdateSettings::default();
-        self.check_on_startup = defaults.check_for_updates_on_startup;
+        // Without the update check the checkbox is hidden, so resetting it
+        // would leave an unsaved change the user cannot see.
+        if UPDATE_CHECK_ENABLED {
+            self.check_on_startup = defaults.check_for_updates_on_startup;
+        }
         self.show_whats_new = defaults.show_whats_new_after_update;
         cx.notify();
     }
@@ -151,13 +179,13 @@ impl UpdatesSection {
 
     fn select(&mut self, row: UpdatesRow) {
         self.content_focused = true;
-        if let Some(position) = ROWS.iter().position(|candidate| *candidate == row) {
+        if let Some(position) = rows().iter().position(|candidate| *candidate == row) {
             self.cursor = position;
         }
     }
 
     fn is_at(&self, row: UpdatesRow) -> bool {
-        self.content_focused && ROWS.get(self.cursor).copied() == Some(row)
+        self.content_focused && rows().get(self.cursor).copied() == Some(row)
     }
 
     fn focus_frame(&self, row: UpdatesRow, cx: &App, child: impl IntoElement) -> Div {
@@ -281,16 +309,59 @@ impl UpdatesSection {
             .into_any_element()
     }
 
-    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        let new_versions = self.render_checkbox(
-            "updates-check-on-startup",
-            UpdatesRow::CheckOnStartup,
-            dbflux_i18n::t!("updates.settings.check_on_startup"),
-            self.check_on_startup,
-            cx,
-        );
+    /// What a build without the update check shows in place of the startup
+    /// checkbox, the check result and Check now.
+    fn render_checks_disabled(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
 
-        let status = self.render_status(cx);
+        div()
+            .debug_selector(|| CHECKS_DISABLED_ID.to_string())
+            .flex()
+            .items_center()
+            .gap(Spacing::MD)
+            .py(ROW_PADDING_Y)
+            .child(
+                Icon::new(AppIcon::Info)
+                    .size(ui(15.0))
+                    .color(theme.muted_foreground),
+            )
+            .child(Text::body(dbflux_i18n::t!("updates.checks_disabled")))
+            .child(
+                Text::code(dbflux_i18n::t!(
+                    "updates.settings.detail_unchecked",
+                    version = running_version_label(),
+                    channel = channel_label(ReleaseChannel::current())
+                ))
+                .font_size(FontSizes::XS)
+                .text_color(theme.muted_foreground),
+            )
+            .into_any_element()
+    }
+
+    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let checks = if UPDATE_CHECK_ENABLED {
+            let new_versions = self.render_checkbox(
+                "updates-check-on-startup",
+                UpdatesRow::CheckOnStartup,
+                dbflux_i18n::t!("updates.settings.check_on_startup"),
+                self.check_on_startup,
+                cx,
+            );
+            let status = self.render_status(cx);
+
+            vec![
+                self.render_row(
+                    dbflux_i18n::t!("updates.settings.new_versions"),
+                    new_versions,
+                ),
+                self.render_row(dbflux_i18n::t!("updates.settings.status"), status),
+            ]
+        } else {
+            vec![self.render_row(
+                dbflux_i18n::t!("updates.settings.status"),
+                self.render_checks_disabled(cx),
+            )]
+        };
 
         let changelog = div()
             .flex()
@@ -325,11 +396,7 @@ impl UpdatesSection {
             .flex()
             .flex_col()
             .child(group_header)
-            .child(self.render_row(
-                dbflux_i18n::t!("updates.settings.new_versions"),
-                new_versions,
-            ))
-            .child(self.render_row(dbflux_i18n::t!("updates.settings.status"), status))
+            .children(checks)
             .child(self.render_row(dbflux_i18n::t!("updates.settings.changelog"), changelog))
             .into_any_element()
     }
@@ -344,7 +411,7 @@ impl UpdatesSection {
             ("j", modifiers) | ("down", modifiers) | ("tab", modifiers)
                 if modifiers == Modifiers::none() =>
             {
-                self.cursor = (self.cursor + 1).min(ROWS.len() - 1);
+                self.cursor = (self.cursor + 1).min(rows().len() - 1);
                 cx.notify();
             }
             ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
@@ -356,7 +423,7 @@ impl UpdatesSection {
                 cx.notify();
             }
             ("enter", modifiers) | ("space", modifiers) if modifiers == Modifiers::none() => {
-                if let Some(row) = ROWS.get(self.cursor).copied() {
+                if let Some(row) = rows().get(self.cursor).copied() {
                     self.activate(row, cx);
                 }
             }
@@ -543,11 +610,64 @@ mod tests {
     // Explicit imports: the parent's `gpui::*` glob would make `#[test]`
     // resolve to `gpui::test`, whose expansion recurses without bound.
     use super::{
-        ReleaseChannel, UpdateCheckOutcome, UpdateCheckState, Utc, channel_label,
+        CHECKS_DISABLED_ID, ReleaseChannel, UPDATE_CHECK_ENABLED, UpdateCheckOutcome,
+        UpdateCheckState, UpdatesRow, UpdatesSection, Utc, channel_label, rows,
         running_version_label, status_detail, status_headline,
     };
     use dbflux_app::updates::AvailableUpdate;
     use dbflux_core::chrono::TimeDelta;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext, TestAppContext};
+
+    #[test]
+    fn the_ring_stops_on_the_check_controls_only_where_they_are_drawn() {
+        let has_check_controls = rows()
+            .iter()
+            .any(|row| matches!(row, UpdatesRow::CheckOnStartup | UpdatesRow::CheckNow));
+
+        assert_eq!(has_check_controls, UPDATE_CHECK_ENABLED);
+        assert_eq!(rows().last(), Some(&UpdatesRow::Save));
+    }
+
+    #[gpui::test]
+    fn the_disabled_line_replaces_the_check_controls_without_checks(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let mut state = AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test app state");
+                // A setting saved by a build with the check must not bring the
+                // controls back.
+                let mut settings = state.update_settings().clone();
+                settings.check_for_updates_on_startup = true;
+                state
+                    .set_update_settings(settings)
+                    .expect("update settings");
+                state
+            })
+        });
+
+        let (_, window) = cx.add_window_view(move |window, cx| {
+            let section = cx.new(|cx| UpdatesSection::new(app_state, window, cx));
+            gpui_component::Root::new(section, window, cx)
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            window.debug_bounds(CHECKS_DISABLED_ID).is_some(),
+            !UPDATE_CHECK_ENABLED
+        );
+    }
 
     #[test]
     fn detail_mentions_the_check_time_only_after_a_check() {
@@ -640,6 +760,7 @@ mod tests {
             "updates.ago.minutes",
             "updates.ago.hours",
             "updates.ago.days",
+            "updates.checks_disabled",
         ] {
             for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);

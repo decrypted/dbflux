@@ -78,6 +78,9 @@ aws = ["dbflux_app/aws", "dbflux_ui/aws"]
 mcp = ["dbflux_app/mcp", "dbflux_ui/mcp"]
 # Development-only UI automation bridge (gpui-mcp). Never part of `default`.
 ui-automation = ["dbflux_ui/ui-automation"]
+# No update check at all, for fork and local builds whose versions do not
+# match the upstream releases. Never part of `default`.
+no-update-check = ["dbflux_app/no-update-check", "dbflux_ui/no-update-check"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]

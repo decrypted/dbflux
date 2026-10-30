@@ -21,7 +21,14 @@ pub use check::{
 pub use install_source::{InstallSource, PackageManager};
 pub use release::{AvailableUpdate, GithubRelease};
 pub use settings::{UpdateSettings, load_update_settings, save_update_settings};
-pub use startup::{StartupDialog, record_startup, startup_dialog};
+pub use startup::{StartupDialog, checks_on_startup, record_startup, startup_dialog};
+
+/// False in builds made with the `no-update-check` feature. Such a build is a
+/// fork or a local build whose version says nothing about the published
+/// releases, so a check could only report updates that are not ones; every
+/// path that would ask GitHub tests this instead of a stored setting, which a
+/// fresh settings database turns back on.
+pub const UPDATE_CHECK_ENABLED: bool = !cfg!(feature = "no-update-check");
 
 /// `owner/name` of the GitHub repository releases are published to.
 pub const REPOSITORY: &str = "0xErwin1/dbflux";

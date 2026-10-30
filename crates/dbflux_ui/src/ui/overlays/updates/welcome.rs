@@ -42,6 +42,10 @@ const BADGE_FILL_OPACITY: f32 = 0.12;
 /// Element id of the scrolling release highlights.
 const HIGHLIGHTS_ID: &str = "welcome-whats-new-list";
 
+/// Debug selector of the line that stands in for the update-check checkbox
+/// in a build without the update check.
+const WELCOME_CHECKS_DISABLED_ID: &str = "welcome-checks-disabled";
+
 /// Highlights listed per changelog section, as the board shows them: four
 /// additions, two of anything else. The full changelog is one link away.
 fn highlights_per_section(kind: &SectionKind) -> usize {
@@ -235,15 +239,31 @@ impl WelcomeDialog {
                 ChromeColors::tint(theme),
                 dbflux_i18n::t!("updates.welcome.updates"),
             ))
-            .child(preference_row(
-                "welcome-check-for-updates",
-                dbflux_i18n::t!("updates.welcome.notify"),
-                Some(dbflux_i18n::t!("updates.welcome.notify_hint")),
-                settings.check_for_updates_on_startup,
-                move |value, _, cx| {
-                    set_update_preference(&check_state, UpdatePreference::CheckOnStartup, value, cx)
-                },
-            ))
+            .map(|column| {
+                if updates::UPDATE_CHECK_ENABLED {
+                    column.child(preference_row(
+                        "welcome-check-for-updates",
+                        dbflux_i18n::t!("updates.welcome.notify"),
+                        Some(dbflux_i18n::t!("updates.welcome.notify_hint")),
+                        settings.check_for_updates_on_startup,
+                        move |value, _, cx| {
+                            set_update_preference(
+                                &check_state,
+                                UpdatePreference::CheckOnStartup,
+                                value,
+                                cx,
+                            )
+                        },
+                    ))
+                } else {
+                    column.child(
+                        div()
+                            .debug_selector(|| WELCOME_CHECKS_DISABLED_ID.to_string())
+                            .py(Spacing::XXS)
+                            .child(Text::caption(dbflux_i18n::t!("updates.checks_disabled"))),
+                    )
+                }
+            })
             .child(preference_row(
                 "welcome-show-whats-new",
                 dbflux_i18n::t!("updates.welcome.show_whats_new"),
@@ -358,8 +378,24 @@ mod tests {
     // Explicit imports: the parent's `gpui::*` glob would make `#[test]`
     // resolve to `gpui::test`, whose expansion recurses without bound.
     use super::super::test_support::{assert_scrolls_by_wheel_and_keys, test_app_state};
-    use super::{SectionKind, WelcomeDialog, highlights_per_section};
+    use super::{SectionKind, WELCOME_CHECKS_DISABLED_ID, WelcomeDialog, highlights_per_section};
+    use dbflux_app::updates::UPDATE_CHECK_ENABLED;
     use gpui::{TestAppContext, px, size};
+
+    #[gpui::test]
+    fn the_check_toggle_gives_way_to_a_note_without_checks(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let (dialog, window) = cx.add_window_view(move |_, cx| WelcomeDialog::new(app_state, cx));
+        window.simulate_resize(size(px(1200.0), px(800.0)));
+
+        dialog.update(window, |dialog, cx| dialog.open(cx));
+        window.run_until_parked();
+
+        assert_eq!(
+            window.debug_bounds(WELCOME_CHECKS_DISABLED_ID).is_some(),
+            !UPDATE_CHECK_ENABLED
+        );
+    }
 
     #[gpui::test]
     fn the_highlights_scroll_when_the_window_is_short(cx: &mut TestAppContext) {
@@ -397,6 +433,7 @@ mod tests {
             "updates.welcome.change_later",
             "updates.welcome.get_started",
             "updates.welcome.full_changelog",
+            "updates.checks_disabled",
         ] {
             for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);

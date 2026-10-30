@@ -75,6 +75,10 @@ aws_secrets = ["dep:dbflux_driver_aws_secrets"]
 lua = ["dbflux_lua"]
 aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws"]
 mcp = ["dbflux_approval", "dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_core/mcp"]
+# Builds without the update check: for binaries whose version cannot be
+# compared with the upstream releases (forks, local builds), where every
+# check would report an update that is not one. See `updates::UPDATE_CHECK_ENABLED`.
+no-update-check = []
 
 [lints]
 workspace = true

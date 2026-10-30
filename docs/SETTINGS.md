@@ -11,6 +11,7 @@ window is organized into sections down the left side.
 | [General](#general) | App-wide behavior: theme, startup, refresh, query safety. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
 | [Keybindings](#keybindings) | Browse and change the keymap. |
+| [Updates](#updates) | Update checks at startup and the changelog after an update. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | AWS SSO / shared-credentials profiles. |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels) | SOCKS5 / HTTP proxy profiles. |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels) | Reusable SSH tunnel profiles. |
@@ -276,6 +277,24 @@ Changes apply at once in every window, without a restart. Only your overrides
 are stored, in the `cfg_keybinding_overrides` table of `dbflux.db`, so bindings
 you did not change follow the defaults of future releases. An override whose
 default binding a later release removes is ignored.
+
+---
+
+## Updates
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| **Check GitHub for a new release at startup** | On | At startup DBFlux asks the public GitHub releases API for the newest release of its channel (stable, rc or nightly). When one is newer, a notice links the download, or says how to update a package-manager install. **Check now** runs the same check at any time. The request carries only a `User-Agent` naming the app and its version. |
+| **Show what is new after each update** | On | The first start of a newer version opens the changelog of every release since the version you ran before. It reads the changelog bundled with the binary, so it needs no network. **Open what is new** and **Show welcome again** open the two dialogs at any time. |
+
+Builds made with `--features no-update-check` (for example
+`cargo build --release --features no-update-check`) have no update check at
+all: they never contact GitHub, at startup or from Settings, and show "Update
+checks are disabled in this build." in place of the startup checkbox and
+**Check now**, here and in the welcome dialog, whatever the stored setting
+says. What is new keeps working. The feature is meant for fork and local
+builds, whose versions do not match the published releases and would
+otherwise report updates that are not ones.
 
 ---
 

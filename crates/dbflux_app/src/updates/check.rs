@@ -15,7 +15,7 @@ use super::release::{
     AvailableUpdate, parse_release_list, parse_single_release, select_nightly_update,
     select_versioned_update,
 };
-use super::{REPOSITORY, parse_version};
+use super::{REPOSITORY, UPDATE_CHECK_ENABLED, parse_version};
 
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -50,6 +50,8 @@ impl UpdateCheckState {
 
 #[derive(Debug)]
 pub enum UpdateCheckError {
+    /// The build has no update check (`no-update-check`).
+    Disabled,
     /// The running version is not semver, so nothing can be compared.
     UnparseableVersion(String),
     Request(reqwest::Error),
@@ -60,6 +62,7 @@ pub enum UpdateCheckError {
 impl std::fmt::Display for UpdateCheckError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Disabled => write!(formatter, "update checks are disabled in this build"),
             Self::UnparseableVersion(version) => {
                 write!(formatter, "running version {version:?} is not semver")
             }
@@ -78,6 +81,12 @@ pub fn fetch_available_update(
     channel: ReleaseChannel,
     current_version: &str,
 ) -> Result<Option<AvailableUpdate>, UpdateCheckError> {
+    // The last line of defence: whatever a caller decided, this build makes
+    // no request.
+    if !UPDATE_CHECK_ENABLED {
+        return Err(UpdateCheckError::Disabled);
+    }
+
     let current = parse_version(current_version)
         .ok_or_else(|| UpdateCheckError::UnparseableVersion(current_version.to_string()))?;
 
@@ -175,6 +184,24 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "no-update-check")]
+    #[test]
+    fn a_build_without_checks_returns_before_any_request() {
+        // A parseable version would otherwise reach the network, so only the
+        // early return can produce `Disabled` here.
+        for channel in [
+            ReleaseChannel::Stable,
+            ReleaseChannel::Rc,
+            ReleaseChannel::Nightly,
+        ] {
+            assert!(matches!(
+                fetch_available_update(channel, "0.1.0"),
+                Err(UpdateCheckError::Disabled)
+            ));
+        }
+    }
+
+    #[cfg(not(feature = "no-update-check"))]
     #[test]
     fn unparseable_running_version_fails_before_any_request() {
         let result = fetch_available_update(ReleaseChannel::Stable, "not-a-version");

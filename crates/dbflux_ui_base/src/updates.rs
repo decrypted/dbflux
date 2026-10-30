@@ -58,7 +58,13 @@ impl AppStateEntity {
 /// Asks GitHub for a newer release on a background thread and records the
 /// result. A second call while one is running does nothing. Failures are only
 /// logged: the check is a courtesy, never an error the user has to handle.
+/// A build without the update check returns at once, so no caller (startup,
+/// Settings, a stale stored setting) can start one.
 pub fn run_update_check(app_state: &Entity<AppStateEntity>, cx: &mut App) {
+    if !updates::UPDATE_CHECK_ENABLED {
+        return;
+    }
+
     let already_running = app_state.read(cx).update_check().in_progress;
     if already_running {
         return;
@@ -260,6 +266,30 @@ mod tests {
                 dbflux_i18n::t!(key, current = current)
             );
         }
+    }
+
+    #[cfg(feature = "no-update-check")]
+    #[gpui::test]
+    fn a_build_without_checks_never_starts_one(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                        .expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+
+        cx.update(|cx| run_update_check(&app_state, cx));
+        cx.run_until_parked();
+
+        // A started check marks itself in progress before the request and
+        // records an outcome after it; neither happened.
+        let check = app_state.read_with(cx, |state, _| state.update_check().clone());
+        assert_eq!(check, UpdateCheckState::default());
     }
 
     #[test]

@@ -47,6 +47,8 @@ mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp", "dbflux_ui_document/mcp", "dbflux
 # Off by default. Only dbflux_ui_base holds the gated bridge code; every other
 # crate calls its always-present install function.
 ui-automation = ["dbflux_ui_base/ui-automation"]
+# Passthrough, so the crate tests can be run without the update check.
+no-update-check = ["dbflux_app/no-update-check", "dbflux_ui_base/no-update-check", "dbflux_ui_windows/no-update-check"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]

@@ -54,6 +54,12 @@ pub fn startup_dialog(settings: &UpdateSettings, current_version: &str) -> Start
     }
 }
 
+/// Whether this start asks GitHub for a newer release. A build without the
+/// update check never does, whatever the stored setting says.
+pub fn checks_on_startup(settings: &UpdateSettings) -> bool {
+    super::UPDATE_CHECK_ENABLED && settings.check_for_updates_on_startup
+}
+
 /// The settings to persist once the startup decision has been acted on: the
 /// running version becomes the last run version, and the welcome dialog is
 /// marked as shown when it was the one opened.
@@ -84,6 +90,21 @@ mod tests {
             show_whats_new_after_update: show_whats_new,
             ..UpdateSettings::default()
         }
+    }
+
+    #[test]
+    fn the_startup_check_follows_the_setting_only_where_checks_exist() {
+        let on = UpdateSettings {
+            check_for_updates_on_startup: true,
+            ..UpdateSettings::default()
+        };
+        let off = UpdateSettings {
+            check_for_updates_on_startup: false,
+            ..UpdateSettings::default()
+        };
+
+        assert_eq!(checks_on_startup(&on), super::super::UPDATE_CHECK_ENABLED);
+        assert!(!checks_on_startup(&off));
     }
 
     #[test]

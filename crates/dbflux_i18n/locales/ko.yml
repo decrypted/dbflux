@@ -5689,6 +5689,7 @@ workspace:
     delete_connection: '연결 "%{name}"을(를) 삭제하시겠습니까?'
   default_object_type: 개체
 updates:
+  checks_disabled: 이 빌드에서는 업데이트 확인이 비활성화되어 있습니다.
   settings:
     title: 업데이트
     subtitle: 새 버전 확인과 업데이트 후 변경 사항.

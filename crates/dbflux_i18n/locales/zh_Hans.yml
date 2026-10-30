@@ -5688,6 +5688,7 @@ workspace:
     delete_connection: "删除连接 %{name}？"
   default_object_type: 对象
 updates:
+  checks_disabled: 此版本在编译时已禁用更新检查。
   settings:
     title: 更新
     subtitle: 新版本检查以及更新后的更新日志。

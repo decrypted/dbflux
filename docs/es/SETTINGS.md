@@ -12,6 +12,7 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 | [General](#general)                                 | Comportamiento a nivel de app: theme, inicio, refresh, seguridad de queries. |
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
 | [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
+| [Actualizaciones](#actualizaciones)                 | Búsqueda de actualizaciones al iniciar y las novedades tras actualizar.      |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | Perfiles AWS SSO / shared-credentials.                                       |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels)       | Perfiles de proxy SOCKS5 / HTTP.                                             |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels)   | Perfiles reutilizables de túnel SSH.                                         |
@@ -289,6 +290,25 @@ guardan tus modificaciones, en la tabla `cfg_keybinding_overrides` de
 `dbflux.db`, así que los bindings que no cambiaste siguen los valores por defecto
 de futuras versiones. Una modificación cuyo binding por defecto elimina una
 versión posterior se ignora.
+
+---
+
+## Actualizaciones
+
+| Ajuste | Por defecto | Qué hace |
+|--------|-------------|----------|
+| **Buscar una nueva versión en GitHub al iniciar** | Activado | Al iniciar, DBFlux consulta la API pública de releases de GitHub por la versión más reciente de su canal (stable, rc o nightly). Si hay una más nueva, un aviso enlaza la descarga, o indica cómo actualizar una instalación hecha con un gestor de paquetes. **Comprobar ahora** hace la misma comprobación en cualquier momento. La petición solo lleva un `User-Agent` con el nombre de la app y su versión. |
+| **Mostrar las novedades después de cada actualización** | Activado | El primer inicio de una versión más nueva abre el registro de cambios de cada release desde la versión que usabas antes. Lee el registro de cambios incluido en el binario, así que no necesita red. **Ver novedades** y **Mostrar la bienvenida de nuevo** abren los dos diálogos en cualquier momento. |
+
+Las compilaciones hechas con `--features no-update-check` (por ejemplo
+`cargo build --release --features no-update-check`) no tienen búsqueda de
+actualizaciones: nunca contactan con GitHub, ni al iniciar ni desde Settings, y
+muestran "Las comprobaciones de actualizaciones están desactivadas en esta
+compilación." en lugar de la casilla de inicio y **Comprobar ahora**, aquí y en
+el diálogo de bienvenida, diga lo que diga el ajuste guardado. Las novedades
+siguen funcionando. El feature está pensado para forks y compilaciones locales,
+cuyas versiones no coinciden con las releases publicadas y que de otro modo
+avisarían de actualizaciones que no lo son.
 
 ---
 

@@ -5,7 +5,7 @@ use dbflux_ui_base::updates::{UpdateDialogRequest, run_update_check};
 impl Workspace {
     /// Runs once per app start, for the main window only: opens the welcome
     /// or "What is new" dialog when due, records this start, and checks for
-    /// a newer release when the user allows it.
+    /// a newer release when the user allows it and the build has the check.
     pub fn start_update_flow(&mut self, cx: &mut Context<Self>) {
         let settings = self.app_state.read(cx).update_settings().clone();
         let current_version = updates::current_version();
@@ -32,7 +32,7 @@ impl Workspace {
             StartupDialog::None => {}
         }
 
-        if settings.check_for_updates_on_startup {
+        if updates::checks_on_startup(&settings) {
             run_update_check(&self.app_state, cx);
         }
     }

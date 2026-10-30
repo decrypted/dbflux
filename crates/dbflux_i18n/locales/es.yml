@@ -5690,6 +5690,7 @@ workspace:
     delete_connection: '¿Eliminar la conexión "%{name}"?'
   default_object_type: Objeto
 updates:
+  checks_disabled: Las comprobaciones de actualizaciones están desactivadas en esta compilación.
   settings:
     title: Actualizaciones
     subtitle: Búsqueda de nuevas versiones y el registro de cambios tras actualizar.

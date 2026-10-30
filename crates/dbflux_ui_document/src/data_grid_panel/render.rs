@@ -436,6 +436,12 @@ impl DataGridPanel {
                 .columns
                 .get(modal.col)
                 .map(|column| (column.name.clone(), column.type_name.clone()));
+            let id_kinds = self
+                .grid_table
+                .table_state
+                .as_ref()
+                .map(|state| state.read(cx).generated_id_kinds(modal.col).to_vec())
+                .unwrap_or_default();
 
             self.document_view.cell_editor.update(cx, |editor, cx| {
                 editor.open(
@@ -447,6 +453,7 @@ impl DataGridPanel {
                     window,
                     cx,
                 );
+                editor.set_generated_id_kinds(id_kinds, cx);
             });
         }
 

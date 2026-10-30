@@ -160,6 +160,7 @@ components:
   data_table:
     expression:
       toggle: "SQL 식으로 편집"
+      generate: "%{kind} 생성"
     record:
       empty: 표시할 행이 없습니다
       name_header: 이름
@@ -1618,6 +1619,7 @@ document:
         edit: 편집
         edit_in_modal: 모달에서 편집…
         edit_as_expression: "SQL 식으로 편집…"
+        generate_id: "%{kind} 생성"
         set_default: 기본값으로 설정
         set_null: NULL로 설정
         add_row: 행 추가
@@ -3754,6 +3756,7 @@ modals:
       no_metrics_filtered: 필터와 일치하는 지표가 없습니다.
     cancel: 취소
   cell_editor:
+    generate: "%{kind} 생성"
     title_column: "%{column} 편집 (%{type_name})"
     title_json: JSON 편집
     title_text: 텍스트 편집

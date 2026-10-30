@@ -9,6 +9,15 @@ use super::DataTableState;
 use crate::components::data_table::model::VisualRowSource;
 use crate::components::data_table::selection::CellCoord;
 
+/// An entry of the list under the inline editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorSuggestion {
+    /// A new identifier of this kind, written as a value.
+    GeneratedId(dbflux_core::GeneratedIdKind),
+    /// A SQL expression, written while `fx` is on.
+    Expression(String),
+}
+
 impl DataTableState {
     /// Sets the expressions offered per column for a cell edited as a SQL
     /// expression, and with it which columns can hold one. An empty map
@@ -117,19 +126,43 @@ impl DataTableState {
         self.start_editing_expression(coord, window, cx);
     }
 
-    /// Steps to the next (or previous) suggestion of the open expression
-    /// editor and writes it into the editor.
+    /// What the list under the open inline editor offers for `col`: the
+    /// identifiers it can generate, then, while `fx` is on, the expressions
+    /// suggested for it.
+    pub fn editor_suggestions(&self, col: usize) -> Vec<EditorSuggestion> {
+        let ids = self
+            .editor_id_kinds(col)
+            .iter()
+            .copied()
+            .map(EditorSuggestion::GeneratedId);
+        let expressions: &[String] = if self.is_editing_expression() {
+            self.cell_expression_suggestions(col)
+        } else {
+            &[]
+        };
+
+        ids.chain(
+            expressions
+                .iter()
+                .cloned()
+                .map(EditorSuggestion::Expression),
+        )
+        .collect()
+    }
+
+    /// Steps to the next (or previous) entry of the list under the open
+    /// inline editor and writes it into the editor.
     pub fn step_expression_suggestion(
         &mut self,
         forward: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(coord) = self.editing_cell.filter(|_| self.is_editing_expression()) else {
+        let Some(coord) = self.editing_cell.filter(|_| self.cell_input.is_some()) else {
             return;
         };
 
-        let count = self.cell_expression_suggestions(coord.col).len();
+        let count = self.editor_suggestions(coord.col).len();
         if count == 0 {
             return;
         }
@@ -144,27 +177,37 @@ impl DataTableState {
         self.apply_expression_suggestion(next, window, cx);
     }
 
-    /// Writes suggestion `index` of the open expression editor into it.
+    /// Writes entry `index` of the list under the open inline editor into
+    /// it. A generated identifier is a value, so it switches `fx` off.
     pub fn apply_expression_suggestion(
         &mut self,
         index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(coord) = self.editing_cell.filter(|_| self.is_editing_expression()) else {
+        let Some(coord) = self.editing_cell.filter(|_| self.cell_input.is_some()) else {
             return;
         };
-        let Some(suggestion) = self
-            .cell_expression_suggestions(coord.col)
-            .get(index)
-            .cloned()
-        else {
+        let Some(suggestion) = self.editor_suggestions(coord.col).into_iter().nth(index) else {
             return;
+        };
+
+        let text = match suggestion {
+            EditorSuggestion::GeneratedId(kind) => {
+                let value = kind.generate();
+                self.editing_expression = false;
+                self.generated_in_editor = Some((kind, value.clone()));
+                value
+            }
+            EditorSuggestion::Expression(expression) => {
+                self.generated_in_editor = None;
+                expression
+            }
         };
 
         if let Some(input) = &self.cell_input {
             input.update(cx, |input, cx| {
-                input.set_value(&suggestion, window, cx);
+                input.set_value(&text, window, cx);
                 input.focus(window, cx);
             });
         }
@@ -175,7 +218,7 @@ impl DataTableState {
 
     /// Whether the row the table shows at `visual_row` can be edited: a base
     /// row of an editable table, or a pending insert.
-    fn can_edit_row(&self, visual_row: usize) -> bool {
+    pub(super) fn can_edit_row(&self, visual_row: usize) -> bool {
         match self.edit_buffer.visual_row_source(visual_row) {
             Some(VisualRowSource::Base(base_idx)) => {
                 self.is_editable && !self.edit_buffer.is_pending_delete(base_idx)

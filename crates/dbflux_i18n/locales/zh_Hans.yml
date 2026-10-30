@@ -160,6 +160,7 @@ components:
   data_table:
     expression:
       toggle: "作为 SQL 表达式编辑"
+      generate: "生成 %{kind}"
     record:
       empty: 没有可显示的行
       name_header: 名称
@@ -1618,6 +1619,7 @@ document:
         edit: 编辑
         edit_in_modal: 在弹窗中编辑…
         edit_as_expression: "作为 SQL 表达式编辑…"
+        generate_id: "生成 %{kind}"
         set_default: 设为默认值
         set_null: 设为 NULL
         add_row: 添加行
@@ -3754,6 +3756,7 @@ modals:
       no_metrics_filtered: 没有符合筛选条件的指标。
     cancel: 取消
   cell_editor:
+    generate: "生成 %{kind}"
     title_column: "编辑 %{column}（%{type_name}）"
     title_json: 编辑 JSON
     title_text: 编辑文本

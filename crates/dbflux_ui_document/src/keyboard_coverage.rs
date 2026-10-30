@@ -90,6 +90,9 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             "cell-expression-suggestion-*",
             KeyboardPath::Command(Command::SelectNext),
         ),
+        // The cell editor dialog's Generate buttons; the context menu
+        // carries the same entries.
+        ("cell-editor-generate-*", KeyboardPath::TabStop),
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
         // The table menu of the column carries Order ascending / descending,
         // which is also the keyboard path of the header's sort arrow.

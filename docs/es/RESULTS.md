@@ -219,6 +219,16 @@ Una expresión pendiente se muestra en la celda como `fx NOW()` en cursiva hasta
 
 Desde la revisión, **Guardar** (o `Enter`) ejecuta esas sentencias, sin la confirmación aparte que piden las eliminaciones; **Copiar SQL** las copia como script; **Cancelar** (o `Escape`) cierra la revisión y conserva los cambios. Con **Revisar los cambios antes de guardar** activado en Configuración > General > Cuadrícula de datos, cada Guardar en la cuadrícula de una tabla abre primero la revisión.
 
+### IDs generados
+
+Una celda puede recibir un identificador nuevo que genera DBFlux y se escribe como un valor normal, así que funciona con cualquier base de datos: **UUID v4** (aleatorio), **UUID v7** (ordenado por tiempo), **KSUID** (27 caracteres, ordenable por segundo) y **ULID** (26 caracteres, ordenable por milisegundo).
+
+- El menú contextual de la celda tiene una entrada **Generar …** por cada tipo que la columna puede guardar. En una celda de una selección mayor, cada celda seleccionada recibe su propio valor nuevo, nunca una copia, y un solo deshacer los revierte todos.
+- En una columna que parece un identificador (un tipo `uuid`, una clave, una columna de texto del tamaño de uno de los tipos o un nombre como `user_id`), la lista bajo el editor en línea ofrece primero los tipos, con los UUID arriba; `Abajo` / `Arriba` escriben un valor nuevo en el editor. Al confirmarlo sobre una selección de varias celdas, cada celda vuelve a recibir su propio valor.
+- El diálogo del editor de celdas muestra un botón **Generar …** por tipo.
+
+Una columna `uuid` o `uniqueidentifier` recibe los UUID en su forma con guiones. Una columna de texto recibe los tipos que caben en su longitud declarada: un `char(36)` los UUID, un `char(27)` un KSUID, un `varchar(30)` un KSUID o un ULID, y una columna de longitud desconocida los cuatro. Las columnas binarias como `binary(16)` de MySQL no ofrecen IDs generados, porque la cuadrícula escribe texto y necesitan los 16 bytes crudos; ahí se usa la expresión `UNHEX(REPLACE(UUID(), '-', ''))`.
+
 ### Cuándo los resultados son editables
 
 Los browses de tabla planos son editables cuando la tabla tiene una primary key.

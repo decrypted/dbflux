@@ -160,6 +160,7 @@ components:
   data_table:
     expression:
       toggle: "Editar como expressão SQL"
+      generate: "Gerar %{kind}"
     record:
       empty: Nenhuma linha para exibir
       name_header: Nome
@@ -1618,6 +1619,7 @@ document:
         edit: Editar
         edit_in_modal: Editar em janela…
         edit_as_expression: "Editar como expressão SQL…"
+        generate_id: "Gerar %{kind}"
         set_default: Definir como padrão
         set_null: Definir como NULL
         add_row: Adicionar linha
@@ -3754,6 +3756,7 @@ modals:
       no_metrics_filtered: Nenhuma métrica corresponde ao filtro.
     cancel: Cancelar
   cell_editor:
+    generate: "Gerar %{kind}"
     title_column: "Editar %{column} (%{type_name})"
     title_json: Editar JSON
     title_text: Editar texto

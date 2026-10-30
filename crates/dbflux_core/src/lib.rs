@@ -145,6 +145,9 @@ pub use data::{
     ProfileSource, ReadEstimate, TableFact, TableFactKind, TablePartition, TablePartitions,
     TableProfile, TableViewFeatures, ValueCount, ValueRange, default_projection,
 };
+pub use data::{
+    GeneratedIdKind, KSUID_EPOCH, ksuid_at, ksuid_unix_secs, looks_like_id_column, ulid_at,
+};
 
 pub use data::{
     KeyBulkDeleteRequest, KeyMetadata, KeyMetadataRequest, KeyValueFeatures, KeyValuePrefixRequest,

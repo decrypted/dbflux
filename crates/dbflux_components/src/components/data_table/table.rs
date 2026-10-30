@@ -1957,6 +1957,80 @@ mod tests {
         assert!(visual.debug_bounds("header-sort-rank-1").is_none());
     }
 
+    /// Under a sort by several keys a plain click on the first key's arrow
+    /// keeps that column alone, in its direction, instead of cycling it off
+    /// and clearing every key; `set_sort` drops the secondary keys and the
+    /// rank badges with them.
+    #[gpui::test]
+    fn a_plain_click_on_the_first_key_narrows_a_multi_sort(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("narrow-sort-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+        let set_two_keys = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| {
+                state.update(cx, |state, cx| {
+                    state.set_multi_sort_enabled(true);
+                    state.set_sort_keys_without_emit(&[
+                        SortState::descending(0),
+                        SortState::ascending(1),
+                    ]);
+                    cx.notify();
+                });
+            });
+            visual.run_until_parked();
+        };
+
+        set_two_keys(&mut *visual);
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(state.sort_rank(0), Some(1));
+            assert_eq!(state.sort_rank(1), Some(2));
+            assert_eq!(state.sort_rank(5), None, "a column that is not a key");
+        });
+
+        let arrow = visual
+            .debug_bounds("header-sort-0")
+            .expect("the sort control is drawn");
+        visual.simulate_click(arrow.center(), gpui::Modifiers::default());
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(
+                state.sort_keys(),
+                vec![SortState::descending(0)],
+                "the clicked key stays, alone and in its direction"
+            );
+            assert_eq!(state.sort_rank(0), None, "one key carries no rank");
+        });
+        assert!(visual.debug_bounds("header-sort-rank-0").is_none());
+
+        set_two_keys(&mut *visual);
+        visual.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.set_sort(Some(SortState::descending(0)), cx);
+            });
+        });
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            assert_eq!(
+                state.read(cx).sort_keys(),
+                vec![SortState::descending(0)],
+                "set_sort drops the secondary keys even with the same first key"
+            );
+        });
+        assert!(visual.debug_bounds("header-sort-rank-1").is_none());
+    }
+
     /// Ctrl+click (Cmd+click on macOS) on row numbers and cells adds them to
     /// the selection without dropping what is selected, as in a database
     /// IDE's grid; Ctrl+click on a row selected on its own takes it out.

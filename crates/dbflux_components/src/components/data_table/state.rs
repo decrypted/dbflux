@@ -698,8 +698,9 @@ impl DataTableState {
             return None;
         }
 
-        self.sort_keys()
+        self.sort
             .iter()
+            .chain(self.then_sorts.iter())
             .position(|key| key.column_ix == col_ix)
             .map(|position| position + 1)
     }
@@ -733,9 +734,14 @@ impl DataTableState {
         cx.notify();
     }
 
-    /// Cycle sort state for a column: none -> asc -> desc -> none
+    /// Cycle sort state for a column: none -> asc -> desc -> none. Under a
+    /// sort by several keys the click first narrows the sort to its column.
     pub fn cycle_sort(&mut self, col_ix: usize, cx: &mut Context<Self>) {
-        let new_sort = next_sort_state(self.sort, col_ix);
+        let new_sort = if self.then_sorts.is_empty() {
+            next_sort_state(self.sort, col_ix)
+        } else {
+            Some(sole_sort_key(&self.sort_keys(), col_ix))
+        };
 
         self.set_sort(new_sort, cx);
     }
@@ -1860,6 +1866,17 @@ fn next_sort_state(current: Option<SortState>, col_ix: usize) -> Option<SortStat
     }
 }
 
+/// The single key a plain click on `col_ix` leaves under a sort by several
+/// keys: the column alone, in the direction it already sorts by, or ascending
+/// when it is not a key. Cycling from the first key instead would clear every
+/// key on a click on it.
+fn sole_sort_key(keys: &[SortState], col_ix: usize) -> SortState {
+    keys.iter()
+        .find(|key| key.column_ix == col_ix)
+        .copied()
+        .unwrap_or(SortState::ascending(col_ix))
+}
+
 /// The sort keys after a modifier click on `col_ix`: a column not yet sorted
 /// joins at the end ascending, a sorted one flips to descending in place, and
 /// a descending one leaves, so the keys after it move up.
@@ -1928,6 +1945,25 @@ mod tests {
             keys,
             vec![SortState::ascending(4)],
             "a descending key leaves and the next one moves up"
+        );
+    }
+
+    #[test]
+    fn sole_sort_key_keeps_a_key_in_its_direction() {
+        use super::sole_sort_key;
+
+        let keys = [SortState::descending(2), SortState::ascending(0)];
+
+        assert_eq!(
+            sole_sort_key(&keys, 2),
+            SortState::descending(2),
+            "the first key stays, so a click on it does not clear the sort"
+        );
+        assert_eq!(sole_sort_key(&keys, 0), SortState::ascending(0));
+        assert_eq!(
+            sole_sort_key(&keys, 5),
+            SortState::ascending(5),
+            "a column that is not a key sorts ascending, as on a single sort"
         );
     }
 

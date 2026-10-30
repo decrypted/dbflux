@@ -528,19 +528,34 @@ impl DataGridPanel {
         self.rebuild_result_views(cx);
     }
 
+    /// The footer's sort item: a label naming every sort key, the first
+    /// key's direction for its arrow, and whether the database sorts.
     pub(super) fn current_sort_info(&self) -> Option<(String, SortDirection, bool)> {
-        match &self.source {
-            DataSource::Table { order_by, .. } => order_by
-                .first()
-                .map(|col| (col.column.name.clone(), col.direction, true)),
-            DataSource::Collection { .. } => None,
-            DataSource::QueryResult { .. } => self.grid_table.local_sort_state.and_then(|state| {
-                self.result
-                    .columns
-                    .get(state.column_ix)
-                    .map(|col| (col.name.clone(), state.direction, false))
-            }),
-        }
+        let (keys, is_server): (Vec<(String, SortDirection)>, bool) = match &self.source {
+            DataSource::Table { order_by, .. } => (
+                order_by
+                    .iter()
+                    .map(|col| (col.column.name.clone(), col.direction))
+                    .collect(),
+                true,
+            ),
+            DataSource::Collection { .. } => return None,
+            DataSource::QueryResult { .. } => (
+                self.local_sort_keys()
+                    .iter()
+                    .filter_map(|key| {
+                        self.result
+                            .columns
+                            .get(key.column_ix)
+                            .map(|col| (col.name.clone(), key.direction))
+                    })
+                    .collect(),
+                false,
+            ),
+        };
+
+        let first_direction = keys.first()?.1;
+        Some((sort_keys_label(&keys), first_direction, is_server))
     }
 
     /// Returns `(inserts, updates, deletes)` counts from the pending edit buffer.
@@ -596,3 +611,23 @@ impl DataGridPanel {
         true
     }
 }
+
+/// One key reads as its column name. Several name every column with its
+/// direction, since the footer arrow shows the first key's only.
+fn sort_keys_label(keys: &[(String, SortDirection)]) -> String {
+    if let [(name, _)] = keys {
+        return name.clone();
+    }
+
+    keys.iter()
+        .map(|(name, direction)| {
+            let direction = match direction {
+                SortDirection::Ascending => "ASC",
+                SortDirection::Descending => "DESC",
+            };
+            format!("{name} {direction}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+

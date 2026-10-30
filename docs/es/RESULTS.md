@@ -78,7 +78,13 @@ pasa a ser la siguiente clave de orden, ascendente, y otro `Alt`+clic la vuelve
 descendente y después la quita del orden. Con más de una clave, cada cabecera
 ordenada muestra su posición (1, 2, 3) junto a la flecha, y las filas que
 empatan en la primera clave se ordenan por la segunda, y así sucesivamente. Un
-clic normal en cualquier flecha vuelve a ordenar solo por esa columna. El menú
+clic normal en cualquier flecha vuelve a ordenar solo por esa columna, en la
+dirección que ya tenía si era clave. Una tabla cuya clave primaria tiene varias
+columnas se abre ordenada por todas ellas, así que sus columnas clave muestran 1
+y 2 desde el principio. Algunos escritorios Linux (KDE Plasma, por ejemplo)
+usan `Alt`+clic para mover ventanas; ahí **Añadir al orden** del menú de la
+columna hace lo mismo, o se puede cambiar el modificador del gestor de
+ventanas. El menú
 de la columna ofrece lo mismo con **Añadir al orden: columna ASC** y **Añadir
 al orden: columna DESC**, que también cambian la dirección de una columna que ya
 es clave, y **Quitar orden** elimina todas las claves. Una tabla envía todas las

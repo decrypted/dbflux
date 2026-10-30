@@ -141,6 +141,19 @@ condition the filter already holds is not added twice. Binary, JSON and nested
 values cannot be added this way. Some Linux window managers use `Alt`+drag to
 move windows; a plain `Alt`+click without moving the pointer still works.
 
+### Undoing a filter
+
+Every new `WHERE` filter a table is read with is a step of the grid's Undo and
+Redo, whichever way it was applied (`Enter`, a history entry, `Alt`+click, the
+Filter submenu, clearing the filter). With the grid focused, Undo first takes
+back the cell edits made since the table was last read, newest first, and then
+puts the previous filter back and reads the table with it from the first page;
+Redo goes forward the same way. While the `WHERE` field has the keyboard, Undo
+and Redo edit its text as before. A filter step never drops pending edits: with
+edits that Undo cannot take back, it is refused with the same message a reload
+shows. It also works in a read-only grid, where there are no edits to undo.
+Sort order and `LIMIT` changes are not undo steps.
+
 ### Filter history
 
 Every filter a table was read with successfully is kept for that table

@@ -235,6 +235,7 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         let filter_value = self.filter_bar.filter_input.read(cx).value();
+        self.filter_bar.undo.issued(&filter_value);
         let filter = if filter_value.trim().is_empty() {
             None
         } else {

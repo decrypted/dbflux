@@ -475,6 +475,10 @@ impl DataGridPanel {
                         this.handle_set_null(*row, *col, cx);
                     }
                     // Deferred to render: the reload it issues needs a `Window`.
+                    DataTableEvent::HistoryStepRequested { redo } => {
+                        this.pending.filter_undo_step = Some(*redo);
+                        cx.notify();
+                    }
                     DataTableEvent::AddToFilterRequested { row, col } => {
                         this.pending.filter_cell = Some((*row, *col));
                         cx.notify();

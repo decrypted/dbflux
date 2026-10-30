@@ -693,6 +693,7 @@ mod facets;
 mod filter_alt_click;
 mod filter_autoquote;
 mod filter_history;
+mod filter_undo;
 mod fk_label_identity;
 mod fk_navigation;
 mod reload_pending_edits;

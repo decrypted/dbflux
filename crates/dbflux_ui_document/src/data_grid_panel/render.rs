@@ -382,6 +382,10 @@ impl DataGridPanel {
 
         dbflux_ui_base::toast::flush_pending_toast(self.pending.toast.take(), window, cx);
 
+        if let Some(redo) = self.pending.filter_undo_step.take() {
+            self.step_filter(redo, window, cx);
+        }
+
         if let Some((row, col)) = self.pending.filter_cell.take() {
             self.add_cell_to_filter(row, col, window, cx);
         }
@@ -563,6 +567,9 @@ impl DataGridPanel {
                 )
             })
             .unwrap_or((false, 0, false, false));
+        // Undo and Redo also step the filters once the edits run out.
+        let can_undo = can_undo || self.can_step_filter(false);
+        let can_redo = can_redo || self.can_step_filter(true);
 
         let is_grouped_result = self.is_grouped_result();
 
@@ -1632,8 +1639,9 @@ impl DataGridPanel {
     /// the selection when it now points past the last row, and hand focus
     /// back to the grid.
     fn step_edit_history(&mut self, undo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let mut stepped = false;
         if let Some(table_state) = &self.grid_table.table_state {
-            table_state.update(cx, |state, cx| {
+            stepped = table_state.update(cx, |state, cx| {
                 if state.is_editing() {
                     state.stop_editing(false, cx);
                 }
@@ -1653,7 +1661,13 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 }
+                changed
             });
+        }
+
+        // The edits since the last read are newer than its filter.
+        if !stepped {
+            self.step_filter(!undo, window, cx);
         }
 
         window.focus(&self.focus_handle, cx);

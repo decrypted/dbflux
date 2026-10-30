@@ -1702,13 +1702,12 @@ fn header_sort_control(
         .flex_shrink_0()
         .ml_auto()
         .cursor_pointer()
-        .on_mouse_down(
-            MouseButton::Left,
-            move |_event: &MouseDownEvent, _window, cx| {
-                cx.stop_propagation();
-                state.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
-            },
-        )
+        // Stopping the click keeps the header's own click from selecting the
+        // column as well.
+        .on_click(move |_event: &ClickEvent, _window, cx| {
+            cx.stop_propagation();
+            state.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
+        })
         .child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
 }
 

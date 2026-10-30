@@ -895,3 +895,79 @@ fn the_table_views_are_named_radio_buttons(cx: &mut TestAppContext) {
         "every view the connection offers is announced"
     );
 }
+
+/// The titles of the columns the grid shows, in screen order.
+fn shown_titles(panel: &Entity<DataGridPanel>, app: &gpui::App) -> Vec<String> {
+    let state = panel
+        .read(app)
+        .grid_table
+        .table_state
+        .as_ref()
+        .expect("a table")
+        .read(app);
+    state
+        .visible_columns()
+        .iter()
+        .map(|col| state.model().columns[*col].title.to_string())
+        .collect()
+}
+
+/// A layout change made while a projection reads only some columns keeps
+/// the kept place and visibility of the columns the projection left out,
+/// even when it puts the projected columns back in their own order.
+#[gpui::test]
+fn a_layout_saved_under_a_projection_keeps_the_columns_it_left_out(cx: &mut TestAppContext) {
+    let (panel, _calls, window) = open_table(all_features(), cx);
+    let table_state = |app: &gpui::App| {
+        panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table")
+    };
+
+    // site_id, path, country: hide `path` and put `country` first.
+    window.update(|_, app| {
+        table_state(app).update(app, |state, cx| {
+            assert!(state.hide_column(1, cx));
+            assert!(state.move_column(2, 0, cx));
+        })
+    });
+    window.run_until_parked();
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.apply_table_projection(
+                dbflux_core::ColumnProjection::from_indices(3, &[0, 2]),
+                window,
+                cx,
+            )
+        })
+    });
+    window.run_until_parked();
+    assert_eq!(
+        window.update(|_, app| shown_titles(&panel, app)),
+        ["country", "site_id"],
+        "the projected grid opens with the kept order"
+    );
+
+    // `site_id` back in front: the projected grid is in its own order.
+    window.update(|_, app| {
+        table_state(app).update(app, |state, cx| assert!(state.move_column(0, 1, cx)))
+    });
+    window.run_until_parked();
+
+    window.update(|window, app| {
+        panel.update(app, |panel, cx| {
+            panel.apply_table_projection(dbflux_core::ColumnProjection::all(3), window, cx)
+        })
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        window.update(|_, app| shown_titles(&panel, app)),
+        ["site_id", "country"],
+        "`path`, left out of the projection, is still hidden"
+    );
+}

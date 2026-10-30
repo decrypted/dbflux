@@ -109,6 +109,58 @@ pub fn validate_value(value: &str, format: ValueFormat) -> Result<(), String> {
     }
 }
 
+/// What saving an edited cell value writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditedValue {
+    /// The text means what the cell already holds: nothing to write.
+    Unchanged,
+    /// The text to store.
+    Write(String),
+    /// The text no longer parses as the format it was shown in, with the
+    /// parser's message. Stored as typed if the owner allows plain text.
+    Invalid { text: String, error: String },
+}
+
+/// Works out what to store when `edited` is saved over a cell that held
+/// `original` and was shown as `shown` (pretty-printed when it parsed).
+///
+/// Showing a value pretty must not rewrite how it is stored: a structured
+/// value stored on one line goes back compacted, which only drops the
+/// whitespace between tokens (see [`compact_value`]), and one stored over
+/// several lines is written as edited. Text that compacts to the same thing
+/// as the original is no edit at all, nor is text left as it was shown.
+pub fn edited_value(original: &str, shown: &str, edited: &str, format: ValueFormat) -> EditedValue {
+    if edited == shown || edited == original {
+        return EditedValue::Unchanged;
+    }
+
+    if !format.is_structured() || edited.trim().is_empty() {
+        return EditedValue::Write(edited.to_string());
+    }
+
+    let compact = match compact_value(edited, format) {
+        Ok(compact) => compact,
+        Err(error) => {
+            return EditedValue::Invalid {
+                text: edited.to_string(),
+                error,
+            };
+        }
+    };
+
+    if compact_value(original, format).is_ok_and(|original| original == compact) {
+        return EditedValue::Unchanged;
+    }
+
+    let stored_on_one_line = !original.trim().is_empty() && !original.trim().contains('\n');
+
+    if stored_on_one_line {
+        EditedValue::Write(compact)
+    } else {
+        EditedValue::Write(edited.to_string())
+    }
+}
+
 fn json_parse_error(value: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(value)
         .err()
@@ -189,6 +241,120 @@ mod tests {
     #[test]
     fn detect_treats_empty_as_text() {
         assert_eq!(detect_format("   "), ValueFormat::Text);
+    }
+
+    /// The API response of the issue: decimal strings, numbers with
+    /// trailing zeros, keys in an order a sorted map would change.
+    const RAW_RESULT: &str = r#"{"success":true,"msg":"ok","data":{"partner_user_id":"u-81","balances":[{"currency":"USDT","amount":"2725.8328350479","usd":2312.64496440},{"currency":"BTC","amount":"0.00010000","usd":1e2}]},"zeta":null,"alpha":"\u00e9\/"}"#;
+
+    #[test]
+    fn detect_recognises_a_compact_api_response() {
+        assert_eq!(detect_format(RAW_RESULT), ValueFormat::Json);
+    }
+
+    #[test]
+    fn detect_leaves_bare_json_scalars_as_text() {
+        for scalar in ["42", "\"just a string\"", "true", "null", "-1.5"] {
+            assert_eq!(detect_format(scalar), ValueFormat::Text, "{scalar}");
+        }
+    }
+
+    #[test]
+    fn json_format_and_compact_only_touch_whitespace() {
+        let pretty = format_value(RAW_RESULT, ValueFormat::Json).expect("valid json");
+        assert!(pretty.lines().count() > 10, "{pretty}");
+        for token in [
+            "\"2725.8328350479\"",
+            "2312.64496440",
+            "1e2",
+            "\"0.00010000\"",
+            "\"\\u00e9\\/\"",
+        ] {
+            assert!(pretty.contains(token), "{token} kept in {pretty}");
+        }
+        assert!(
+            pretty.find("\"zeta\"") < pretty.find("\"alpha\""),
+            "keys keep their order"
+        );
+
+        assert_eq!(
+            compact_value(&pretty, ValueFormat::Json).expect("valid json"),
+            RAW_RESULT
+        );
+    }
+
+    #[test]
+    fn json_pretty_layout_matches_serde_for_plain_values() {
+        let value = r#"{"a":[1,{"b":[]},{}],"c":{"d":"x"}}"#;
+        let parsed: serde_json::Value = serde_json::from_str(value).expect("valid json");
+        assert_eq!(
+            format_value(value, ValueFormat::Json).expect("valid json"),
+            serde_json::to_string_pretty(&parsed).expect("serializes")
+        );
+    }
+
+    #[test]
+    fn an_unchanged_value_is_no_edit() {
+        let pretty = format_value(RAW_RESULT, ValueFormat::Json).expect("valid json");
+        assert_eq!(
+            edited_value(RAW_RESULT, &pretty, &pretty, ValueFormat::Json),
+            EditedValue::Unchanged
+        );
+
+        // Reindented by hand, still the same tokens.
+        let reindented = pretty.replace("  ", "    ");
+        assert_eq!(
+            edited_value(RAW_RESULT, &pretty, &reindented, ValueFormat::Json),
+            EditedValue::Unchanged
+        );
+    }
+
+    #[test]
+    fn an_edited_compact_value_is_stored_compact_with_every_other_token_kept() {
+        let pretty = format_value(RAW_RESULT, ValueFormat::Json).expect("valid json");
+        let edited = pretty.replace("\"u-81\"", "\"u-82\"");
+
+        assert_eq!(
+            edited_value(RAW_RESULT, &pretty, &edited, ValueFormat::Json),
+            EditedValue::Write(RAW_RESULT.replace("\"u-81\"", "\"u-82\""))
+        );
+    }
+
+    #[test]
+    fn an_edited_multi_line_value_is_stored_as_edited() {
+        let original = "{\n  \"a\": 1\n}";
+        let edited = "{\n  \"a\": 2\n}";
+
+        assert_eq!(
+            edited_value(original, original, edited, ValueFormat::Json),
+            EditedValue::Write(edited.to_string())
+        );
+    }
+
+    #[test]
+    fn text_that_no_longer_parses_is_reported_with_the_text() {
+        let pretty = format_value(RAW_RESULT, ValueFormat::Json).expect("valid json");
+        let edited = pretty.replacen('}', "", 1);
+
+        match edited_value(RAW_RESULT, &pretty, &edited, ValueFormat::Json) {
+            EditedValue::Invalid { text, error } => {
+                assert_eq!(text, edited);
+                assert!(!error.is_empty());
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_text_is_written_as_typed() {
+        assert_eq!(
+            edited_value("note", "note", "  new note ", ValueFormat::Text),
+            EditedValue::Write("  new note ".to_string())
+        );
+        assert_eq!(
+            edited_value("note", "note", "note", ValueFormat::Text),
+            EditedValue::Unchanged
+        );
     }
 
     #[test]

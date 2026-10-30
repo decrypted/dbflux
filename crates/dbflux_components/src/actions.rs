@@ -17,6 +17,13 @@ actions!(
         SaveQuery,
         // Save the value of a modal editor (cell editor, document preview)
         SaveEdit,
+        // The modal value editor (cell editor): copy what it shows, copy it
+        // compacted, pretty-print or compact the text, maximize the dialog
+        CopyEditorText,
+        CopyEditorTextCompact,
+        FormatEditorText,
+        CompactEditorText,
+        ToggleDialogMaximized,
         // Scroll a modal body from the keyboard
         ScrollUp,
         ScrollDown,

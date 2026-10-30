@@ -769,7 +769,9 @@ pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
 /// file order, so the document does not sort and a column header click has
 /// no action for a key to reach. The column prompt and the offer to load the
 /// rest confirm with Enter and close with Escape, and the modal cell editor
-/// saves with its save key and closes with Escape. `t` switches between the
+/// saves with its save key, closes with Escape, and copies, formats,
+/// compacts and maximizes with chords of its own (see the cell editor layer
+/// of the keymap). `t` switches between the
 /// table and the text view and `Shift+T` between raw and aligned text, in
 /// the tab's context: in the text view, Escape first takes the keyboard out
 /// of the text editor, whose context is `TextInput`.
@@ -869,6 +871,26 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::SaveQuery),
         ),
         ("cell-editor-cancel", KeyboardPath::Command(Command::Cancel)),
+        (
+            "cell-editor-copy",
+            KeyboardPath::Command(Command::CopyEditorText),
+        ),
+        (
+            "cell-editor-copy-compact",
+            KeyboardPath::Command(Command::CopyEditorTextCompact),
+        ),
+        (
+            "cell-editor-format",
+            KeyboardPath::Command(Command::FormatEditorText),
+        ),
+        (
+            "cell-editor-compact",
+            KeyboardPath::Command(Command::CompactEditorText),
+        ),
+        (
+            "cell-editor-maximize",
+            KeyboardPath::Command(Command::ToggleDialogMaximized),
+        ),
         ("modal-close", KeyboardPath::Command(Command::Cancel)),
     ],
 };

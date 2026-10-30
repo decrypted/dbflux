@@ -809,6 +809,11 @@ fn modal_editor_action(command: Command) -> Option<Box<dyn Action>> {
     let action: Box<dyn Action> = match command {
         Command::Cancel => Box::new(component_actions::Cancel),
         Command::SaveQuery => Box::new(component_actions::SaveEdit),
+        Command::CopyEditorText => Box::new(component_actions::CopyEditorText),
+        Command::CopyEditorTextCompact => Box::new(component_actions::CopyEditorTextCompact),
+        Command::FormatEditorText => Box::new(component_actions::FormatEditorText),
+        Command::CompactEditorText => Box::new(component_actions::CompactEditorText),
+        Command::ToggleDialogMaximized => Box::new(component_actions::ToggleDialogMaximized),
         _ => return None,
     };
 

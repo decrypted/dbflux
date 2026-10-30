@@ -58,7 +58,7 @@ use dbflux_components::controls::{
 };
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::modals::cell_editor::{
-    CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
+    CellEditorClosedEvent, CellEditorCopiedEvent, CellEditorModal, CellEditorSaveEvent,
 };
 use dbflux_components::modals::document_preview::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
@@ -1279,6 +1279,12 @@ impl DataGridPanel {
         let context_menu_focus = cx.focus_handle();
 
         let cell_editor = cx.new(|cx| CellEditorModal::new(window, cx));
+        crate::cell_editor_host::install_geometry_store(&app_state, cx);
+
+        cx.subscribe(&cell_editor, |_, _, event: &CellEditorCopiedEvent, cx| {
+            crate::cell_editor_host::copied_toast(event, cx);
+        })
+        .detach();
 
         cx.subscribe_in(
             &cell_editor,

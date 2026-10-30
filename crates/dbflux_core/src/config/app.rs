@@ -420,6 +420,12 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub grid_review_before_save: bool,
 
+    /// A primary click on a column header sorts the column, as before column
+    /// selection. Off by default: the click selects the column and the
+    /// header's arrow sorts.
+    #[serde(default)]
+    pub grid_header_click_sorts: bool,
+
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -550,6 +556,7 @@ impl Default for GeneralSettings {
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
             grid_review_before_save: false,
+            grid_header_click_sorts: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -578,6 +585,7 @@ mod font_settings_tests {
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
         assert!(!legacy.grid_fk_labels);
         assert!(!legacy.grid_review_before_save);
+        assert!(!legacy.grid_header_click_sorts);
         assert_eq!(legacy, settings);
     }
 

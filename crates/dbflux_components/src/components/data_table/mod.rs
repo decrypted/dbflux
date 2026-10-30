@@ -14,7 +14,10 @@ pub use annotation::HeaderAnnotation;
 pub use document::{ColumnGroupHeader, DocumentColumnHeader, DocumentPresentation, GroupSpan};
 pub use events::{ContextMenuAction, DataTableEvent, Direction, Edge, FilterOperator, SortState};
 pub use model::TableModel;
-pub use state::{DataTableState, EditorSuggestion, GeneratedIdOffer, ModelSwap};
+pub use state::{
+    DataTableState, EditorSuggestion, GeneratedIdOffer, HeaderClickSetting, ModelSwap,
+    header_click_sorts, set_header_click_sorts,
+};
 pub use table::{CONTEXT, DataTable, actions, context_menu_keystroke};
 pub use theme::ROW_NUMBER_WIDTH;
 pub use totals::{NumericTotals, SelectionTotals};

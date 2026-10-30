@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dbflux_core::{ColumnMeta, QueryResult, RowState, Value};
 use gpui::TextAlign;
@@ -910,11 +911,30 @@ pub struct EditBuffer {
     /// Undo stack length when an undo group opened; see
     /// [`Self::begin_undo_group`].
     group_start: Option<usize>,
+
+    /// Stamp of the last change, see [`EditBuffer::revision`].
+    revision: u64,
 }
+
+/// Source of [`EditBuffer::revision`] stamps. Shared by every buffer, so a
+/// buffer swapped in whole (a restored copy) never carries the stamp of a
+/// different state of the one it replaces.
+static NEXT_EDIT_REVISION: AtomicU64 = AtomicU64::new(1);
 
 impl EditBuffer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Changes whenever the buffer may have changed, so a reader can cache
+    /// what it derives from the buffer and recompute only on a new revision.
+    /// Two buffers with the same revision hold the same edits.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn touch(&mut self) {
+        self.revision = NEXT_EDIT_REVISION.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Push an action to the undo stack, enforcing the max history limit.
@@ -958,6 +978,27 @@ impl EditBuffer {
         self.overrides.get(&(row, col)).unwrap_or(base)
     }
 
+    /// The cell the grid shows at visual `row`: a pending insert's value, or
+    /// the base row's value with its unsaved edit applied. `visual_order` is
+    /// [`EditBuffer::compute_visual_order`] for this buffer.
+    pub fn displayed_cell<'a>(
+        &'a self,
+        model: &'a TableModel,
+        visual_order: &[VisualRowSource],
+        row: usize,
+        col: usize,
+    ) -> Option<&'a CellValue> {
+        match visual_order.get(row).copied()? {
+            VisualRowSource::Base(base_row) => {
+                let base = model.cell(base_row, col)?;
+                Some(self.get_cell(base_row, col, base))
+            }
+            VisualRowSource::Insert(insert_idx) => {
+                self.get_pending_insert_by_idx(insert_idx)?.get(col)
+            }
+        }
+    }
+
     /// Check if a cell has been modified.
     pub fn is_cell_dirty(&self, row: usize, col: usize) -> bool {
         self.overrides.contains_key(&(row, col))
@@ -965,6 +1006,7 @@ impl EditBuffer {
 
     /// Set a cell value in the buffer.
     pub fn set_cell(&mut self, row: usize, col: usize, value: CellValue) {
+        self.touch();
         let old_value = self.overrides.get(&(row, col)).cloned();
 
         self.push_undo(EditAction::SetCell {
@@ -980,6 +1022,7 @@ impl EditBuffer {
 
     /// Drop a staged value so the cell shows the row's own value again.
     pub fn clear_cell(&mut self, row: usize, col: usize) {
+        self.touch();
         let Some(replaced_value) = self.overrides.remove(&(row, col)) else {
             return;
         };
@@ -998,12 +1041,14 @@ impl EditBuffer {
 
     /// Clear all overrides for a specific row.
     pub fn clear_row(&mut self, row: usize) {
+        self.touch();
         self.overrides.retain(|&(r, _), _| r != row);
         self.row_states.remove(&row);
     }
 
     /// Clear all overrides.
     pub fn clear_all(&mut self) {
+        self.touch();
         self.overrides.clear();
         self.row_states.clear();
         self.pending_inserts.clear();
@@ -1017,6 +1062,7 @@ impl EditBuffer {
     /// being replaced, so keeping any of them would apply them to unrelated
     /// rows.
     pub fn reset_for_base(&mut self, base_row_count: usize) {
+        self.touch();
         self.overrides.clear();
         self.row_states.clear();
         self.pending_inserts.clear();
@@ -1114,6 +1160,7 @@ impl EditBuffer {
     /// carries their identity (or it could not be read). Undo history is not
     /// restored: it addresses the rows of the replaced model.
     pub fn restore_by_identity(&mut self, edits: KeyedPendingEdits, model: &TableModel) -> usize {
+        self.touch();
         let mut dropped_rows = edits.unkeyed_rows;
 
         // Cells are addressed by column index, which only means the same
@@ -1176,6 +1223,7 @@ impl EditBuffer {
 
     /// Set the state of a row.
     pub fn set_row_state(&mut self, row: usize, state: RowState) {
+        self.touch();
         if state.is_clean() {
             self.row_states.remove(&row);
         } else {
@@ -1214,6 +1262,7 @@ impl EditBuffer {
     /// Set the base row count (from the model).
     /// This is needed to correctly index pending inserts.
     pub fn set_base_row_count(&mut self, count: usize) {
+        self.touch();
         self.base_row_count = count;
     }
 
@@ -1233,6 +1282,7 @@ impl EditBuffer {
     /// Returns the index in pending_inserts.
     #[allow(dead_code)]
     pub fn add_pending_insert(&mut self, row_data: Vec<CellValue>) -> usize {
+        self.touch();
         let idx = self.pending_inserts.len();
         self.pending_inserts.push(PendingInsert {
             data: row_data,
@@ -1248,6 +1298,7 @@ impl EditBuffer {
         after_row: usize,
         row_data: Vec<CellValue>,
     ) -> usize {
+        self.touch();
         self.add_pending_insert_at(InsertAnchor::After(after_row), row_data)
     }
 
@@ -1259,6 +1310,7 @@ impl EditBuffer {
         anchor: InsertAnchor,
         row_data: Vec<CellValue>,
     ) -> usize {
+        self.touch();
         let idx = self.pending_inserts.len();
 
         self.push_undo(EditAction::AddInsert {
@@ -1286,6 +1338,7 @@ impl EditBuffer {
         anchor: InsertAnchor,
         row_data: Vec<CellValue>,
     ) -> usize {
+        self.touch();
         let insert_idx = position.min(self.pending_inserts.len());
 
         self.push_undo(EditAction::AddInsert {
@@ -1321,6 +1374,7 @@ impl EditBuffer {
         &mut self,
         insert_idx: usize,
     ) -> Option<&mut Vec<CellValue>> {
+        self.touch();
         self.pending_inserts
             .get_mut(insert_idx)
             .map(|pi| &mut pi.data)
@@ -1386,6 +1440,7 @@ impl EditBuffer {
 
     /// Mark an existing row for deletion.
     pub fn mark_for_delete(&mut self, row: usize) {
+        self.touch();
         if row < self.base_row_count {
             self.push_undo(EditAction::MarkDelete { row });
             self.row_states.insert(row, RowState::PendingDelete);
@@ -1395,6 +1450,7 @@ impl EditBuffer {
     /// Unmark a row from deletion.
     #[allow(dead_code)]
     pub fn unmark_delete(&mut self, row: usize) {
+        self.touch();
         if let Some(state) = self.row_states.get(&row)
             && state.is_pending_delete()
         {
@@ -1460,6 +1516,7 @@ impl EditBuffer {
     /// This shifts subsequent pending insert indices.
     #[allow(dead_code)]
     pub fn remove_pending_insert(&mut self, row: usize) {
+        self.touch();
         if row >= self.base_row_count {
             let insert_idx = row - self.base_row_count;
             self.remove_pending_insert_by_idx(insert_idx);
@@ -1468,6 +1525,7 @@ impl EditBuffer {
 
     /// Remove a pending insert by its index in the pending_inserts array.
     pub fn remove_pending_insert_by_idx(&mut self, insert_idx: usize) {
+        self.touch();
         if insert_idx >= self.pending_inserts.len() {
             return;
         }
@@ -1494,6 +1552,7 @@ impl EditBuffer {
     /// Clear pending inserts but keep other edits.
     #[allow(dead_code)]
     pub fn clear_pending_inserts(&mut self) {
+        self.touch();
         for i in 0..self.pending_inserts.len() {
             let virtual_idx = self.base_row_count + i;
             self.row_states.remove(&virtual_idx);
@@ -1506,11 +1565,13 @@ impl EditBuffer {
     /// Clear pending deletes but keep other edits.
     #[allow(dead_code)]
     pub fn clear_pending_deletes(&mut self) {
+        self.touch();
         self.row_states.retain(|_, s| !s.is_pending_delete());
     }
 
     /// Set a cell value in a pending insert (with undo support).
     pub fn set_insert_cell(&mut self, insert_idx: usize, col: usize, value: CellValue) {
+        self.touch();
         // Get old value first (before mutable borrow for push_undo)
         let old_value = self
             .pending_inserts
@@ -1551,8 +1612,65 @@ impl EditBuffer {
         !self.redo_stack.is_empty()
     }
 
+    /// Undo the members of a group, last first, and return them in the
+    /// order the redo stack holds them.
+    ///
+    /// A cell edit that had no staged value before drops its row's state
+    /// once no other cell of the row is staged. Asked per member, as a
+    /// single undo does, that is a scan of every override for each cell, so
+    /// a group over a whole selected column would take quadratic time; the
+    /// rows are collected here and checked in one pass at the end.
+    fn undo_group(&mut self, actions: Vec<EditAction>) -> Vec<EditAction> {
+        let mut undone = Vec::with_capacity(actions.len());
+        let mut emptied_rows = BTreeSet::new();
+
+        for action in actions.into_iter().rev() {
+            match action {
+                EditAction::SetCell {
+                    row,
+                    col,
+                    old_value,
+                    new_value,
+                } => {
+                    match &old_value {
+                        Some(old) => {
+                            self.overrides.insert((row, col), old.clone());
+                        }
+                        None => {
+                            self.overrides.remove(&(row, col));
+                            emptied_rows.insert(row);
+                        }
+                    }
+                    undone.push(EditAction::SetCell {
+                        row,
+                        col,
+                        old_value,
+                        new_value,
+                    });
+                }
+                other => {
+                    self.undo_stack.push(other);
+                    self.undo();
+                    undone.extend(self.redo_stack.pop());
+                }
+            }
+        }
+
+        if !emptied_rows.is_empty() {
+            let staged_rows: BTreeSet<usize> = self.overrides.keys().map(|&(row, _)| row).collect();
+            for row in emptied_rows {
+                if !staged_rows.contains(&row) {
+                    self.row_states.remove(&row);
+                }
+            }
+        }
+
+        undone
+    }
+
     /// Undo the last action. Returns true if an action was undone.
     pub fn undo(&mut self) -> bool {
+        self.touch();
         let Some(action) = self.undo_stack.pop() else {
             return false;
         };
@@ -1674,15 +1792,7 @@ impl EditBuffer {
             }
 
             EditAction::Group(actions) => {
-                // Undo the members one by one, last first, then fold the redo
-                // entries they left back into one.
-                let count = actions.len();
-                self.undo_stack.extend(actions);
-                for _ in 0..count {
-                    self.undo();
-                }
-                let start = self.redo_stack.len().saturating_sub(count);
-                let undone = self.redo_stack.split_off(start);
+                let undone = self.undo_group(actions);
                 self.redo_stack.push(EditAction::Group(undone));
             }
         }
@@ -1692,6 +1802,7 @@ impl EditBuffer {
 
     /// Redo the last undone action. Returns true if an action was redone.
     pub fn redo(&mut self) -> bool {
+        self.touch();
         let Some(action) = self.redo_stack.pop() else {
             return false;
         };
@@ -2681,5 +2792,168 @@ mod tests {
             "original",
             "another row's edits stay pending"
         );
+    }
+
+    mod undo_groups {
+        use super::super::{EditAction, MAX_UNDO_HISTORY};
+        use super::{CellValue, EditBuffer};
+
+        fn buffer() -> EditBuffer {
+            let mut buffer = EditBuffer::new();
+            buffer.set_base_row_count(MAX_UNDO_HISTORY + 10);
+            buffer
+        }
+
+        fn staged(buffer: &EditBuffer, row: usize, col: usize) -> Option<String> {
+            buffer
+                .overrides
+                .get(&(row, col))
+                .map(|value| value.display_text().to_string())
+        }
+
+        fn dirty(buffer: &EditBuffer) -> Vec<usize> {
+            let mut rows = buffer.dirty_rows();
+            rows.sort_unstable();
+            rows
+        }
+
+        #[test]
+        fn an_empty_group_leaves_no_step() {
+            let mut buffer = buffer();
+            buffer.begin_undo_group();
+            buffer.end_undo_group();
+            assert!(!buffer.can_undo());
+        }
+
+        #[test]
+        fn a_group_of_one_action_stays_that_action() {
+            let mut buffer = buffer();
+            buffer.begin_undo_group();
+            buffer.set_cell(0, 0, CellValue::text("a"));
+            buffer.end_undo_group();
+            assert_eq!(buffer.undo_stack.len(), 1);
+            assert!(matches!(
+                buffer.undo_stack.last(),
+                Some(EditAction::SetCell { .. })
+            ));
+        }
+
+        #[test]
+        fn a_nested_begin_is_ignored() {
+            let mut buffer = buffer();
+            buffer.begin_undo_group();
+            buffer.set_cell(0, 0, CellValue::text("a"));
+            buffer.begin_undo_group();
+            buffer.set_cell(1, 0, CellValue::text("b"));
+            buffer.end_undo_group();
+            // The first end closed the only group; this one has nothing to close.
+            buffer.end_undo_group();
+            buffer.set_cell(2, 0, CellValue::text("c"));
+
+            assert_eq!(buffer.undo_stack.len(), 2);
+            assert!(matches!(
+                buffer.undo_stack.first(),
+                Some(EditAction::Group(actions)) if actions.len() == 2
+            ));
+        }
+
+        #[test]
+        fn closing_a_group_trims_the_history_counting_it_as_one_step() {
+            let mut buffer = buffer();
+            for row in 0..MAX_UNDO_HISTORY {
+                buffer.set_cell(row, 0, CellValue::text("old"));
+            }
+            buffer.begin_undo_group();
+            for row in 0..3 {
+                buffer.set_cell(row, 1, CellValue::text("new"));
+            }
+            assert_eq!(
+                buffer.undo_stack.len(),
+                MAX_UNDO_HISTORY + 3,
+                "an open group does not trim"
+            );
+            buffer.end_undo_group();
+
+            assert_eq!(buffer.undo_stack.len(), MAX_UNDO_HISTORY);
+            assert!(matches!(
+                buffer.undo_stack.last(),
+                Some(EditAction::Group(actions)) if actions.len() == 3
+            ));
+            assert!(
+                matches!(
+                    buffer.undo_stack.first(),
+                    Some(EditAction::SetCell { row: 1, col: 0, .. })
+                ),
+                "only the oldest single step was dropped"
+            );
+        }
+
+        /// A group with two edits of the same cell, one over a value staged
+        /// before the group, and one on a row of its own.
+        fn grouped_buffer() -> EditBuffer {
+            let mut buffer = buffer();
+            buffer.set_cell(1, 0, CellValue::text("before"));
+            buffer.begin_undo_group();
+            buffer.set_cell(0, 0, CellValue::text("first"));
+            buffer.set_cell(0, 0, CellValue::text("second"));
+            buffer.set_cell(1, 0, CellValue::text("group"));
+            buffer.set_cell(2, 0, CellValue::text("group"));
+            buffer.end_undo_group();
+            buffer
+        }
+
+        fn assert_applied(buffer: &EditBuffer) {
+            assert_eq!(staged(buffer, 0, 0).as_deref(), Some("second"));
+            assert_eq!(staged(buffer, 1, 0).as_deref(), Some("group"));
+            assert_eq!(staged(buffer, 2, 0).as_deref(), Some("group"));
+            assert_eq!(dirty(buffer), vec![0, 1, 2]);
+        }
+
+        fn assert_undone(buffer: &EditBuffer) {
+            assert_eq!(staged(buffer, 0, 0), None, "both edits of the cell undone");
+            assert_eq!(
+                staged(buffer, 1, 0).as_deref(),
+                Some("before"),
+                "the value staged before the group is back"
+            );
+            assert_eq!(staged(buffer, 2, 0), None);
+            assert_eq!(
+                dirty(buffer),
+                vec![1],
+                "only the row staged before stays dirty"
+            );
+        }
+
+        #[test]
+        fn undo_and_redo_of_a_group_round_trip() {
+            let mut buffer = grouped_buffer();
+            assert_applied(&buffer);
+
+            for _ in 0..2 {
+                assert!(buffer.undo());
+                assert_undone(&buffer);
+                assert!(buffer.redo());
+                assert_applied(&buffer);
+            }
+
+            assert!(buffer.undo());
+            assert!(
+                buffer.undo(),
+                "the edit staged before the group is its own step"
+            );
+            assert_eq!(dirty(&buffer), Vec::<usize>::new());
+            assert!(buffer.redo());
+            assert!(buffer.redo());
+            assert_applied(&buffer);
+        }
+
+        #[test]
+        fn a_new_edit_after_undoing_a_group_clears_the_redo() {
+            let mut buffer = grouped_buffer();
+            assert!(buffer.undo());
+            assert!(buffer.can_redo());
+            buffer.set_cell(5, 0, CellValue::text("other"));
+            assert!(!buffer.can_redo());
+        }
     }
 }

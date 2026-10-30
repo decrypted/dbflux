@@ -1789,8 +1789,12 @@ document:
           average: "Media %{value}"
           min: "Mín %{value}"
           max: "Máx %{value}"
-          nulls_skipped: "%{count} NULL omitidos"
-          non_numeric_skipped: "%{count} no numéricos omitidos"
+          nulls_skipped:
+            one: "%{count} NULL omitido"
+            many: "%{count} NULL omitidos"
+          non_numeric_skipped:
+            one: "%{count} no numérico omitido"
+            many: "%{count} no numéricos omitidos"
       export:
         trigger: Exportar
         save_as_file: Guardar filas cargadas como archivo
@@ -4141,6 +4145,9 @@ settings:
     grid_fk_labels:
       label: "Mostrar el valor del registro referenciado en celdas de clave foránea"
       hint: "Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias."
+    grid_header_click_sorts:
+      label: "Hacer clic en la cabecera de una columna la ordena"
+      hint: "Desactivado: un clic en la cabecera de una columna selecciona la columna entera y la flecha de su borde derecho ordena. Activado: el clic ordena la columna; Shift+clic y Ctrl+clic siguen seleccionando columnas."
     vim_mode:
       label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."

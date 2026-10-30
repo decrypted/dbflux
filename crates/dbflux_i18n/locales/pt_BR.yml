@@ -4340,6 +4340,7 @@ settings:
       toggle_value_panel: Alternar painel de valor
       toggle_row_inspector: Alternar inspetor de linha
       find_similar_rows: Encontrar linhas semelhantes
+      copy_selection_as_json: "Copiar a seleção como JSON"
       results_set_null: Definir célula como NULL
       open_context_menu: Abrir menu de contexto
       open_pane_actions: Abrir ações do painel

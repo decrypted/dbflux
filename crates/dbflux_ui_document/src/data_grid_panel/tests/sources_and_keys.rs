@@ -937,3 +937,72 @@ fn copy_as_csv_and_json_take_only_the_selected_rows(cx: &mut TestAppContext) {
         "got {json}"
     );
 }
+
+/// The Copy selection as JSON command (primary+Alt+C) copies exactly what the
+/// context menu's Copy as JSON copies for the same selection, and claims the
+/// key so it does not fall through to another binding.
+#[gpui::test]
+fn copy_selection_as_json_command_matches_the_copy_as_json_menu_item(cx: &mut TestAppContext) {
+    use dbflux_components::components::data_table::ContextMenuAction;
+
+    init_test_runtime(cx);
+    let app_state = cx.update(|cx| {
+        cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("isolated storage runtime"),
+            )
+            .expect("test storage setup")
+        })
+    });
+    let (_host, panel, window) = host_result_grid(cx, app_state);
+    window.run_until_parked();
+
+    let secondary = gpui::Modifiers::secondary_key();
+    window.update(|_, cx| {
+        let table_state = panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the grid has a table");
+        table_state.update(cx, |state, cx| {
+            state.click_row(0, gpui::Modifiers::default(), cx);
+            state.click_row(2, secondary, cx);
+        });
+    });
+
+    let clipboard = |window: &mut VisualTestContext| {
+        window
+            .update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    };
+
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.open_context_menu_at_selection(window, cx);
+            panel.handle_context_menu_action(ContextMenuAction::CopyAsJson, window, cx);
+        });
+    });
+    let from_menu = clipboard(window);
+
+    window.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into())));
+    let handled = window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.dispatch_command(Command::CopySelectionAsJson, window, cx)
+        })
+    });
+    let from_command = clipboard(window);
+
+    assert!(handled, "the grid claims the key");
+    assert_eq!(from_command, from_menu);
+    let parsed: serde_json::Value = serde_json::from_str(&from_command).expect("valid JSON");
+    assert_eq!(
+        parsed,
+        serde_json::json!([
+            {"id": 1, "name": "row 1"},
+            {"id": 3, "name": "row 3"}
+        ]),
+        "got {from_command}"
+    );
+}

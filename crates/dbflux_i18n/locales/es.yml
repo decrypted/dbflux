@@ -4340,6 +4340,7 @@ settings:
       toggle_value_panel: Alternar panel de valor
       toggle_row_inspector: Alternar inspector de fila
       find_similar_rows: Buscar filas similares
+      copy_selection_as_json: "Copiar la selección como JSON"
       results_set_null: Establecer celda en NULL
       open_context_menu: Abrir menú contextual
       open_pane_actions: Abrir acciones del panel

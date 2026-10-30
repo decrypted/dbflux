@@ -631,8 +631,8 @@ edited.
 | `d d` / `Delete` | Delete the row |
 | `a a` / `Shift+a Shift+a` | Add / duplicate a row |
 | `Ctrl+n` | Set the cell to NULL |
-| `u` / `Ctrl+z` / `Cmd+z` | Undo |
-| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo |
+| `u` / `Ctrl+z` / `Cmd+z` | Undo; once the edits since the table was last read are undone, the previous `WHERE` filter (see [Undoing a filter](RESULTS.md#undoing-a-filter)) |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo, the filters included |
 | `e` | Expand or collapse a nested column (document grids) |
 | `Backspace` | Step out of a nested value (document grids) |
 

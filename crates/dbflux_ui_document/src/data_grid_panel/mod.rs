@@ -9,6 +9,7 @@ mod facets;
 mod filter_autoquote;
 pub(crate) mod filter_bar;
 mod filter_history;
+mod filter_undo;
 mod fk_display;
 mod grid;
 pub(crate) mod mutation_confirm;
@@ -538,6 +539,9 @@ struct PendingActions {
     json_reload: bool,
     /// Cell (visual row, column) an Alt+click asked to add to the filter.
     filter_cell: Option<(usize, usize)>,
+    /// Undo (`false`) or Redo (`true`) the table's edit history had no step
+    /// for, to try on the filters.
+    filter_undo_step: Option<bool>,
 }
 
 /// How the grid should treat the state held by an existing `DataTableState`
@@ -646,6 +650,8 @@ struct FilterBarState {
     pending_history: Option<String>,
     /// The quotes the WHERE field inserts after a comparison (a setting).
     autoquote: filter_autoquote::AutoQuoteState,
+    /// The filters the table was read with, as steps of Undo / Redo.
+    undo: filter_undo::FilterUndo,
 }
 
 /// Auto-refresh policy, timer, and grid load state.
@@ -1403,6 +1409,7 @@ impl DataGridPanel {
                 history: Default::default(),
                 pending_history: None,
                 autoquote: Default::default(),
+                undo: Default::default(),
             },
             refresh: RefreshState {
                 refresh_policy: default_refresh,

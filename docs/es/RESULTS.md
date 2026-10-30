@@ -153,6 +153,21 @@ contiene no se añade dos veces. Los valores binarios, JSON y anidados no se
 pueden añadir así. Algunos gestores de ventanas de Linux usan `Alt`+arrastrar
 para mover ventanas; un `Alt`+clic sin mover el puntero sigue funcionando.
 
+### Deshacer un filtro
+
+Cada filtro `WHERE` nuevo con el que se lee una tabla es un paso de Deshacer y
+Rehacer del grid, se aplique como se aplique (`Enter`, una entrada del
+historial, `Alt`+clic, el submenú Filtro, limpiar el filtro). Con el foco en el
+grid, Deshacer primero revierte las ediciones de celdas hechas desde la última
+lectura de la tabla, de la más reciente a la más antigua, y después vuelve a
+poner el filtro anterior y lee la tabla con él desde la primera página; Rehacer
+avanza del mismo modo. Mientras el campo `WHERE` tiene el teclado, Deshacer y
+Rehacer editan su texto como antes. Un paso de filtro nunca descarta ediciones
+pendientes: con ediciones que Deshacer no puede revertir se rechaza con el mismo
+mensaje que una recarga. También funciona en un grid de solo lectura, donde no
+hay ediciones que deshacer. Los cambios de orden y de `LIMIT` no son pasos de
+deshacer.
+
 ### Historial de filtros
 
 Cada filtro con el que una tabla se leyó correctamente se guarda para esa tabla

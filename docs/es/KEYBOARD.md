@@ -661,8 +661,8 @@ foco y no se está editando ninguna celda.
 | `d d` / `Delete` | Borrar la fila |
 | `a a` / `Shift+a Shift+a` | Agregar / duplicar una fila |
 | `Ctrl+n` | Poner la celda en NULL |
-| `u` / `Ctrl+z` / `Cmd+z` | Deshacer |
-| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer |
+| `u` / `Ctrl+z` / `Cmd+z` | Deshacer; una vez deshechas las ediciones desde la última lectura de la tabla, el filtro `WHERE` anterior (ver [Deshacer un filtro](RESULTS.md#deshacer-un-filtro)) |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer, filtros incluidos |
 | `e` | Expandir o contraer una columna anidada (grillas de documentos) |
 | `Backspace` | Salir de un valor anidado (grillas de documentos) |
 

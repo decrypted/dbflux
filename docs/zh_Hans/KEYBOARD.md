@@ -473,8 +473,8 @@ Alt 拖动鼠标选择一样，按顺序用换行符连接非空行片段；若�
 | `d d` / `Delete` | 删除行 |
 | `a a` / `Shift+a Shift+a` | 添加 / 复制一行 |
 | `Ctrl+n` | 将单元格设为 NULL |
-| `u` / `Ctrl+z` / `Cmd+z` | 撤销 |
-| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | 重做 |
+| `u` / `Ctrl+z` / `Cmd+z` | 撤销；撤销完自上次读取表以来的编辑后，回到上一个 `WHERE` 筛选条件（参见[撤销筛选](RESULTS.md#撤销筛选)） |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | 重做，包括筛选条件 |
 | `e` | 展开或折叠嵌套列（文档网格） |
 | `Backspace` | 退出嵌套值（文档网格） |
 

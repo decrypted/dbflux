@@ -364,8 +364,8 @@ IME 확정을 포함한 네이티브 텍스트 편집 시 마크는 텍스트를
 | `d d` / `Delete` | 행 삭제 |
 | `a a` / `Shift+a Shift+a` | 행 추가 / 복제 |
 | `Ctrl+n` | 셀을 NULL로 설정 |
-| `u` / `Ctrl+z` / `Cmd+z` | 실행 취소 |
-| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | 다시 실행 |
+| `u` / `Ctrl+z` / `Cmd+z` | 실행 취소. 테이블을 마지막으로 읽은 뒤의 편집을 모두 되돌리면 이전 `WHERE` 필터로 돌아갑니다([필터 실행 취소](RESULTS.md#필터-실행-취소) 참조) |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | 다시 실행. 필터도 포함 |
 | `e` | 중첩 열 펼치기 / 접기(문서 그리드) |
 | `Backspace` | 중첩 값에서 나가기(문서 그리드) |
 

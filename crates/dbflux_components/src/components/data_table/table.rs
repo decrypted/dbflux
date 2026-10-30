@@ -761,6 +761,7 @@ impl DataTable {
         let model = state.model();
         let sort_keys = state.sort_keys();
         let rank_font_size = fonts::grid_px(cx, GridMetrics::SORT_RANK_FONT);
+        let sortable = state.is_sortable();
         let font_size = fonts::grid_font_size(cx);
         let type_font_size = fonts::grid_type_font_size(cx);
         let column_widths = state.column_widths();
@@ -875,15 +876,17 @@ impl DataTable {
                             )
                         },
                     )
-                    .child(header_sort_control(
-                        state_entity.clone(),
-                        col_ix,
-                        sort_direction,
-                        sort_rank,
-                        rank_font_size,
-                        ChromeColors::tint(theme),
-                        theme.muted_foreground,
-                    ))
+                    .when(sortable, |header| {
+                        header.child(header_sort_control(
+                            state_entity.clone(),
+                            col_ix,
+                            sort_direction,
+                            sort_rank,
+                            rank_font_size,
+                            ChromeColors::tint(theme),
+                            theme.muted_foreground,
+                        ))
+                    })
                     // An annotated header pins the name line to the top and
                     // draws the facts along the bottom, so columns with and
                     // without facts keep their names on the same line.
@@ -982,6 +985,7 @@ impl DataTable {
         let h_offset = state.horizontal_offset();
         let sort_keys = state.sort_keys();
         let rank_font_size = fonts::grid_px(cx, GridMetrics::SORT_RANK_FONT);
+        let sortable = state.is_sortable();
         let tint = ChromeColors::tint(theme);
         let strong = ChromeColors::strong(theme);
         let muted = theme.muted_foreground;
@@ -1083,15 +1087,17 @@ impl DataTable {
                             .text_color(muted)
                             .child(SharedString::from(col_spec.type_name.to_string())),
                     )
-                    .child(header_sort_control(
-                        state_for_sort.clone(),
-                        col_ix,
-                        sort_direction,
-                        sort_rank,
-                        rank_font_size,
-                        tint,
-                        muted,
-                    ));
+                    .when(sortable, |header| {
+                        header.child(header_sort_control(
+                            state_for_sort.clone(),
+                            col_ix,
+                            sort_direction,
+                            sort_rank,
+                            rank_font_size,
+                            tint,
+                            muted,
+                        ))
+                    });
 
                 let presence_line = presence.map(|ratio| {
                     let clamped = ratio.clamp(0.0, 1.0);

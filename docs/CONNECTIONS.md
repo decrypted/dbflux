@@ -242,9 +242,13 @@ opens a login modal:
 
 ### Selecting an Auth Profile per connection
 
-- **Direct mode** — the Auth Profile is *optional*. Use it only to resolve
-  Secret/Parameter/Auth value sources (next section).
+- **Direct, SSH Tunnel and Proxy modes** — the Auth Profile is *optional*,
+  shown below the method's own fields. Use it only to resolve
+  Secret/Parameter/Auth value sources (next section); they resolve before the
+  tunnel or proxy opens, so an SSH tunnel to a bastion can still take its
+  database password from Secret Manager.
 - **SSM mode** — the Auth Profile is **required**.
+- Switching the access method keeps the selected Auth Profile.
 - If any field uses a Secret/Parameter value source whose provider is an auth
   provider, a matching Auth Profile is **required** or the connection is rejected
   before connecting.

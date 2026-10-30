@@ -51,10 +51,10 @@ crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: propagation guard
 crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: propagation guard
 crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: propagation guard
 crates/dbflux_ui_sidebar/src/render_tree.rs:render_tree_item: propagation guard
-crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_access_tab: cursor sync
-crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_access_tab: cursor sync
-crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_access_tab: cursor sync
-crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_access_tab: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_optional_auth_profile: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_optional_auth_profile: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_optional_auth_profile: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_optional_auth_profile: cursor sync
 crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssh_auth_inputs: cursor sync
 crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssh_auth_inputs: cursor sync
 crates/dbflux_ui_windows/src/connection_manager/access_tab.rs:render_ssh_auth_inputs: cursor sync

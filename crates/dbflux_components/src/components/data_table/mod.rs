@@ -8,6 +8,7 @@ pub mod selection;
 mod state;
 mod table;
 mod theme;
+mod totals;
 
 pub use annotation::HeaderAnnotation;
 pub use document::{ColumnGroupHeader, DocumentColumnHeader, DocumentPresentation, GroupSpan};
@@ -18,3 +19,4 @@ pub use state::{
 };
 pub use table::{CONTEXT, DataTable, actions, context_menu_keystroke};
 pub use theme::ROW_NUMBER_WIDTH;
+pub use totals::{NumericTotals, SelectionTotals};

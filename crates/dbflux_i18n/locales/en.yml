@@ -1764,6 +1764,18 @@ document:
         pending_changes:
           one: "%{count} pending change"
           many: "%{count} pending changes"
+        selection:
+          cells: "%{count} cells"
+          sum: "Sum %{value}"
+          average: "Avg %{value}"
+          min: "Min %{value}"
+          max: "Max %{value}"
+          nulls_skipped:
+            one: "%{count} NULL skipped"
+            many: "%{count} NULLs skipped"
+          non_numeric_skipped:
+            one: "%{count} non-numeric skipped"
+            many: "%{count} non-numeric skipped"
       export:
         trigger: Export
         save_as_file: Save loaded rows as file

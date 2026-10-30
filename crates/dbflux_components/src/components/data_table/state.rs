@@ -17,6 +17,7 @@ use super::theme::{
     AUTO_WIDTH_SAMPLE_ROWS, AUTO_WIDTH_SLACK, CELL_PADDING_X, MAX_AUTO_COLUMN_WIDTH,
     MIN_COLUMN_WIDTH, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
 };
+use super::totals::{self, SelectionTotals, TotalsCache, TotalsKey};
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 use crate::fonts;
 use crate::tokens::GridMetrics;
@@ -207,6 +208,9 @@ pub struct DataTableState {
     /// Facts drawn under each column header, indexed like the model's
     /// columns. Empty, or all `None`, keeps the header one line tall.
     header_annotations: Vec<Option<HeaderAnnotation>>,
+
+    /// Totals of the selected cells, kept until the cells they cover change.
+    selection_totals: TotalsCache,
 }
 
 impl DataTableState {
@@ -257,6 +261,7 @@ impl DataTableState {
             enum_options: std::collections::HashMap::new(),
             document: None,
             header_annotations: Vec::new(),
+            selection_totals: TotalsCache::default(),
         }
     }
 
@@ -855,6 +860,16 @@ impl DataTableState {
         }
     }
 
+    /// Count, sum, average, minimum and maximum of the selected cells as the
+    /// grid shows them, for a host's status bar. `None` while fewer than two
+    /// cells are selected.
+    pub fn selection_totals(&self) -> Option<SelectionTotals> {
+        let key = TotalsKey::new(&self.model, &self.edit_buffer, &self.selection);
+        self.selection_totals.get_or_compute(key, || {
+            totals::selection_totals(&self.model, &self.edit_buffer, &self.selection)
+        })
+    }
+
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         if !self.selection.is_empty() {
             self.selection.clear();
@@ -1018,18 +1033,8 @@ impl DataTableState {
         row: usize,
         col: usize,
     ) -> Option<&'a super::model::CellValue> {
-        use super::model::VisualRowSource;
-
-        match visual_order.get(row).copied()? {
-            VisualRowSource::Base(base_row) => {
-                let base = self.model.cell(base_row, col)?;
-                Some(self.edit_buffer.get_cell(base_row, col, base))
-            }
-            VisualRowSource::Insert(insert_idx) => self
-                .edit_buffer
-                .get_pending_insert_by_idx(insert_idx)?
-                .get(col),
-        }
+        self.edit_buffer
+            .displayed_cell(&self.model, visual_order, row, col)
     }
 
     // --- Focus ---

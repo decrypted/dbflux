@@ -1764,6 +1764,18 @@ document:
         pending_changes:
           one: "%{count} 处待处理更改"
           many: "%{count} 处待处理更改"
+        selection:
+          cells: "%{count} 个单元格"
+          sum: "总和 %{value}"
+          average: "平均 %{value}"
+          min: "最小 %{value}"
+          max: "最大 %{value}"
+          nulls_skipped:
+            one: "已跳过 %{count} 个 NULL"
+            many: "已跳过 %{count} 个 NULL"
+          non_numeric_skipped:
+            one: "已跳过 %{count} 个非数字值"
+            many: "已跳过 %{count} 个非数字值"
       export:
         trigger: 导出
         save_as_file: 将已加载的行保存为文件

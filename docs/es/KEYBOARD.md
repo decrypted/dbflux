@@ -421,6 +421,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `Esc` | Salir de las filas similares y volver a la página de la tabla |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `Ctrl+Alt+c` / `Cmd+Alt+c` | Copiar la selección como JSON, como **Copiar como JSON** del menú contextual (resultados de tabla) |
+| `Ctrl+Alt+s` / `Cmd+Alt+s` | Revisar las sentencias que Guardar ejecutará para los cambios pendientes (resultados de tabla) |
 | `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, mostrar otra vista del resultado, los botones del panel de valor y del inspector de fila, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
 
@@ -649,6 +650,7 @@ foco y no se está editando ninguna celda.
 | `d d` / `Delete` | Borrar la fila |
 | `a a` / `Shift+a Shift+a` | Agregar / duplicar una fila |
 | `Ctrl+n` | Poner la celda en NULL |
+| `Ctrl+Alt+e` / `Cmd+Alt+e` | Editar la celda como expresión SQL; con el editor abierto, alternar entre valor y expresión (`fx`) |
 | `u` / `Ctrl+z` / `Cmd+z` | Deshacer |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer |
 | `e` | Expandir o contraer una columna anidada (grillas de documentos) |

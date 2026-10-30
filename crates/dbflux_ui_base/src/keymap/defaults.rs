@@ -700,6 +700,11 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("c", Modifiers::primary_alt()),
         Command::CopySelectionAsJson,
     );
+    // Next to primary+S, which saves without the review.
+    layer.bind(
+        KeyChord::new("s", Modifiers::primary_alt()),
+        Command::ReviewChanges,
+    );
 
     // Toggle panel collapse
     layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
@@ -1529,6 +1534,13 @@ fn data_table_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("n", Modifiers::ctrl()),
         Command::ResultsSetNull,
+    );
+    // Primary+Alt like Copy as JSON: primary+Shift+E is a workspace command,
+    // and Alt alone types characters on macOS. It also reaches the open
+    // inline editor, which sits inside the table's context.
+    layer.bind(
+        KeyChord::new("e", Modifiers::primary_alt()),
+        Command::ToggleCellExpression,
     );
 
     // Undo / redo: the standard primary chords plus the vim-style `u` and

@@ -1033,13 +1033,9 @@ fn h3_approval_required_does_not_open_confirmation_modal(cx: &mut TestAppContext
         fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
             SchemaLoadingStrategy::SingleDatabase
         }
-
-        #[expect(
-            clippy::unimplemented,
-            reason = "test-only stub connection: no test path in this suite calls the dialect"
-        )]
         fn dialect(&self) -> &dyn SqlDialect {
-            unimplemented!("StubSqlConnection2::dialect not needed")
+            // Read when the grid builds a table, for its cell expressions.
+            &dbflux_core::DefaultSqlDialect
         }
 
         fn ping(&self) -> Result<(), DbError> {
@@ -1207,13 +1203,9 @@ impl dbflux_core::Connection for FkResolveConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: the fk display path never asks for a dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!("FkResolveConnection::dialect not needed")
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
@@ -1781,13 +1773,9 @@ impl dbflux_core::Connection for FkBatchConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: the fk display batch path never asks for a dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!("FkBatchConnection::dialect not needed")
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
@@ -2551,13 +2539,9 @@ impl dbflux_core::Connection for TableOpenFkConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: the table-open path never asks for a dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!("TableOpenFkConnection::dialect not needed for this test")
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {

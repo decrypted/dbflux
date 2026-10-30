@@ -760,6 +760,21 @@ impl DataGridPanel {
             }
         }
 
+        // The review owns the keys while it is open: Enter saves, Escape
+        // cancels, and nothing reaches the grid behind it.
+        if self.change_review.is_some() {
+            match cmd {
+                Command::Cancel => self.cancel_change_review(window, cx),
+                Command::Execute => self.confirm_change_review(window, cx),
+                _ => {}
+            }
+            return true;
+        }
+
+        if cmd == Command::ReviewChanges {
+            return self.open_change_review(window, cx);
+        }
+
         // Handle context menu commands when menu is open
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);

@@ -97,6 +97,14 @@ pub struct ColumnAssignment {
     /// `serde(default)` present.
     #[serde(default)]
     pub type_name: Option<String>,
+    /// Whether `value` is a `Value::Text` holding a SQL expression the
+    /// statement carries unquoted (`NOW()`) instead of a literal.
+    ///
+    /// Never serialized: an assignment that crosses a process or protocol
+    /// boundary (IPC, MCP) always arrives as a literal, so no remote input
+    /// can turn its text into SQL.
+    #[serde(skip)]
+    pub is_expression: bool,
 }
 
 impl ColumnAssignment {
@@ -105,6 +113,7 @@ impl ColumnAssignment {
             name: name.into(),
             value,
             type_name: None,
+            is_expression: false,
         }
     }
 
@@ -113,6 +122,51 @@ impl ColumnAssignment {
             name: name.into(),
             value,
             type_name: Some(type_name.into()),
+            is_expression: false,
+        }
+    }
+
+    /// An assignment of the SQL expression `expression`, written into the
+    /// statement as it is. See [`crate::validate_cell_expression`] for what
+    /// the statement builders accept.
+    pub fn expression(
+        name: impl Into<String>,
+        expression: impl Into<String>,
+        type_name: Option<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            value: Value::Text(expression.into()),
+            type_name,
+            is_expression: true,
+        }
+    }
+
+    /// The SQL expression this assignment carries, or `None` for a literal.
+    pub fn sql_expression(&self) -> Option<&str> {
+        match (&self.value, self.is_expression) {
+            (Value::Text(expression), true) => Some(expression),
+            _ => None,
+        }
+    }
+
+    /// The right-hand side of this assignment in a statement of `dialect`:
+    /// the expression as it is, or the value as a literal typed by
+    /// `type_name`.
+    ///
+    /// # Errors
+    ///
+    /// An expression that [`crate::validate_cell_expression`] rejects.
+    pub fn to_sql(
+        &self,
+        dialect: &dyn crate::SqlDialect,
+    ) -> Result<String, crate::CellExpressionError> {
+        match self.sql_expression() {
+            Some(expression) => {
+                crate::validate_cell_expression(expression)?;
+                Ok(expression.trim().to_string())
+            }
+            None => Ok(dialect.value_to_literal_typed(&self.value, self.type_name.as_deref())),
         }
     }
 
@@ -124,21 +178,13 @@ impl ColumnAssignment {
 
 impl From<(String, Value)> for ColumnAssignment {
     fn from((name, value): (String, Value)) -> Self {
-        Self {
-            name,
-            value,
-            type_name: None,
-        }
+        Self::new(name, value)
     }
 }
 
 impl From<(&str, Value)> for ColumnAssignment {
     fn from((name, value): (&str, Value)) -> Self {
-        Self {
-            name: name.to_string(),
-            value,
-            type_name: None,
-        }
+        Self::new(name, value)
     }
 }
 
@@ -230,6 +276,7 @@ impl From<RowPatchWire> for RowPatch {
                 name,
                 value,
                 type_name: change_types.get(idx).cloned().flatten(),
+                is_expression: false,
             })
             .collect();
 
@@ -319,6 +366,7 @@ impl RowInsert {
                 name,
                 value,
                 type_name: None,
+                is_expression: false,
             })
             .collect();
         Self {
@@ -373,6 +421,7 @@ impl From<RowInsertWire> for RowInsert {
                 name,
                 value,
                 type_name: column_types.get(idx).cloned().flatten(),
+                is_expression: false,
             })
             .collect();
 
@@ -573,6 +622,7 @@ impl From<SqlUpdateRequestWire> for SqlUpdateRequest {
                 name,
                 value,
                 type_name: change_types.get(idx).cloned().flatten(),
+                is_expression: false,
             })
             .collect();
 
@@ -656,6 +706,7 @@ impl SqlUpsertRequest {
                 name,
                 value,
                 type_name: None,
+                is_expression: false,
             })
             .collect();
 
@@ -713,6 +764,7 @@ impl From<SqlUpsertRequestWire> for SqlUpsertRequest {
                 name,
                 value,
                 type_name: column_types.get(idx).cloned().flatten(),
+                is_expression: false,
             })
             .collect();
 
@@ -723,6 +775,7 @@ impl From<SqlUpsertRequestWire> for SqlUpsertRequest {
                 name,
                 value,
                 type_name: update_assignment_types.get(idx).cloned().flatten(),
+                is_expression: false,
             })
             .collect();
 

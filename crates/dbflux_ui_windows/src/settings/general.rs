@@ -53,6 +53,7 @@ impl GeneralSection {
             current.table_alias_use_as != saved.table_alias_use_as,
             current.grid_fk_labels != saved.grid_fk_labels,
             current.grid_pk_sort_desc != saved.grid_pk_sort_desc,
+            current.grid_review_before_save != saved.grid_review_before_save,
             current.grid_header_click_sorts != saved.grid_header_click_sorts,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
@@ -129,6 +130,7 @@ impl GeneralSection {
             GeneralFormRow::TableAliasUseAs,
             GeneralFormRow::GridFkLabels,
             GeneralFormRow::GridPkSortDesc,
+            GeneralFormRow::GridReviewBeforeSave,
             GeneralFormRow::GridHeaderClickSorts,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
@@ -286,6 +288,11 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::GridPkSortDesc) => {
                 self.gen_settings.grid_pk_sort_desc = !self.gen_settings.grid_pk_sort_desc;
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridReviewBeforeSave) => {
+                self.gen_settings.grid_review_before_save =
+                    !self.gen_settings.grid_review_before_save;
                 cx.notify();
             }
             Some(GeneralFormRow::GridHeaderClickSorts) => {
@@ -1044,6 +1051,17 @@ impl GeneralSection {
                 self.gen_settings.grid_pk_sort_desc,
                 GeneralFormRow::GridPkSortDesc,
                 |this, value, _cx| this.gen_settings.grid_pk_sort_desc = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-review-before-save",
+                dbflux_i18n::t!("settings.general.grid_review_before_save.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.grid_review_before_save.hint"
+                )),
+                self.gen_settings.grid_review_before_save,
+                GeneralFormRow::GridReviewBeforeSave,
+                |this, value, _cx| this.gen_settings.grid_review_before_save = value,
                 cx,
             ))
             .child(self.render_gen_checkbox(

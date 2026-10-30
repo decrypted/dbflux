@@ -1,4 +1,5 @@
 mod builder;
+mod cell_expressions;
 mod chart;
 mod chrome;
 pub(crate) mod context_menu;
@@ -8,7 +9,9 @@ mod export_all;
 mod facets;
 pub(crate) mod filter_bar;
 mod fk_display;
+mod generated_ids;
 mod grid;
+mod multi_edit;
 pub(crate) mod mutation_confirm;
 pub(crate) mod mutation_executor;
 mod mutations;
@@ -19,7 +22,10 @@ mod query;
 mod refresh;
 mod render;
 mod result_search;
+mod review_changes;
 pub(crate) mod row_inspector;
+mod row_statements;
+mod selection_totals;
 mod session;
 pub(crate) mod side_island;
 mod table_documents;
@@ -537,6 +543,9 @@ struct PendingActions {
     /// The JSON view has to be reloaded with the page. Deferred to render
     /// because setting an editor's text needs a `Window`.
     json_reload: bool,
+    /// Save was asked for while "Review changes before saving" is on. The
+    /// review opens at render because focusing it needs a `Window`.
+    change_review: bool,
 }
 
 /// How the grid should treat the state held by an existing `DataTableState`
@@ -905,6 +914,8 @@ pub struct DataGridPanel {
     side_panels_hosted: bool,
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
+    /// The open review of the statements Save would run.
+    change_review: Option<review_changes::ChangeReview>,
     pending_batch_remaining: Option<PendingBatchRemaining>,
     /// A close is waiting on the staged edits being applied.
     ///
@@ -1543,6 +1554,7 @@ impl DataGridPanel {
             side_panels_hosted: false,
             pending: PendingActions::default(),
             pending_delete_confirm: None,
+            change_review: None,
             pending_batch_remaining: None,
             close_after_apply: false,
             batch_op_in_flight: false,

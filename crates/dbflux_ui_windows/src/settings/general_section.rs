@@ -42,6 +42,7 @@ pub(super) enum GeneralFormRow {
     TableAliasUseAs,
     GridFkLabels,
     GridPkSortDesc,
+    GridReviewBeforeSave,
     GridHeaderClickSorts,
     RestoreSession,
     ReopenConnections,
@@ -1977,6 +1978,10 @@ mod tests {
             (
                 "grid-pk-sort-desc",
                 "settings.general.grid_pk_sort_desc.label",
+            ),
+            (
+                "grid-review-before-save",
+                "settings.general.grid_review_before_save.label",
             ),
             (
                 "grid-header-click-sorts",

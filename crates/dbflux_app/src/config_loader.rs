@@ -114,6 +114,7 @@ pub fn save_general_settings(
         toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
         grid_fk_labels: if settings.grid_fk_labels { 1 } else { 0 },
         grid_pk_sort_desc: if settings.grid_pk_sort_desc { 1 } else { 0 },
+        grid_review_before_save: i32::from(settings.grid_review_before_save),
         grid_header_click_sorts: i32::from(settings.grid_header_click_sorts),
         updated_at: String::new(),
     };
@@ -1143,6 +1144,7 @@ fn load_general_settings(
             .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
         grid_fk_labels: dto.grid_fk_labels != 0,
         grid_pk_sort_desc: dto.grid_pk_sort_desc != 0,
+        grid_review_before_save: dto.grid_review_before_save != 0,
         grid_header_click_sorts: dto.grid_header_click_sorts != 0,
     }
 }
@@ -2680,6 +2682,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             grid_pk_sort_desc: 0,
+            grid_review_before_save: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -2780,6 +2783,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             grid_pk_sort_desc: 0,
+            grid_review_before_save: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -3131,6 +3135,7 @@ mod tests {
             table_alias_use_as: 0,
             grid_fk_labels: 0,
             grid_pk_sort_desc: 0,
+            grid_review_before_save: 0,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };

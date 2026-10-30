@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use crate::controls::{GpuiInput as Input, InputState};
+use crate::controls::{GpuiInput as Input, InputMoveDown, InputMoveUp, InputState};
 use crate::fonts;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferRing, Icon};
@@ -11,8 +11,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
     IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
-    ParentElement, Pixels, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
-    Window, canvas, div, px, uniform_list,
+    ParentElement, Pixels, Role, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
+    Styled, Toggled, Window, anchored, canvas, deferred, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
@@ -70,6 +70,10 @@ pub mod actions {
             StartEdit,
             ConfirmEdit,
             CancelEdit,
+            /// The editor's `fx` switch: edit the active cell as a SQL
+            /// expression, or flip the open editor between value and
+            /// expression.
+            ToggleCellExpression,
             SaveRow,
             // Row operations (vim-style)
             DeleteRow,
@@ -103,6 +107,7 @@ pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Key
     let table_action: Box<dyn Action> = match action {
         ContextMenuAction::Copy => Box::new(Copy),
         ContextMenuAction::Edit => Box::new(StartEdit),
+        ContextMenuAction::EditAsExpression => Box::new(ToggleCellExpression),
         ContextMenuAction::DeleteRow => Box::new(DeleteRow),
         ContextMenuAction::SetNull => Box::new(SetNull),
         ContextMenuAction::AddRow => Box::new(AddRow),
@@ -300,6 +305,12 @@ impl gpui::Render for DataTable {
                 }
             });
         };
+
+        let s = self.state.clone();
+        let on_toggle_cell_expression =
+            move |_: &ToggleCellExpression, window: &mut Window, cx: &mut App| {
+                s.update(cx, |state, cx| state.toggle_cell_expression(window, cx));
+            };
 
         let s = self.state.clone();
         let on_confirm_edit = move |_: &ConfirmEdit, _: &mut Window, cx: &mut App| {
@@ -599,6 +610,7 @@ impl gpui::Render for DataTable {
             .on_action(on_select_all)
             .on_action(on_clear_selection)
             .on_action(on_start_edit)
+            .on_action(on_toggle_cell_expression)
             .on_action(on_confirm_edit)
             .on_action(on_cancel_edit)
             .on_action(on_save_row)
@@ -1241,6 +1253,8 @@ impl DataTable {
         let model = Arc::clone(state.model_arc());
 
         let state_entity = self.state.clone();
+        let drag_selecting = state.is_drag_selecting();
+        let row_height = fonts::grid_row_height(cx);
 
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
@@ -1261,6 +1275,7 @@ impl DataTable {
                 let cell_input = state.cell_input().cloned();
                 let enum_dropdown = state.enum_dropdown().cloned();
                 let edit_buffer = state.edit_buffer();
+                let expression_editor = ExpressionEditorView::of(state);
 
                 render_rows(
                     &state_entity,
@@ -1271,6 +1286,7 @@ impl DataTable {
                     editing_cell,
                     cell_input.as_ref(),
                     enum_dropdown.as_ref(),
+                    expression_editor.as_ref(),
                     edit_buffer,
                     state.document_presentation(),
                     state.has_reference_row(),
@@ -1300,11 +1316,166 @@ impl DataTable {
 
         div()
             .id("table-body")
+            .relative()
             .flex_1()
             .min_h_0()
             .overflow_hidden()
             .child(list)
+            .when(drag_selecting, |body| {
+                body.child(drag_autoscroll_listener(self.state.clone(), row_height))
+            })
     }
+}
+
+/// What the open inline editor draws for a column that can hold a SQL
+/// expression: the `fx` switch, and the suggestions while it is on.
+struct ExpressionEditorView {
+    /// The column can hold an expression, so the editor draws `fx`.
+    takes_expressions: bool,
+    active: bool,
+    suggestions: Vec<super::state::EditorSuggestion>,
+    highlight: Option<usize>,
+}
+
+impl ExpressionEditorView {
+    fn of(state: &DataTableState) -> Option<Self> {
+        let coord = state.editing_cell()?;
+        state.cell_input()?;
+
+        let takes_expressions = state.accepts_cell_expressions(coord.col);
+        let suggestions = state.editor_suggestions(coord.col);
+        if !takes_expressions && suggestions.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            takes_expressions,
+            active: state.is_editing_expression(),
+            suggestions,
+            highlight: state.expression_highlight(),
+        })
+    }
+
+    fn shows_suggestions(&self) -> bool {
+        !self.suggestions.is_empty()
+    }
+}
+
+/// The `fx` switch at the start of the inline editor. On, the typed text is
+/// saved as a SQL expression rather than as a value.
+fn render_expression_toggle(
+    state_entity: &Entity<DataTableState>,
+    active: bool,
+    font_size: Pixels,
+    theme: &gpui_component::theme::Theme,
+) -> AnyElement {
+    let state = state_entity.clone();
+
+    div()
+        .id("cell-expression-toggle")
+        .role(Role::Switch)
+        .aria_label(SharedString::from(dbflux_i18n::t!(
+            "components.data_table.expression.toggle"
+        )))
+        .aria_toggled(if active {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .flex_shrink_0()
+        .h_full()
+        .px(Spacing::XS)
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .text_size(font_size)
+        .italic()
+        .font_weight(FontWeight::SEMIBOLD)
+        .when(active, |d| {
+            d.bg(theme.info.opacity(0.15)).text_color(theme.info)
+        })
+        .when(!active, |d| d.text_color(theme.muted_foreground))
+        // A press would move focus out of the input and close the editor
+        // before the click lands.
+        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+            window.prevent_default();
+            cx.stop_propagation();
+        })
+        .on_click(move |_, window, cx| {
+            state.update(cx, |state, cx| state.toggle_cell_expression(window, cx));
+        })
+        .child("fx")
+        .into_any_element()
+}
+
+/// The expressions suggested for the column, under the inline editor. The
+/// arrow keys step through them from the editor and write the one stepped to
+/// into it; a click does the same.
+fn render_expression_suggestions(
+    state_entity: &Entity<DataTableState>,
+    view: &ExpressionEditorView,
+    min_width: Pixels,
+    font_size: Pixels,
+    theme: &gpui_component::theme::Theme,
+) -> AnyElement {
+    let rows = view
+        .suggestions
+        .iter()
+        .enumerate()
+        .map(|(index, suggestion)| {
+            let state = state_entity.clone();
+            let highlighted = view.highlight == Some(index);
+
+            div()
+                .id(("cell-expression-suggestion", index))
+                .role(Role::MenuItem)
+                .px(Spacing::SM)
+                .py(Spacing::XS)
+                .cursor_pointer()
+                .whitespace_nowrap()
+                .text_size(font_size)
+                .text_color(theme.foreground)
+                .when(highlighted, |d| d.bg(theme.accent))
+                .hover(|d| d.bg(theme.accent.opacity(0.5)))
+                .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(move |_, window, cx| {
+                    state.update(cx, |state, cx| {
+                        state.apply_expression_suggestion(index, window, cx)
+                    });
+                })
+                .child(match suggestion {
+                    super::state::EditorSuggestion::Expression(expression) => expression.clone(),
+                    super::state::EditorSuggestion::GeneratedId(kind) => {
+                        dbflux_i18n::t!(
+                            "components.data_table.expression.generate",
+                            kind = kind.label()
+                        )
+                    }
+                })
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+
+    let menu = div()
+        .id("cell-expression-suggestions")
+        .min_w(min_width)
+        .py(Spacing::XS)
+        .bg(theme.popover)
+        .border_1()
+        .border_color(theme.border)
+        .shadow_lg()
+        .occlude()
+        .children(rows);
+
+    div()
+        .absolute()
+        .top_full()
+        .left_0()
+        .child(deferred(anchored().snap_to_window().child(menu)).with_priority(1))
+        .into_any_element()
 }
 
 /// Renders the visible rows for the uniform_list.
@@ -1318,6 +1489,7 @@ fn render_rows(
     editing_cell: Option<CellCoord>,
     cell_input: Option<&Entity<InputState>>,
     enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
+    expression_editor: Option<&ExpressionEditorView>,
     edit_buffer: &super::model::EditBuffer,
     document: Option<&DocumentPresentation>,
     reference_row: bool,
@@ -1418,16 +1590,70 @@ fn render_rows(
                         if let Some(input_state) = cell_input {
                             return div()
                                 .id(("cell", row_ix * 10000 + col_ix))
+                                .relative()
                                 .flex()
                                 .flex_shrink_0()
                                 .items_center()
                                 .h_full()
                                 .w(px(width))
-                                .overflow_hidden()
                                 .border_1()
                                 .border_color(theme.ring)
                                 .bg(theme.background)
-                                .child(Input::new(input_state).small())
+                                .when_some(expression_editor, |cell, view| {
+                                    cell.when(view.takes_expressions, |cell| {
+                                        cell.child(render_expression_toggle(
+                                            state_entity,
+                                            view.active,
+                                            font_size,
+                                            theme,
+                                        ))
+                                    })
+                                    .when(
+                                        view.shows_suggestions(),
+                                        |cell| {
+                                            let down = state_entity.clone();
+                                            let up = state_entity.clone();
+                                            cell.capture_action(
+                                                move |_: &InputMoveDown, window, cx| {
+                                                    down.update(cx, |state, cx| {
+                                                        state.step_expression_suggestion(
+                                                            true, window, cx,
+                                                        )
+                                                    });
+                                                    cx.stop_propagation();
+                                                },
+                                            )
+                                            .capture_action(move |_: &InputMoveUp, window, cx| {
+                                                up.update(cx, |state, cx| {
+                                                    state.step_expression_suggestion(
+                                                        false, window, cx,
+                                                    )
+                                                });
+                                                cx.stop_propagation();
+                                            })
+                                            .child(
+                                                render_expression_suggestions(
+                                                    state_entity,
+                                                    view,
+                                                    px(width),
+                                                    font_size,
+                                                    theme,
+                                                ),
+                                            )
+                                        },
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .when(
+                                            expression_editor.is_some_and(|view| view.active),
+                                            |d| d.italic(),
+                                        )
+                                        .child(Input::new(input_state).small()),
+                                )
                                 .into_any_element();
                         }
                     }
@@ -1461,6 +1687,7 @@ fn render_rows(
                     let is_auto_generated = display_value.is_auto_generated();
                     let is_placeholder = display_value.is_placeholder();
                     let is_missing = display_value.is_missing();
+                    let is_expression = display_value.is_expression();
                     let nested_kind = match display_value.kind {
                         super::model::CellKind::Nested { is_array, .. } => Some(is_array),
                         _ => None,
@@ -1477,7 +1704,7 @@ fn render_rows(
                         theme.warning
                     } else if is_missing {
                         theme.input
-                    } else if nested_kind.is_some() {
+                    } else if nested_kind.is_some() || is_expression {
                         theme.info
                     } else if is_pending_delete || is_auto_generated || is_placeholder {
                         theme.muted_foreground
@@ -1525,7 +1752,11 @@ fn render_rows(
                             d.child(Chamfer::new(Pixels::ZERO).ring(ChamferRing::focus(tint)))
                         })
                         .when(
-                            is_null || is_auto_generated || is_placeholder || is_missing,
+                            is_null
+                                || is_auto_generated
+                                || is_placeholder
+                                || is_missing
+                                || is_expression,
                             |d| d.italic(),
                         )
                         .when(is_pending_delete, |d| d.line_through())
@@ -1534,13 +1765,7 @@ fn render_rows(
                             move |event: &MouseDownEvent, window, cx| {
                                 state.update(cx, |state, cx| {
                                     state.focus(window, cx);
-                                    // The second press of a Ctrl+double-click
-                                    // opens the editor on release; toggling
-                                    // again would take the cell back out first.
-                                    if event.click_count >= 2 && event.modifiers.secondary() {
-                                        return;
-                                    }
-                                    state.begin_drag_select(coord, event.modifiers, cx);
+                                    state.press_cell(coord, event.modifiers, event.click_count, cx);
                                 });
                             }
                         })
@@ -1723,6 +1948,62 @@ fn render_rows(
                 .into_any_element()
         })
         .collect()
+}
+
+/// Window-level pointer listeners for a running drag selection, laid over
+/// the grid body to learn its bounds.
+///
+/// The cells' own move handlers stop firing once the pointer leaves them,
+/// so past the body's edge only a window listener still sees it; that is
+/// where the grid has to scroll. Releasing the button outside the table
+/// ends the drag here too.
+fn drag_autoscroll_listener(state: Entity<DataTableState>, row_height: Pixels) -> impl IntoElement {
+    canvas(
+        |bounds, _, _| bounds,
+        move |_, bounds: gpui::Bounds<Pixels>, window, _| {
+            // The scrollbars overlay the body's right and bottom strips, so
+            // the cells visibly end where they start.
+            let cells = gpui::Bounds::new(
+                bounds.origin,
+                gpui::size(
+                    (bounds.size.width - SCROLLBAR_WIDTH).max(px(0.0)),
+                    (bounds.size.height - SCROLLBAR_WIDTH).max(px(0.0)),
+                ),
+            );
+
+            window.on_mouse_event({
+                let state = state.clone();
+                move |event: &MouseMoveEvent, phase, _, cx| {
+                    if !phase.bubble() {
+                        return;
+                    }
+                    state.update(cx, |state, cx| {
+                        if event.pressed_button == Some(MouseButton::Left) {
+                            state.drag_pointer_moved(event.position, cells, row_height, cx);
+                        } else {
+                            state.end_drag_select();
+                        }
+                    });
+                }
+            });
+
+            window.on_mouse_event({
+                let state = state.clone();
+                move |event: &gpui::MouseUpEvent, phase, _, cx| {
+                    if phase.bubble() && event.button == MouseButton::Left {
+                        state.update(cx, |state, cx| {
+                            state.end_drag_select();
+                            cx.notify();
+                        });
+                    }
+                }
+            });
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }
 
 /// The sort control at the right edge of a column header: the current
@@ -2215,6 +2496,289 @@ mod tests {
                 .expect("a drag selects a range");
             assert_eq!(range.start, super::super::selection::CellCoord::new(1, 0));
             assert_eq!(range.end, super::super::selection::CellCoord::new(3, 1));
+        });
+    }
+
+    /// Holding a drag selection below the grid body scrolls the grid down
+    /// and keeps extending the range, as in a database IDE's grid; bringing
+    /// the pointer back in stops the scrolling, and so does releasing it.
+    #[gpui::test]
+    fn dragging_past_the_bottom_edge_scrolls_and_extends(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::time::Duration;
+
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("drag-autoscroll-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        let x = harness.origin.x + ROW_NUMBER_WIDTH + px(first_col_width / 2.0);
+        let start = gpui::point(x, harness.origin.y + header_height + row_height * 1.5);
+        let below = gpui::point(x, harness.bottom() + px(40.0));
+        let none = gpui::Modifiers::default();
+        let vertical = |visual: &mut VisualTestContext| offsets(visual, &state).0;
+        let active_row = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| state.read(cx).selection().active.map(|active| active.row))
+        };
+
+        visual.simulate_mouse_down(start, MouseButton::Left, none);
+        visual.run_until_parked();
+        visual.simulate_mouse_move(below, MouseButton::Left, none);
+        visual.executor().advance_clock(Duration::from_millis(400));
+        visual.run_until_parked();
+
+        let scrolled = vertical(visual);
+        assert!(
+            scrolled < px(0.0),
+            "held below the body, the grid scrolls down"
+        );
+        let visible_rows = (f32::from(harness.size.height) / f32::from(row_height)) as usize;
+        let reached = active_row(visual).expect("the drag keeps a cursor");
+        assert!(
+            reached > visible_rows,
+            "the range grows past the rows that were on screen (reached row {reached})"
+        );
+        visual.update(|_, cx| {
+            let range = state
+                .read(cx)
+                .selection()
+                .selected_range()
+                .expect("a range");
+            assert_eq!(range.start, CellCoord::new(1, 0), "the anchor stays put");
+        });
+
+        // Back inside the body the grid stops scrolling.
+        let inside = gpui::point(x, harness.origin.y + header_height + row_height * 3.5);
+        visual.simulate_mouse_move(inside, MouseButton::Left, none);
+        visual.run_until_parked();
+        let stopped = vertical(visual);
+        visual.executor().advance_clock(Duration::from_millis(400));
+        visual.run_until_parked();
+        assert_eq!(vertical(visual), stopped, "inside the body nothing scrolls");
+
+        // Out again and released: the drag ends and so does the scrolling.
+        visual.simulate_mouse_move(below, MouseButton::Left, none);
+        visual.executor().advance_clock(Duration::from_millis(100));
+        visual.run_until_parked();
+        visual.simulate_mouse_up(below, MouseButton::Left, none);
+        visual.run_until_parked();
+        let released = vertical(visual);
+        visual.executor().advance_clock(Duration::from_millis(400));
+        visual.run_until_parked();
+        assert_eq!(vertical(visual), released, "releasing stops the scrolling");
+        assert!(!visual.update(|_, cx| state.read(cx).is_drag_selecting()));
+    }
+    /// Twelve text columns, far wider together than the scroll harness.
+    fn wide_model() -> Arc<TableModel> {
+        use super::super::model::{CellValue, ColumnKind, ColumnSpec, RowData};
+        use gpui::TextAlign;
+
+        let columns = (0..12)
+            .map(|col| ColumnSpec {
+                id: format!("c{col}").into(),
+                title: format!("c{col}").into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            })
+            .collect();
+        let rows = (0..10)
+            .map(|_| RowData {
+                cells: (0..12).map(|_| CellValue::text("v")).collect(),
+            })
+            .collect();
+        Arc::new(TableModel::new(columns, rows))
+    }
+
+    /// Holding a drag selection right of the grid body scrolls the grid
+    /// right and extends the range into columns that were off screen; held
+    /// left of it, the grid scrolls back to the first column. Covers the
+    /// column hit-test under a horizontal offset.
+    #[gpui::test]
+    fn dragging_past_the_side_edges_scrolls_and_extends_columns(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+        use std::time::Duration;
+
+        const COLUMN_WIDTH: f32 = 200.0;
+
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(wide_model(), cx));
+            let table = cx.new(|cx| DataTable::new("drag-autoscroll-wide", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+        visual.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                for col in 0..12 {
+                    state.set_column_width(col, COLUMN_WIDTH, cx);
+                }
+            })
+        });
+        visual.run_until_parked();
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let y = harness.origin.y + header_height + row_height * 1.5;
+        let start = gpui::point(harness.origin.x + ROW_NUMBER_WIDTH + px(20.0), y);
+        let right = gpui::point(harness.right() + px(40.0), y);
+        let left = gpui::point(harness.origin.x - px(40.0), y);
+        let none = gpui::Modifiers::default();
+        let horizontal = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| state.read(cx).horizontal_offset())
+        };
+        let range = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| {
+                let selection = state.read(cx).selection();
+                (
+                    selection.anchor,
+                    selection.active.expect("the drag keeps a cursor"),
+                )
+            })
+        };
+        // Columns 0 and 1 are fully on screen at the start; column 3 starts
+        // past the harness's right edge.
+        let first_hidden_col = ((f32::from(harness.size.width) - f32::from(ROW_NUMBER_WIDTH))
+            / COLUMN_WIDTH) as usize
+            + 1;
+
+        visual.simulate_mouse_down(start, MouseButton::Left, none);
+        visual.run_until_parked();
+        assert_eq!(horizontal(visual), px(0.0), "the grid starts unscrolled");
+
+        visual.simulate_mouse_move(right, MouseButton::Left, none);
+        visual.executor().advance_clock(Duration::from_millis(400));
+        visual.run_until_parked();
+
+        assert!(
+            horizontal(visual) > px(0.0),
+            "held right of the body, the grid scrolls right"
+        );
+        let (anchor, active) = range(visual);
+        assert_eq!(anchor, Some(CellCoord::new(1, 0)), "the anchor stays put");
+        assert_eq!(active.row, 1, "a sideways drag keeps its row");
+        assert!(
+            active.col >= first_hidden_col,
+            "the range grows into a column that was off screen (reached column {}, first hidden {first_hidden_col})",
+            active.col
+        );
+
+        visual.simulate_mouse_move(left, MouseButton::Left, none);
+        visual.executor().advance_clock(Duration::from_millis(3000));
+        visual.run_until_parked();
+
+        assert_eq!(
+            horizontal(visual),
+            px(0.0),
+            "held left of the body, the grid scrolls back to the start"
+        );
+        let (anchor, active) = range(visual);
+        assert_eq!(anchor, Some(CellCoord::new(1, 0)));
+        assert_eq!(active, CellCoord::new(1, 0), "back at the first column");
+
+        visual.simulate_mouse_up(left, MouseButton::Left, none);
+        visual.run_until_parked();
+        assert!(!visual.update(|_, cx| state.read(cx).is_drag_selecting()));
+    }
+
+    /// A double-click on a cell of a larger selection opens the editor for
+    /// the whole selection: the first press collapses it, as any press does,
+    /// and the second brings it back.
+    #[gpui::test]
+    fn double_click_inside_a_selection_edits_all_of_it(cx: &mut TestAppContext) {
+        use super::super::selection::CellCoord;
+        use gpui::{MouseDownEvent, MouseUpEvent};
+
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut state = DataTableState::new(overflow_model(), cx);
+                state.set_pk_columns(vec![0]);
+                state
+            });
+            let table = cx.new(|cx| DataTable::new("multi-edit-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let first_col_width = visual.update(|_, cx| state.read(cx).column_widths()[0]);
+        let y = |row: usize| harness.origin.y + header_height + row_height * (row as f32 + 0.5);
+        let gutter = |row: usize| gpui::point(harness.origin.x + ROW_NUMBER_WIDTH / 2.0, y(row));
+        let cell = gpui::point(
+            harness.origin.x + ROW_NUMBER_WIDTH + px(first_col_width + 10.0),
+            y(2),
+        );
+        let none = gpui::Modifiers::default();
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        visual.simulate_click(gutter(1), none);
+        visual.simulate_click(gutter(3), shift);
+        visual.run_until_parked();
+
+        for click_count in [1, 2] {
+            visual.simulate_event(MouseDownEvent {
+                button: MouseButton::Left,
+                position: cell,
+                modifiers: none,
+                click_count,
+                first_mouse: false,
+            });
+            visual.simulate_event(MouseUpEvent {
+                button: MouseButton::Left,
+                position: cell,
+                modifiers: none,
+                click_count,
+            });
+        }
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert_eq!(state.editing_cell(), Some(CellCoord::new(2, 1)));
+            assert!(state.selection().is_full_row_selected(1, 2));
+            assert!(state.selection().is_full_row_selected(3, 2));
+            assert_eq!(
+                state.multi_edit_count(),
+                3,
+                "rows 1 to 3 of the text column; the integer key column is skipped"
+            );
         });
     }
 

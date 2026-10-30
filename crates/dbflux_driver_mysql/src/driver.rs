@@ -369,7 +369,35 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
 /// MySQL/MariaDB SQL dialect implementation.
 pub struct MysqlDialect;
 
+/// Cell expressions MySQL and MariaDB both accept. A 16-byte uuid is packed
+/// with `UNHEX(REPLACE(..))` because MariaDB has no `UUID_TO_BIN`.
+static MYSQL_CELL_EXPRESSIONS: dbflux_core::CellExpressionVocabulary =
+    dbflux_core::CellExpressionVocabulary {
+        timestamp: &[
+            "NOW()",
+            "CURRENT_TIMESTAMP",
+            "UTC_TIMESTAMP()",
+            "DATE_ADD(NOW(), INTERVAL 1 DAY)",
+        ],
+        date: &["CURDATE()", "CURRENT_DATE", "UTC_DATE()"],
+        time: &["CURTIME()", "CURRENT_TIME", "UTC_TIME()"],
+        uuid: &["UUID()"],
+        uuid_text: &["UUID()"],
+        uuid_binary: &["UNHEX(REPLACE(UUID(), '-', ''))"],
+        text: &[
+            "CONCAT({col}, '')",
+            "UPPER({col})",
+            "LOWER({col})",
+            "TRIM({col})",
+        ],
+        supports_default: true,
+    };
+
 impl SqlDialect for MysqlDialect {
+    fn cell_expression_vocabulary(&self) -> Option<&'static dbflux_core::CellExpressionVocabulary> {
+        Some(&MYSQL_CELL_EXPRESSIONS)
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         mysql_quote_ident(name)
     }
@@ -450,6 +478,51 @@ impl SqlDialect for MysqlDialect {
 }
 
 static MYSQL_DIALECT: MysqlDialect = MysqlDialect;
+
+/// The UPDATE `update_row` runs for `patch`, and the save preview shows.
+fn mysql_update_row_sql(patch: &RowPatch) -> Result<String, DbError> {
+    if !patch.identity.is_valid() {
+        return Err(DbError::query_failed(
+            "Cannot update row: invalid row identity (missing primary key)".to_string(),
+        ));
+    }
+
+    if !patch.has_changes() {
+        return Err(DbError::query_failed("No changes to save".to_string()));
+    }
+
+    let update_sql = SqlQueryBuilder::new(&MYSQL_DIALECT)
+        .build_update(patch, false)
+        .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query".to_string()))?;
+    Ok(format!("{} LIMIT 1", update_sql))
+}
+
+/// The INSERT `insert_row` runs for `insert`, and the save preview shows.
+fn mysql_insert_row_sql(insert: &RowInsert) -> Result<String, DbError> {
+    if !insert.is_valid() {
+        return Err(DbError::query_failed(
+            "Cannot insert row: no columns specified".to_string(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&MYSQL_DIALECT)
+        .build_insert(insert, false)
+        .ok_or_else(|| DbError::query_failed("Failed to build INSERT query".to_string()))
+}
+
+/// The DELETE `delete_row` runs for `delete`, and the save preview shows.
+fn mysql_delete_row_sql(delete: &RowDelete) -> Result<String, DbError> {
+    if !delete.is_valid() {
+        return Err(DbError::query_failed(
+            "Cannot delete row: invalid row identity (missing primary key)".to_string(),
+        ));
+    }
+
+    let delete_sql = SqlQueryBuilder::new(&MYSQL_DIALECT)
+        .build_delete(delete, false)
+        .ok_or_else(|| DbError::query_failed("Failed to build DELETE query".to_string()))?;
+    Ok(format!("{} LIMIT 1", delete_sql))
+}
 
 // =============================================================================
 // MySQL Code Generator
@@ -2686,23 +2759,21 @@ impl Connection for MysqlConnection {
         }
     }
 
+    fn update_row_statement(&self, patch: &RowPatch) -> Option<Result<String, DbError>> {
+        Some(mysql_update_row_sql(patch))
+    }
+
+    fn insert_row_statement(&self, insert: &RowInsert) -> Option<Result<String, DbError>> {
+        Some(mysql_insert_row_sql(insert))
+    }
+
+    fn delete_row_statement(&self, delete: &RowDelete) -> Option<Result<String, DbError>> {
+        Some(mysql_delete_row_sql(delete))
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
-        if !patch.identity.is_valid() {
-            return Err(DbError::query_failed(
-                "Cannot update row: invalid row identity (missing primary key)".to_string(),
-            ));
-        }
-
-        if !patch.has_changes() {
-            return Err(DbError::query_failed("No changes to save".to_string()));
-        }
-
+        let update_sql = mysql_update_row_sql(patch)?;
         let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
-
-        let update_sql = builder
-            .build_update(patch, false)
-            .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query".to_string()))?;
-        let update_sql = format!("{} LIMIT 1", update_sql);
 
         log::debug!("[UPDATE] Executing: {}", update_sql);
 
@@ -2758,17 +2829,8 @@ impl Connection for MysqlConnection {
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
-        if !insert.is_valid() {
-            return Err(DbError::query_failed(
-                "Cannot insert row: no columns specified".to_string(),
-            ));
-        }
-
+        let insert_sql = mysql_insert_row_sql(insert)?;
         let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
-
-        let insert_sql = builder
-            .build_insert(insert, false)
-            .ok_or_else(|| DbError::query_failed("Failed to build INSERT query".to_string()))?;
 
         log::debug!("[INSERT] Executing: {}", insert_sql);
 
@@ -2808,7 +2870,15 @@ impl Connection for MysqlConnection {
                 table, first_col, last_id
             )
         } else {
-            let identity = RecordIdentity::composite(insert.column_names(), insert.values());
+            // An expression's value is only known to the server, so the row is
+            // found by the literal columns alone.
+            let (columns, values) = insert
+                .assignments
+                .iter()
+                .filter(|a| a.sql_expression().is_none())
+                .map(|a| (a.name.clone(), a.value.clone()))
+                .unzip();
+            let identity = RecordIdentity::composite(columns, values);
             builder
                 .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
                 .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?
@@ -2879,10 +2949,7 @@ impl Connection for MysqlConnection {
                 .collect::<Row>()
         });
 
-        let delete_sql = builder
-            .build_delete(delete, false)
-            .ok_or_else(|| DbError::query_failed("Failed to build DELETE query".to_string()))?;
-        let delete_sql = format!("{} LIMIT 1", delete_sql);
+        let delete_sql = mysql_delete_row_sql(delete)?;
 
         log::debug!("[DELETE] Executing: {}", delete_sql);
 
@@ -6096,3 +6163,107 @@ fn is_tls_negotiation_failure(error: &mysql::Error) -> bool {
 
 #[cfg(test)]
 mod preferred_fallback_tests;
+
+#[cfg(test)]
+mod cell_expression_tests {
+    use super::*;
+    use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch, SqlQueryBuilder};
+
+    fn suggestions(column: &str, type_name: &str) -> Vec<String> {
+        MYSQL_DIALECT
+            .cell_expression_suggestions(column, type_name)
+            .expect("MySQL offers cell expressions")
+    }
+
+    #[test]
+    fn cell_expressions_are_suggested_per_column_type() {
+        assert_eq!(
+            suggestions("created_at", "datetime"),
+            [
+                "NOW()",
+                "CURRENT_TIMESTAMP",
+                "UTC_TIMESTAMP()",
+                "DATE_ADD(NOW(), INTERVAL 1 DAY)",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+        assert_eq!(
+            suggestions("born", "date"),
+            ["CURDATE()", "CURRENT_DATE", "UTC_DATE()", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("id", "char(36)"),
+            [
+                "UUID()",
+                "CONCAT(`id`, '')",
+                "UPPER(`id`)",
+                "LOWER(`id`)",
+                "TRIM(`id`)",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+        assert_eq!(
+            suggestions("id", "binary(16)"),
+            ["UNHEX(REPLACE(UUID(), '-', ''))", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("qty", "int unsigned"),
+            ["`qty` + 1", "`qty` - 1", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("name", "varchar(64)"),
+            [
+                "CONCAT(`name`, '')",
+                "UPPER(`name`)",
+                "LOWER(`name`)",
+                "TRIM(`name`)",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+        assert_eq!(suggestions("doc", "json"), ["NULL", "DEFAULT"]);
+    }
+
+    #[test]
+    fn a_row_update_writes_an_expression_unquoted_and_its_text_as_a_literal() {
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "events".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("seen_at", "NOW()", None),
+                ColumnAssignment::new("note", Value::Text("NOW()".to_string())),
+            ],
+        );
+
+        let sql = SqlQueryBuilder::new(&MYSQL_DIALECT)
+            .build_update(&patch, false)
+            .unwrap();
+
+        assert!(sql.contains("`seen_at` = NOW()"), "{sql}");
+        assert!(!sql.contains("`note` = NOW()"), "{sql}");
+    }
+
+    #[test]
+    fn the_previewed_statements_are_the_ones_the_row_mutations_run() {
+        let identity = RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]);
+        let patch = RowPatch::with_typed_changes(
+            identity.clone(),
+            "events".to_string(),
+            None,
+            vec![ColumnAssignment::expression("seen_at", "NOW()", None)],
+        );
+        let delete = dbflux_core::RowDelete::new(identity, "events".to_string(), None);
+
+        assert_eq!(
+            mysql_update_row_sql(&patch).unwrap(),
+            "UPDATE `events` SET `seen_at` = NOW() WHERE `id` = 1 LIMIT 1"
+        );
+        assert_eq!(
+            mysql_delete_row_sql(&delete).unwrap(),
+            "DELETE FROM `events` WHERE `id` = 1 LIMIT 1"
+        );
+    }
+}

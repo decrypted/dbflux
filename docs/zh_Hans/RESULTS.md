@@ -31,7 +31,9 @@
 - `z` 切换面板。
 - `m`（或 `Shift+F10`）打开行 / 单元格上下文菜单。
 
-使用鼠标时，单击选择一个单元格，`Shift`+单击或按住拖动选择到另一个单元格的范围。单击行号选择整行，在另一个行号上 `Shift`+单击选择其间的所有行。在单元格或行号上 `Ctrl`+单击（macOS 上为 `Cmd`+单击）会将其加入选择，若它是唯一选中的则取消选择；复制多个范围时会复制其覆盖的行和列，未选中的单元格留空。添加的范围用于复制：删除、复制行、保存等行操作作用于光标所在的行，右键单击会选中指针下的单元格，记录视图将 `Ctrl`+单击视为普通单击。
+使用鼠标时，单击选择一个单元格，`Shift`+单击或按住拖动选择到另一个单元格的范围。单击行号选择整行，在另一个行号上 `Shift`+单击选择其间的所有行。在单元格或行号上 `Ctrl`+单击（macOS 上为 `Cmd`+单击）会将其加入选择，若它是唯一选中的则取消选择；复制多个范围时会复制其覆盖的行和列，未选中的单元格留空。添加的范围用于复制：删除、复制行、保存等行操作作用于光标所在的行，右键单击会选中指针下的单元格，记录视图将 `Ctrl`+单击视为普通单击。拖动超出网格边缘时，网格会朝该方向滚动，指针离得越远滚动越快，并持续扩展范围，直到松开按钮或指针移回。
+
+当选区包含多个单元格时，状态栏会显示单元格数量，以及其中数字的总和、平均值、最小值和最大值。NULL 和文本会计入数量，但不参与计算，状态栏会说明跳过了多少个。合计基于已加载的行（包括未保存的编辑）计算，不会再次查询数据库。
 
 ## 记录视图
 
@@ -130,6 +132,8 @@ JPEG、GIF、WebP 或 BMP 图片（根据字节本身识别，而不是根据列
 - `y` — 复制选中的行。
 - `Ctrl+c`（`Cmd+c`）— 把选中的单元格复制到剪贴板。
 
+选中多个单元格时，按 `Enter`、`F2` 或双击其中一个单元格，会为所有选中单元格打开编辑器，状态栏会显示此次编辑将更改多少个单元格。提交的值会写入每个列类型相同且可以接受它的选中单元格，作为未保存的更改，保存和还原与其他编辑一样处理，一次撤销（`u` 或 `Ctrl+z`）即可撤回整个编辑。只读列中的单元格、标记为删除的行以及内联编辑器不编辑的值（JSON、较长或多行文本）会被跳过；当选区跨越多行时，主键列也会被跳过，因为在每一行的主键中写入同一个值永远无法保存；从某列的允许值列表中选择的值只会写入具有相同列表的列。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/results/editing-dark.webp">
   <img src="../images/results/editing-light.webp" alt="customers 表中有一个已编辑但尚未保存的单元格，Save 与 Revert 按钮处于可用状态">
@@ -161,6 +165,41 @@ JSON 列则拒绝保存。
 | `Ctrl+Shift+Enter` | 最大化或恢复编辑器 |
 
 `Ctrl+c`（`Cmd+c`）仍然复制选中的文本。
+### 单元格中的 SQL 表达式
+
+在 MySQL、MariaDB、PostgreSQL、SQLite 或 SQL Server 的表中，单元格可以设为 SQL 表达式而不是值，例如 `NOW()`、`"qty" + 1` 或 `DEFAULT`。表达式会不加引号地写入该行的 `UPDATE` 或 `INSERT`，由数据库计算出值。
+
+- 单元格上下文菜单中的 **作为 SQL 表达式编辑…**，或 `Ctrl+Alt+E`（macOS 上为 `Cmd+Alt+E`），会打开 `fx` 开关已打开的编辑器。在更大选区中的单元格上，表达式会像多单元格编辑一样写入每个选中的单元格。
+- 编辑器打开时，点击 `fx` 或按同一快捷键可在值和表达式之间切换，已输入的内容保留。
+- `fx` 打开时，编辑器下方的列表会按列的类型和数据库给出建议的表达式，`Down` / `Up` 会逐个把它们写入编辑器。也可以输入任何其他表达式。
+
+| 列类型 | MySQL / MariaDB | PostgreSQL | SQLite | SQL Server |
+|---|---|---|---|---|
+| 日期和时间 | `NOW()`、`CURRENT_TIMESTAMP`、`UTC_TIMESTAMP()`、`DATE_ADD(NOW(), INTERVAL 1 DAY)` | `now()`、`current_timestamp`、`now() + interval '1 day'` | `CURRENT_TIMESTAMP`、`datetime('now')`、`datetime('now', 'localtime')`、`datetime('now', '+1 day')` | `GETDATE()`、`CURRENT_TIMESTAMP`、`SYSDATETIME()`、`GETUTCDATE()`、`DATEADD(day, 1, GETDATE())` |
+| 日期 | `CURDATE()`、`CURRENT_DATE`、`UTC_DATE()` | `current_date`、`current_date + 1` | `CURRENT_DATE`、`date('now')` | `CAST(GETDATE() AS date)` |
+| 时间 | `CURTIME()`、`CURRENT_TIME`、`UTC_TIME()` | `current_time`、`localtime` | `CURRENT_TIME`、`time('now')` | `CAST(GETDATE() AS time)` |
+| uuid | `UUID()`（`char(36)`）、`UNHEX(REPLACE(UUID(), '-', ''))`（`binary(16)`） | `gen_random_uuid()` | | `NEWID()` |
+| 数字 | `col + 1`、`col - 1` | 同上 | 同上 | 同上 |
+| 文本 | `CONCAT(col, '')`、`UPPER`、`LOWER`、`TRIM` | `col \|\| ''`、`upper`、`lower`、`trim` | `col \|\| ''`、`upper`、`lower`、`trim` | `CONCAT(col, '')`、`UPPER`、`LOWER`、`LTRIM(RTRIM(col))` |
+| 任意类型 | `NULL`、`DEFAULT` | `NULL`、`DEFAULT` | `NULL` | `NULL`、`DEFAULT` |
+
+尚未保存的表达式在单元格中显示为斜体的 `fx NOW()`；保存后，该行显示数据库计算出的值。撤销、重做和还原会像处理其他编辑一样处理它，新行的单元格也可以使用表达式。包含注释、`;` 或括号外 `,` 的表达式在提交时会被拒绝，因为它可能改变单元格以外的内容（注释可能把 `UPDATE` 的 `WHERE` 隐藏掉）。其他数据库、查询结果和文档集合不提供表达式。
+
+### 保存前查看更改
+
+编辑栏中保存和还原旁边的 **查看**，或 `Ctrl+Alt+S`（macOS 上为 `Cmd+Alt+S`），会按执行顺序（删除、新行、编辑过的行）显示保存将为该表未保存的更改执行的语句。这些语句由保存本身构建并由连接的驱动生成，因此就是数据库收到的内容，SQL 表达式不加引号。值以字面量写入语句；MySQL、MariaDB、PostgreSQL、SQLite 和 SQL Server 驱动不发送绑定参数。无法保存的更改（缺少主键的行）会显示为说明原因的注释。
+
+在查看窗口中，**保存**（或 `Enter`）会执行这些语句，不再单独确认删除；**复制 SQL** 把它们作为脚本复制；**取消**（或 `Escape`）关闭窗口并保留更改。在“设置 > 通用 > 数据网格”中打开 **保存前查看更改** 后，表格网格的每次保存都会先打开查看窗口。
+
+### 生成的 ID
+
+可以给单元格写入由 DBFlux 生成、作为普通值写入的新标识符，因此适用于所有数据库：**UUID v4**（随机）、**UUID v7**（按时间排序）、**KSUID**（27 个字符，按秒排序）和 **ULID**（26 个字符，按毫秒排序）。
+
+- 单元格上下文菜单中，列能存储的每种类型各有一个 **生成 …** 项。在更大选区中的单元格上，每个选中的单元格都会得到自己的新值，而不是副本，一次撤销即可全部撤回。
+- 对看起来像标识符的列（`uuid` 类型、主键、长度适合某种类型的文本列，或 `user_id` 这样的名称），内联编辑器下方的列表会先列出这些类型（UUID 在最上面），`Down` / `Up` 会把新值写入编辑器。在多单元格选区上提交时，每个单元格同样得到自己的值。
+- 单元格编辑器对话框中每种类型各有一个 **生成 …** 按钮。
+
+`uuid` 或 `uniqueidentifier` 列接收带连字符的 UUID。文本列接收适合其声明长度的类型：`char(36)` 接收 UUID，`char(27)` 接收 KSUID，`varchar(30)` 接收 KSUID 或 ULID，长度未知的列四种都可以。MySQL 的 `binary(16)` 等二进制列不提供生成的 ID，因为网格写入的是文本，而这类列需要 16 个原始字节；这时请改用 `UNHEX(REPLACE(UUID(), '-', ''))` 表达式。
 
 ### 结果何时可编辑
 

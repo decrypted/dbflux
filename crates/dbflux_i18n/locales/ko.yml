@@ -174,6 +174,9 @@ components:
       text: "텍스트"
     wrap: 줄바꿈
   data_table:
+    expression:
+      toggle: "SQL 식으로 편집"
+      generate: "%{kind} 생성"
     record:
       empty: 표시할 행이 없습니다
       name_header: 이름
@@ -1552,6 +1555,17 @@ document:
       waiting_title: 연결되지 않음
       waiting_connection: "%{object}을(를) 불러오려면 %{profile}에 연결하세요."
       waiting_database: "%{object}을(를) 불러오려면 사이드바에서 %{database} 데이터베이스를 펼치세요."
+    review:
+      title: "변경 사항 검토"
+      literals_note: "저장이 실행하는 문을 순서대로, 드라이버가 보내는 그대로 보여 줍니다. 값은 리터럴로 SQL에 들어가며 바인드 매개변수는 보내지 않습니다."
+      cancel: "취소"
+      copy: "SQL 복사"
+      save: "저장"
+      unavailable: "이 드라이버는 이 변경에 대해 보내는 문을 보여 주지 않습니다."
+      skipped_row: "%{row}행은 저장되지 않습니다: %{reason}"
+      no_connection: "연결이 열려 있지 않아 문을 만들 수 없습니다."
+    expression:
+      rejected: "식을 저장할 수 없습니다: %{reason}"
     chart_dock:
       toolbar:
         apply: 적용
@@ -1635,6 +1649,8 @@ document:
         paste: 붙여넣기
         edit: 편집
         edit_in_modal: 모달에서 편집…
+        edit_as_expression: "SQL 식으로 편집…"
+        generate_id: "%{kind} 생성"
         set_default: 기본값으로 설정
         set_null: NULL로 설정
         add_row: 행 추가
@@ -1672,6 +1688,7 @@ document:
         clear_filter: "필터 지우기"
         open_builder: "쿼리 빌더 열기"
         reset_builder: "빌더 쿼리 초기화"
+        review_changes: "변경 사항 검토"
         save_changes: "모든 변경 사항 저장"
         revert_changes: "모든 변경 사항 되돌리기"
         auto_refresh: "자동 새로 고침 간격…"
@@ -1746,6 +1763,7 @@ document:
           update_failed: "문서를 업데이트하지 못했습니다: %{error}"
     grid:
       edit_bar:
+        review: "검토"
         clean: 저장하지 않은 변경 사항 없음
         dirty:
           one: "저장하지 않은 변경 사항 %{count}개"
@@ -1800,6 +1818,19 @@ document:
         pending_changes:
           one: "대기 중인 변경 사항 %{count}개"
           many: "대기 중인 변경 사항 %{count}개"
+        multi_edit: "셀 %{count}개 편집 중"
+        selection:
+          cells: "셀 %{count}개"
+          sum: "합계 %{value}"
+          average: "평균 %{value}"
+          min: "최소 %{value}"
+          max: "최대 %{value}"
+          nulls_skipped:
+            one: "NULL %{count}개 제외"
+            many: "NULL %{count}개 제외"
+          non_numeric_skipped:
+            one: "숫자가 아닌 값 %{count}개 제외"
+            many: "숫자가 아닌 값 %{count}개 제외"
       export:
         trigger: 내보내기
         save_as_file: 불러온 행을 파일로 저장
@@ -3765,6 +3796,7 @@ modals:
       no_metrics_filtered: 필터와 일치하는 지표가 없습니다.
     cancel: 취소
   cell_editor:
+    generate: "%{kind} 생성"
     title_column: "%{column} 편집 (%{type_name})"
     title_json: JSON 편집
     title_text: 텍스트 편집
@@ -4149,6 +4181,9 @@ settings:
       group: "편집기"
     data_grid:
       group: "데이터 그리드"
+    grid_review_before_save:
+      label: "저장 전에 변경 사항 검토"
+      hint: "저장할 때 먼저 실행할 문을 보여 주며, 저장하거나 복사하거나 취소할 수 있습니다."
     grid_fk_labels:
       label: "외래 키 셀에 참조된 행의 레이블 표시"
       hint: "외래 키를 담은 셀은 참조된 행의 레이블을 id와 함께 확인해 표시합니다. 저장한 이후에 불러오는 페이지에 적용됩니다. 행 인스펙터는 항상 참조를 확인합니다."
@@ -4387,6 +4422,8 @@ settings:
       find_similar_rows: 유사한 행 찾기
       copy_selection_as_json: "선택 영역을 JSON으로 복사"
       results_set_null: 셀을 NULL로 설정
+      toggle_cell_expression: "셀을 SQL 식으로 편집"
+      review_changes: "변경 사항 검토"
       open_context_menu: 상황에 맞는 메뉴 열기
       open_pane_actions: 패널 작업 열기
       menu_up: 메뉴 위로

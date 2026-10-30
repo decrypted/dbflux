@@ -17,9 +17,18 @@ use super::theme::{
     AUTO_WIDTH_SAMPLE_ROWS, AUTO_WIDTH_SLACK, CELL_PADDING_X, MAX_AUTO_COLUMN_WIDTH,
     MIN_COLUMN_WIDTH, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
 };
+use super::totals::{self, SelectionTotals, TotalsCache, TotalsKey};
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 use crate::fonts;
 use crate::tokens::GridMetrics;
+
+mod autoscroll;
+mod expression_edit;
+mod generated_ids;
+mod multi_edit;
+
+pub use expression_edit::EditorSuggestion;
+pub use generated_ids::GeneratedIdOffer;
 
 /// Grid face and glyph advances an auto-sized column width was estimated
 /// with. A change in any of them re-estimates the auto-sized columns.
@@ -140,9 +149,21 @@ pub struct DataTableState {
     /// other cells extends the selection to them.
     drag_selecting: bool,
 
+    /// Pointer of the running drag selection and the task scrolling the
+    /// grid while it is held past an edge of the body.
+    drag_autoscroll: Option<autoscroll::DragAutoscroll>,
+
     // --- Edit Mode ---
     /// Cell currently being edited (inline editor is open).
     editing_cell: Option<CellCoord>,
+
+    /// Every cell the open editor writes to when committed, the edited one
+    /// first; empty unless the edit started on a selection of several cells.
+    edit_targets: Vec<CellCoord>,
+
+    /// The selection a plain press on one of its cells collapsed, kept so
+    /// the second press of a double-click can bring it back for the edit.
+    selection_before_press: Option<(CellCoord, SelectionState)>,
 
     /// Input state for the inline cell editor.
     cell_input: Option<Entity<InputState>>,
@@ -200,6 +221,26 @@ pub struct DataTableState {
     /// Enum/set options per column index.
     enum_options: std::collections::HashMap<usize, Vec<String>>,
 
+    /// The expressions offered per column when a cell is edited as a SQL
+    /// expression. A column the map lacks cannot hold an expression, so an
+    /// empty map turns expression editing off.
+    expression_suggestions: HashMap<usize, Vec<String>>,
+
+    /// Whether the open inline editor writes a SQL expression instead of a
+    /// value.
+    editing_expression: bool,
+
+    /// The suggestion of the open expression editor last stepped to with
+    /// the arrow keys.
+    expression_highlight: Option<usize>,
+
+    /// The identifier kinds each column can take.
+    generated_id_offers: HashMap<usize, GeneratedIdOffer>,
+
+    /// The identifier the open editor was given from its list, so a commit
+    /// over several cells gives each its own instead of copying it.
+    generated_in_editor: Option<(dbflux_core::GeneratedIdKind, String)>,
+
     /// Document extras (column groups, presence bars, stepping into nested
     /// values). `None` for relational grids.
     document: Option<super::document::DocumentPresentation>,
@@ -207,6 +248,9 @@ pub struct DataTableState {
     /// Facts drawn under each column header, indexed like the model's
     /// columns. Empty, or all `None`, keeps the header one line tall.
     header_annotations: Vec<Option<HeaderAnnotation>>,
+
+    /// Totals of the selected cells, kept until the cells they cover change.
+    selection_totals: TotalsCache,
 }
 
 impl DataTableState {
@@ -241,7 +285,10 @@ impl DataTableState {
             horizontal_scroll_handle: ScrollHandle::new(),
             horizontal_offset: px(0.0),
             drag_selecting: false,
+            drag_autoscroll: None,
             editing_cell: None,
+            edit_targets: Vec::new(),
+            selection_before_press: None,
             cell_input: None,
             enum_dropdown: None,
             _editing_subs: Vec::new(),
@@ -255,8 +302,14 @@ impl DataTableState {
             positional_rows: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
+            expression_suggestions: HashMap::new(),
+            editing_expression: false,
+            expression_highlight: None,
+            generated_id_offers: HashMap::new(),
+            generated_in_editor: None,
             document: None,
             header_annotations: Vec::new(),
+            selection_totals: TotalsCache::default(),
         }
     }
 
@@ -427,6 +480,8 @@ impl DataTableState {
         self.reload_header_annotations(&previous_titles);
         self.edit_buffer.reset_for_base(self.model.row_count());
         self.enum_options.clear();
+        self.expression_suggestions.clear();
+        self.generated_id_offers.clear();
 
         match swap {
             ModelSwap::KeepCursor => self.clamp_selection(),
@@ -777,6 +832,7 @@ impl DataTableState {
         cx: &mut Context<Self>,
     ) {
         self.drag_selecting = self.apply_cell_click(coord, modifiers, cx);
+        self.drag_autoscroll = None;
     }
 
     /// The pointer moved onto `coord` with the left button held: extend the
@@ -789,6 +845,7 @@ impl DataTableState {
 
     pub fn end_drag_select(&mut self) {
         self.drag_selecting = false;
+        self.drag_autoscroll = None;
     }
 
     /// Selection change for a primary click on a row number: the whole row,
@@ -796,7 +853,7 @@ impl DataTableState {
     /// Ctrl (Cmd on macOS) the row added to, or taken out of, the selection.
     pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
         // A press on a row number never starts a cell drag.
-        self.drag_selecting = false;
+        self.end_drag_select();
         self.commit_edit_in_progress(cx);
         let col_count = self.col_count();
         if modifiers.shift {
@@ -853,6 +910,16 @@ impl DataTableState {
         if self.editing_cell.is_some() {
             self.stop_editing(true, cx);
         }
+    }
+
+    /// Count, sum, average, minimum and maximum of the selected cells as the
+    /// grid shows them, for a host's status bar. `None` while fewer than two
+    /// cells are selected.
+    pub fn selection_totals(&self) -> Option<SelectionTotals> {
+        let key = TotalsKey::new(&self.model, &self.edit_buffer, &self.selection);
+        self.selection_totals.get_or_compute(key, || {
+            totals::selection_totals(&self.model, &self.edit_buffer, &self.selection)
+        })
     }
 
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
@@ -1018,18 +1085,8 @@ impl DataTableState {
         row: usize,
         col: usize,
     ) -> Option<&'a super::model::CellValue> {
-        use super::model::VisualRowSource;
-
-        match visual_order.get(row).copied()? {
-            VisualRowSource::Base(base_row) => {
-                let base = self.model.cell(base_row, col)?;
-                Some(self.edit_buffer.get_cell(base_row, col, base))
-            }
-            VisualRowSource::Insert(insert_idx) => self
-                .edit_buffer
-                .get_pending_insert_by_idx(insert_idx)?
-                .get(col),
-        }
+        self.edit_buffer
+            .displayed_cell(&self.model, visual_order, row, col)
     }
 
     // --- Focus ---
@@ -1341,6 +1398,16 @@ impl DataTableState {
     ) -> bool {
         use super::model::{ColumnKind, VisualRowSource};
 
+        self.edit_targets.clear();
+        self.editing_expression = false;
+        self.expression_highlight = None;
+        self.generated_in_editor = None;
+
+        // A staged expression is edited as one, not as the text it spells.
+        if self.staged_expression(coord).is_some() {
+            return self.start_editing_expression(coord, window, cx);
+        }
+
         if self.document.is_some() && self.is_nested_cell(coord) {
             cx.emit(DataTableEvent::StepIntoRequested {
                 row: coord.row,
@@ -1464,10 +1531,15 @@ impl DataTableState {
             // be silently discarded.
             self._editing_subs.clear();
 
+            // Captured for the same reason as `coord`: the dismissal may have
+            // closed the editor, and with it the targets, by now.
+            let targets = self.multi_edit_targets(coord);
+            let targets_for_selection = targets.clone();
             self._editing_subs.push(cx.subscribe(
                 &dropdown,
                 move |this, _dropdown, event: &DropdownSelectionChanged, cx| {
                     let value = event.item.value.to_string();
+                    this.edit_targets = targets_for_selection.clone();
                     this.apply_enum_selection_at(coord, &value, cx);
                 },
             ));
@@ -1480,6 +1552,7 @@ impl DataTableState {
             ));
 
             self.editing_cell = Some(coord);
+            self.edit_targets = targets;
             self.enum_dropdown = Some(dropdown);
             self.cell_input = None;
             self.scroll_to_cell(coord.row, coord.col);
@@ -1487,9 +1560,22 @@ impl DataTableState {
             return true;
         }
 
+        self.open_inline_input(coord, &initial_value, window, cx);
+        true
+    }
+
+    /// Opens the text editor on `coord` holding `initial_value`, for the
+    /// cell or, when `coord` is part of a larger selection, for all of it.
+    fn open_inline_input(
+        &mut self,
+        coord: CellCoord,
+        initial_value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
-            state.set_value(&initial_value, window, cx);
+            state.set_value(initial_value, window, cx);
             state
         });
 
@@ -1510,11 +1596,11 @@ impl DataTableState {
         );
 
         self.editing_cell = Some(coord);
+        self.edit_targets = self.multi_edit_targets(coord);
         self.cell_input = Some(input);
         self.enum_dropdown = None;
         self.scroll_to_cell(coord.row, coord.col);
         cx.notify();
-        true
     }
 
     /// Get the cell input state if currently editing.
@@ -1543,7 +1629,7 @@ impl DataTableState {
             super::model::CellValue::text(value)
         };
 
-        self.stage_cell_value(coord.row, coord.col, cell_value);
+        self.stage_edit_value(coord, cell_value);
 
         cx.notify();
     }
@@ -1551,6 +1637,9 @@ impl DataTableState {
     fn cancel_enum_edit(&mut self, cx: &mut Context<Self>) {
         self.editing_cell = None;
         self.enum_dropdown = None;
+        // A selection delivered after this dismissal brings back its own
+        // copy of the targets.
+        self.edit_targets.clear();
         cx.notify();
     }
 
@@ -1709,15 +1798,46 @@ impl DataTableState {
             if let Some(input) = self.cell_input.take() {
                 let value_str = input.read(cx).value().to_string();
 
-                self.stage_cell_value(
-                    coord.row,
-                    coord.col,
-                    super::model::CellValue::text(&value_str),
-                );
+                if self.editing_expression {
+                    if let Err(error) = dbflux_core::validate_cell_expression(&value_str) {
+                        // Enter on an expression the save would refuse keeps
+                        // the editor open on it; a host closing the table
+                        // drops it instead of staging it.
+                        if refocus {
+                            self.editing_cell = Some(coord);
+                            self.cell_input = Some(input);
+                            cx.emit(DataTableEvent::CellExpressionRejected {
+                                message: error.to_string(),
+                            });
+                            cx.notify();
+                            return;
+                        }
+                    } else {
+                        self.stage_edit_value(
+                            coord,
+                            super::model::CellValue::expression(&value_str),
+                        );
+                    }
+                } else if let Some((kind, generated)) = self
+                    .generated_in_editor
+                    .take()
+                    .filter(|(_, generated)| *generated == value_str && self.edit_targets.len() > 1)
+                {
+                    // An identifier picked for several cells is generated
+                    // once per cell, never copied.
+                    let targets = std::mem::take(&mut self.edit_targets);
+                    self.stage_generated_ids(kind, &targets, Some(generated));
+                } else {
+                    self.stage_edit_value(coord, super::model::CellValue::text(&value_str));
+                }
             }
         } else {
             self.cell_input = None;
         }
+        self.edit_targets.clear();
+        self.editing_expression = false;
+        self.expression_highlight = None;
+        self.generated_in_editor = None;
 
         // The input and dropdown these watch are gone; they are re-subscribed
         // when the next edit starts.

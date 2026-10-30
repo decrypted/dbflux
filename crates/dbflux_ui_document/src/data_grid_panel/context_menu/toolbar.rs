@@ -49,6 +49,8 @@ pub(crate) enum ToolbarAction {
     ClearNearest,
     /// Opens the vector column picker of the neighbor bar.
     NearestColumn,
+    /// Review in the edit bar.
+    ReviewChanges,
     /// Save in the edit bar.
     SaveChanges,
     /// Revert in the edit bar.
@@ -150,6 +152,7 @@ impl ToolbarAction {
             ToolbarAction::NearestDistance => "nearest-neighbors-distance",
             ToolbarAction::ClearNearest => "nearest-neighbors-clear",
             ToolbarAction::NearestColumn => "nearest-neighbors-column",
+            ToolbarAction::ReviewChanges => "review-changes",
             ToolbarAction::SaveChanges => "save-changes",
             ToolbarAction::RevertChanges => "revert-changes",
             ToolbarAction::AutoRefresh => "auto-refresh",
@@ -225,6 +228,7 @@ impl ToolbarAction {
             ToolbarAction::NearestDistance => AppIcon::Search,
             ToolbarAction::ClearNearest => AppIcon::X,
             ToolbarAction::NearestColumn => AppIcon::ChartScatter,
+            ToolbarAction::ReviewChanges => AppIcon::Eye,
             ToolbarAction::SaveChanges => AppIcon::Save,
             ToolbarAction::RevertChanges => AppIcon::RotateCcw,
             ToolbarAction::AutoRefresh => AppIcon::Clock,
@@ -386,6 +390,9 @@ impl DataGridPanel {
         }
 
         if self.has_pending_edits(cx) || self.has_pending_document_commit(cx) {
+            if matches!(self.source, DataSource::Table { .. }) {
+                actions.push(ToolbarAction::ReviewChanges);
+            }
             actions.push(ToolbarAction::SaveChanges);
             actions.push(ToolbarAction::RevertChanges);
         }
@@ -578,6 +585,9 @@ impl DataGridPanel {
             }
             ToolbarAction::NearestColumn => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.nearest_column")
+            }
+            ToolbarAction::ReviewChanges => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.review_changes")
             }
             ToolbarAction::SaveChanges => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.save_changes")
@@ -819,6 +829,9 @@ impl DataGridPanel {
             }
             ToolbarAction::RevertChanges if self.commits_document_patches(cx) => {
                 self.revert_document_edits(window, cx)
+            }
+            ToolbarAction::ReviewChanges => {
+                self.open_change_review(window, cx);
             }
             ToolbarAction::SaveChanges => {
                 if let Some(table_state) = &self.grid_table.table_state {

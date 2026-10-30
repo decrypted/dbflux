@@ -86,6 +86,7 @@ converted crate by crate and stays in English for now.
 |---------|---------|--------------|
 | **Show referenced-row labels in foreign-key cells** | Off | Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after you save; the row inspector always resolves references. |
 | **Sort tables by primary key descending** | Off | Tables open ordered by their primary key descending instead of ascending, so with an auto-increment key the latest rows come first. Clearing a column sort returns to this order, and a click on the key column's header from this order sorts it ascending. Tables opened after you save use it; in a table already open, clearing a column sort picks it up too. |
+| **Review changes before saving** | Off | Save in a table grid first shows the statements it will run, with Save, Copy SQL and Cancel, as the Review button does. See Working with Results. |
 | **Clicking a column header sorts the column** | Off | Off: a click on a column header selects the whole column, and the arrow at the header's right edge sorts. On: a plain click sorts the column (none, ascending, descending), and `Shift`+click and `Ctrl`+click still select columns. Tables that keep their rows in file order (CSV, Parquet, spreadsheets) always select. |
 
 ### Startup & session

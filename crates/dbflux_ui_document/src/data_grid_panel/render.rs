@@ -341,6 +341,9 @@ impl Render for DataGridPanel {
             .when(self.pending_delete_confirm.is_some(), |d| {
                 d.child(self.render_delete_confirm_modal(&st.theme, cx))
             })
+            .when(self.change_review.is_some(), |d| {
+                d.child(self.render_change_review(cx))
+            })
             .when(self.document_view.cell_editor.read(cx).is_visible(), |d| {
                 d.child(self.document_view.cell_editor.clone())
             })
@@ -423,12 +426,22 @@ impl DataGridPanel {
             self.focus.context_menu_focus.focus(window, cx);
         }
 
+        if std::mem::take(&mut self.pending.change_review) {
+            self.open_change_review(window, cx);
+        }
+
         if let Some(modal) = self.pending.modal_open.take() {
             let column = self
                 .result
                 .columns
                 .get(modal.col)
                 .map(|column| (column.name.clone(), column.type_name.clone()));
+            let id_kinds = self
+                .grid_table
+                .table_state
+                .as_ref()
+                .map(|state| state.read(cx).generated_id_kinds(modal.col).to_vec())
+                .unwrap_or_default();
 
             self.document_view.cell_editor.update(cx, |editor, cx| {
                 editor.open(
@@ -440,6 +453,7 @@ impl DataGridPanel {
                     window,
                     cx,
                 );
+                editor.set_generated_id_kinds(id_kinds, cx);
             });
         }
 
@@ -1529,6 +1543,21 @@ impl DataGridPanel {
                     this.step_edit_history(false, window, cx);
                 })),
             )
+            .when(matches!(self.source, DataSource::Table { .. }), |bar| {
+                bar.child(
+                    Button::new(
+                        "review-btn",
+                        dbflux_i18n::t!("document.data.grid.edit_bar.review"),
+                    )
+                    .ghost()
+                    .icon(AppIcon::Eye)
+                    .disabled(!has_changes)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_change_review(window, cx);
+                    })),
+                )
+            })
             .child(
                 Button::new(
                     "save-btn",
@@ -3814,6 +3843,39 @@ impl DataGridPanel {
             .justify_end()
             .items_center()
             .gap(ResultMetrics::FOOTER_GAP)
+            .when_some(self.multi_edit_footer(cx), |d, note| {
+                d.child(
+                    div()
+                        .debug_selector(|| "footer-multi-edit".to_string())
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(ResultMetrics::FOOTER_ITEM_GAP)
+                        .text_color(theme.warning)
+                        .child(
+                            Icon::new(AppIcon::Pencil)
+                                .size(ResultMetrics::FOOTER_ICON)
+                                .color(theme.warning),
+                        )
+                        .child(note),
+                )
+            })
+            .when_some(self.selection_totals_footer(cx), |d, totals| {
+                d.child(
+                    div()
+                        .debug_selector(|| "footer-selection-totals".to_string())
+                        .flex()
+                        .min_w_0()
+                        .items_center()
+                        .gap(ResultMetrics::FOOTER_ITEM_GAP)
+                        .child(
+                            Icon::new(AppIcon::Sigma)
+                                .size(ResultMetrics::FOOTER_ICON)
+                                .color(muted),
+                        )
+                        .child(div().min_w_0().truncate().child(totals)),
+                )
+            })
             .when(has_data, |d| d.child(self.render_export_button(cx)))
             .child(
                 div()

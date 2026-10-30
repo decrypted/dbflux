@@ -46,7 +46,9 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
-With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. The extra ranges are for copying: delete, duplicate, save and the other row actions act on the row of the cursor, a right-click selects the cell under the pointer, and the record view treats `Ctrl`+click as a plain click.
+With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. The extra ranges are for copying: delete, duplicate, save and the other row actions act on the row of the cursor, a right-click selects the cell under the pointer, and the record view treats `Ctrl`+click as a plain click. Dragging past an edge of the grid scrolls it that way, faster the further out the pointer is, and keeps extending the range until the button is released or the pointer comes back.
+
+When the selection covers more than one cell, the status bar shows how many cells it holds and, for the numbers among them, their sum, average, minimum and maximum. NULLs and text are counted but left out of the figures, and the status bar says how many it skipped. The totals are worked out from the rows already loaded, unsaved edits included, without querying the database again.
 
 ## Record view
 
@@ -185,6 +187,8 @@ In the data grid:
 - `y` — copy the selected row.
 - `Ctrl+c` (`Cmd+c`) — copy the selected cell(s) to the clipboard.
 
+With several cells selected, `Enter`, `F2` or a double-click on one of them opens the editor for all of them, and the status bar says how many cells the edit will change. The value you commit is written to every selected cell of the same column type that can take it, as unsaved changes that Save and Revert handle like any other edit, and one undo (`u` or `Ctrl+z`) takes the whole edit back. Cells in read-only columns, rows marked for deletion and values the inline editor does not edit (JSON, long or multi-line text) are skipped, and so are key columns when the selection spans several rows, since one value in every row's key could never be saved; a value picked from a column's list of allowed values goes only to columns with the same list.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/results/editing-dark.webp">
   <img src="images/results/editing-light.webp" alt="The customers table with one edited cell not yet saved, and the Save and Revert buttons enabled">
@@ -221,6 +225,41 @@ button next to the close button. The size is remembered for the next value.
 | `Ctrl+Shift+Enter` | Maximize or restore the editor |
 
 `Ctrl+c` (`Cmd+c`) keeps copying the selected text.
+### SQL expressions in cells
+
+In a table of MySQL, MariaDB, PostgreSQL, SQLite or SQL Server, a cell can be set to a SQL expression instead of a value, such as `NOW()`, `"qty" + 1` or `DEFAULT`. The expression is saved unquoted in the row's `UPDATE` or `INSERT`, and the database computes the value.
+
+- **Edit as SQL expression…** in the cell's context menu, or `Ctrl+Alt+E` (`Cmd+Alt+E` on macOS), opens the editor with its `fx` switch on. On a cell of a larger selection the expression goes to every selected cell, as a multi-cell edit does.
+- In an open editor, a click on `fx` or the same shortcut switches between a value and an expression, keeping what was typed.
+- While `fx` is on, a list under the editor suggests expressions for the column's type and the database, and `Down` / `Up` write them into the editor one by one. Any other expression can be typed.
+
+| Column type | MySQL / MariaDB | PostgreSQL | SQLite | SQL Server |
+|---|---|---|---|---|
+| Date and time | `NOW()`, `CURRENT_TIMESTAMP`, `UTC_TIMESTAMP()`, `DATE_ADD(NOW(), INTERVAL 1 DAY)` | `now()`, `current_timestamp`, `now() + interval '1 day'` | `CURRENT_TIMESTAMP`, `datetime('now')`, `datetime('now', 'localtime')`, `datetime('now', '+1 day')` | `GETDATE()`, `CURRENT_TIMESTAMP`, `SYSDATETIME()`, `GETUTCDATE()`, `DATEADD(day, 1, GETDATE())` |
+| Date | `CURDATE()`, `CURRENT_DATE`, `UTC_DATE()` | `current_date`, `current_date + 1` | `CURRENT_DATE`, `date('now')` | `CAST(GETDATE() AS date)` |
+| Time | `CURTIME()`, `CURRENT_TIME`, `UTC_TIME()` | `current_time`, `localtime` | `CURRENT_TIME`, `time('now')` | `CAST(GETDATE() AS time)` |
+| uuid | `UUID()` (`char(36)`), `UNHEX(REPLACE(UUID(), '-', ''))` (`binary(16)`) | `gen_random_uuid()` | | `NEWID()` |
+| Number | `col + 1`, `col - 1` | same | same | same |
+| Text | `CONCAT(col, '')`, `UPPER`, `LOWER`, `TRIM` | `col \|\| ''`, `upper`, `lower`, `trim` | `col \|\| ''`, `upper`, `lower`, `trim` | `CONCAT(col, '')`, `UPPER`, `LOWER`, `LTRIM(RTRIM(col))` |
+| Any | `NULL`, `DEFAULT` | `NULL`, `DEFAULT` | `NULL` | `NULL`, `DEFAULT` |
+
+A staged expression shows in the cell as an italic `fx NOW()` until it is saved; after the save the row shows the value the database computed. Undo, redo and Revert treat it like any other edit, and a new row's cells can hold one too. An expression containing a comment, a `;` or a `,` outside parentheses is refused when you commit it, because it could change more than the cell (a comment could hide the `WHERE` of the `UPDATE`). Other databases, query results and document collections do not offer expressions.
+
+### Review changes before saving
+
+**Review** in the edit bar, next to Save and Revert, or `Ctrl+Alt+S` (`Cmd+Alt+S` on macOS), shows the statements Save will run for the table's unsaved changes, in the order it runs them: deletes, then new rows, then edited rows. They are built by the save itself and rendered by the connection's driver, so they are what the database receives, with SQL expressions unquoted. Values are written into the statements as literals; the MySQL, MariaDB, PostgreSQL, SQLite and SQL Server drivers send no bind parameters. A change that cannot be saved (a row without its key) shows as a comment saying why.
+
+From the review, **Save** (or `Enter`) runs those statements, without the separate confirmation deletes otherwise ask for; **Copy SQL** copies them as a script; **Cancel** (or `Escape`) closes the review and keeps the changes. With **Review changes before saving** on in Settings > General > Data grid, every Save of a table grid opens the review first.
+
+### Generated IDs
+
+A cell can be given a new identifier generated by DBFlux and written as an ordinary value, so it works with every database: **UUID v4** (random), **UUID v7** (time-ordered), **KSUID** (27 characters, sortable by second) and **ULID** (26 characters, sortable by millisecond).
+
+- The cell's context menu has a **Generate …** entry for each kind the column can store. On a cell of a larger selection, every selected cell gets its own new value, never a copy, and one undo takes them all back.
+- For a column that looks like an identifier (a `uuid` type, a key, a text column sized for one of the kinds, or a name such as `user_id`), the list under the inline editor offers the kinds first, UUIDs on top; `Down` / `Up` write a new value into the editor. Committing it over a multi-cell selection again gives each cell its own value.
+- The cell editor dialog shows a **Generate …** button per kind.
+
+A `uuid` or `uniqueidentifier` column takes the UUIDs in their hyphenated form. A text column takes the kinds that fit its declared length: a `char(36)` the UUIDs, a `char(27)` a KSUID, a `varchar(30)` a KSUID or a ULID, and a column of unknown length all four. Binary columns such as MySQL's `binary(16)` are not offered generated IDs, because the grid writes text and they need the raw 16 bytes; use the `UNHEX(REPLACE(UUID(), '-', ''))` expression there instead.
 
 ### When results are editable
 

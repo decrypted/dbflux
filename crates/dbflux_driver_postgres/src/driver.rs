@@ -229,7 +229,25 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
 /// PostgreSQL SQL dialect implementation.
 pub struct PostgresDialect;
 
+/// Cell expressions for PostgreSQL. `gen_random_uuid()` is built in from
+/// PostgreSQL 13 on.
+static POSTGRES_CELL_EXPRESSIONS: dbflux_core::CellExpressionVocabulary =
+    dbflux_core::CellExpressionVocabulary {
+        timestamp: &["now()", "current_timestamp", "now() + interval '1 day'"],
+        date: &["current_date", "current_date + 1"],
+        time: &["current_time", "localtime"],
+        uuid: &["gen_random_uuid()"],
+        uuid_text: &["gen_random_uuid()::text"],
+        uuid_binary: &[],
+        text: &["{col} || ''", "upper({col})", "lower({col})", "trim({col})"],
+        supports_default: true,
+    };
+
 impl SqlDialect for PostgresDialect {
+    fn cell_expression_vocabulary(&self) -> Option<&'static dbflux_core::CellExpressionVocabulary> {
+        Some(&POSTGRES_CELL_EXPRESSIONS)
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         pg_quote_ident(name)
     }
@@ -338,6 +356,55 @@ impl SqlDialect for PostgresDialect {
 }
 
 pub(crate) static POSTGRES_DIALECT: PostgresDialect = PostgresDialect;
+
+/// The DELETE `delete_row` runs for `delete`, and the save preview shows.
+fn postgres_delete_row_sql(delete: &RowDelete) -> Result<String, DbError> {
+    if !delete.is_valid() {
+        return Err(DbError::QueryFailed(
+            "Cannot delete row: invalid row identity (missing primary key)"
+                .to_string()
+                .into(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&POSTGRES_DIALECT)
+        .build_delete(delete, true)
+        .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string().into()))
+}
+
+/// The INSERT `insert_row` runs for `insert`, and the save preview shows.
+fn postgres_insert_row_sql(insert: &RowInsert) -> Result<String, DbError> {
+    if !insert.is_valid() {
+        return Err(DbError::QueryFailed(
+            "Cannot insert row: no columns specified".to_string().into(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&POSTGRES_DIALECT)
+        .build_insert(insert, true)
+        .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string().into()))
+}
+
+/// The UPDATE `update_row` runs for `patch`, and the save preview shows.
+fn postgres_update_row_sql(patch: &RowPatch) -> Result<String, DbError> {
+    if !patch.identity.is_valid() {
+        return Err(DbError::QueryFailed(
+            "Cannot update row: invalid row identity (missing primary key)"
+                .to_string()
+                .into(),
+        ));
+    }
+
+    if !patch.has_changes() {
+        return Err(DbError::QueryFailed(
+            "No changes to save".to_string().into(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&POSTGRES_DIALECT)
+        .build_update(patch, true)
+        .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string().into()))
+}
 
 // =============================================================================
 // PostgreSQL Code Generator
@@ -2546,25 +2613,20 @@ impl Connection for PostgresConnection {
         }
     }
 
+    fn update_row_statement(&self, patch: &RowPatch) -> Option<Result<String, DbError>> {
+        Some(postgres_update_row_sql(patch))
+    }
+
+    fn insert_row_statement(&self, insert: &RowInsert) -> Option<Result<String, DbError>> {
+        Some(postgres_insert_row_sql(insert))
+    }
+
+    fn delete_row_statement(&self, delete: &RowDelete) -> Option<Result<String, DbError>> {
+        Some(postgres_delete_row_sql(delete))
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
-        if !patch.identity.is_valid() {
-            return Err(DbError::QueryFailed(
-                "Cannot update row: invalid row identity (missing primary key)"
-                    .to_string()
-                    .into(),
-            ));
-        }
-
-        if !patch.has_changes() {
-            return Err(DbError::QueryFailed(
-                "No changes to save".to_string().into(),
-            ));
-        }
-
-        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
-        let sql = builder.build_update(patch, true).ok_or_else(|| {
-            DbError::QueryFailed("Failed to build UPDATE query".to_string().into())
-        })?;
+        let sql = postgres_update_row_sql(patch)?;
 
         log::debug!("[UPDATE] Executing: {}", sql);
 
@@ -2592,16 +2654,7 @@ impl Connection for PostgresConnection {
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
-        if !insert.is_valid() {
-            return Err(DbError::QueryFailed(
-                "Cannot insert row: no columns specified".to_string().into(),
-            ));
-        }
-
-        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
-        let sql = builder.build_insert(insert, true).ok_or_else(|| {
-            DbError::QueryFailed("Failed to build INSERT query".to_string().into())
-        })?;
+        let sql = postgres_insert_row_sql(insert)?;
 
         log::debug!("[INSERT] Executing: {}", sql);
 
@@ -2629,18 +2682,7 @@ impl Connection for PostgresConnection {
     }
 
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
-        if !delete.is_valid() {
-            return Err(DbError::QueryFailed(
-                "Cannot delete row: invalid row identity (missing primary key)"
-                    .to_string()
-                    .into(),
-            ));
-        }
-
-        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
-        let sql = builder.build_delete(delete, true).ok_or_else(|| {
-            DbError::QueryFailed("Failed to build DELETE query".to_string().into())
-        })?;
+        let sql = postgres_delete_row_sql(delete)?;
 
         log::debug!("[DELETE] Executing: {}", sql);
 
@@ -8409,6 +8451,7 @@ mod tests {
                     Value::Text("b".to_string()),
                 ]),
                 type_name: Some("text[]".to_string()),
+                is_expression: false,
             }],
         );
 
@@ -8831,3 +8874,93 @@ mod notice_buffer_tests {
 
 #[cfg(test)]
 mod prefer_fallback_tests;
+
+#[cfg(test)]
+mod cell_expression_tests {
+    use super::*;
+    use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch, SqlQueryBuilder};
+
+    fn suggestions(column: &str, type_name: &str) -> Vec<String> {
+        POSTGRES_DIALECT
+            .cell_expression_suggestions(column, type_name)
+            .expect("PostgreSQL offers cell expressions")
+    }
+
+    #[test]
+    fn cell_expressions_are_suggested_per_column_type() {
+        assert_eq!(
+            suggestions("created_at", "timestamp with time zone"),
+            [
+                "now()",
+                "current_timestamp",
+                "now() + interval '1 day'",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+        assert_eq!(
+            suggestions("born", "date"),
+            ["current_date", "current_date + 1", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("id", "uuid"),
+            ["gen_random_uuid()", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("qty", "integer"),
+            ["\"qty\" + 1", "\"qty\" - 1", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("name", "text"),
+            [
+                "\"name\" || ''",
+                "upper(\"name\")",
+                "lower(\"name\")",
+                "trim(\"name\")",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_row_update_writes_an_expression_unquoted_and_its_text_as_a_literal() {
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "events".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("seen_at", "now()", None),
+                ColumnAssignment::new("note", Value::Text("now()".to_string())),
+            ],
+        );
+
+        let sql = SqlQueryBuilder::new(&POSTGRES_DIALECT)
+            .build_update(&patch, true)
+            .unwrap();
+
+        assert!(sql.contains("\"seen_at\" = now()"), "{sql}");
+        assert!(!sql.contains("\"note\" = now()"), "{sql}");
+    }
+
+    #[test]
+    fn the_previewed_statements_are_the_ones_the_row_mutations_run() {
+        let identity = RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]);
+        let patch = RowPatch::with_typed_changes(
+            identity.clone(),
+            "events".to_string(),
+            None,
+            vec![ColumnAssignment::expression("seen_at", "now()", None)],
+        );
+        let delete = dbflux_core::RowDelete::new(identity, "events".to_string(), None);
+
+        assert_eq!(
+            postgres_update_row_sql(&patch).unwrap(),
+            "UPDATE \"events\" SET \"seen_at\" = now() WHERE \"id\" = 1 RETURNING *"
+        );
+        assert_eq!(
+            postgres_delete_row_sql(&delete).unwrap(),
+            "DELETE FROM \"events\" WHERE \"id\" = 1 RETURNING *"
+        );
+    }
+}

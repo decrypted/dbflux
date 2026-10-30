@@ -174,6 +174,9 @@ components:
       text: "文本"
     wrap: 自动换行
   data_table:
+    expression:
+      toggle: "作为 SQL 表达式编辑"
+      generate: "生成 %{kind}"
     record:
       empty: 没有可显示的行
       name_header: 名称
@@ -1552,6 +1555,17 @@ document:
       waiting_title: 未连接
       waiting_connection: "连接到 %{profile} 以加载 %{object}。"
       waiting_database: "在侧边栏展开数据库 %{database} 以加载 %{object}。"
+    review:
+      title: "查看更改"
+      literals_note: "保存将按顺序执行的语句，与驱动发送的完全一致。值以字面量写入 SQL，不发送绑定参数。"
+      cancel: "取消"
+      copy: "复制 SQL"
+      save: "保存"
+      unavailable: "此驱动不显示它为该更改发送的语句。"
+      skipped_row: "第 %{row} 行不会保存：%{reason}"
+      no_connection: "连接未打开，无法生成语句。"
+    expression:
+      rejected: "无法保存该表达式：%{reason}"
     chart_dock:
       toolbar:
         apply: 应用
@@ -1635,6 +1649,8 @@ document:
         paste: 粘贴
         edit: 编辑
         edit_in_modal: 在弹窗中编辑…
+        edit_as_expression: "作为 SQL 表达式编辑…"
+        generate_id: "生成 %{kind}"
         set_default: 设为默认值
         set_null: 设为 NULL
         add_row: 添加行
@@ -1672,6 +1688,7 @@ document:
         clear_filter: "清除筛选"
         open_builder: "打开查询构建器"
         reset_builder: "重置构建器查询"
+        review_changes: "查看更改"
         save_changes: "保存所有更改"
         revert_changes: "还原所有更改"
         auto_refresh: "自动刷新间隔…"
@@ -1746,6 +1763,7 @@ document:
           update_failed: "更新文档失败：%{error}"
     grid:
       edit_bar:
+        review: "查看"
         clean: 无未保存的更改
         dirty:
           one: "%{count} 处未保存更改"
@@ -1800,6 +1818,19 @@ document:
         pending_changes:
           one: "%{count} 处待处理更改"
           many: "%{count} 处待处理更改"
+        multi_edit: "正在编辑 %{count} 个单元格"
+        selection:
+          cells: "%{count} 个单元格"
+          sum: "总和 %{value}"
+          average: "平均 %{value}"
+          min: "最小 %{value}"
+          max: "最大 %{value}"
+          nulls_skipped:
+            one: "已跳过 %{count} 个 NULL"
+            many: "已跳过 %{count} 个 NULL"
+          non_numeric_skipped:
+            one: "已跳过 %{count} 个非数字值"
+            many: "已跳过 %{count} 个非数字值"
       export:
         trigger: 导出
         save_as_file: 将已加载的行保存为文件
@@ -3765,6 +3796,7 @@ modals:
       no_metrics_filtered: 没有符合筛选条件的指标。
     cancel: 取消
   cell_editor:
+    generate: "生成 %{kind}"
     title_column: "编辑 %{column}（%{type_name}）"
     title_json: 编辑 JSON
     title_text: 编辑文本
@@ -4149,6 +4181,9 @@ settings:
       group: "编辑器"
     data_grid:
       group: "数据网格"
+    grid_review_before_save:
+      label: "保存前查看更改"
+      hint: "保存时先显示将要执行的语句，可以保存、复制或取消。"
     grid_fk_labels:
       label: "在外键单元格中显示被引用行的标签"
       hint: "保存后加载的页面会解析外键单元格，并在其 ID 旁显示被引用行的标签。行检查器始终解析引用。"
@@ -4387,6 +4422,8 @@ settings:
       find_similar_rows: 查找相似行
       copy_selection_as_json: "将选区复制为 JSON"
       results_set_null: 将单元格设为 NULL
+      toggle_cell_expression: "将单元格作为 SQL 表达式编辑"
+      review_changes: "查看更改"
       open_context_menu: 打开上下文菜单
       open_pane_actions: 打开面板操作
       menu_up: 菜单上移

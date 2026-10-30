@@ -201,6 +201,9 @@ pub struct CellEditorModal {
     size: Size<Pixels>,
     maximized: bool,
     drag: Option<ResizeDrag>,
+    /// Identifier kinds the edited column takes, offered as Generate
+    /// buttons; empty for a column that takes none.
+    generated_id_kinds: Vec<dbflux_core::GeneratedIdKind>,
     vim: VimBinding,
     /// Re-renders on every edit so the JSON status line follows the text.
     _input_observation: Subscription,
@@ -243,6 +246,7 @@ impl CellEditorModal {
             size: DEFAULT_SIZE,
             maximized: false,
             drag: None,
+            generated_id_kinds: Vec::new(),
             vim,
             _input_observation: input_observation,
         };
@@ -311,6 +315,7 @@ impl CellEditorModal {
         self.validation_error = None;
         self.invalid_warning = None;
         self.drag = None;
+        self.generated_id_kinds.clear();
 
         if let Some(geometry) = remembered_geometry(cx) {
             self.size = geometry.size();
@@ -413,6 +418,63 @@ impl CellEditorModal {
             col: self.col,
             value,
         }))
+    }
+
+    /// Offers a Generate button for each of `kinds`, which the edited column
+    /// can store. Called after [`Self::open`], which clears them.
+    pub fn set_generated_id_kinds(
+        &mut self,
+        kinds: Vec<dbflux_core::GeneratedIdKind>,
+        cx: &mut Context<Self>,
+    ) {
+        self.generated_id_kinds = kinds;
+        cx.notify();
+    }
+
+    /// Replaces the editor's text with a new identifier of `kind`.
+    fn generate_id(
+        &mut self,
+        kind: dbflux_core::GeneratedIdKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let value = kind.generate();
+        self.input.update(cx, |state, cx| {
+            state.set_value(&value, window, cx);
+            state.focus(window, cx);
+        });
+        self.validation_error = None;
+        cx.notify();
+    }
+
+    fn render_generate_buttons(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.generated_id_kinds.is_empty() {
+            return None;
+        }
+
+        let buttons = self
+            .generated_id_kinds
+            .iter()
+            .enumerate()
+            .map(|(index, &kind)| {
+                crate::controls::Button::new(
+                    ("cell-editor-generate", index),
+                    dbflux_i18n::t!("modals.cell_editor.generate", kind = kind.label()),
+                )
+                .ghost()
+                .icon(AppIcon::KeyRound)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.generate_id(kind, window, cx);
+                }))
+            });
+
+        Some(
+            div()
+                .flex()
+                .gap(crate::tokens::Spacing::XS)
+                .children(buttons)
+                .into_any_element(),
+        )
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
@@ -726,7 +788,14 @@ impl Render for CellEditorModal {
             entity.update(cx, |this, cx| this.finish_resize(cx)).ok();
         };
 
-        Modal::new(self.title())
+        let generate = self.render_generate_buttons(cx);
+
+        let mut modal = Modal::new(self.title());
+        if let Some(buttons) = generate {
+            modal = modal.header_extra(buttons);
+        }
+
+        modal
             .id("cell-editor-modal")
             .focus_handle(&self.focus_handle)
             .on_close(close)

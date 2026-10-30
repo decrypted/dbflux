@@ -187,6 +187,8 @@ components:
       env: "DBFlux 每次连接时从环境变量 %{name} 读取。DBFlux 不保存该值。"
       dotenv: "DBFlux 每次连接时从 %{path} 中的 %{key} 读取。该文件必须只有您能读取。"
       dotenv_missing_key: "在路径后添加键：~/path/to/file.env#KEY"
+      whole_value: "使用整个值。对于 JSON 密钥（例如由 RDS 管理的密钥），请添加 #键 以只使用其中一个字段，例如 #password。"
+      json_key: "使用 JSON 值中的 %{key} 字段。"
   file_picker:
     browse: 浏览…
   column_projection:

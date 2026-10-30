@@ -203,7 +203,7 @@ SSM 需要 `PATH` 中有 AWS CLI 和 Session Manager 插件。在 macOS 和 Linu
 
 补充说明：
 
-- AWS 云密钥管理 / AWS 参数存储来源可以指向 JSON 密钥中的某个 **JSON 键**，因此一份 JSON 文档就能为多个字段供值。
+- AWS 云密钥管理 / AWS 参数存储来源可以指向 JSON 密钥中的某个 **JSON 键**，因此一份 JSON 文档就能为多个字段供值。在密钥名称或 ARN 后以 `<locator>#<key>` 的形式写上键，例如由 RDS 管理的密钥的密码写作 `rds!db-1a2b#password`。字段下方的提示会说明使用的是整个值还是其中一个键。如果 AWS 云密钥管理中的密钥保存的是 JSON 对象，但引用时没有写键，连接时会被拒绝，错误信息会列出该密钥的键（不会显示值）。
 - 解析结果会缓存 **5 分钟**，避免每次重连都重新获取。
 - 由认证提供程序支持的 AWS 云密钥管理 / AWS 参数存储来源**要求连接上配置了认证配置文件**（连接前强制校验）。
 - 要访问 LocalStack 或 VPC 终端节点，请在 AWS 认证配置文件中设置 **Endpoint URL**。AWS SDK 也会读取 `AWS_ENDPOINT_URL_SECRETS_MANAGER` 和 `AWS_ENDPOINT_URL_SSM`。

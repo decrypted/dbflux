@@ -1,6 +1,7 @@
-//! Embeds the Windows executable resources: the application icon and the
-//! `VERSIONINFO` block that Explorer shows under Properties and that the
-//! taskbar, the Open With dialog, and installers read the product name from.
+//! Records the build stamp the main window title shows, and embeds the Windows
+//! executable resources: the application icon and the `VERSIONINFO` block that
+//! Explorer shows under Properties and that the taskbar, the Open With dialog,
+//! and installers read the product name from.
 //!
 //! macOS takes the icon and version from the bundle and Linux from the desktop
 //! entry, so on those platforms the script only registers its inputs and exits.
@@ -10,14 +11,42 @@
 
 use std::env;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Workspace paths, relative to its root, that the binary is compiled from.
+///
+/// Cargo has no directive for "rerun when a dependency crate is rebuilt", so
+/// the stamp watches the sources of every workspace crate the binary links
+/// instead: a change that relinks the binary almost always touches one of
+/// these. Changes it misses, such as an environment variable that only a
+/// dependency's build script reads, relink with the previous stamp.
+///
+/// The cost is coarse: cargo checks the modification time of every file under
+/// these directories on each build, and a change to any of them reruns this
+/// script and relinks the binary (a thin-LTO link in release), including files
+/// that are not compiled, such as a README, an editor swap file or an insta
+/// `.snap.new`. An unchanged tree still skips the relink, which an
+/// always-dirty build script would not. A new top-level directory that a crate
+/// embeds with `include_bytes!` belongs on this list.
+const STAMPED_INPUTS: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates",
+    "vendor",
+    "resources",
+    "CHANGELOG.md",
+];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    let manifest_dir = PathBuf::from(env_var("CARGO_MANIFEST_DIR"));
+    emit_build_stamp(&manifest_dir.join("../.."));
+
     let version = env_var("CARGO_PKG_VERSION");
     let identity = ChannelIdentity::from_version(&version);
 
-    let manifest_dir = PathBuf::from(env_var("CARGO_MANIFEST_DIR"));
     let icon = manifest_dir
         .join("../../packaging/icons")
         .join(identity.icon_file);
@@ -41,6 +70,105 @@ fn main() {
 
     #[cfg(not(windows))]
     drop(script);
+}
+
+/// `SOURCE_DATE_EPOCH` values at or below this (1980-01-01 00:00 UTC) are
+/// placeholders rather than the date of the source: nixpkgs exports exactly
+/// this value for every build that does not set its own. Such a build shows
+/// no stamp instead of a 1980 build date.
+const NO_REAL_SOURCE_DATE: u64 = 315_532_800;
+
+/// Passes the build time and the commit to the binary as `DBFLUX_BUILD_UNIX_TIME`
+/// and `DBFLUX_BUILD_GIT_SHA`, each empty when there is no value to show.
+fn emit_build_stamp(workspace_root: &Path) {
+    for input in STAMPED_INPUTS {
+        watch_if_present(&workspace_root.join(input));
+    }
+
+    // Reproducible builds pin the time through this variable, so honoring it
+    // keeps such a binary byte-identical across rebuilds.
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    let built_at = match env::var("SOURCE_DATE_EPOCH") {
+        Ok(value) => value
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|&epoch| epoch > NO_REAL_SOURCE_DATE),
+        Err(_) => Some(unix_time_now()),
+    };
+    // An empty value tells the binary there is no stamp to show.
+    let built_at = built_at.map(|epoch| epoch.to_string()).unwrap_or_default();
+    println!("cargo:rustc-env=DBFLUX_BUILD_UNIX_TIME={built_at}");
+
+    let git_sha = git_short_sha(workspace_root).unwrap_or_default();
+    println!("cargo:rustc-env=DBFLUX_BUILD_GIT_SHA={git_sha}");
+}
+
+/// Cargo treats a watched path that does not exist as changed on every build,
+/// which would relink the binary each time, so only existing paths are watched.
+fn watch_if_present(path: &Path) {
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
+fn unix_time_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+/// The abbreviated commit of the workspace checkout, if it is one.
+///
+/// Builds also run from copies of the tree without `.git` (an rsync to a build
+/// machine), and a missing `git` binary is just as possible, so every failure
+/// means "no commit to show" rather than a failed build.
+fn git_short_sha(workspace_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .args([
+            "rev-parse",
+            "--show-toplevel",
+            "--git-path",
+            "HEAD",
+            "--git-path",
+            "logs/HEAD",
+            "--short=8",
+            "HEAD",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let mut lines = stdout.lines();
+    let toplevel = lines.next()?;
+    let head = lines.next()?;
+    let head_log = lines.next()?;
+    let sha = lines.next()?.trim();
+
+    // git searches parent directories, so a copy without `.git` that sits
+    // inside another repository would otherwise report that repository's
+    // commit.
+    let same_tree =
+        std::fs::canonicalize(toplevel).ok()? == std::fs::canonicalize(workspace_root).ok()?;
+    if !same_tree || sha.is_empty() {
+        return None;
+    }
+
+    // HEAD moves on checkout and the reflog grows on every commit, reset and
+    // checkout, so watching both refreshes the commit without a source change.
+    // `--git-path` answers relative to the workspace root in a plain checkout
+    // and absolutely in a linked worktree.
+    for git_path in [head, head_log] {
+        watch_if_present(&workspace_root.join(git_path));
+    }
+
+    Some(sha.to_string())
 }
 
 /// Reads a Cargo-provided environment variable.

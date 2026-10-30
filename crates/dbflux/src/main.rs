@@ -28,6 +28,7 @@ use dbflux_ui::platform;
 use dbflux_ui::ui::views::workspace::{
     DocumentFlushOutcome, QuitConfirmed, Workspace, await_document_flush,
 };
+use dbflux_ui_base::build_stamp::{BuildStamp, main_window_title};
 use dbflux_ui_base::keymap::RunCommand;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use dbflux_ui_base::window_state::{self, WindowGeometry};
@@ -479,10 +480,23 @@ fn run_gui() {
         let window_geometry = window_state::load(app_state.read(cx).storage_runtime());
         let placement = window_state::resolve_main_window_placement(window_geometry, cx);
 
+        let build_stamp = BuildStamp::from_build_env(
+            env!("DBFLUX_BUILD_UNIX_TIME"),
+            env!("DBFLUX_BUILD_GIT_SHA"),
+        );
+        let main_window_title = main_window_title(
+            channel.display_name(),
+            env!("CARGO_PKG_VERSION"),
+            build_stamp.as_ref(),
+        );
+        if let Some(build_stamp) = build_stamp {
+            cx.set_global(build_stamp);
+        }
+
         let mut main_window_options = WindowOptions {
             app_id: Some(channel.app_id().into()),
             titlebar: Some(TitlebarOptions {
-                title: Some(channel.display_name().into()),
+                title: Some(main_window_title.into()),
                 ..Default::default()
             }),
             // Request client-side decorations on Linux to enable native Wayland support.

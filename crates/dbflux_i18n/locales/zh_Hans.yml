@@ -4340,6 +4340,7 @@ settings:
       toggle_value_panel: 切换值面板
       toggle_row_inspector: 切换行检查器
       find_similar_rows: 查找相似行
+      copy_selection_as_json: "将选区复制为 JSON"
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
       open_pane_actions: 打开面板操作

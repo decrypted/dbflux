@@ -239,6 +239,8 @@ valor nuevo y una fila añadida aún sin guardar, en su lugar. En JSON, las
 columnas con el mismo nombre (`a.id` y `b.id` de un join) comparten una clave,
 que toma el valor de la última. **Copiar** (`Ctrl+c`) sigue copiando texto
 separado por tabulaciones sin cabecera.
+`Ctrl+Alt+c` (`Cmd+Alt+c` en macOS) ejecuta **Copiar como JSON** desde el
+teclado; el menú lo muestra junto a la entrada.
 
 ## Copiar como query
 

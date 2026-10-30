@@ -239,7 +239,9 @@ fn global_layer() -> KeymapLayer {
 /// Workspace commands that also have an activity rail entry, a status bar
 /// chip or a title bar button. Every chord holds the primary modifier or
 /// Ctrl, so it also works while a text field has focus, and none uses Alt:
-/// Ctrl+Alt is AltGr on Windows and types characters on many layouts.
+/// Ctrl+Alt is AltGr on Windows and types characters on many layouts. (The
+/// Results layer's primary+Alt+C is not global: a focused text field roots
+/// the keyboard in `TextInput`, which does not inherit it.)
 fn bind_workspace_commands(layer: &mut KeymapLayer) {
     layer.bind(
         KeyChord::new(",", Modifiers::primary()),
@@ -688,6 +690,15 @@ fn results_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("c", Modifiers::primary()),
         Command::ResultsCopyCell,
+    );
+    // Primary+Alt because primary+Shift+C is the global Open saved chart,
+    // which must keep working from the results too. Ctrl+Alt is AltGr on
+    // Windows, but this binding is in the Results layer only: a text field in
+    // the results (filter, inline cell editor) roots the keyboard in
+    // `TextInput`, so AltGr+C still types there.
+    layer.bind(
+        KeyChord::new("c", Modifiers::primary_alt()),
+        Command::CopySelectionAsJson,
     );
 
     // Toggle panel collapse

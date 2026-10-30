@@ -221,6 +221,8 @@ its new value and an added row that is not saved yet at its place. In JSON,
 columns that share a name (`a.id` and `b.id` of a join) share one key, which
 takes the value of the last of them. Plain **Copy** (`Ctrl+c`) still copies
 tab-separated text without a header.
+`Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
+the menu shows it next to the item.
 
 ## Copy as Query
 

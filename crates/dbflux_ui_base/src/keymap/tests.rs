@@ -2162,6 +2162,69 @@ fn alt_keys_switch_and_close_result_tabs_from_the_results() {
     }
 }
 
+/// Primary+Alt+C copies the grid selection as JSON from the results, on the
+/// grid itself too, and primary+Shift+C stays the global Open saved chart
+/// there. Outside the results the new chord is not bound.
+#[test]
+fn primary_alt_c_copies_the_selection_as_json_and_leaves_open_saved_chart() {
+    let keymap = native_keymap();
+    let results = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(results.clone(), &[data_table::CONTEXT]);
+    let copy_json = gpui_keystrokes(&KeySequence::from(KeyChord::new(
+        "c",
+        Modifiers::primary_alt(),
+    )));
+    let saved_chart = gpui_keystrokes(&KeySequence::from(KeyChord::new(
+        "c",
+        Modifiers::primary_shift(),
+    )));
+
+    for stack in [vec![results], grid] {
+        for (keys, command) in [
+            (&copy_json, Command::CopySelectionAsJson),
+            (&saved_chart, Command::OpenSavedChart),
+        ] {
+            let action = top_action(&keymap, keys, &stack).expect("bound");
+            assert!(
+                runs_command(action.as_ref(), command),
+                "`{keys}` must run {command:?} in {stack:?}"
+            );
+        }
+    }
+
+    for context in [ContextId::Editor, ContextId::Sidebar] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        assert!(
+            top_action(&keymap, &copy_json, &[root]).is_none(),
+            "`{copy_json}` must not be bound in {context:?}"
+        );
+    }
+}
+
+/// Ctrl+Alt is AltGr on Windows, where AltGr+C types a character on some
+/// layouts. A text field inside the results (the filter bar, an inline cell
+/// editor in the grid) roots the keyboard in `TextInput`, so the Results
+/// layer's primary+Alt+C does not reach it and the key stays typed text.
+#[test]
+fn primary_alt_c_is_typed_text_in_a_field_inside_the_results() {
+    let keymap = native_keymap();
+    let copy_json = gpui_keystrokes(&KeySequence::from(KeyChord::new(
+        "c",
+        Modifiers::primary_alt(),
+    )));
+    let text_root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+
+    for stack in [
+        element_stack(text_root.clone(), &["Input"]),
+        element_stack(text_root, &[data_table::CONTEXT, "Input"]),
+    ] {
+        assert!(
+            top_action(&keymap, &copy_json, &stack).is_none(),
+            "`{copy_json}` must stay typed text in {stack:?}"
+        );
+    }
+}
+
 /// `/` focuses the query history's search from its list, but stays a typed
 /// character in the history's own fields (search, rename, save name), which
 /// sit inside the history element.

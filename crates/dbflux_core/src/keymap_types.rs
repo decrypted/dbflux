@@ -116,6 +116,8 @@ pub enum Command {
     ToggleRowInspector,
     /// Shows the rows nearest to the active row by its vector column.
     FindSimilarRows,
+    /// Copies the grid selection as JSON, as the context menu's Copy as JSON.
+    CopySelectionAsJson,
     ResultsSetNull,
     // Context menu
     OpenContextMenu,
@@ -425,6 +427,7 @@ impl Command {
             Command::ToggleValuePanel => "Toggle value panel",
             Command::ToggleRowInspector => "Toggle row inspector",
             Command::FindSimilarRows => "Find similar rows",
+            Command::CopySelectionAsJson => "Copy selection as JSON",
             Command::ResultsSetNull => "Set cell to NULL",
             Command::OpenContextMenu => "Open context menu",
             Command::OpenPaneActions => "Open pane actions",
@@ -627,6 +630,7 @@ impl Command {
             Command::ToggleValuePanel => "toggle_value_panel",
             Command::ToggleRowInspector => "toggle_row_inspector",
             Command::FindSimilarRows => "find_similar_rows",
+            Command::CopySelectionAsJson => "copy_selection_as_json",
             Command::ResultsSetNull => "results_set_null",
             Command::OpenContextMenu => "open_context_menu",
             Command::OpenPaneActions => "open_pane_actions",
@@ -846,6 +850,7 @@ impl Command {
             Command::ToggleValuePanel,
             Command::ToggleRowInspector,
             Command::FindSimilarRows,
+            Command::CopySelectionAsJson,
             Command::ResultsSetNull,
             Command::OpenContextMenu,
             Command::OpenPaneActions,
@@ -1040,6 +1045,7 @@ impl Command {
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector
             | Command::FindSimilarRows
+            | Command::CopySelectionAsJson
             | Command::ResultsSetNull
             | Command::OpenContextMenu
             | Command::MenuUp

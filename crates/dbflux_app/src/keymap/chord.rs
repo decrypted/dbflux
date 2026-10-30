@@ -80,6 +80,17 @@ impl Modifiers {
         }
     }
 
+    /// Primary + Alt: Cmd+Option on macOS, Ctrl+Alt elsewhere.
+    ///
+    /// Windows reports AltGr as Ctrl+Alt, so a chord here can collide with a
+    /// character the keyboard layout types; keep it out of text contexts.
+    pub fn primary_alt() -> Self {
+        Self {
+            alt: true,
+            ..Self::primary()
+        }
+    }
+
     pub fn has_any(&self) -> bool {
         self.ctrl || self.alt || self.shift || self.platform
     }

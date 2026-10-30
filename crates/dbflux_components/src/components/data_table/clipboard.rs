@@ -154,5 +154,15 @@ mod tests {
             copy_selection(&model, &selection).as_deref(),
             Some("0\t\n\trow2")
         );
+
+        // Overlapping ranges copy each cell once.
+        let mut selection = SelectionState::new();
+        selection.select_cell(CellCoord::new(0, 0));
+        selection.extend_to(CellCoord::new(1, 1));
+        selection.toggle_cell(CellCoord::new(1, 1));
+        assert_eq!(
+            copy_selection(&model, &selection).as_deref(),
+            Some("0\trow0\n1\trow1")
+        );
     }
 }

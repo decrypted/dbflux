@@ -80,6 +80,11 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        // A row number selects its row: Home, then Shift+End, does the same.
+        (
+            "row-number-*",
+            KeyboardPath::Command(Command::ExtendSelectRowEnd),
+        ),
         // The table menu of the column carries Order ascending / descending,
         // which is also the keyboard path of the header's sort arrow.
         (
@@ -768,6 +773,11 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        // A row number selects its row: Home, then Shift+End, does the same.
+        (
+            "row-number-*",
+            KeyboardPath::Command(Command::ExtendSelectRowEnd),
+        ),
         (
             "segmented-delimited-view-*",
             KeyboardPath::Command(Command::CycleDocumentView),
@@ -881,6 +891,11 @@ pub(crate) const PARQUET: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        // A row number selects its row: Home, then Shift+End, does the same.
+        (
+            "row-number-*",
+            KeyboardPath::Command(Command::ExtendSelectRowEnd),
+        ),
         (
             "header-col-*",
             KeyboardPath::MouseOnly(
@@ -959,6 +974,11 @@ pub(crate) const SPREADSHEET: SurfaceRegistry = SurfaceRegistry {
     ],
     entries: &[
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
+        // A row number selects its row: Home, then Shift+End, does the same.
+        (
+            "row-number-*",
+            KeyboardPath::Command(Command::ExtendSelectRowEnd),
+        ),
         (
             "segmented-spreadsheet-view-*",
             KeyboardPath::Command(Command::CycleDocumentView),

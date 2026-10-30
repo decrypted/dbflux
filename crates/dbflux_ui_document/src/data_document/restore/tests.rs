@@ -166,7 +166,9 @@ fn a_restored_table_waits_for_its_connection_then_reads_its_first_page(cx: &mut 
     let sql = executed_sql(&driver);
     let browse = sql
         .iter()
-        .find(|sql| sql.contains("api_call_log") && sql.contains("status = 500"))
+        .find(|sql| {
+            sql.contains("api_call_log") && sql.contains("status = 500") && !sql.contains("COUNT(")
+        })
         .unwrap_or_else(|| panic!("the first page must be read under the filter, got {sql:?}"));
     assert!(browse.contains("25"), "the saved limit applies: {browse}");
     assert!(

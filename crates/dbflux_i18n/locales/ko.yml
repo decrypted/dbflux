@@ -1764,6 +1764,14 @@ document:
         pending_changes:
           one: "대기 중인 변경 사항 %{count}개"
           many: "대기 중인 변경 사항 %{count}개"
+        selection:
+          cells: "셀 %{count}개"
+          sum: "합계 %{value}"
+          average: "평균 %{value}"
+          min: "최소 %{value}"
+          max: "최대 %{value}"
+          nulls_skipped: "NULL %{count}개 제외"
+          non_numeric_skipped: "숫자가 아닌 값 %{count}개 제외"
       export:
         trigger: 내보내기
         save_as_file: 불러온 행을 파일로 저장

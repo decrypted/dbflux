@@ -1764,6 +1764,14 @@ document:
         pending_changes:
           one: "%{count} cambio pendiente"
           many: "%{count} cambios pendientes"
+        selection:
+          cells: "%{count} celdas"
+          sum: "Suma %{value}"
+          average: "Media %{value}"
+          min: "Mín %{value}"
+          max: "Máx %{value}"
+          nulls_skipped: "%{count} NULL omitidos"
+          non_numeric_skipped: "%{count} no numéricos omitidos"
       export:
         trigger: Exportar
         save_as_file: Guardar filas cargadas como archivo

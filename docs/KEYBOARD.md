@@ -416,6 +416,13 @@ Revert all changes run the edit bar's Commit and Revert. Query history opens the
 history menu with the keyboard in it: the context menu keys move, `Enter` runs
 the highlighted query again and `Escape` closes it.
 
+In the `WHERE` field of a table, `Up` or `Down` opens the table's filter history
+while the field is empty or the caret is at its start; **Filter history** in the
+Toolbar submenu opens it too. While it is open, typing narrows the list, `Up` /
+`Down` move the highlight, `Enter` applies the highlighted filter, `Shift+Delete`
+removes it and `Escape` closes the list; its last row clears the table's history.
+See [Filter history](RESULTS.md#filter-history).
+
 When the results offer no context menu of their own, `m` opens the pane actions
 menu instead, the same one the command palette's **Open pane actions** shows.
 

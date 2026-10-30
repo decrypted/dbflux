@@ -1813,6 +1813,12 @@ document:
         builder_notice: As linhas vêm da consulta do construtor
         edit_in_builder: Editar no construtor
         reset_builder: Redefinir
+        history:
+          toggle: "Histórico de filtros"
+          delete: "Remover do histórico"
+          clear: "Limpar histórico"
+          empty: "Ainda não há filtros para esta tabela"
+          no_match: "Nenhum filtro corresponde"
       nearest:
         summary: "Semelhantes a %{anchor} por %{column}"
         similar_to: "Semelhantes a"

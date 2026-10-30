@@ -129,6 +129,26 @@ builder — see [Schema-aware autocomplete](QUERY_BUILDER.md#schema-aware-autoco
   <img src="images/results/filtering-light.webp" alt="The customers table filtered by a WHERE condition typed in the filter bar">
 </picture>
 
+### Filter history
+
+Every filter a table was read with successfully is kept for that table
+(connection, database, schema and table), newest first, up to 50 per table,
+and survives a restart. Applying a filter again moves it to the top instead of
+listing it twice, and a filter the database rejected is not kept. Only the
+filter text is stored, never rows.
+
+Open the list with the history icon at the left of the `WHERE` field, with
+**Filter history** in the Toolbar entry of the table menu (`m`), or with `Up` /
+`Down` in the field while it is empty or the caret is at its start. Typing while
+the list is open narrows it to the filters that contain the text. `Up` / `Down`
+move the highlight and `Enter` applies the highlighted filter; with nothing
+highlighted, `Enter` applies what you typed. `Shift+Delete` or the × of a row
+removes that filter, the last row, **Clear history**, forgets every filter of the
+table, and `Escape` closes the list.
+
+The query history of a document collection (the history button of its query bar)
+is kept across restarts the same way.
+
 ## Similar rows
 
 On a table with a vector column (today a PostgreSQL table with a pgvector

@@ -140,6 +140,26 @@ schema](QUERY_BUILDER.md#autocompletado-consciente-del-schema)).
   <img src="../images/results/filtering-light.webp" alt="La tabla customers filtrada con una condición WHERE escrita en la barra de filtro">
 </picture>
 
+### Historial de filtros
+
+Cada filtro con el que una tabla se leyó correctamente se guarda para esa tabla
+(conexión, base de datos, schema y tabla), del más reciente al más antiguo,
+hasta 50 por tabla, y se conserva al reiniciar. Aplicar de nuevo un filtro lo
+sube al principio en lugar de listarlo dos veces, y un filtro que la base de
+datos rechazó no se guarda. Solo se guarda el texto del filtro, nunca filas.
+
+Abre la lista con el icono de historial a la izquierda del campo `WHERE`, con
+**Filter history** en la entrada Toolbar del menú de la tabla (`m`), o con
+`Up` / `Down` en el campo mientras está vacío o el cursor está al principio.
+Escribir con la lista abierta la reduce a los filtros que contienen el texto.
+`Up` / `Down` mueven el resaltado y `Enter` aplica el filtro resaltado; sin nada
+resaltado, `Enter` aplica lo que escribiste. `Shift+Delete` o la × de una fila
+quita ese filtro, la última fila, **Clear history**, olvida todos los filtros de
+la tabla, y `Escape` cierra la lista.
+
+El historial de queries de una colección de documentos (el botón de historial de
+su barra de query) también se conserva al reiniciar.
+
 ## Filas similares
 
 En una tabla con una columna vectorial (hoy, una tabla PostgreSQL con una

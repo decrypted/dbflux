@@ -1813,6 +1813,12 @@ document:
         builder_notice: 行来自构建器查询
         edit_in_builder: 在构建器中编辑
         reset_builder: 重置
+        history:
+          toggle: "筛选历史"
+          delete: "从历史中移除"
+          clear: "清除历史"
+          empty: "此表还没有筛选条件"
+          no_match: "没有匹配的筛选条件"
       nearest:
         summary: "按 %{column} 与 %{anchor} 相似"
         similar_to: "相似于"

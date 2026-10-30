@@ -1225,9 +1225,46 @@ impl DataGridPanel {
             })),
         );
 
+        // Up / Down / Shift+Delete reach the history popup before the input:
+        // the input would otherwise move its caret or delete a character.
         let filter_editor = div()
             .flex()
             .items_center()
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::MoveUp, window, cx| {
+                    if this.filter_history_vertical_key(false, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::MoveDown, window, cx| {
+                    if this.filter_history_vertical_key(true, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Escape, _, cx| {
+                    let completion_open = this
+                        .filter_bar
+                        .filter_input
+                        .read(cx)
+                        .completion_menu_state()
+                        .open;
+                    if this.filter_bar.history.open && !completion_open {
+                        this.close_filter_history(cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Delete, window, cx| {
+                    if window.modifiers().shift && this.delete_selected_filter_history(cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -1262,10 +1299,21 @@ impl DataGridPanel {
 
         let has_filter = !filter_keyword.is_empty();
 
+        let history_toggle = (has_filter && self.offers_filter_history()).then(|| {
+            div()
+                .relative()
+                .flex()
+                .flex_none()
+                .items_center()
+                .child(self.render_filter_history_toggle(cx))
+                .children(self.render_filter_history_menu(cx))
+        });
+
         let field = FilterField::new("data-grid-filter-field")
             .when(has_filter, |field| {
                 field.filter(filter_keyword.to_string(), filter_editor)
             })
+            .when_some(history_toggle, |field, toggle| field.leading(toggle))
             .when(filter_has_value && has_filter, |field| {
                 field.trailing(
                     div()

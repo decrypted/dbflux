@@ -40,7 +40,7 @@ impl DataGridPanel {
         Some(format!("{KEY_PREFIX}:{parts}"))
     }
 
-    /// Whether this grid offers hiding, moving and pinning columns. A
+    /// Whether this grid offers hiding and moving columns. A
     /// document grid groups its columns by the nested field they come from,
     /// which a reorder would split, so it keeps the model order.
     pub(super) fn offers_column_layout(&self, cx: &App) -> bool {
@@ -63,32 +63,46 @@ impl DataGridPanel {
             return;
         };
 
+        if let Some(spec) = self.read_column_layout(&key, cx) {
+            table_state.update(cx, |state, cx| state.set_column_layout_spec(&spec, cx));
+        }
+    }
+
+    /// The layout the store keeps under `key`, `None` when it keeps none or
+    /// cannot be read.
+    fn read_column_layout(&self, key: &str, cx: &App) -> Option<ColumnLayoutSpec> {
         let stored = match self
             .app_state
             .read(cx)
             .storage_runtime()
             .ui_state()
-            .get(&key)
+            .get(key)
         {
-            Ok(stored) => stored,
+            Ok(stored) => stored?,
             Err(error) => {
                 log::warn!("Could not read the column layout of {key}: {error}");
-                return;
+                return None;
             }
-        };
-        let Some(stored) = stored else {
-            return;
         };
 
         match serde_json::from_str::<ColumnLayoutSpec>(&stored) {
-            Ok(spec) => table_state.update(cx, |state, cx| state.set_column_layout_spec(&spec, cx)),
-            Err(error) => log::warn!("Ignoring the unreadable column layout of {key}: {error}"),
+            Ok(spec) => Some(spec),
+            Err(error) => {
+                log::warn!("Ignoring the unreadable column layout of {key}: {error}");
+                None
+            }
         }
     }
 
     /// Writes the grid's layout to the store after the user changed it. A
     /// layout back to the table's own order with every column shown removes
     /// the row, so the store only holds tables someone rearranged.
+    ///
+    /// While a column projection reads only some of the table's columns, the
+    /// grid's layout covers just those, so it is laid over the kept one:
+    /// the columns left out keep their place and visibility, and the row is
+    /// never removed, since the grid cannot tell whether the whole table is
+    /// back in its own order.
     pub(super) fn save_column_layout(&self, cx: &App) {
         let (Some(key), Some(table_state)) = (
             self.column_layout_key(),
@@ -98,18 +112,27 @@ impl DataGridPanel {
         };
 
         let state = table_state.read(cx);
-        let store = self.app_state.read(cx).storage_runtime().ui_state();
-
-        let result = if state.column_layout().is_identity() {
-            store.delete(&key)
+        let identity = state.column_layout().is_identity();
+        let spec = state.column_layout_spec();
+        let spec = if self.table_projection_columns().is_empty() {
+            (!identity).then_some(spec)
         } else {
-            match serde_json::to_string(&state.column_layout_spec()) {
+            match self.read_column_layout(&key, cx) {
+                Some(stored) => Some(spec.merged_over(&stored)),
+                None => (!identity).then_some(spec),
+            }
+        };
+
+        let store = self.app_state.read(cx).storage_runtime().ui_state();
+        let result = match spec {
+            None => store.delete(&key),
+            Some(spec) => match serde_json::to_string(&spec) {
                 Ok(json) => store.set(&key, &json),
                 Err(error) => {
                     log::error!("Could not encode the column layout of {key}: {error}");
                     return;
                 }
-            }
+            },
         };
 
         if let Err(error) = result {

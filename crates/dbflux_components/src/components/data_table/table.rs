@@ -774,6 +774,7 @@ impl DataTable {
         let header_height = state.header_height(cx);
         let pinned_width = state.pinned_width();
         let pinned_count = state.column_layout().pinned_count();
+        let reorderable = state.columns_reorderable();
 
         let mut header_cells: Vec<AnyElement> = state
             .visible_columns()
@@ -820,7 +821,13 @@ impl DataTable {
                     .hover(|s| s.bg(theme.table_hover))
                     .cursor_pointer();
 
-                header_reorder(header, &state_entity, col_spec.title.clone(), col_ix, theme)
+                let header = if reorderable {
+                    header_reorder(header, &state_entity, col_spec.title.clone(), col_ix, theme)
+                } else {
+                    header
+                };
+
+                header
                     .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.focus(window, cx);

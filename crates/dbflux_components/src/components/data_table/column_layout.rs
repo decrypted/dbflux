@@ -47,6 +47,51 @@ pub struct ColumnLayoutSpec {
     pub pinned: Vec<String>,
 }
 
+impl ColumnLayoutSpec {
+    /// This spec, written by a grid that reads only some of the table's
+    /// columns (a column projection), laid over `stored`, the spec kept for
+    /// the whole table. The columns this spec names take the places `stored`
+    /// gave them, in this spec's order, and their visibility and pin from
+    /// this spec; every other stored column keeps its place and its flags.
+    /// Columns new to `stored` follow at the end.
+    pub fn merged_over(&self, stored: &ColumnLayoutSpec) -> ColumnLayoutSpec {
+        let mut remaining: HashMap<&str, usize> = HashMap::new();
+        for name in &self.order {
+            *remaining.entry(name.as_str()).or_default() += 1;
+        }
+
+        let mut ours = self.order.iter();
+        let mut order = Vec::with_capacity(stored.order.len().max(self.order.len()));
+        for name in &stored.order {
+            match remaining.get_mut(name.as_str()) {
+                Some(count) if *count > 0 => {
+                    *count -= 1;
+                    order.extend(ours.next().cloned());
+                }
+                _ => order.push(name.clone()),
+            }
+        }
+        order.extend(ours.cloned());
+
+        // A flag of a column this spec names comes from this spec, every
+        // other one from `stored`.
+        let flags = |stored: &[String], ours: &[String]| -> Vec<String> {
+            stored
+                .iter()
+                .filter(|name| !self.order.contains(name))
+                .chain(ours)
+                .cloned()
+                .collect()
+        };
+
+        ColumnLayoutSpec {
+            order,
+            hidden: flags(&stored.hidden, &self.hidden),
+            pinned: flags(&stored.pinned, &self.pinned),
+        }
+    }
+}
+
 impl ColumnLayout {
     /// The model's own order with every column shown.
     pub fn identity(col_count: usize) -> Self {
@@ -431,6 +476,37 @@ mod tests {
         let old: ColumnLayoutSpec =
             serde_json::from_str(r#"{"order":["id"],"hidden":[]}"#).expect("decodes");
         assert!(old.pinned.is_empty());
+    }
+
+    #[test]
+    fn a_projected_spec_keeps_the_stored_columns_it_does_not_name() {
+        let stored = ColumnLayoutSpec {
+            order: vec!["email".into(), "id".into(), "name".into(), "note".into()],
+            hidden: vec!["note".into()],
+            pinned: vec!["name".into()],
+        };
+        // The grid read only `id` and `email`, and the user put `id` first.
+        let projected = ColumnLayoutSpec {
+            order: vec!["id".into(), "email".into()],
+            hidden: Vec::new(),
+            pinned: Vec::new(),
+        };
+
+        let merged = projected.merged_over(&stored);
+        assert_eq!(merged.order, ["id", "email", "name", "note"]);
+        assert_eq!(merged.hidden, ["note"], "`note` stays hidden");
+        assert_eq!(merged.pinned, ["name"], "`name` stays pinned");
+
+        // Hiding a projected column, and a column new to the store.
+        let projected = ColumnLayoutSpec {
+            order: vec!["email".into(), "id".into(), "added".into()],
+            hidden: vec!["email".into()],
+            pinned: vec!["id".into()],
+        };
+        let merged = projected.merged_over(&stored);
+        assert_eq!(merged.order, ["email", "id", "name", "note", "added"]);
+        assert_eq!(merged.hidden, ["note", "email"]);
+        assert_eq!(merged.pinned, ["name", "id"]);
     }
 
     #[test]

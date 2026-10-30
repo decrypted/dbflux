@@ -405,7 +405,7 @@ A read-only delete does not change the clipboard.
 | `Ctrl+Alt+c` / `Cmd+Alt+c` | Copy the selection as JSON, as the context menu's **Copy as JSON** does (table results) |
 | `z` | Maximize the results of a query document over the editor, or restore the split |
 | `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, show another view of the result, the value panel's and row inspector's buttons, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
-| `Shift+m` | Open the column header menu of the selected cell's column, as a right-click on its header does: order, filter and the Column section |
+| `Shift+m` | Open the column header menu of the selected cell's column, as a right-click on its header does: order, filter and the Column section. Only in the grid, which has column headers; the record view and the document tree ignore it |
 
 An instance inspector tab takes these keys too: `m` opens the context menu of
 the selected row with the driver's row actions (for example Kill session),

@@ -86,6 +86,12 @@ pub struct DataTableState {
     /// undoing every sort it receives.
     sortable: bool,
 
+    /// Whether a header can be dragged onto another to move its column.
+    /// Off by default: a host whose column order means something of its own
+    /// (a file's column order, which a rename or save reads by model index)
+    /// would see a screen order it never asked for.
+    columns_reorderable: bool,
+
     /// Viewport size (updated on layout).
     viewport_size: Size<Pixels>,
 
@@ -212,6 +218,7 @@ impl DataTableState {
             column_layout: Arc::new(ColumnLayout::identity(col_count)),
             sort: None,
             sortable: true,
+            columns_reorderable: false,
             viewport_size: Size::default(),
             selection: SelectionState::new(),
             focus_handle: cx.focus_handle(),
@@ -674,6 +681,15 @@ impl DataTableState {
 
     pub fn set_sortable(&mut self, sortable: bool) {
         self.sortable = sortable;
+    }
+
+    pub fn columns_reorderable(&self) -> bool {
+        self.columns_reorderable
+    }
+
+    /// Lets the user move a column by dragging its header onto another one.
+    pub fn set_columns_reorderable(&mut self, reorderable: bool) {
+        self.columns_reorderable = reorderable;
     }
 
     pub fn set_sort(&mut self, sort: Option<SortState>, cx: &mut Context<Self>) {

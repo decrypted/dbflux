@@ -152,6 +152,66 @@ impl DataGridPanel {
         }
     }
 
+    /// A header click cycled the sort off. While the rows are in the table's
+    /// default order, clearing would read that same order again, so the
+    /// click sorts the column the other way instead: the default is where
+    /// the cycle starts. A table opened newest first (primary key
+    /// descending) then reaches ascending on the next click.
+    pub(super) fn handle_header_sort_off(&mut self, cx: &mut Context<Self>) {
+        match self.default_order_flipped(cx) {
+            Some((col_ix, direction)) => self.handle_sort_request(col_ix, direction, cx),
+            None => self.handle_sort_clear(cx),
+        }
+    }
+
+    /// The first default-order column the other way round, when the table's
+    /// rows are in its default order now.
+    fn default_order_flipped(&self, cx: &Context<Self>) -> Option<(usize, SortDirection)> {
+        let DataSource::Table {
+            profile_id,
+            database,
+            table,
+            order_by,
+            ..
+        } = &self.source
+        else {
+            return None;
+        };
+
+        let default_order = Self::get_primary_key_columns(
+            &self.app_state,
+            *profile_id,
+            database.as_deref(),
+            table,
+            cx,
+        );
+        let in_default_order = !default_order.is_empty()
+            && order_by.len() == default_order.len()
+            && order_by
+                .iter()
+                .zip(&default_order)
+                .all(|(loaded, default)| {
+                    loaded.column.name == default.column.name
+                        && loaded.direction == default.direction
+                });
+        if !in_default_order {
+            return None;
+        }
+
+        let first = default_order.first()?;
+        let col_ix = self
+            .result
+            .columns
+            .iter()
+            .position(|column| column.name == first.column.name)?;
+        let flipped = match first.direction {
+            SortDirection::Ascending => SortDirection::Descending,
+            SortDirection::Descending => SortDirection::Ascending,
+        };
+
+        Some((col_ix, flipped))
+    }
+
     // current is the enumerate() index over original_order, which
     // apply_local_sort builds and apply_result_search filters in step with
     // result.rows. The order and the sort state are reset wherever the rows

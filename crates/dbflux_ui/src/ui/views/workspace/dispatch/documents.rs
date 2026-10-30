@@ -154,6 +154,7 @@ impl Workspace {
             | Command::TriggerCompletion
             // The filter a table shows belongs to its document.
             | Command::ClearFilter
+            | Command::SearchFilterHistory
             // So do the result tabs of a query.
             | Command::NextResultTab
             | Command::PrevResultTab

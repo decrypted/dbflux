@@ -86,6 +86,9 @@ pub enum Command {
     ExportResults,
     /// Clears the WHERE filter of a table and reloads its rows.
     ClearFilter,
+    /// Opens the filter history of a table's WHERE field with the keyboard
+    /// in its search, or moves to the next older match while it is open.
+    SearchFilterHistory,
     /// Shows the next result tab of a query document, wrapping at the end.
     NextResultTab,
     /// Shows the previous result tab of a query document, wrapping at the start.
@@ -427,6 +430,7 @@ impl Command {
 
             Command::ExportResults => "Export results",
             Command::ClearFilter => "Clear filter",
+            Command::SearchFilterHistory => "Search filter history",
             Command::NextResultTab => "Next result tab",
             Command::PrevResultTab => "Previous result tab",
             Command::CloseResultTab => "Close result tab",
@@ -639,6 +643,7 @@ impl Command {
 
             Command::ExportResults => "export_results",
             Command::ClearFilter => "clear_filter",
+            Command::SearchFilterHistory => "search_filter_history",
             Command::NextResultTab => "next_result_tab",
             Command::PrevResultTab => "prev_result_tab",
             Command::CloseResultTab => "close_result_tab",
@@ -868,6 +873,7 @@ impl Command {
             Command::ToggleComment,
             Command::ExportResults,
             Command::ClearFilter,
+            Command::SearchFilterHistory,
             Command::NextResultTab,
             Command::PrevResultTab,
             Command::CloseResultTab,
@@ -1075,6 +1081,7 @@ impl Command {
 
             Command::ExportResults
             | Command::ClearFilter
+            | Command::SearchFilterHistory
             | Command::NextResultTab
             | Command::PrevResultTab
             | Command::CloseResultTab

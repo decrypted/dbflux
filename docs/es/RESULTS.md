@@ -284,13 +284,19 @@ sube al principio en lugar de listarlo dos veces, y un filtro que la base de
 datos rechazó no se guarda. Solo se guarda el texto del filtro, nunca filas.
 
 Abre la lista con el icono de historial a la izquierda del campo `WHERE`, con
-**Filter history** en la entrada Toolbar del menú de la tabla (`m`), o con
-`Up` / `Down` en el campo mientras está vacío o el cursor está al principio.
-Escribir con la lista abierta la reduce a los filtros que contienen el texto.
-`Up` / `Down` mueven el resaltado y `Enter` aplica el filtro resaltado; sin nada
-resaltado, `Enter` aplica lo que escribiste. `Shift+Delete` o la × de una fila
-quita ese filtro, la última fila, **Clear history**, olvida todos los filtros de
-la tabla, y `Escape` cierra la lista.
+**Filter history** en la entrada Toolbar del menú de la tabla (`m`), con
+`Ctrl+r` (`Cmd+r` en macOS) en el campo, o con `Up` / `Down` en el campo
+mientras está vacío o el cursor está al principio. La lista se abre con el
+teclado en su campo de búsqueda, que empieza vacío. Escribir ahí reduce la lista
+a los filtros que contienen todas las palabras escritas, en cualquier orden y
+sin distinguir mayúsculas: `status 500` encuentra `status = 500 AND method =
+'x'`. Las palabras encontradas se resaltan en las filas, y la coincidencia más
+reciente queda resaltada para `Enter`. `Up` / `Down` mueven el resaltado,
+`Ctrl+r` de nuevo pasa a la siguiente coincidencia más antigua y `Enter` aplica
+el filtro resaltado. `Shift+Delete` o la × de una fila quita ese filtro, y la
+última fila, **Clear history**, olvida todos los filtros de la tabla. `Escape`
+primero vacía la búsqueda; un segundo `Escape` cierra la lista y vuelve al campo
+`WHERE`.
 
 El historial de queries de una colección de documentos (el botón de historial de
 su barra de query) también se conserva al reiniciar.

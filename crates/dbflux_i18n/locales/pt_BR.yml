@@ -1983,6 +1983,7 @@ document:
           clear: "Limpar histórico"
           empty: "Ainda não há filtros para esta tabela"
           no_match: "Nenhum filtro corresponde"
+          search: "Pesquisar no histórico de filtros"
       nearest:
         summary: "Semelhantes a %{anchor} por %{column}"
         similar_to: "Semelhantes a"
@@ -4507,6 +4508,7 @@ settings:
       toggle_comment: Alternar comentário de linha
       export_results: Exportar resultados
       clear_filter: Limpar filtro
+      search_filter_history: Pesquisar no histórico de filtros
       next_result_tab: Próxima aba de resultado
       prev_result_tab: Aba de resultado anterior
       close_result_tab: Fechar aba de resultado

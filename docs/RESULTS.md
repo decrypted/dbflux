@@ -260,13 +260,18 @@ listing it twice, and a filter the database rejected is not kept. Only the
 filter text is stored, never rows.
 
 Open the list with the history icon at the left of the `WHERE` field, with
-**Filter history** in the Toolbar entry of the table menu (`m`), or with `Up` /
-`Down` in the field while it is empty or the caret is at its start. Typing while
-the list is open narrows it to the filters that contain the text. `Up` / `Down`
-move the highlight and `Enter` applies the highlighted filter; with nothing
-highlighted, `Enter` applies what you typed. `Shift+Delete` or the × of a row
-removes that filter, the last row, **Clear history**, forgets every filter of the
-table, and `Escape` closes the list.
+**Filter history** in the Toolbar entry of the table menu (`m`), with `Ctrl+r`
+(`Cmd+r` on macOS) in the field, or with `Up` / `Down` in the field while it is
+empty or the caret is at its start. The list opens with the keyboard in its
+search field, which starts empty. Typing there narrows the list to the filters
+that contain every word typed, in any order and ignoring case: `status 500`
+finds `status = 500 AND method = 'x'`. The matched words are highlighted in the
+rows, and the newest match is highlighted for `Enter`. `Up` / `Down` move the
+highlight, `Ctrl+r` again moves to the next older match, and `Enter` applies the
+highlighted filter. `Shift+Delete` or the × of a row removes that filter, and
+the last row, **Clear history**, forgets every filter of the table. `Escape`
+clears the search first; a second `Escape` closes the list and returns to the
+`WHERE` field.
 
 The query history of a document collection (the history button of its query bar)
 is kept across restarts the same way.

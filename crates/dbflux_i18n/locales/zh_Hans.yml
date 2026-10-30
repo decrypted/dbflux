@@ -1983,6 +1983,7 @@ document:
           clear: "清除历史"
           empty: "此表还没有筛选条件"
           no_match: "没有匹配的筛选条件"
+          search: "搜索筛选历史"
       nearest:
         summary: "按 %{column} 与 %{anchor} 相似"
         similar_to: "相似于"
@@ -4507,6 +4508,7 @@ settings:
       toggle_comment: 切换注释
       export_results: 导出结果
       clear_filter: 清除筛选
+      search_filter_history: 搜索筛选历史
       next_result_tab: 下一个结果标签页
       prev_result_tab: 上一个结果标签页
       close_result_tab: 关闭结果标签页

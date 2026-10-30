@@ -10,10 +10,12 @@ mod render;
 mod tests;
 
 use super::{DataGridPanel, DataSource, TableReload};
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_ui_base::AppStateEntity;
-use gpui::{App, Context, Entity, Window};
+use gpui::{App, AppContext as _, Context, Entity, Focusable as _, ScrollHandle, Window};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::ops::Range;
 
 /// Prefix of the `st_ui_state` keys of table filters. The version lets a
 /// later format use new keys instead of misreading old rows.
@@ -31,13 +33,15 @@ pub(super) struct FilterHistoryPopup {
     pub(super) open: bool,
     /// Entries of the table, newest first, as last read from the store.
     pub(super) entries: Vec<String>,
-    /// Highlighted row of the shown list. `entries_shown().len()` is the
-    /// "Clear history" row. `None` leaves Enter to the typed filter.
+    /// Highlighted row of the shown list. `shown().len()` is the "Clear
+    /// history" row.
     pub(super) selected: Option<usize>,
-    /// Text typed since the popup opened; the list shows the entries that
-    /// contain it. `None` until the user types, so opening on a filter that
-    /// matches nothing still lists everything.
-    pub(super) query: Option<String>,
+    /// The text of the popup's search field. Every word of it must occur in
+    /// an entry for the entry to be shown.
+    pub(super) query: String,
+    /// Scrolls the highlighted row into view while the keys walk a list
+    /// longer than the popup.
+    pub(super) scroll: ScrollHandle,
     /// Where the press that last closed the popup from outside landed, so
     /// the toggle's click from that same press does not reopen it.
     pub(super) dismiss_press: Option<gpui::Point<gpui::Pixels>>,
@@ -46,7 +50,13 @@ pub(super) struct FilterHistoryPopup {
 impl FilterHistoryPopup {
     /// Indexes into `entries` of the rows shown, in order.
     pub(super) fn shown(&self) -> Vec<usize> {
-        matching_entries(&self.entries, self.query.as_deref().unwrap_or(""))
+        matching_entries(&self.entries, &self.query)
+    }
+
+    /// The first shown row, highlighted after the list changes so that Enter
+    /// picks the best match, as a shell's reverse search does.
+    fn first_shown(&self) -> Option<usize> {
+        (!self.shown().is_empty()).then_some(0)
     }
 }
 
@@ -57,17 +67,102 @@ pub(super) fn record_entry<T: PartialEq>(entries: &mut Vec<T>, entry: T, limit: 
     entries.truncate(limit);
 }
 
-/// Indexes of the entries containing `query`, ignoring case. An empty query
-/// matches every entry.
+/// The lowercased words of a search, in the order typed.
+pub(super) fn search_words(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// Indexes of the entries that contain every word of `query`, in any order
+/// and ignoring case. An empty query matches every entry.
 pub(super) fn matching_entries(entries: &[String], query: &str) -> Vec<usize> {
-    let needle = query.trim().to_lowercase();
+    let words = search_words(query);
 
     entries
         .iter()
         .enumerate()
-        .filter(|(_, entry)| needle.is_empty() || entry.to_lowercase().contains(&needle))
+        .filter(|(_, entry)| {
+            let entry = entry.to_lowercase();
+            words.iter().all(|word| entry.contains(word.as_str()))
+        })
         .map(|(index, _)| index)
         .collect()
+}
+
+/// Byte ranges of `text` where one of `words` (lowercased) occurs, sorted
+/// and merged, for highlighting a row.
+///
+/// Lowercasing can change a character's byte length, so the search runs on
+/// a lowercased copy and maps each hit back to the characters of `text`
+/// that produced it.
+pub(super) fn word_ranges(text: &str, words: &[String]) -> Vec<Range<usize>> {
+    let mut lowered = String::with_capacity(text.len());
+    // For each byte of `lowered`, the start of the character of `text` it
+    // came from.
+    let mut origin = Vec::with_capacity(text.len());
+    for (start, character) in text.char_indices() {
+        for lower in character.to_lowercase() {
+            let before = lowered.len();
+            lowered.push(lower);
+            origin.extend(std::iter::repeat_n(start, lowered.len() - before));
+        }
+    }
+    let original_at =
+        |lowered_index: usize| origin.get(lowered_index).copied().unwrap_or(text.len());
+
+    let mut ranges: Vec<Range<usize>> = words
+        .iter()
+        .filter(|word| !word.is_empty())
+        .flat_map(|word| {
+            lowered
+                .match_indices(word.as_str())
+                .map(|(start, hit)| original_at(start)..original_at(start + hit.len()))
+                .collect::<Vec<_>>()
+        })
+        .filter(|range| !range.is_empty())
+        .collect();
+    ranges.sort_by_key(|range| range.start);
+
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
+}
+
+/// The popup's search field. Its keys reach the popup through
+/// [`DataGridPanel::render_filter_history_search`]; this wires its events.
+pub(super) fn new_history_search(
+    window: &mut Window,
+    cx: &mut Context<DataGridPanel>,
+) -> Entity<InputState> {
+    let search = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(dbflux_i18n::t!("document.data.grid.filter.history.search"))
+    });
+
+    cx.subscribe_in(
+        &search,
+        window,
+        |this, input, event: &InputEvent, window, cx| match event {
+            InputEvent::Change => {
+                let text = input.read(cx).value().to_string();
+                this.filter_history_search_changed(&text, cx);
+            }
+            InputEvent::PressEnter {
+                secondary: false, ..
+            } => {
+                this.activate_filter_history(window, cx);
+            }
+            InputEvent::Blur => this.filter_history_search_blurred(window, cx),
+            _ => {}
+        },
+    )
+    .detach();
+
+    search
 }
 
 /// A store key: the prefix and the parts as a JSON array, which keeps names
@@ -200,8 +295,8 @@ impl DataGridPanel {
         self.filter_history_key().is_some() && self.filter_input_visible()
     }
 
-    /// Opens the history popup under the WHERE field, with the keyboard in
-    /// the field, highlighting the newest entry.
+    /// Opens the history popup under the WHERE field with an empty search,
+    /// the keyboard in the search field and the newest entry highlighted.
     pub(super) fn open_filter_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.filter_history_key() else {
             return;
@@ -210,10 +305,14 @@ impl DataGridPanel {
         let popup = &mut self.filter_bar.history;
         popup.entries = load_history(&self.app_state, &key, cx);
         popup.open = true;
-        popup.query = None;
-        popup.selected = (!popup.entries.is_empty()).then_some(0);
+        popup.query.clear();
+        popup.selected = popup.first_shown();
+        popup.scroll.scroll_to_item(0);
 
-        self.focus_filter_input(window, cx);
+        self.filter_bar
+            .history_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.focus_filter_history_search(window, cx);
         cx.notify();
     }
 
@@ -222,6 +321,115 @@ impl DataGridPanel {
             self.filter_bar.history.open = false;
             cx.notify();
         }
+    }
+
+    /// Closes the popup from its search field and hands the keyboard back to
+    /// the WHERE field, which the popup belongs to.
+    pub(super) fn dismiss_filter_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_filter_history(cx);
+        self.focus_filter_input(window, cx);
+    }
+
+    /// Ctrl+R (Cmd+R on macOS) in the WHERE field or the popup's search: opens
+    /// the popup, or, while it is open, moves to the next older match, like a
+    /// shell's reverse search. Elsewhere the key is not the popup's.
+    pub(super) fn search_filter_history(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.offers_filter_history() {
+            return false;
+        }
+
+        let in_search = self.filter_history_search_focused(window, cx);
+        let in_filter = self
+            .filter_bar
+            .filter_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+        if !in_search && !in_filter {
+            return false;
+        }
+
+        if self.filter_bar.history.open {
+            self.step_filter_history(true, cx);
+            if !in_search {
+                self.focus_filter_history_search(window, cx);
+            }
+        } else {
+            self.open_filter_history(window, cx);
+        }
+        true
+    }
+
+    /// Escape in the search field: clears a search first, so a second
+    /// Escape is needed to close the popup.
+    pub(super) fn filter_history_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.filter_bar.history.query.is_empty() {
+            self.dismiss_filter_history(window, cx);
+            return;
+        }
+
+        self.filter_bar
+            .history_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.filter_history_search_changed("", cx);
+    }
+
+    /// The list follows the search field: it narrows to the entries holding
+    /// every word, and the best (newest) match is highlighted.
+    pub(super) fn filter_history_search_changed(&mut self, text: &str, cx: &mut Context<Self>) {
+        let popup = &mut self.filter_bar.history;
+        if popup.query == text {
+            return;
+        }
+
+        popup.query = text.to_string();
+        popup.selected = popup.first_shown();
+        popup.scroll.scroll_to_item(0);
+        cx.notify();
+    }
+
+    /// The search field lost the keyboard. Going back to the WHERE field
+    /// keeps the grid in edit mode (the popup closes on that click anyway);
+    /// anywhere else the popup closes and the grid leaves edit mode, as when
+    /// the WHERE field loses it.
+    fn filter_history_search_blurred(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let to_filter = self
+            .filter_bar
+            .filter_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+        if to_filter {
+            return;
+        }
+
+        self.close_filter_history(cx);
+        self.exit_edit_mode(window, cx);
+    }
+
+    pub(super) fn filter_history_search_focused(&self, window: &Window, cx: &App) -> bool {
+        self.filter_bar
+            .history_search
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }
+
+    /// Gives the popup's search field the keyboard. The grid stays in the
+    /// toolbar's edit mode, so typed letters are text and not grid keys.
+    fn focus_filter_history_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use super::{EditState, GridFocusMode, ToolbarFocus};
+
+        self.focus.focus_mode = GridFocusMode::Toolbar;
+        self.focus.toolbar_focus = ToolbarFocus::Filter;
+        self.focus.edit_state = EditState::Editing;
+        self.filter_bar
+            .history_search
+            .update(cx, |input, cx| input.focus(window, cx));
     }
 
     /// Moves the highlight one row down or up, wrapping, over the shown
@@ -233,30 +441,48 @@ impl DataGridPanel {
             return;
         }
 
-        popup.selected = Some(match (popup.selected, forward) {
+        let row = match (popup.selected, forward) {
             (None, true) => 0,
             (None, false) => rows - 1,
             (Some(row), true) => (row + 1) % rows,
             (Some(row), false) => (row + rows - 1) % rows,
-        });
+        };
+        popup.selected = Some(row);
+        // The list holds the shown entries, then a separator, then "Clear
+        // history".
+        let child = if row < popup.shown().len() {
+            row
+        } else {
+            row + 1
+        };
+        popup.scroll.scroll_to_item(child);
         cx.notify();
     }
 
-    /// Enter while the popup is open: runs the highlighted row. Returns
-    /// false when nothing is highlighted, so the typed filter applies.
+    /// Enter while the popup is open: runs the highlighted row, or the only
+    /// match when nothing is highlighted. Returns false when there is
+    /// neither.
     pub(super) fn activate_filter_history(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let popup = &self.filter_bar.history;
-        let Some(row) = popup.selected.filter(|_| popup.open) else {
+        if !popup.open {
+            return false;
+        }
+        let shown = popup.shown();
+        let Some(row) = popup.selected.or_else(|| (shown.len() == 1).then_some(0)) else {
             return false;
         };
 
-        match popup.shown().get(row) {
+        match shown.get(row) {
             Some(&index) => self.apply_filter_history_entry(index, window, cx),
-            None => self.clear_filter_history(cx),
+            None => {
+                self.clear_filter_history(cx);
+                // The search field goes with the popup.
+                self.focus_filter_input(window, cx);
+            }
         }
         true
     }
@@ -332,23 +558,10 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// The popup follows what is typed while it is open: the list narrows
-    /// to the entries containing it, and Enter goes back to the typed text
-    /// until a row is highlighted again.
-    pub(super) fn filter_history_text_changed(&mut self, text: &str, cx: &mut Context<Self>) {
-        let popup = &mut self.filter_bar.history;
-        if !popup.open || popup.query.as_deref() == Some(text) {
-            return;
-        }
-
-        popup.query = Some(text.to_string());
-        popup.selected = None;
-        cx.notify();
-    }
-
-    /// Up / Down in the WHERE field. They walk an open popup, and open it
-    /// when the field is empty or the caret is at its start, where they
-    /// would otherwise do nothing. An open completion menu keeps them.
+    /// Up / Down in the WHERE field. They open the popup when the field is
+    /// empty or the caret is at its start, where they would otherwise do
+    /// nothing, and walk it if it is still open. An open completion menu
+    /// keeps them.
     pub(super) fn filter_history_vertical_key(
         &mut self,
         forward: bool,
@@ -379,7 +592,7 @@ impl DataGridPanel {
     }
 
     /// Enter in the WHERE field: the highlighted history entry when the
-    /// popup has one, otherwise the typed filter.
+    /// popup is open, otherwise the typed filter.
     pub(super) fn submit_filter_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.activate_filter_history(window, cx) {
             self.apply_filter_input(window, cx);

@@ -421,12 +421,14 @@ Revert all changes run the edit bar's Commit and Revert. Query history opens the
 history menu with the keyboard in it: the context menu keys move, `Enter` runs
 the highlighted query again and `Escape` closes it.
 
-In the `WHERE` field of a table, `Up` or `Down` opens the table's filter history
-while the field is empty or the caret is at its start; **Filter history** in the
-Toolbar submenu opens it too. While it is open, typing narrows the list, `Up` /
-`Down` move the highlight, `Enter` applies the highlighted filter, `Shift+Delete`
-removes it and `Escape` closes the list; its last row clears the table's history.
-See [Filter history](RESULTS.md#filter-history).
+In the `WHERE` field of a table, `Ctrl+r` / `Cmd+r` opens the table's filter
+history, and so do `Up` or `Down` while the field is empty or the caret is at
+its start, and **Filter history** in the Toolbar submenu. The list opens with
+the keyboard in its search field: typing narrows it to the filters that contain
+every word typed, `Up` / `Down` (or `Ctrl+r` / `Cmd+r` again) move the
+highlight, `Enter` applies the highlighted filter, `Shift+Delete` removes it,
+and `Escape` clears the search, then closes the list; its last row clears the
+table's history. See [Filter history](RESULTS.md#filter-history).
 
 `=` and the context menu's Add to filter and Filter submenu are the keyboard
 counterparts of a middle-click on a cell (`Shift`+middle-click excludes the
@@ -844,6 +846,7 @@ The keys are listed under the Migrate Wizard context in Settings > Keybindings.
 | `Ctrl+Enter` / `Cmd+Enter` | Run the query |
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Run the query in a new tab |
 | `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
+| `Ctrl+r` / `Cmd+r` | In a table's `WHERE` field, open its filter history with the keyboard in the history's search; see [Filter history](RESULTS.md#filter-history) |
 
 While you type in a text field outside a dialog, such as the sidebar search or
 the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd`, or

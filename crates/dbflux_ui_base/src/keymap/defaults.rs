@@ -1087,6 +1087,14 @@ fn text_input_layer() -> KeymapLayer {
     // Escape exits text input mode
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
+    // Reverse search, as in a shell: the history of a table's WHERE field.
+    // The grid ignores it in every other field, and the data table's own
+    // Ctrl+R (Redo) does not apply inside an input.
+    layer.bind(
+        KeyChord::new("r", Modifiers::primary()),
+        Command::SearchFilterHistory,
+    );
+
     layer
 }
 

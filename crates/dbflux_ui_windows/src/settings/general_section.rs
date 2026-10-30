@@ -1977,6 +1977,8 @@ mod tests {
             (
                 "grid-pk-sort-desc",
                 "settings.general.grid_pk_sort_desc.label",
+            ),
+            (
                 "grid-copy-column-names",
                 "settings.general.grid_copy_column_names.label",
             ),

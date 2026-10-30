@@ -178,3 +178,37 @@ fn a_read_only_grid_still_undoes_its_filters(cx: &mut TestAppContext) {
     assert_eq!(filter_text(&panel, window), "status = 404");
     assert_eq!(reads(&log).last(), Some(&Some("status = 404".to_string())));
 }
+
+/// A multi-cell edit is one undo group: the first Undo takes back every cell
+/// it wrote, and only the next one steps back through the filters.
+#[gpui::test]
+fn a_multi_cell_edit_is_one_step_before_the_filter(cx: &mut TestAppContext) {
+    let (panel, window, log) = grid_read_with(cx, method_rows(), &["", "status = 404"]);
+    let state = table_state(&panel, window);
+    let dirty_cells = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            let buffer = state.read(cx).edit_buffer();
+            (0..2).filter(|col| buffer.is_cell_dirty(0, *col)).count()
+        })
+    };
+    window.update(|_, cx| {
+        state.update(cx, |state, _| {
+            let buffer = state.edit_buffer_mut();
+            buffer.begin_undo_group();
+            buffer.set_cell(0, 0, CellValue::text("same"));
+            buffer.set_cell(0, 1, CellValue::text("same"));
+            buffer.end_undo_group();
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(dirty_cells(window), 2);
+    let before = reads(&log).len();
+
+    press(&panel, window, actions::Undo);
+    assert_eq!(dirty_cells(window), 0, "the whole edit at once");
+    assert_eq!(filter_text(&panel, window), "status = 404");
+    assert_eq!(reads(&log).len(), before, "no read for the edit");
+
+    press(&panel, window, actions::Undo);
+    assert_eq!(filter_text(&panel, window), "", "then the filter");
+}

@@ -3377,6 +3377,54 @@ mod tests {
         assert_eq!(fx.range(), CellRange::single(CellCoord::new(4, 0)));
     }
 
+    /// Alt+press on a cell selects it and asks the host to filter by it, once
+    /// per press: the release does not ask again, and no drag starts, so
+    /// moving to another cell with the button held selects nothing more.
+    #[gpui::test]
+    fn an_alt_press_filters_by_the_cell_without_dragging(cx: &mut TestAppContext) {
+        use super::super::selection::{CellCoord, CellRange};
+
+        let mut fx = DragFixture::new(cx);
+        let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let state = fx.state.clone();
+        let requests_for_sub = requests.clone();
+        fx.visual.update(|_, cx| {
+            cx.subscribe(&state, move |_, event: &DataTableEvent, _| {
+                if let DataTableEvent::AddToFilterRequested { row, col } = event {
+                    requests_for_sub.borrow_mut().push((*row, *col));
+                }
+            })
+            .detach();
+        });
+        let alt = gpui::Modifiers {
+            alt: true,
+            ..gpui::Modifiers::default()
+        };
+
+        let (cell, other) = (fx.cell(2, 1), fx.cell(4, 0));
+        fx.visual.simulate_mouse_down(cell, MouseButton::Left, alt);
+        fx.visual.simulate_mouse_move(other, MouseButton::Left, alt);
+        fx.visual.simulate_mouse_up(other, MouseButton::Left, alt);
+        fx.visual.run_until_parked();
+
+        assert_eq!(
+            *requests.borrow(),
+            vec![(2, 1)],
+            "one request, for the pressed cell"
+        );
+        assert_eq!(
+            fx.range(),
+            CellRange::single(CellCoord::new(2, 1)),
+            "no drag"
+        );
+
+        // A plain click afterwards neither filters nor keeps the Alt cell.
+        fx.visual.simulate_click(other, gpui::Modifiers::default());
+        fx.visual.run_until_parked();
+        assert_eq!(requests.borrow().len(), 1);
+        assert_eq!(fx.range(), CellRange::single(CellCoord::new(4, 0)));
+    }
+
     /// A Ctrl+press that takes a cell out starts no drag: a jitter inside the
     /// cell or a move to another before the release selects nothing again.
     #[gpui::test]

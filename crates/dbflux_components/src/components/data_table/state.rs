@@ -713,6 +713,8 @@ impl DataTableState {
     /// Selection change for a primary click on a row number: the whole row,
     /// or with Shift every row from the anchor's row to this one.
     pub fn click_row(&mut self, row: usize, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        // A press on a row number never starts a cell drag.
+        self.drag_selecting = false;
         self.commit_edit_in_progress(cx);
         let col_count = self.col_count();
         if modifiers.shift {

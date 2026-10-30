@@ -1058,6 +1058,19 @@ impl DataGridPanel {
         panel
     }
 
+    /// Types `filter` into the filter bar, as a user would before running it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_filter_for_tests(
+        &mut self,
+        filter: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.filter_bar
+            .filter_input
+            .update(cx, |input, cx| input.set_value(filter, window, cx));
+    }
+
     /// A table grid showing `result`, with rows identified by `pk_columns`,
     /// that never queries a connection. For tests outside this crate that need
     /// an editable grid.

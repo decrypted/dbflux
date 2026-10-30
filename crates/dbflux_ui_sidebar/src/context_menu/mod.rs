@@ -227,7 +227,7 @@ impl Sidebar {
     ) {
         let mut section_items: Vec<ContextMenuItem> = section
             .into_iter()
-            .filter(ContextMenuItem::is_selectable)
+            .filter(ContextMenuItem::is_entry)
             .collect();
 
         if section_items.is_empty() {
@@ -696,16 +696,26 @@ impl Sidebar {
                 items
             }
             SchemaNodeKind::Profile => {
-                let (is_connected, connect_failed) =
+                let (is_connected, connect_failed, connect_on_startup) =
                     if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) {
                         let state = self.app_state.read(cx);
                         (
                             state.connections().contains_key(&profile_id),
                             state.connect_failure(profile_id).is_some(),
+                            state
+                                .profiles()
+                                .iter()
+                                .find(|profile| profile.id == profile_id)
+                                .is_some_and(|profile| profile.connect_on_startup),
                         )
                     } else {
-                        (false, false)
+                        (false, false, false)
                     };
+                let startup_overridden = self
+                    .app_state
+                    .read(cx)
+                    .general_settings()
+                    .reopen_last_connections;
 
                 let mut items = Vec::new();
 
@@ -758,6 +768,28 @@ impl Sidebar {
                             ContextMenuAction::Export,
                         ),
                     ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [{
+                        let item = ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.connect_on_startup"),
+                            ContextMenuAction::ToggleConnectOnStartup(connect_on_startup),
+                        );
+
+                        // Launch ignores the flag while the global reopen
+                        // setting is on, so the row must not look like it
+                        // does anything; the stored value is kept for when
+                        // that setting is turned off.
+                        if startup_overridden {
+                            item.disabled_because(dbflux_i18n::t!(
+                                "sidebar.menu.connect_on_startup_overridden"
+                            ))
+                        } else {
+                            item
+                        }
+                    }],
                 );
 
                 // Import (folder bundle -> tables) is offered for any connected
@@ -2103,6 +2135,15 @@ impl Sidebar {
             ContextMenuAction::CompareSchema => {
                 self.open_schema_diff_from_context(&item_id, cx);
             }
+            ContextMenuAction::ToggleConnectOnStartup(enabled) => {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                    self.app_state.update(cx, |state, cx| {
+                        if state.set_profile_connect_on_startup(profile_id, !enabled) {
+                            cx.emit(AppStateChanged);
+                        }
+                    });
+                }
+            }
         }
 
         // Close menu after executing action
@@ -3152,6 +3193,166 @@ mod menu_availability_tests {
                 .is_none(),
             "a connected profile must not show the error indicator"
         );
+    }
+
+    #[gpui::test]
+    async fn profile_menu_toggles_connect_on_startup_and_shows_its_state(cx: &mut TestAppContext) {
+        use dbflux_components::icon::IconSource;
+        use dbflux_components::icons::AppIcon;
+
+        let state = test_app_state(cx);
+        let profile = dbflux_core::ConnectionProfile::new(
+            "startup-toggle",
+            dbflux_core::DbConfig::default_postgres(),
+        );
+        let profile_id = profile.id;
+        state.update(cx, |state, _| {
+            state.profiles_mut().push(profile);
+            state.connection_tree_mut().add_node(
+                dbflux_core::ConnectionTreeNode::new_connection_ref(profile_id, None, 1000),
+            );
+        });
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let profile_item = SchemaNodeId::Profile { profile_id }.to_string();
+
+        let toggle_entry = |sidebar: &mut Sidebar, cx: &mut gpui::Context<Sidebar>| {
+            let items =
+                sidebar.build_context_menu_items(SchemaNodeKind::Profile, &profile_item, cx);
+            let index = items
+                .iter()
+                .position(|item| {
+                    matches!(item.action, ContextMenuAction::ToggleConnectOnStartup(_))
+                })
+                .expect("the profile menu offers the startup toggle");
+            let shown = match items[index].action {
+                ContextMenuAction::ToggleConnectOnStartup(enabled) => enabled,
+                _ => unreachable!(),
+            };
+            let icon = crate::ContextMenuItem::to_menu_items(&items)[index]
+                .icon
+                .clone();
+            (index, shown, icon)
+        };
+
+        let (index, shown, icon) = sidebar.update(cx, |sidebar, cx| toggle_entry(sidebar, cx));
+        assert!(!shown, "a new profile does not connect on startup");
+        assert!(icon.is_none(), "an unchecked entry shows no check mark");
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.open_menu_for_item(&profile_item, point(px(0.0), px(0.0)), cx);
+            let open_index = sidebar
+                .context_menu_state()
+                .expect("profile menu open")
+                .items
+                .iter()
+                .position(|item| {
+                    matches!(item.action, ContextMenuAction::ToggleConnectOnStartup(_))
+                })
+                .expect("open menu has the startup toggle");
+            assert_eq!(open_index, index);
+            sidebar.context_menu_execute_at(open_index, cx);
+        });
+
+        state.read_with(cx, |state, _| {
+            let saved = state
+                .profiles()
+                .iter()
+                .find(|profile| profile.id == profile_id)
+                .expect("profile kept");
+            assert!(saved.connect_on_startup, "the click switches it on");
+            let stored = state
+                .storage_runtime()
+                .connection_profiles()
+                .get(&profile_id.to_string())
+                .expect("read stored profile")
+                .expect("profile is stored");
+            assert!(stored.connect_on_startup, "the click saves it");
+        });
+
+        let (_, shown, icon) = sidebar.update(cx, |sidebar, cx| toggle_entry(sidebar, cx));
+        assert!(shown, "the menu shows the profile connects on startup");
+        assert!(matches!(
+            icon,
+            Some(IconSource::Svg(path)) if path.as_ref() == AppIcon::Check.path()
+        ));
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.open_menu_for_item(&profile_item, point(px(0.0), px(0.0)), cx);
+            sidebar.context_menu_execute_at(index, cx);
+        });
+        state.read_with(cx, |state, _| {
+            assert!(
+                !state
+                    .profiles()
+                    .iter()
+                    .any(|profile| profile.id == profile_id && profile.connect_on_startup),
+                "a second click switches it off"
+            );
+        });
+    }
+
+    /// While the global reopen setting is on, launch ignores the flag, so the
+    /// entry is greyed out with the reason, cannot be run, and keeps the
+    /// stored value.
+    #[gpui::test]
+    async fn profile_menu_greys_out_connect_on_startup_while_reopen_is_on(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let mut profile = dbflux_core::ConnectionProfile::new(
+            "startup-overridden",
+            dbflux_core::DbConfig::default_postgres(),
+        );
+        profile.connect_on_startup = true;
+        let profile_id = profile.id;
+        state.update(cx, |state, _| {
+            let mut settings = state.general_settings().clone();
+            settings.reopen_last_connections = true;
+            state.update_general_settings(settings);
+            state.profiles_mut().push(profile);
+            state.connection_tree_mut().add_node(
+                dbflux_core::ConnectionTreeNode::new_connection_ref(profile_id, None, 1000),
+            );
+        });
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let profile_item = SchemaNodeId::Profile { profile_id }.to_string();
+
+        sidebar.update(cx, |sidebar, cx| {
+            let items =
+                sidebar.build_context_menu_items(SchemaNodeKind::Profile, &profile_item, cx);
+            let index = items
+                .iter()
+                .position(|item| {
+                    matches!(item.action, ContextMenuAction::ToggleConnectOnStartup(_))
+                })
+                .expect("the entry is still listed");
+            let entry = &items[index];
+            assert!(entry.is_disabled, "the entry is greyed out");
+            assert!(!entry.is_selectable(), "the keyboard skips it");
+            assert_eq!(
+                entry.detail.as_deref(),
+                Some(dbflux_i18n::t!("sidebar.menu.connect_on_startup_overridden").as_str()),
+                "it says which setting decides"
+            );
+            let rendered = &crate::ContextMenuItem::to_menu_items(&items)[index];
+            assert!(rendered.disabled);
+            assert!(rendered.detail.is_some());
+
+            sidebar.open_menu_for_item(&profile_item, point(px(0.0), px(0.0)), cx);
+            sidebar.context_menu_execute_at(index, cx);
+        });
+
+        state.read_with(cx, |state, _| {
+            assert!(
+                state
+                    .profiles()
+                    .iter()
+                    .any(|profile| profile.id == profile_id && profile.connect_on_startup),
+                "a click on the disabled entry keeps the stored value"
+            );
+        });
     }
 }
 

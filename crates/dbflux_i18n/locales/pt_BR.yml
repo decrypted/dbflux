@@ -433,6 +433,9 @@ connection_manager:
     show_all_databases: "Mostrar todos os bancos de dados"
     read_only_help: "Bloqueia alterações pela grade de dados, pelo construtor de consultas, pela comparação de esquemas e pelo editor de consultas, e nega escritas por MCP nesta conexão. Instruções de leitura continuam sendo executadas."
     read_only: "Somente leitura"
+    connect_on_startup: "Conectar ao iniciar"
+    connect_on_startup_help: "O DBFlux se conecta a esta conexão em segundo plano ao iniciar. Se a senha não estiver salva, ela não é conectada; conecte-se você mesmo para digitar a senha."
+    connect_on_startup_overridden: "Não é usado enquanto \"Reconectar às conexões que estavam abertas\" estiver ativado em Configurações > Geral > Inicialização e sessão: essa configuração decide quais conexões abrem ao iniciar. A escolha é mantida para quando ela for desativada."
     name: Nome
     ssl_mode: Modo SSL
     ca_certificate: Certificado da CA
@@ -442,6 +445,7 @@ connection_manager:
     transport: TRANSPORTE
     navigator: "NAVEGADOR"
     safety: "SEGURANÇA"
+    startup: "INICIALIZAÇÃO"
   banner:
     correct_following: Corrija os itens a seguir
     testing_connection: "Testando conexão…"
@@ -5131,6 +5135,8 @@ sidebar:
     drop_collection: Remover coleção
     connect: Conectar
     retry_connect: Tentar novamente
+    connect_on_startup: Conectar ao iniciar
+    connect_on_startup_overridden: "Sem efeito enquanto Configurações > Geral > Inicialização e sessão reconecta as conexões abertas"
     disconnect: Desconectar
     edit: Editar
     duplicate: Duplicar
@@ -5230,6 +5236,9 @@ sidebar:
     edit_reconnect_now: Reconectar agora
     edit_reconnect_later: Depois
     connection_already_pending: A conexão já está pendente
+    startup_needs_password: "'%{name}' não foi conectada ao iniciar porque a senha não está salva. Conecte-se para digitá-la."
+    startup_needs_passwords: "%{names} não foram conectadas ao iniciar porque as senhas não estão salvas. Conecte-se a cada uma para digitá-la."
+    startup_needs_passphrase: "'%{name}' não foi conectada ao iniciar porque o túnel SSH precisa de uma frase secreta que não está salva. Conecte-se para digitá-la."
     operation_started_elsewhere: Operação iniciada por outra thread
     background_task_limit: Há tarefas em segundo plano demais em execução, aguarde
     connection_cancelled_by_hook: Conexão cancelada pelo hook

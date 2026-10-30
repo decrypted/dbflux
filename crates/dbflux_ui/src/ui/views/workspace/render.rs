@@ -788,6 +788,12 @@ impl Render for Workspace {
                 let menu_gap = Spacing::XS;
                 let menu_item_height = Heights::ROW_COMPACT.to_pixels(window.rem_size());
                 let separator_height = px(1.0) + Spacing::XS * 2.0;
+                // A row with a detail line is taller than a plain one.
+                let detail_row_extra = {
+                    use dbflux_components::tokens::MenuMetrics;
+                    MenuMetrics::DETAIL_ROW_HEIGHT.to_pixels(window.rem_size())
+                        - MenuMetrics::ROW_HEIGHT.to_pixels(window.rem_size())
+                };
                 let menu_container_padding = px(4.0);
 
                 let parent_entry = menu.parent_stack.last();
@@ -804,6 +810,8 @@ impl Render for Workspace {
                             .fold(px(0.0), |acc, item| {
                                 acc + if item.is_separator {
                                     separator_height
+                                } else if item.detail.is_some() {
+                                    menu_item_height + detail_row_extra
                                 } else {
                                     menu_item_height
                                 }

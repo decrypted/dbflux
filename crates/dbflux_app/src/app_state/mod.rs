@@ -1322,6 +1322,42 @@ impl AppState {
         self.save_profiles();
     }
 
+    /// Sets whether `profile_id` connects when DBFlux starts, and saves it.
+    ///
+    /// Unlike [`Self::update_profile`], this keeps the profile's connect
+    /// failure and remembered password: the flag changes when the profile
+    /// connects, not how. Returns `false` when no such profile exists.
+    pub fn set_profile_connect_on_startup(&mut self, profile_id: Uuid, enabled: bool) -> bool {
+        let Some(profile) = self
+            .facade
+            .profiles
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == profile_id)
+        else {
+            return false;
+        };
+
+        if profile.connect_on_startup == enabled {
+            return true;
+        }
+
+        profile.connect_on_startup = enabled;
+        let profile_name = profile.name.clone();
+
+        self.record_config_event(
+            EventOutcome::Success,
+            CONFIG_UPDATE,
+            "connection_profile",
+            profile_id.to_string(),
+            format!("Updated connection profile '{}'", profile_name),
+            None,
+        );
+
+        self.save_profiles();
+        true
+    }
+
     pub fn save_profiles(&self) {
         if let Err(e) = crate::config_loader::save_profiles(
             &self.storage_runtime,
@@ -4033,6 +4069,38 @@ mod tests {
             .expect("profile present");
         state.remove_profile(removed_index);
         assert_eq!(state.connect_failure(removed_id), None);
+    }
+
+    #[test]
+    fn toggling_connect_on_startup_saves_it_and_keeps_the_connect_failure() {
+        let profile = ConnectionProfile::new("eager", DbConfig::default_postgres());
+        let profile_id = profile.id;
+
+        let mut state = test_state_with_profiles(HashMap::new(), vec![profile]);
+        state.record_connect_failure(profile_id, "connection refused");
+
+        assert!(state.set_profile_connect_on_startup(profile_id, true));
+        assert!(
+            state
+                .profiles()
+                .iter()
+                .find(|profile| profile.id == profile_id)
+                .is_some_and(|profile| profile.connect_on_startup)
+        );
+        let stored = state
+            .storage_runtime()
+            .connection_profiles()
+            .get(&profile_id.to_string())
+            .expect("read stored profile")
+            .expect("profile is stored");
+        assert!(stored.connect_on_startup, "the flag is saved at once");
+        assert_eq!(
+            state.connect_failure(profile_id),
+            Some("connection refused"),
+            "the flag does not change how the profile connects"
+        );
+
+        assert!(!state.set_profile_connect_on_startup(Uuid::new_v4(), true));
     }
 
     /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain

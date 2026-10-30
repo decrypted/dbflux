@@ -98,7 +98,7 @@ y permanece en English por ahora.
 | Setting                        | Default | Qué hace                                                         |
 | ------------------------------ | ------- | ---------------------------------------------------------------- |
 | **Restore session on startup** | On      | Reabre las tabs que tenías abiertas la última vez.               |
-| **Reopen last connections**    | Off     | Al iniciar, reconecta las conexiones que estaban abiertas al salir la última vez y las que usan las tabs restauradas. Funciona aunque la sesión no se restaure. |
+| **Reopen last connections**    | Off     | Al iniciar, reconecta las conexiones que estaban abiertas al salir la última vez y las que usan las tabs restauradas. Funciona aunque la sesión no se restaure. Mientras está activado, el interruptor **Conectar al iniciar** de cada conexión no tiene efecto (ver [Conexiones](CONNECTIONS.md)). |
 | **Default focus**              | Sidebar | Dónde cae el focus al iniciar (Sidebar o la última tab).         |
 | **Max history entries**        | 1000    | Tope del historial de queries (mínimo 10).                       |
 | **Auto-save interval (ms)**    | 2000    | Cada cuánto se auto-guarda el contenido del editor (mínimo 500). Un script respaldado por un archivo se escribe en ese archivo; el contenido sin título se conserva en la carpeta `sessions/`. |

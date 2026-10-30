@@ -264,6 +264,7 @@ pub(super) enum MainExtraStop {
     NavigatorView,
     ShowAllDatabases,
     ReadOnly,
+    ConnectOnStartup,
 }
 
 /// Identifies which SSL certificate slot a file picker writes into.
@@ -314,6 +315,9 @@ struct FormState {
     show_all_databases: bool,
     /// Whether mutations are blocked for the connection; saved on the profile.
     read_only: bool,
+    /// Whether the app connects the profile when it starts; saved on the
+    /// profile.
+    connect_on_startup: bool,
     form_save_password: bool,
     form_save_ssh_secret: bool,
     input_name: Entity<InputState>,
@@ -485,6 +489,10 @@ pub struct ConnectionManagerWindow {
     /// grid navigation steps by it.
     driver_grid_columns: usize,
     editing_profile_id: Option<uuid::Uuid>,
+    /// Mirrors the global "reconnect to the connections that were open"
+    /// setting. While it is on, launch ignores the per-profile startup flag,
+    /// so its checkbox is shown disabled and left out of the keyboard ring.
+    connect_on_startup_overridden: bool,
 
     validation_errors: Vec<String>,
     test_status: TestStatus,
@@ -982,8 +990,14 @@ impl ConnectionManagerWindow {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
+        let connect_on_startup_overridden = app_state
+            .read(cx)
+            .general_settings()
+            .reopen_last_connections;
+
         Self {
             app_state: app_state.clone(),
+            connect_on_startup_overridden,
             view: View::DriverSelect,
             import_panel,
             active_tab: ActiveTab::Main,
@@ -1011,6 +1025,7 @@ impl ConnectionManagerWindow {
                 navigator_view: dbflux_core::NavigatorView::Advanced,
                 show_all_databases: true,
                 read_only: false,
+                connect_on_startup: false,
                 form_save_password: true,
                 form_save_ssh_secret: true,
                 input_name,
@@ -1165,6 +1180,7 @@ impl ConnectionManagerWindow {
         instance.form.navigator_view = profile.navigator_view;
         instance.form.show_all_databases = profile.show_all_databases;
         instance.form.read_only = profile.read_only_flag;
+        instance.form.connect_on_startup = profile.connect_on_startup;
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
@@ -2039,6 +2055,10 @@ impl ConnectionManagerWindow {
 
         stops.push(MainExtraStop::ReadOnly);
 
+        if !self.connect_on_startup_overridden {
+            stops.push(MainExtraStop::ConnectOnStartup);
+        }
+
         stops
     }
 
@@ -2074,6 +2094,11 @@ impl ConnectionManagerWindow {
     /// The ring stop of the read-only checkbox.
     fn main_extra_focus_for_read_only(&self) -> Option<FormFocus> {
         self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::ReadOnly))
+    }
+
+    /// The ring stop of the connect-on-startup checkbox.
+    fn main_extra_focus_for_connect_on_startup(&self) -> Option<FormFocus> {
+        self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::ConnectOnStartup))
     }
 
     /// The ring stop of the navigator view control.
@@ -3437,6 +3462,11 @@ impl ConnectionManagerWindow {
 
     fn handle_app_state_changed(&mut self, cx: &mut Context<Self>) {
         self.sync_secret_providers(cx);
+        self.connect_on_startup_overridden = self
+            .app_state
+            .read(cx)
+            .general_settings()
+            .reopen_last_connections;
 
         let current_profiles = self.app_state.read(cx).list_auth_profiles();
         let current_ids = current_profiles

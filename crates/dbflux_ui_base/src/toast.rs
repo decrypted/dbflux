@@ -649,6 +649,11 @@ impl ToastHost {
         self.toasts.len()
     }
 
+    /// Returns the titles of the visible toasts, oldest first. For use in tests only.
+    pub fn toast_titles(&self) -> Vec<String> {
+        self.toasts.iter().map(|t| t.title.to_string()).collect()
+    }
+
     /// Returns the title of the most-recently-pushed toast, if any. For use in tests only.
     pub fn last_toast_title(&self) -> Option<String> {
         self.toasts.last().map(|t| t.title.to_string())

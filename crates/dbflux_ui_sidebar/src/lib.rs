@@ -417,6 +417,10 @@ pub struct ContextMenuItem {
     /// The mono caption at the top of a menu naming what it acts on.
     pub is_header: bool,
     pub is_danger: bool,
+    /// Shown greyed out, skipped by the keyboard and ignored when clicked.
+    pub is_disabled: bool,
+    /// A muted second line under the label, such as why the row is disabled.
+    pub detail: Option<String>,
 }
 
 impl ContextMenuItem {
@@ -428,6 +432,8 @@ impl ContextMenuItem {
             is_separator: false,
             is_header: false,
             is_danger: false,
+            is_disabled: false,
+            detail: None,
         }
     }
 
@@ -439,6 +445,8 @@ impl ContextMenuItem {
             is_separator: false,
             is_header: false,
             is_danger: true,
+            is_disabled: false,
+            detail: None,
         }
     }
 
@@ -452,6 +460,8 @@ impl ContextMenuItem {
             is_separator: false,
             is_header: true,
             is_danger: false,
+            is_disabled: false,
+            detail: None,
         }
     }
 
@@ -468,11 +478,26 @@ impl ContextMenuItem {
             is_separator: true,
             is_header: false,
             is_danger: false,
+            is_disabled: false,
+            detail: None,
         }
     }
 
-    pub fn is_selectable(&self) -> bool {
+    /// Greys the row out with `detail` as the reason under its label.
+    pub fn disabled_because(mut self, detail: impl Into<String>) -> Self {
+        self.is_disabled = true;
+        self.detail = Some(detail.into());
+        self
+    }
+
+    /// Whether the row is an entry of the menu, as opposed to a caption or
+    /// a separator. A disabled entry is still one.
+    pub fn is_entry(&self) -> bool {
         !self.is_separator && !self.is_header
+    }
+
+    pub fn is_selectable(&self) -> bool {
+        self.is_entry() && !self.is_disabled
     }
 
     pub fn to_menu_items(
@@ -509,6 +534,14 @@ impl ContextMenuItem {
 
                 if item.is_danger {
                     mi = mi.danger();
+                }
+
+                if item.is_disabled {
+                    mi = mi.disabled();
+                }
+
+                if let Some(detail) = &item.detail {
+                    mi = mi.detail(detail.clone());
                 }
 
                 mi
@@ -612,6 +645,10 @@ pub enum ContextMenuAction {
     /// menu was opened on. Gated on `DatabaseCategory::Relational` — never a
     /// driver id; non-relational nodes surface an explicit "unsupported" toast.
     CompareSchema,
+    /// Flip whether the profile connects when DBFlux starts. Carries the
+    /// state the menu showed, so the click sets the opposite of what the user
+    /// saw.
+    ToggleConnectOnStartup(bool),
 }
 
 #[derive(Clone)]
@@ -751,6 +788,7 @@ impl ContextMenuAction {
             Self::ImportTables => Some(AppIcon::Download),
             Self::MigrateTables => Some(AppIcon::ArrowUpDown),
             Self::CompareSchema => Some(AppIcon::Columns),
+            Self::ToggleConnectOnStartup(enabled) => enabled.then_some(AppIcon::Check),
         }
     }
 }
@@ -1128,6 +1166,10 @@ pub struct Sidebar {
     /// Connection password of the attempt waiting for the SSH passphrase, so
     /// the retry does not ask for it again.
     pub(crate) pending_tunnel_auth_password: Option<dbflux_core::secrecy::SecretString>,
+    /// Profiles whose next connect was started by "Connect on startup".
+    /// Nobody asked for those connects, so a tunnel passphrase they turn out
+    /// to need is reported instead of opening the single-profile modal.
+    pub(crate) startup_connects: HashSet<Uuid>,
     /// In-flight metric catalog fetch tasks, keyed by profile_id.
     ///
     /// Dropping the task on collapse abandons the await; the underlying cache fetch
@@ -1462,6 +1504,7 @@ impl Sidebar {
             hovered_item_id: None,
             pending_tunnel_auth_profile_id: None,
             pending_tunnel_auth_password: None,
+            startup_connects: HashSet::new(),
             pending_metric_namespace_fetches: HashMap::new(),
             pending_metric_fetches: HashMap::new(),
             pending_remote_dashboard_fetches: HashMap::new(),

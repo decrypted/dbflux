@@ -433,6 +433,9 @@ connection_manager:
     show_all_databases: "Show all databases"
     read_only_help: "Blocks changes from the data grid, the query builder, schema diff and the query editor, and denies MCP writes on this connection. Read statements still run."
     read_only: "Read-only"
+    connect_on_startup: "Connect on startup"
+    connect_on_startup_help: "DBFlux connects to this connection in the background when it starts. If the password is not saved, it is not connected; connect to it yourself to enter the password."
+    connect_on_startup_overridden: "Not used while \"Reconnect to the connections that were open\" is on in Settings > General > Startup and session: that setting decides which connections open at startup. The choice here is kept for when it is turned off."
     name: Name
     ssl_mode: SSL mode
     ca_certificate: CA certificate
@@ -442,6 +445,7 @@ connection_manager:
     transport: TRANSPORT
     navigator: "NAVIGATOR"
     safety: "SAFETY"
+    startup: "STARTUP"
   banner:
     correct_following: Please correct the following
     testing_connection: "Testing connection…"
@@ -5131,6 +5135,8 @@ sidebar:
     drop_collection: Drop collection
     connect: Connect
     retry_connect: Retry
+    connect_on_startup: Connect on startup
+    connect_on_startup_overridden: "No effect while Settings > General > Startup and session reconnects open connections"
     disconnect: Disconnect
     edit: Edit
     duplicate: Duplicate
@@ -5230,6 +5236,9 @@ sidebar:
     edit_reconnect_now: Reconnect now
     edit_reconnect_later: Later
     connection_already_pending: Connection already pending
+    startup_needs_password: "'%{name}' was not connected on startup because its password is not saved. Connect to enter it."
+    startup_needs_passwords: "%{names} were not connected on startup because their passwords are not saved. Connect to each one to enter it."
+    startup_needs_passphrase: "'%{name}' was not connected on startup because its SSH tunnel needs a passphrase that is not saved. Connect to enter it."
     operation_started_elsewhere: Operation started by another thread
     background_task_limit: Too many background tasks running, please wait
     connection_cancelled_by_hook: Connection cancelled by hook

@@ -178,6 +178,89 @@ impl Sidebar {
         self.connect_to_profile_inner(profile_id, None, false, remembered_password, cx);
     }
 
+    /// Connects every profile marked "Connect on startup" that is not
+    /// connected and not already connecting.
+    ///
+    /// Each one goes through [`Self::connect_to_profile`], so tunnels, hooks,
+    /// keyring secrets and connect errors behave as they do for a click.
+    pub fn connect_profiles_on_startup(&mut self, cx: &mut Context<Self>) {
+        let profile_ids: Vec<Uuid> = {
+            let state = self.app_state.read(cx);
+            state
+                .profiles()
+                .iter()
+                .filter(|profile| profile.connect_on_startup)
+                .map(|profile| profile.id)
+                .filter(|profile_id| {
+                    !state.connections().contains_key(profile_id)
+                        && !state.is_operation_pending(*profile_id, None)
+                })
+                .collect()
+        };
+
+        let mut unsaved_password_names = Vec::new();
+        for profile_id in profile_ids {
+            if let Some(name) = self.connect_on_startup(profile_id, cx) {
+                unsaved_password_names.push(name);
+            }
+        }
+
+        if !unsaved_password_names.is_empty() {
+            self.push_startup_toast(crate::labels::startup_needs_password_toast_label(
+                &unsaved_password_names,
+            ));
+            self.refresh_tree(cx);
+            cx.notify();
+        }
+    }
+
+    /// Starts one startup connect, or returns the profile name when its
+    /// password is not saved.
+    ///
+    /// The password prompt shows one profile at a time, so prompting for
+    /// several at startup would drop all but the last without a trace. A
+    /// recorded failure marks each one instead, and its Retry prompts.
+    fn connect_on_startup(&mut self, profile_id: Uuid, cx: &mut Context<Self>) -> Option<String> {
+        let prompt = self
+            .app_state
+            .read(cx)
+            .connection_password_prompt(profile_id);
+
+        if let Some(prompt) = prompt {
+            let message = crate::labels::startup_needs_password_label(&prompt.profile_name);
+
+            self.app_state.update(cx, |state, cx| {
+                state.record_connect_failure(profile_id, message);
+                cx.emit(AppStateChanged);
+            });
+            return Some(prompt.profile_name);
+        }
+
+        self.startup_connects.insert(profile_id);
+        self.connect_to_profile(profile_id, cx);
+        // The connect consumes the mark synchronously; drop it when it
+        // returned before reaching that point.
+        self.startup_connects.remove(&profile_id);
+        None
+    }
+
+    /// Shows a startup notice without replacing one that has not been shown
+    /// yet, so several profiles failing in the same frame are all named.
+    pub(crate) fn push_startup_toast(&mut self, message: String) {
+        match &mut self.pending_toast {
+            Some(pending) if pending.is_error => {
+                pending.message.push('\n');
+                pending.message.push_str(&message);
+            }
+            _ => {
+                self.pending_toast = Some(PendingToast {
+                    message,
+                    is_error: true,
+                });
+            }
+        }
+    }
+
     /// Disconnect a live session and reconnect once the connection has fully
     /// cleared. Used by the "Reconnect now" prompt that fires after the user
     /// edits a profile that is currently connected — the new settings only take
@@ -275,6 +358,8 @@ impl Sidebar {
         password: Option<SecretString>,
         cx: &mut Context<Self>,
     ) {
+        let from_startup = self.startup_connects.remove(&profile_id);
+
         let uses_pipeline = {
             let app_state = self.app_state.read(cx);
 
@@ -585,6 +670,23 @@ impl Sidebar {
                                     guard.remove(&tunnel_id);
                                 }
                             });
+
+                            if from_startup {
+                                // Nobody is waiting for this connect, and the
+                                // modal holds one profile at a time: mark the
+                                // profile failed so its Retry asks instead.
+                                let message =
+                                    crate::labels::startup_needs_passphrase_label(&profile_name);
+                                app_state.update(cx, |state, cx| {
+                                    state.record_connect_failure(profile_id, message.clone());
+                                    cx.emit(AppStateChanged);
+                                });
+                                sidebar.update(cx, |sidebar, cx| {
+                                    sidebar.push_startup_toast(message);
+                                    sidebar.refresh_tree(cx);
+                                });
+                                return;
+                            }
 
                             // Look up the SSH tunnel profile info for display in the modal.
                             let tunnel_info = app_state
@@ -1421,6 +1523,10 @@ mod tests {
     static PASSWORD_DRIVER_FORM: LazyLock<dbflux_core::DriverFormDef> =
         LazyLock::new(|| dbflux_core::DriverFormDef { tabs: vec![] });
 
+    /// Profiles named with this prefix fail to connect the way a tunnel whose
+    /// private key needs an unsaved passphrase does.
+    const LOCKED_KEY_PREFIX: &str = "locked-key-";
+
     /// A driver that authenticates with a password and records the password
     /// every connect receives.
     struct PasswordRecordingDriver {
@@ -1458,10 +1564,16 @@ mod tests {
 
         fn connect_with_secrets(
             &self,
-            _: &dbflux_core::ConnectionProfile,
+            profile: &dbflux_core::ConnectionProfile,
             password: Option<&SecretString>,
             _: Option<&SecretString>,
         ) -> Result<Box<dyn dbflux_core::Connection>, dbflux_core::DbError> {
+            if profile.name.starts_with(LOCKED_KEY_PREFIX) {
+                return Err(dbflux_core::DbError::connection_failed(
+                    "SSH tunnel: Unable to extract public key from private key file",
+                ));
+            }
+
             self.passwords
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1671,6 +1783,262 @@ mod tests {
         assert_eq!(recorded(&fixture.passwords).len(), 1);
         fixture.state.read_with(cx, |state, _| {
             assert!(state.connections().contains_key(&profile_id))
+        });
+    }
+
+    /// Adds a profile the fixture driver connects, with a saved password so
+    /// it needs no prompt.
+    fn add_saved_profile(
+        fixture: &PasswordFixture,
+        name: &str,
+        connect_on_startup: bool,
+        cx: &mut VisualTestContext,
+    ) -> Uuid {
+        let mut profile =
+            dbflux_core::ConnectionProfile::new(name, dbflux_core::DbConfig::default_postgres());
+        profile.connect_on_startup = connect_on_startup;
+        let profile_id = profile.id;
+
+        fixture.state.update(cx, |state, _| {
+            state.profiles_mut().push(profile);
+            state.connection_tree_mut().add_node(
+                dbflux_core::ConnectionTreeNode::new_connection_ref(profile_id, None, 1000),
+            );
+        });
+
+        profile_id
+    }
+
+    #[gpui::test]
+    fn startup_connects_exactly_the_profiles_marked_to_connect_on_startup(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let unmarked = fixture.profile_id;
+        let marked = add_saved_profile(&fixture, "marked", true, cx);
+        let also_marked = add_saved_profile(&fixture, "also-marked", true, cx);
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_profiles_on_startup(cx));
+        cx.run_until_parked();
+
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&marked));
+            assert!(state.connections().contains_key(&also_marked));
+            assert!(
+                !state.connections().contains_key(&unmarked),
+                "a profile without the flag waits for a click"
+            );
+        });
+        assert_eq!(
+            recorded(&fixture.passwords).len(),
+            2,
+            "one connect per marked profile"
+        );
+        assert!(fixture.prompts.lock().expect("prompts").is_empty());
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_profiles_on_startup(cx));
+        cx.run_until_parked();
+        assert_eq!(
+            recorded(&fixture.passwords).len(),
+            2,
+            "connected profiles are not connected again"
+        );
+    }
+
+    #[gpui::test]
+    fn startup_marks_an_unsaved_password_profile_failed_instead_of_prompting(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, cx) = password_fixture(false, cx);
+        let profile_id = fixture.profile_id;
+        fixture.state.update(cx, |state, _| {
+            if let Some(profile) = state
+                .profiles_mut()
+                .iter_mut()
+                .find(|profile| profile.id == profile_id)
+            {
+                profile.connect_on_startup = true;
+            }
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_profiles_on_startup(cx));
+        cx.run_until_parked();
+
+        assert!(
+            fixture.prompts.lock().expect("prompts").is_empty(),
+            "startup does not open the password prompt"
+        );
+        assert!(recorded(&fixture.passwords).is_empty());
+        fixture.state.read_with(cx, |state, _| {
+            assert!(!state.connections().contains_key(&profile_id));
+            assert!(!state.is_operation_pending(profile_id, None));
+            assert!(
+                state
+                    .connect_failure(profile_id)
+                    .is_some_and(|failure| failure.contains("orders")),
+                "the profile is marked failed so its Retry prompts"
+            );
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            *fixture.prompts.lock().expect("prompts"),
+            vec![profile_id],
+            "a click afterwards asks for the password as usual"
+        );
+    }
+
+    /// The messages of the toasts shown so far, plus one not drawn yet.
+    fn shown_toasts(fixture: &PasswordFixture, cx: &mut VisualTestContext) -> Vec<String> {
+        let mut toasts = cx.update(|_, cx| {
+            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .read(cx)
+                .toast_titles()
+        });
+        if let Some(pending) = fixture.sidebar.read_with(cx, |sidebar, _| {
+            sidebar
+                .pending_toast
+                .as_ref()
+                .map(|toast| toast.message.clone())
+        }) {
+            toasts.push(pending);
+        }
+        toasts
+    }
+
+    fn mark_connect_on_startup(
+        fixture: &PasswordFixture,
+        profile_id: Uuid,
+        cx: &mut VisualTestContext,
+    ) {
+        fixture.state.update(cx, |state, _| {
+            if let Some(profile) = state
+                .profiles_mut()
+                .iter_mut()
+                .find(|profile| profile.id == profile_id)
+            {
+                profile.connect_on_startup = true;
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn startup_names_every_unsaved_password_profile_in_one_toast(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(false, cx);
+        let orders = fixture.profile_id;
+        mark_connect_on_startup(&fixture, orders, cx);
+        let billing = add_saved_profile(&fixture, "billing", true, cx);
+        fixture.state.update(cx, |state, _| {
+            if let Some(profile) = state
+                .profiles_mut()
+                .iter_mut()
+                .find(|profile| profile.id == billing)
+            {
+                profile.save_password = false;
+            }
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_profiles_on_startup(cx));
+        cx.run_until_parked();
+
+        assert!(fixture.prompts.lock().expect("prompts").is_empty());
+        assert!(recorded(&fixture.passwords).is_empty());
+        fixture.state.read_with(cx, |state, _| {
+            for (profile_id, name) in [(orders, "orders"), (billing, "billing")] {
+                assert!(
+                    state
+                        .connect_failure(profile_id)
+                        .is_some_and(|failure| failure.contains(name)),
+                    "{name} is marked failed so its Retry prompts"
+                );
+            }
+        });
+
+        let toasts = shown_toasts(&fixture, cx);
+        assert_eq!(toasts.len(), 1, "one toast for all of them: {toasts:?}");
+        assert!(
+            toasts[0].contains("'orders'") && toasts[0].contains("'billing'"),
+            "the toast names every profile: {}",
+            toasts[0]
+        );
+    }
+
+    #[gpui::test]
+    fn startup_reports_a_tunnel_passphrase_instead_of_asking_for_it(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let first = add_saved_profile(&fixture, "locked-key-a", true, cx);
+        let second = add_saved_profile(&fixture, "locked-key-b", true, cx);
+
+        let tunnel_requests = Arc::new(Mutex::new(Vec::new()));
+        cx.update(|_, cx| {
+            let tunnel_requests = tunnel_requests.clone();
+            cx.subscribe(
+                &fixture.sidebar,
+                move |_, event: &crate::SidebarEvent, _| {
+                    if let crate::SidebarEvent::RequestTunnelAuth { profile_id, .. } = event {
+                        tunnel_requests
+                            .lock()
+                            .expect("tunnel requests")
+                            .push(*profile_id);
+                    }
+                },
+            )
+            .detach();
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_profiles_on_startup(cx));
+        cx.run_until_parked();
+
+        assert!(
+            tunnel_requests.lock().expect("tunnel requests").is_empty(),
+            "startup does not open the passphrase modal"
+        );
+        let startup_failure_for = |name: &str| crate::labels::startup_needs_passphrase_label(name);
+        fixture.state.read_with(cx, |state, _| {
+            assert_eq!(
+                state.connect_failure(first),
+                Some(startup_failure_for("locked-key-a").as_str())
+            );
+            assert_eq!(
+                state.connect_failure(second),
+                Some(startup_failure_for("locked-key-b").as_str())
+            );
+            assert!(!state.is_operation_pending(first, None));
+            assert!(!state.is_operation_pending(second, None));
+        });
+
+        let toasts = shown_toasts(&fixture, cx).join("\n");
+        assert!(
+            toasts.contains("'locked-key-a'") && toasts.contains("'locked-key-b'"),
+            "every profile is named in a toast: {toasts}"
+        );
+        fixture.sidebar.read_with(cx, |sidebar, _| {
+            assert!(sidebar.startup_connects.is_empty());
+            assert_eq!(sidebar.pending_tunnel_auth_profile_id, None);
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(first, cx));
+        cx.run_until_parked();
+        fixture.state.read_with(cx, |state, _| {
+            assert_ne!(
+                state.connect_failure(first),
+                Some(startup_failure_for("locked-key-a").as_str()),
+                "a later click is not treated as a startup connect"
+            );
         });
     }
 }

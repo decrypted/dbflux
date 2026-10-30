@@ -433,6 +433,9 @@ connection_manager:
     show_all_databases: "显示所有数据库"
     read_only_help: "阻止通过数据网格、查询构建器、模式对比和查询编辑器进行的更改，并拒绝此连接上的 MCP 写入。读取语句仍会执行。"
     read_only: "只读"
+    connect_on_startup: "启动时连接"
+    connect_on_startup_help: "DBFlux 启动时会在后台连接此连接。如果未保存密码，则不会连接；请手动连接并输入密码。"
+    connect_on_startup_overridden: "当 设置 > 常规 > 启动与会话 中的“重新连接之前打开的连接”开启时，此选项不生效：启动时打开哪些连接由该设置决定。此处的选择会保留，待该设置关闭后生效。"
     name: 名称
     ssl_mode: SSL 模式
     ca_certificate: CA 证书
@@ -442,6 +445,7 @@ connection_manager:
     transport: 传输
     navigator: "导航器"
     safety: "安全"
+    startup: "启动"
   banner:
     correct_following: 请更正以下内容
     testing_connection: 正在测试连接…
@@ -5129,6 +5133,8 @@ sidebar:
     drop_collection: 删除集合
     connect: 连接
     retry_connect: 重试
+    connect_on_startup: 启动时连接
+    connect_on_startup_overridden: "设置 > 常规 > 启动与会话 重新连接已打开的连接时不生效"
     disconnect: 断开连接
     edit: 编辑
     duplicate: 复制
@@ -5228,6 +5234,9 @@ sidebar:
     edit_reconnect_now: 立即重新连接
     edit_reconnect_later: 稍后
     connection_already_pending: 连接已在等待中
+    startup_needs_password: "'%{name}' 未保存密码，因此启动时未连接。请连接并输入密码。"
+    startup_needs_passwords: "%{names} 未保存密码，因此启动时未连接。请逐个连接并输入密码。"
+    startup_needs_passphrase: "'%{name}' 的 SSH 隧道需要未保存的密码短语，因此启动时未连接。请连接并输入密码短语。"
     operation_started_elsewhere: 操作已由其他线程启动
     background_task_limit: 后台任务运行过多，请稍候
     connection_cancelled_by_hook: 连接被 Hook 取消

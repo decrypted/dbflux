@@ -1692,11 +1692,11 @@ fn sort_direction_of(sort_keys: &[SortState], col_ix: usize) -> Option<SortDirec
 }
 
 /// The sort control at the right edge of a column header: the current
-/// direction, or a faint up/down arrow while the column is not sorted. A press
+/// direction, or a faint up/down arrow while the column is not sorted. A click
 /// cycles the sort and stops there, so it does not reach the header, whose
 /// click selects the column.
 ///
-/// Alt+press adds the column as the next sort key instead, as in DataGrip:
+/// Alt+click adds the column as the next sort key instead, as in DataGrip:
 /// Shift and Ctrl/Cmd already extend and toggle the column selection on the
 /// header, so they would read as selection gestures here. With several keys
 /// the arrow carries the column's place among them.
@@ -1722,20 +1722,19 @@ fn header_sort_control(
         .items_center()
         .ml_auto()
         .cursor_pointer()
-        .on_mouse_down(
-            MouseButton::Left,
-            move |event: &MouseDownEvent, _window, cx| {
-                cx.stop_propagation();
-                let adds_key = event.modifiers.alt;
-                state.update(cx, |state, cx| {
-                    if adds_key {
-                        state.cycle_sort_key(col_ix, cx);
-                    } else {
-                        state.cycle_sort(col_ix, cx);
-                    }
-                });
-            },
-        )
+        // Stopping the click keeps the header's own click from selecting the
+        // column as well. Alt adds the column as the next sort key.
+        .on_click(move |event: &ClickEvent, _window, cx| {
+            cx.stop_propagation();
+            let adds_key = event.modifiers().alt;
+            state.update(cx, |state, cx| {
+                if adds_key {
+                    state.cycle_sort_key(col_ix, cx);
+                } else {
+                    state.cycle_sort(col_ix, cx);
+                }
+            });
+        })
         .child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
         .when_some(sort_rank, |control, rank| {
             control.child(

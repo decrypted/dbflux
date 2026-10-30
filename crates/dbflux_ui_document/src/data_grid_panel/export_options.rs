@@ -940,7 +940,6 @@ mod tests {
 
         // A Ctrl+click range adds its row and column; the export writes the
         // whole grid they span, with values, not just the picked cells.
-        let mut selection = selection;
         selection.toggle_cell(CellCoord::new(4, 2));
         let view =
             GridExportView::from_selection(&selection, layout.visible_columns(), 6, 4, false);

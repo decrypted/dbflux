@@ -3905,6 +3905,7 @@ modals:
     title_xml: Edit XML
     maximize: Maximize
     restore: Restore size
+    reset_size: Reset size
     invalid_warning: "Not valid %{format} any more: %{error}. Save again to store it as plain text."
     copied: Value copied to the clipboard
     copied_compact: Compact value copied to the clipboard
@@ -4622,6 +4623,7 @@ settings:
       format_editor_text: Format editor text
       compact_editor_text: Compact editor text
       toggle_dialog_maximized: Maximize or restore dialog
+      reset_dialog_size: Reset dialog size
       import_items: "Import…"
       import_from_client: "Import from another client…"
       reset_binding: "Reset binding"

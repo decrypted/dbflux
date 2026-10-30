@@ -3905,6 +3905,7 @@ modals:
     title_xml: Editar XML
     maximize: Maximizar
     restore: Restaurar tamanho
+    reset_size: Redefinir tamanho
     invalid_warning: "Não é mais %{format} válido: %{error}. Salve novamente para armazenar como texto simples."
     copied: Valor copiado para a área de transferência
     copied_compact: Valor compacto copiado para a área de transferência
@@ -4622,6 +4623,7 @@ settings:
       format_editor_text: Formatar texto do editor
       compact_editor_text: Compactar texto do editor
       toggle_dialog_maximized: Maximizar ou restaurar diálogo
+      reset_dialog_size: Redefinir tamanho do diálogo
       import_items: "Importar…"
       import_from_client: "Importar de outro cliente…"
       reset_binding: "Restaurar atalho"

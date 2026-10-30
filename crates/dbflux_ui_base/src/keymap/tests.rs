@@ -1549,6 +1549,86 @@ fn modal_editors_cancel_and_save() {
     }
 }
 
+/// The cell editor's chords reach the dialog with its text editor focused,
+/// in Vim's Normal mode as well: the input layer's Ctrl+Shift+Enter (run in
+/// a new tab) sits at the editor's depth and used to win over the maximize
+/// chord. Escape and Save keep working there, and the run chord keeps
+/// running the query in a plain text field.
+#[test]
+fn cell_editor_chords_win_over_the_input_layer_inside_the_editor() {
+    #[cfg(target_os = "macos")]
+    let chords = [
+        "cmd-shift-enter",
+        "cmd-shift-backspace",
+        "cmd-shift-k",
+        "cmd-shift-h",
+        "cmd-shift-u",
+        "cmd-shift-j",
+        "cmd-s",
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let chords = [
+        "ctrl-shift-enter",
+        "ctrl-shift-backspace",
+        "ctrl-shift-k",
+        "ctrl-shift-h",
+        "ctrl-shift-u",
+        "ctrl-shift-j",
+        "ctrl-s",
+    ];
+    let actions = || -> [Box<dyn Action>; 7] {
+        [
+            Box::new(component_actions::ToggleDialogMaximized),
+            Box::new(component_actions::ResetDialogSize),
+            Box::new(component_actions::CopyEditorText),
+            Box::new(component_actions::CopyEditorTextCompact),
+            Box::new(component_actions::FormatEditorText),
+            Box::new(component_actions::CompactEditorText),
+            Box::new(component_actions::SaveEdit),
+        ]
+    };
+
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let stacks = [
+        element_stack(root.clone(), &["Modal CellEditorModal"]),
+        element_stack(root.clone(), &["Modal CellEditorModal", "Input"]),
+        element_stack(
+            root,
+            &[
+                "Modal CellEditorModal",
+                ContextId::VimNormal.as_gpui_context(),
+                "Input",
+            ],
+        ),
+    ];
+
+    for stack in &stacks {
+        let names = format!("cell editor ({stack:?})");
+        assert_element_bindings(stack, chords.into_iter().zip(actions()).collect(), &names);
+    }
+
+    // Escape stays with a focused editor first, which cancels its own state
+    // with it, and closes the dialog otherwise.
+    assert_element_bindings(
+        &stacks[0],
+        vec![("escape", Box::new(component_actions::Cancel))],
+        "cell editor",
+    );
+
+    let keymap = native_keymap();
+    let text_field = element_stack(
+        root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]),
+        &["Input"],
+    );
+    let run = top_action(&keymap, chords[0], &text_field)
+        .expect("the run chord is bound in a text field");
+    assert!(
+        runs_command(run.as_ref(), Command::RunQueryInNewTab),
+        "outside the dialog the chord still runs the query, got {}",
+        run.name()
+    );
+}
+
 /// The SQL preview and the dialogs that share its context: Escape, Enter,
 /// j / k and the paging keys run the modal actions, and the primary modifier
 /// + C copies the preview. The letter keys stay with a focused text field.

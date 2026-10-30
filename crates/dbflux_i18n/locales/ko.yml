@@ -3905,6 +3905,7 @@ modals:
     title_xml: XML 편집
     maximize: 최대화
     restore: 크기 복원
+    reset_size: 크기 초기화
     invalid_warning: "더 이상 유효한 %{format}이(가) 아닙니다: %{error}. 일반 텍스트로 저장하려면 다시 저장하세요."
     copied: 값을 클립보드에 복사했습니다
     copied_compact: 압축된 값을 클립보드에 복사했습니다
@@ -4622,6 +4623,7 @@ settings:
       format_editor_text: 편집기 텍스트 서식 지정
       compact_editor_text: 편집기 텍스트 압축
       toggle_dialog_maximized: 대화 상자 최대화 또는 복원
+      reset_dialog_size: 대화 상자 크기 초기화
       import_items: "가져오기…"
       import_from_client: "다른 클라이언트에서 가져오기…"
       reset_binding: "단축키 재설정"

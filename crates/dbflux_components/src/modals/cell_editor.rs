@@ -1,6 +1,6 @@
 use crate::actions::{
-    CompactEditorText, CopyEditorText, CopyEditorTextCompact, FormatEditorText, SaveEdit,
-    ToggleDialogMaximized,
+    CompactEditorText, CopyEditorText, CopyEditorTextCompact, FormatEditorText, ResetDialogSize,
+    SaveEdit, ToggleDialogMaximized,
 };
 use crate::components::json_editor_view::JsonEditorView;
 use crate::components::value_format::{
@@ -38,6 +38,19 @@ const MAXIMIZED_WINDOW_SHARE: f32 = 0.94;
 
 /// Height the editor keeps when the dialog is made small.
 const MIN_EDITOR_HEIGHT: Pixels = px(120.0);
+
+/// Keycaps of the maximize toggle and of Reset size until the keymap is
+/// installed (component tests).
+const MAXIMIZE_SHORTCUT_FALLBACK: &str = if cfg!(target_os = "macos") {
+    "Cmd Shift Enter"
+} else {
+    "Ctrl Shift Enter"
+};
+const RESET_SIZE_SHORTCUT_FALLBACK: &str = if cfg!(target_os = "macos") {
+    "Cmd Shift Backspace"
+} else {
+    "Ctrl Shift Backspace"
+};
 
 /// Event emitted when the modal editor saves.
 #[derive(Clone)]
@@ -80,7 +93,8 @@ impl EditorGeometry {
     }
 }
 
-type GeometryStore = Rc<dyn Fn(EditorGeometry) + 'static>;
+/// Persists a new geometry, or forgets the stored one on `None`.
+type GeometryStore = Rc<dyn Fn(Option<EditorGeometry>) + 'static>;
 
 /// The remembered geometry for this session, and where it is persisted when
 /// a host installed a store.
@@ -93,11 +107,12 @@ struct EditorGeometryGlobal {
 impl Global for EditorGeometryGlobal {}
 
 /// Persists the editor geometry beyond the session: `load` gives the stored
-/// one, read once, and `store` is called with every new size. Installing
-/// again is a no-op, so every host can call it.
+/// one, read once, and `store` is called with every new size, or with `None`
+/// when Reset size drops it. Installing again is a no-op, so every host can
+/// call it.
 pub fn install_editor_geometry_store(
     load: impl FnOnce() -> Option<EditorGeometry>,
-    store: impl Fn(EditorGeometry) + 'static,
+    store: impl Fn(Option<EditorGeometry>) + 'static,
     cx: &mut App,
 ) {
     let global = cx.default_global::<EditorGeometryGlobal>();
@@ -126,9 +141,9 @@ fn remembered_geometry(cx: &App) -> Option<EditorGeometry> {
         .and_then(|global| global.geometry)
 }
 
-fn remember_geometry(geometry: EditorGeometry, cx: &mut App) {
+fn remember_geometry(geometry: Option<EditorGeometry>, cx: &mut App) {
     let global = cx.default_global::<EditorGeometryGlobal>();
-    global.geometry = Some(geometry);
+    global.geometry = geometry;
 
     if let Some(store) = global.store.clone() {
         store(geometry);
@@ -214,6 +229,10 @@ pub struct CellEditorModal {
     /// Identifier kinds the edited column takes, offered as Generate
     /// buttons; empty for a column that takes none.
     generated_id_kinds: Vec<dbflux_core::GeneratedIdKind>,
+
+    /// The size of the area the dialog was last laid out in: the panel that
+    /// draws it, which can be much smaller than the window.
+    area: Option<Size<Pixels>>,
     vim: VimBinding,
     /// Re-renders on every edit so the JSON status line follows the text.
     _input_observation: Subscription,
@@ -257,6 +276,7 @@ impl CellEditorModal {
             maximized: false,
             drag: None,
             generated_id_kinds: Vec::new(),
+            area: None,
             vim,
             _input_observation: input_observation,
         };
@@ -285,7 +305,7 @@ impl CellEditorModal {
         self.maximized
     }
 
-    /// The size the dialog is drawn at in a window of `viewport`.
+    /// The size the dialog is drawn at in an area of `viewport`.
     pub fn card_size(&self, viewport: Size<Pixels>) -> Size<Pixels> {
         if self.maximized {
             return Size {
@@ -295,6 +315,17 @@ impl CellEditorModal {
         }
 
         clamp_to_window(self.size, viewport)
+    }
+
+    /// The area the dialog is laid out in, or the window before the first
+    /// layout.
+    fn area(&self, window: &Window) -> Size<Pixels> {
+        self.area.unwrap_or_else(|| window.viewport_size())
+    }
+
+    /// Whether the dialog has the size it opens with by default.
+    pub fn has_default_size(&self) -> bool {
+        !self.maximized && self.size == DEFAULT_SIZE
     }
 
     /// Opens the editor on a cell. `column` is the column's name and type,
@@ -327,9 +358,17 @@ impl CellEditorModal {
         self.drag = None;
         self.generated_id_kinds.clear();
 
-        if let Some(geometry) = remembered_geometry(cx) {
-            self.size = geometry.size();
-            self.maximized = geometry.maximized;
+        // Nothing remembered means the default, also after a Reset size in
+        // another dialog that this one did not see.
+        match remembered_geometry(cx) {
+            Some(geometry) => {
+                self.size = geometry.size();
+                self.maximized = geometry.maximized;
+            }
+            None => {
+                self.size = DEFAULT_SIZE;
+                self.maximized = false;
+            }
         }
 
         let shown = if self.format.is_structured() && !value.is_empty() {
@@ -595,12 +634,38 @@ impl CellEditorModal {
         if self.maximized {
             self.maximized = false;
         } else {
-            self.size = self.card_size(window.viewport_size());
+            self.size = self.card_size(self.area(window));
             self.maximized = true;
         }
         self.drag = None;
         self.remember(cx);
         cx.notify();
+    }
+
+    /// Back to the size the dialog opens with by default, and forgets the
+    /// stored one, so the next dialog opens at the default as well.
+    fn reset_size(&mut self, cx: &mut Context<Self>) {
+        self.size = DEFAULT_SIZE;
+        self.maximized = false;
+        self.drag = None;
+        remember_geometry(None, cx);
+        cx.notify();
+    }
+
+    /// Keeps the size of the area the dialog was laid out in. A change
+    /// redraws it, since its pixel size is clamped to that area.
+    fn set_area(&mut self, area: Size<Pixels>, cx: &mut Context<Self>) {
+        if self.area == Some(area) {
+            return;
+        }
+        self.area = Some(area);
+
+        // The area is measured while the window draws, where a notify marks
+        // the view without scheduling another frame.
+        let entity = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            entity.update(cx, |_, cx| cx.notify()).ok();
+        });
     }
 
     fn begin_resize(
@@ -610,7 +675,7 @@ impl CellEditorModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let start = self.card_size(window.viewport_size());
+        let start = self.card_size(self.area(window));
         self.size = start;
         self.maximized = false;
         self.drag = Some(ResizeDrag {
@@ -636,7 +701,7 @@ impl CellEditorModal {
             drag.edge,
             drag.from,
             position,
-            window.viewport_size(),
+            self.area(window),
         );
         cx.notify();
     }
@@ -650,11 +715,11 @@ impl CellEditorModal {
 
     fn remember(&self, cx: &mut Context<Self>) {
         remember_geometry(
-            EditorGeometry {
+            Some(EditorGeometry {
                 width: self.size.width.into(),
                 height: self.size.height.into(),
                 maximized: self.maximized,
-            },
+            }),
             cx,
         );
     }
@@ -712,6 +777,21 @@ impl EventEmitter<CellEditorSaveEvent> for CellEditorModal {}
 impl EventEmitter<CellEditorClosedEvent> for CellEditorModal {}
 impl EventEmitter<CellEditorCopiedEvent> for CellEditorModal {}
 
+/// `label` with the keys that run `command` in the cell editor, for a
+/// tooltip: "Maximize (Ctrl Shift Enter)", or the label alone when the user
+/// removed the shortcut.
+fn with_shortcut(label: &str, command: Command, fallback: &str, cx: &App) -> SharedString {
+    match crate::actions::shortcut_label(
+        cx,
+        ContextId::CellEditorModal.id(),
+        command.id(),
+        fallback,
+    ) {
+        Some(keys) => format!("{label} ({keys})").into(),
+        None => SharedString::from(label.to_string()),
+    }
+}
+
 /// Vim's listeners on the editor's container. In Insert mode the modal's
 /// Escape (`Cancel`) leaves Insert mode instead of closing, and in Normal
 /// mode Enter (`Execute`) moves down instead of reaching the modal.
@@ -747,6 +827,17 @@ impl Render for CellEditorModal {
                 Box::new(cx.listener(|this, _, _, cx| this.copy(true, cx)))
             });
 
+        let area = self.area(window);
+        let card = self.card_size(area);
+
+        // A dialog squeezed below its minimum by a small panel gives up the
+        // editor's minimum height first, so the header and footer stay.
+        let min_editor_height = if card.height < MIN_SIZE.height {
+            Pixels::ZERO
+        } else {
+            MIN_EDITOR_HEIGHT
+        };
+
         let mut editor = JsonEditorView::new(
             "cell-editor",
             &self.input,
@@ -758,7 +849,7 @@ impl Render for CellEditorModal {
         .format(self.format)
         .readonly(self.vim.locked(false))
         .below_editor(self.vim.render_indicator(cx))
-        .min_editor_height(MIN_EDITOR_HEIGHT)
+        .min_editor_height(min_editor_height)
         .copy_buttons(
             cx.listener(|this, _, _, cx| this.copy(false, cx)),
             copy_compact,
@@ -786,10 +877,38 @@ impl Render for CellEditorModal {
             })
             .icon_size(ModalMetrics::CLOSE_ICON)
             .icon_only()
+            .tooltip(with_shortcut(
+                &maximize_label,
+                Command::ToggleDialogMaximized,
+                MAXIMIZE_SHORTCUT_FALLBACK,
+                cx,
+            ))
             .aria_label(maximize_label)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_maximized(window, cx)));
 
-        let card = self.card_size(window.viewport_size());
+        let reset_label = dbflux_i18n::t!("modals.cell_editor.reset_size");
+        let reset_size = Button::new("cell-editor-reset-size", "")
+            .ghost()
+            .inline()
+            .icon(AppIcon::RotateCcw)
+            .icon_size(ModalMetrics::CLOSE_ICON)
+            .icon_only()
+            .disabled(self.has_default_size())
+            .tooltip(with_shortcut(
+                &reset_label,
+                Command::ResetDialogSize,
+                RESET_SIZE_SHORTCUT_FALLBACK,
+                cx,
+            ))
+            .aria_label(reset_label)
+            .on_click(cx.listener(|this, _, _, cx| this.reset_size(cx)));
+
+        let header_actions = div()
+            .flex()
+            .items_center()
+            .gap(ModalMetrics::FOOTER_GAP)
+            .child(reset_size)
+            .child(maximize);
 
         let on_start = {
             let entity = entity.clone();
@@ -807,26 +926,50 @@ impl Render for CellEditorModal {
                     .ok();
             }
         };
-        let on_end = move |_window: &mut Window, cx: &mut App| {
-            entity.update(cx, |this, cx| this.finish_resize(cx)).ok();
+        let on_end = {
+            let entity = entity.clone();
+            move |_window: &mut Window, cx: &mut App| {
+                entity.update(cx, |this, cx| this.finish_resize(cx)).ok();
+            }
+        };
+        let on_title_double_click = {
+            let entity = entity.clone();
+            move |window: &mut Window, cx: &mut App| {
+                entity
+                    .update(cx, |this, cx| this.toggle_maximized(window, cx))
+                    .ok();
+            }
+        };
+        let on_area = move |area, _window: &mut Window, cx: &mut App| {
+            entity.update(cx, |this, cx| this.set_area(area, cx)).ok();
         };
 
         let generate = self.render_generate_buttons(cx);
 
-        let mut modal = Modal::new(self.title());
-        if let Some(buttons) = generate {
-            modal = modal.header_extra(buttons);
-        }
-
-        modal
+        let mut modal = Modal::new(self.title())
             .id("cell-editor-modal")
             .focus_handle(&self.focus_handle)
             .on_close(close)
             .key_context(ContextId::CellEditorModal.as_gpui_context())
-            .icon(AppIcon::Pencil)
-            .width(card.width)
-            .height(card.height)
-            .header_actions(maximize)
+            .icon(AppIcon::Pencil);
+        if let Some(buttons) = generate {
+            modal = modal.header_extra(buttons);
+        }
+
+        // Maximized is a share of the area itself rather than pixels from
+        // the last layout, so it fills the panel from the first frame.
+        let modal = if self.maximized {
+            modal
+                .width_fraction(MAXIMIZED_WINDOW_SHARE)
+                .height_fraction(MAXIMIZED_WINDOW_SHARE)
+        } else {
+            modal.width(card.width).height(card.height)
+        };
+
+        modal
+            .header_actions(header_actions)
+            .on_title_double_click(on_title_double_click)
+            .on_area(on_area)
             .resizable(self.drag.is_some(), on_start, on_move, on_end)
             .child(
                 vim_wrapper(
@@ -853,6 +996,9 @@ impl Render for CellEditorModal {
                         }))
                         .on_action(cx.listener(|this, _: &ToggleDialogMaximized, window, cx| {
                             this.toggle_maximized(window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &ResetDialogSize, _, cx| {
+                            this.reset_size(cx);
                         })),
                     self.vim.input_id(),
                     cx,
@@ -1388,6 +1534,7 @@ mod structured_text_tests {
                 gpui::KeyBinding::new("ctrl-shift-u", actions::FormatEditorText, context),
                 gpui::KeyBinding::new("ctrl-shift-j", actions::CompactEditorText, context),
                 gpui::KeyBinding::new("ctrl-shift-enter", actions::ToggleDialogMaximized, context),
+                gpui::KeyBinding::new("ctrl-shift-backspace", actions::ResetDialogSize, context),
             ]);
         });
     }
@@ -1725,7 +1872,7 @@ mod structured_text_tests {
 
     #[gpui::test]
     fn the_next_editor_opens_at_the_remembered_size(cx: &mut TestAppContext) {
-        let stored = Rc::new(RefCell::new(Vec::<EditorGeometry>::new()));
+        let stored = Rc::new(RefCell::new(Vec::<Option<EditorGeometry>>::new()));
         let store = stored.clone();
         cx.update(|cx| {
             install_editor_geometry_store(
@@ -1743,7 +1890,7 @@ mod structured_text_tests {
         window.run_until_parked();
 
         assert_eq!(
-            stored.borrow().last().copied(),
+            stored.borrow().last().copied().flatten(),
             Some(EditorGeometry {
                 width: resized.width.into(),
                 height: resized.height.into(),
@@ -1802,5 +1949,392 @@ mod structured_text_tests {
         let (_host, modal, window) = open_text_cell(cx, RAW_RESULT);
         assert!(!window.update(|_, cx| modal.read(cx).is_maximized()));
         assert_eq!(card(&modal, window), DEFAULT_SIZE);
+    }
+}
+
+/// The dialog in a panel smaller than the window, as the results grid draws
+/// it: its header and footer stay inside at every size, whatever the length
+/// of the value.
+#[cfg(test)]
+mod layout_tests {
+    use super::{
+        CellEditorModal, DEFAULT_SIZE, EditorGeometry, MAXIMIZED_WINDOW_SHARE,
+        install_editor_geometry_store, remembered_geometry,
+    };
+    use crate::accessibility::FrameCapture;
+    use crate::actions;
+    use dbflux_core::keymap_types::ContextId;
+    use gpui::{
+        AccessibilityFrame, AppContext as _, Bounds, Context, Entity, IntoElement, Modifiers,
+        MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, Size,
+        Styled as _, TestAppContext, VisualTestContext, Window, div, point, px, size,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const WINDOW: Size<Pixels> = Size {
+        width: px(1600.0),
+        height: px(1000.0),
+    };
+
+    /// The results panel: lower than the dialog's default height, so a card
+    /// sized from the window, or the default card, overflows it.
+    const PANEL: Bounds<Pixels> = Bounds {
+        origin: Point {
+            x: px(300.0),
+            y: px(420.0),
+        },
+        size: Size {
+            width: px(1100.0),
+            height: px(500.0),
+        },
+    };
+
+    /// The header and footer controls that must stay reachable.
+    const CHROME: [&str; 4] = [
+        "cell-editor-maximize",
+        "modal-close",
+        "cell-editor-cancel",
+        "cell-editor-save",
+    ];
+
+    struct PanelHost {
+        modal: Entity<CellEditorModal>,
+    }
+
+    impl Render for PanelHost {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().relative().child(
+                div()
+                    .absolute()
+                    .left(PANEL.origin.x)
+                    .top(PANEL.origin.y)
+                    .w(PANEL.size.width)
+                    .h(PANEL.size.height)
+                    .child(self.modal.clone()),
+            )
+        }
+    }
+
+    fn bind_keys(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let context = Some(ContextId::CellEditorModal.as_gpui_context());
+            cx.bind_keys([
+                gpui::KeyBinding::new("escape", actions::Cancel, context),
+                gpui::KeyBinding::new("ctrl-shift-enter", actions::ToggleDialogMaximized, context),
+                gpui::KeyBinding::new("ctrl-shift-backspace", actions::ResetDialogSize, context),
+            ]);
+        });
+    }
+
+    /// A JSON array that the dialog pretty-prints to about 3000 lines.
+    fn long_json() -> String {
+        let items: Vec<String> = (0..1000).map(|id| format!(r#"{{"id":{id}}}"#)).collect();
+        format!("[{}]", items.join(","))
+    }
+
+    fn open_in_panel(cx: &mut TestAppContext) -> (Entity<CellEditorModal>, &mut VisualTestContext) {
+        bind_keys(cx);
+
+        let (host, window) = cx.add_window_view(|window, cx| PanelHost {
+            modal: cx.new(|cx| CellEditorModal::new(window, cx)),
+        });
+        window.simulate_resize(WINDOW);
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    0,
+                    0,
+                    long_json(),
+                    false,
+                    Some(("raw_result".to_string(), "TEXT".to_string())),
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        let lines = window.update(|_, cx| modal.read(cx).text(cx).lines().count());
+        assert!(lines >= 3000, "the value spans {lines} lines");
+
+        (modal, window)
+    }
+
+    fn bounds_of(frame: &AccessibilityFrame, id: &str) -> Bounds<Pixels> {
+        let suffix = format!(".{id}");
+        frame
+            .nodes()
+            .find(|(_, node)| node.id() == id || node.id().ends_with(&suffix))
+            .map(|(_, node)| node.bounds())
+            .unwrap_or_else(|| panic!("`{id}` is not drawn"))
+    }
+
+    fn inside(inner: Bounds<Pixels>, outer: Bounds<Pixels>) -> bool {
+        let tolerance = px(0.5);
+        inner.origin.x >= outer.origin.x - tolerance
+            && inner.origin.y >= outer.origin.y - tolerance
+            && inner.origin.x + inner.size.width <= outer.origin.x + outer.size.width + tolerance
+            && inner.origin.y + inner.size.height <= outer.origin.y + outer.size.height + tolerance
+    }
+
+    /// The card's bounds: centered in the panel at the size the dialog says.
+    fn card_bounds(
+        modal: &Entity<CellEditorModal>,
+        window: &mut VisualTestContext,
+    ) -> Bounds<Pixels> {
+        let card = window.update(|_, cx| modal.read(cx).card_size(PANEL.size));
+        Bounds {
+            origin: point(
+                PANEL.origin.x + (PANEL.size.width - card.width) / 2.0,
+                PANEL.origin.y + (PANEL.size.height - card.height) / 2.0,
+            ),
+            size: card,
+        }
+    }
+
+    #[track_caller]
+    fn assert_chrome_inside(
+        modal: &Entity<CellEditorModal>,
+        window: &mut VisualTestContext,
+        capture: &FrameCapture,
+        state: &str,
+    ) {
+        let frame = capture.frame(window);
+        let card = card_bounds(modal, window);
+        assert!(
+            inside(card, PANEL),
+            "{state}: card {card:?} leaves the panel {PANEL:?}"
+        );
+
+        for id in CHROME {
+            let bounds = bounds_of(&frame, id);
+            assert!(
+                inside(bounds, card),
+                "{state}: `{id}` at {bounds:?} is outside the card {card:?}"
+            );
+            assert!(
+                inside(bounds, PANEL),
+                "{state}: `{id}` at {bounds:?} is outside the panel {PANEL:?}"
+            );
+        }
+    }
+
+    fn corner_of(card: Bounds<Pixels>) -> Point<Pixels> {
+        point(
+            card.origin.x + card.size.width - px(3.0),
+            card.origin.y + card.size.height - px(3.0),
+        )
+    }
+
+    fn drag(window: &mut VisualTestContext, from: Point<Pixels>, to: Point<Pixels>) {
+        window.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+        window.run_until_parked();
+        window.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::none());
+        window.run_until_parked();
+        window.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        window.run_until_parked();
+    }
+
+    fn double_click(window: &mut VisualTestContext, position: Point<Pixels>) {
+        for click_count in [1, 2] {
+            window.simulate_event(MouseDownEvent {
+                position,
+                modifiers: Modifiers::default(),
+                button: MouseButton::Left,
+                click_count,
+                first_mouse: false,
+            });
+            window.simulate_event(MouseUpEvent {
+                position,
+                modifiers: Modifiers::default(),
+                button: MouseButton::Left,
+                click_count,
+            });
+        }
+        window.run_until_parked();
+    }
+
+    fn is_maximized(modal: &Entity<CellEditorModal>, window: &mut VisualTestContext) -> bool {
+        window.update(|_, cx| modal.read(cx).is_maximized())
+    }
+
+    #[gpui::test]
+    fn the_header_and_footer_stay_in_a_small_panel_at_every_size(cx: &mut TestAppContext) {
+        let (modal, window) = open_in_panel(cx);
+        let capture = FrameCapture::observe(window);
+
+        assert_chrome_inside(&modal, window, &capture, "default size");
+        let card = card_bounds(&modal, window);
+        assert!(
+            card.size.height < DEFAULT_SIZE.height,
+            "the default card is clamped to the panel: {card:?}"
+        );
+
+        window.simulate_keystrokes("ctrl-shift-enter");
+        window.run_until_parked();
+        assert!(is_maximized(&modal, window));
+        assert_chrome_inside(&modal, window, &capture, "maximized");
+
+        // Drawn at the panel's share, not the window's: the close button sits
+        // in the panel's margin of 3% plus the header padding.
+        let close = bounds_of(&capture.frame(window), "modal-close");
+        let panel_right = PANEL.origin.x + PANEL.size.width;
+        let margin = PANEL.size.width * (1.0 - MAXIMIZED_WINDOW_SHARE) / 2.0;
+        let close_right = close.origin.x + close.size.width;
+        assert!(
+            close_right < panel_right - margin && close_right > panel_right - margin - px(60.0),
+            "maximized fills the panel: close button at {close:?}"
+        );
+
+        window.simulate_keystrokes("ctrl-shift-enter");
+        window.run_until_parked();
+        assert!(!is_maximized(&modal, window));
+
+        let card = card_bounds(&modal, window);
+        drag(window, corner_of(card), point(px(1590.0), px(990.0)));
+        assert_chrome_inside(&modal, window, &capture, "dragged past the panel");
+
+        let card = card_bounds(&modal, window);
+        drag(window, corner_of(card), point(px(0.0), px(0.0)));
+        assert_chrome_inside(&modal, window, &capture, "dragged small");
+    }
+
+    /// The default card in a window large enough for it: unchanged by the
+    /// panel clamp, with a 3000-line value.
+    #[gpui::test]
+    fn the_header_and_footer_stay_with_a_long_value_in_the_window(cx: &mut TestAppContext) {
+        bind_keys(cx);
+        let (modal, window) = cx.add_window_view(CellEditorModal::new);
+        window.simulate_resize(WINDOW);
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, 0, long_json(), false, None, window, cx);
+            });
+        });
+        window.run_until_parked();
+        let capture = FrameCapture::observe(window);
+
+        let whole = Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: WINDOW,
+        };
+        for maximized in [false, true] {
+            if maximized {
+                window.simulate_keystrokes("ctrl-shift-enter");
+                window.run_until_parked();
+            }
+            let frame = capture.frame(window);
+            let card = window.update(|_, cx| modal.read(cx).card_size(WINDOW));
+            let card = Bounds {
+                origin: point(
+                    (WINDOW.width - card.width) / 2.0,
+                    (WINDOW.height - card.height) / 2.0,
+                ),
+                size: card,
+            };
+            for id in CHROME {
+                let bounds = bounds_of(&frame, id);
+                assert!(
+                    inside(bounds, card) && inside(bounds, whole),
+                    "maximized {maximized}: `{id}` at {bounds:?} is outside the card {card:?}"
+                );
+            }
+        }
+        assert_eq!(
+            window
+                .update(|_, cx| modal.read(cx).card_size(WINDOW))
+                .height,
+            WINDOW.height * MAXIMIZED_WINDOW_SHARE
+        );
+    }
+
+    #[gpui::test]
+    fn a_double_click_on_the_title_toggles_maximized(cx: &mut TestAppContext) {
+        let (modal, window) = open_in_panel(cx);
+        let capture = FrameCapture::observe(window);
+
+        let title = bounds_of(&capture.frame(window), "modal-title-bar");
+        double_click(window, title.center());
+        assert!(
+            is_maximized(&modal, window),
+            "the first double click maximizes"
+        );
+
+        let title = bounds_of(&capture.frame(window), "modal-title-bar");
+        double_click(window, title.center());
+        assert!(!is_maximized(&modal, window), "the second one restores");
+
+        let title = bounds_of(&capture.frame(window), "modal-title-bar");
+        window.simulate_click(title.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(!is_maximized(&modal, window), "a single click does nothing");
+    }
+
+    #[gpui::test]
+    fn reset_size_returns_to_the_default_and_forgets_the_stored_size(cx: &mut TestAppContext) {
+        let stored = Rc::new(RefCell::new(Vec::<Option<EditorGeometry>>::new()));
+        let store = stored.clone();
+        cx.update(|cx| {
+            install_editor_geometry_store(
+                || {
+                    Some(EditorGeometry {
+                        width: 640.0,
+                        height: 400.0,
+                        maximized: false,
+                    })
+                },
+                move |geometry| store.borrow_mut().push(geometry),
+                cx,
+            )
+        });
+
+        let (modal, window) = open_in_panel(cx);
+        let capture = FrameCapture::observe(window);
+        assert_eq!(
+            window.update(|_, cx| modal.read(cx).card_size(PANEL.size)),
+            size(px(640.0), px(400.0))
+        );
+
+        window.simulate_keystrokes("ctrl-shift-backspace");
+        window.run_until_parked();
+
+        assert!(window.update(|_, cx| modal.read(cx).has_default_size()));
+        assert_eq!(
+            stored.borrow().last().copied(),
+            Some(None),
+            "the store forgets it"
+        );
+        assert_eq!(window.update(|_, cx| remembered_geometry(cx)), None);
+        assert_chrome_inside(&modal, window, &capture, "after the reset");
+
+        // The button does the same from a maximized dialog.
+        window.simulate_keystrokes("ctrl-shift-enter");
+        window.run_until_parked();
+        assert!(is_maximized(&modal, window));
+        let reset = bounds_of(&capture.frame(window), "cell-editor-reset-size");
+        window.simulate_click(reset.center(), Modifiers::default());
+        window.run_until_parked();
+        assert!(window.update(|_, cx| modal.read(cx).has_default_size()));
+        assert_eq!(window.update(|_, cx| remembered_geometry(cx)), None);
+    }
+
+    #[gpui::test]
+    fn the_maximize_tooltip_names_the_shortcut(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let label = super::with_shortcut(
+                "Maximize",
+                dbflux_core::keymap_types::Command::ToggleDialogMaximized,
+                super::MAXIMIZE_SHORTCUT_FALLBACK,
+                cx,
+            );
+            assert_eq!(
+                label.as_ref(),
+                format!("Maximize ({})", super::MAXIMIZE_SHORTCUT_FALLBACK)
+            );
+        });
     }
 }

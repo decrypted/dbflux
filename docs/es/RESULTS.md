@@ -395,8 +395,12 @@ escribió; una columna JSON lo rechaza.
 **Copy** copia al portapapeles el texto del editor tal como se ve, con las
 ediciones sin guardar, y **Copy compact** lo copia compactado. Arrastra el borde
 derecho o inferior del editor, o su esquina inferior derecha, para cambiar su
-tamaño, o maximízalo con el botón junto al botón de cerrar. El tamaño se recuerda
-para el siguiente valor.
+tamaño, o maximízalo con el botón junto al botón de cerrar o con un doble clic en
+su barra de título. El editor queda dentro del panel sobre el que se abre, así
+que su barra de título y sus botones siguen a la vista con cualquier tamaño, por
+largo que sea el valor. El tamaño se recuerda para el siguiente valor; **Reset
+size**, el botón anterior al de maximizar, devuelve al editor su tamaño
+predeterminado y olvida el recordado.
 
 | Teclas | Acción |
 |--------|--------|
@@ -404,6 +408,7 @@ para el siguiente valor.
 | `Ctrl+Shift+k` / `Ctrl+Shift+h` | Copiar / Copiar compacto (`Cmd` en macOS) |
 | `Ctrl+Shift+u` / `Ctrl+Shift+j` | Formatear / Compactar |
 | `Ctrl+Shift+Enter` | Maximizar o restaurar el editor |
+| `Ctrl+Shift+Backspace` | Restablecer el tamaño predeterminado del editor |
 
 `Ctrl+c` (`Cmd+c`) sigue copiando el texto seleccionado.
 ### Expresiones SQL en celdas

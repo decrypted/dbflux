@@ -815,6 +815,7 @@ fn modal_editor_action(command: Command) -> Option<Box<dyn Action>> {
         Command::FormatEditorText => Box::new(component_actions::FormatEditorText),
         Command::CompactEditorText => Box::new(component_actions::CompactEditorText),
         Command::ToggleDialogMaximized => Box::new(component_actions::ToggleDialogMaximized),
+        Command::ResetDialogSize => Box::new(component_actions::ResetDialogSize),
         _ => return None,
     };
 

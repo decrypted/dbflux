@@ -363,7 +363,11 @@ and the second saves it as typed; a JSON column refuses it.
 **Copy** puts the editor's text on the clipboard as shown, unsaved edits
 included, and **Copy compact** copies it compacted. Drag the editor's right or
 bottom edge or its bottom-right corner to resize it, or maximize it with the
-button next to the close button. The size is remembered for the next value.
+button next to the close button or a double click on its title bar. The editor
+stays inside the panel it opens over, so its title bar and its buttons remain
+in view at every size, however long the value. The size is remembered for the
+next value; **Reset size**, the button before the maximize button, gives the
+editor its default size back and forgets the remembered one.
 
 | Keys | Action |
 |------|--------|
@@ -371,6 +375,7 @@ button next to the close button. The size is remembered for the next value.
 | `Ctrl+Shift+k` / `Ctrl+Shift+h` | Copy / Copy compact (`Cmd` on macOS) |
 | `Ctrl+Shift+u` / `Ctrl+Shift+j` | Format / Compact |
 | `Ctrl+Shift+Enter` | Maximize or restore the editor |
+| `Ctrl+Shift+Backspace` | Reset the editor to its default size |
 
 `Ctrl+c` (`Cmd+c`) keeps copying the selected text.
 ### SQL expressions in cells

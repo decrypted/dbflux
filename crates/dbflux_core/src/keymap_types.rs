@@ -289,6 +289,9 @@ pub enum Command {
     CompactEditorText,
     /// Maximizes the modal value editor, or restores its size.
     ToggleDialogMaximized,
+    /// Gives the modal value editor its default size back and forgets the
+    /// remembered one.
+    ResetDialogSize,
     /// Imports entries from a file into the list that has the keyboard (the
     /// profile lists of the settings window).
     ImportItems,
@@ -564,6 +567,7 @@ impl Command {
             Command::FormatEditorText => "Format editor text",
             Command::CompactEditorText => "Compact editor text",
             Command::ToggleDialogMaximized => "Maximize or restore dialog",
+            Command::ResetDialogSize => "Reset dialog size",
             Command::ImportItems => "Import…",
             Command::ImportFromClient => "Import from another client…",
             Command::ResetBinding => "Reset binding",
@@ -778,6 +782,7 @@ impl Command {
             Command::FormatEditorText => "format_editor_text",
             Command::CompactEditorText => "compact_editor_text",
             Command::ToggleDialogMaximized => "toggle_dialog_maximized",
+            Command::ResetDialogSize => "reset_dialog_size",
             Command::ImportItems => "import_items",
             Command::ImportFromClient => "import_from_client",
             Command::ResetBinding => "reset_binding",
@@ -996,6 +1001,7 @@ impl Command {
             Command::FormatEditorText,
             Command::CompactEditorText,
             Command::ToggleDialogMaximized,
+            Command::ResetDialogSize,
             Command::ImportItems,
             Command::ImportFromClient,
             Command::ResetBinding,
@@ -1214,7 +1220,8 @@ impl Command {
             | Command::CopyEditorTextCompact
             | Command::FormatEditorText
             | Command::CompactEditorText
-            | Command::ToggleDialogMaximized => "Actions",
+            | Command::ToggleDialogMaximized
+            | Command::ResetDialogSize => "Actions",
             Command::ImportItems
             | Command::ImportFromClient
             | Command::ResetBinding

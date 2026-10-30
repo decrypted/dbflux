@@ -41,7 +41,10 @@ If a non-empty text selection exists, only the selected text runs. With no
 selection and several `;`-separated statements in the buffer, only the
 statement under the cursor runs: a cursor after a statement's `;` or in the
 blank lines below it runs that statement, and a cursor above every statement
-runs the first. To run the whole buffer, select all (`Ctrl+A`) first. A buffer
+runs the first. Comment lines directly above a statement belong to it, so a
+cursor on them runs that statement, while a comment after a `;` on the same line
+belongs to the statement it follows. Each statement's run marker sits on its
+first line of code. To run the whole buffer, select all (`Ctrl+A`) first. A buffer
 with a single statement, or in a language without statement splitting, runs
 whole. So does a buffer with a compound block, such as the `BEGIN ... END` body
 of a procedure or trigger, since the `;` inside it does not end a statement;
@@ -76,7 +79,9 @@ support, each statement's result set is rendered in its own result tab.
 
 Statement splitting is language-aware for SQL-family languages: separators inside
 strings, identifiers, line/block comments, and PostgreSQL dollar-quoted bodies are
-not treated as statement boundaries. Non-SQL languages remain single-statement.
+not treated as statement boundaries. A part that holds only comments, such as a
+closing note after the last `;`, is not a statement and is not sent to the
+database. Non-SQL languages remain single-statement.
 Batch support is per-driver — among the built-in SQL drivers, PostgreSQL,
 MySQL/MariaDB, SQLite, and Microsoft SQL Server support it. A selection always
 runs as-is.

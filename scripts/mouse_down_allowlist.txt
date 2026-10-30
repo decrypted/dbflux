@@ -24,6 +24,7 @@ crates/dbflux_components/src/components/data_table/table.rs:render: focus on pre
 crates/dbflux_components/src/components/data_table/table.rs:render_document_header: resize grip
 crates/dbflux_components/src/components/data_table/table.rs:render_header: resize grip
 crates/dbflux_components/src/components/data_table/table.rs:render_rows: selection start
+crates/dbflux_components/src/components/data_table/table.rs:render_rows: selection start
 crates/dbflux_components/src/components/document_tree/tree.rs:render_chevron: propagation guard
 crates/dbflux_components/src/components/document_tree/tree.rs:render_value_preview_with_expand: propagation guard
 crates/dbflux_components/src/composites/menu_item.rs:menu_frame: propagation guard

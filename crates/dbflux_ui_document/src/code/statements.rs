@@ -246,23 +246,29 @@ impl CodeDocument {
     /// Number of statements in the buffer, or `None` for a language without
     /// a statement splitter.
     pub(super) fn statement_count(&self) -> Option<usize> {
-        self.editor.statement_ranges.as_ref().map(Vec::len)
+        self.editor.statements.as_ref().map(Vec::len)
     }
 
     /// Re-splits the buffer into statements and reinstalls the gutter. Runs
     /// after every edit and whenever the effective language changes.
     pub(super) fn refresh_statements(&mut self, cx: &mut Context<Self>) {
         let text = self.editor.input_state.read(cx).value();
-        let ranges = self.effective_language().statement_ranges(&text);
+        let language = self.effective_language();
+        // An edit inside a statement can move its marker without moving the
+        // statement (a comment line above it becoming code), so the markers
+        // are compared along with the ranges.
+        let statements = language
+            .statement_ranges(&text)
+            .map(|ranges| gutter_statements(language, &text, &ranges));
 
-        let unchanged = ranges == self.editor.statement_ranges
+        let unchanged = statements == self.editor.statements
             && self.editor.gutter_style.is_some()
             && self.editor.gutter_shown == self.shows_statement_gutter();
         if unchanged {
             return;
         }
 
-        self.editor.statement_ranges = ranges;
+        self.editor.statements = statements;
         self.install_statement_gutter(cx);
     }
 
@@ -293,16 +299,14 @@ impl CodeDocument {
         self.editor.gutter_shown = shown;
 
         let document = cx.entity().downgrade();
-        let text = self.editor.input_state.read(cx).value();
-        let language = self.effective_language();
 
         let gutter = self
             .editor
-            .statement_ranges
-            .as_ref()
+            .statements
+            .clone()
             .filter(|_| shown)
-            .map(|ranges| GutterStatements {
-                statements: gutter_statements(language, &text, ranges),
+            .map(|statements| GutterStatements {
+                statements,
                 style,
                 on_run: Rc::new(move |range, window, cx| {
                     let updated = document.update(cx, |document, cx| {
@@ -846,6 +850,52 @@ mod gutter_tests {
             window.update(|_, cx| document.read(cx).execution.query_origin),
             Some(second_start),
             "the marker on the SELECT line ran the SELECT with its comments"
+        );
+    }
+
+    /// Typing over a comment can turn its line into code without moving any
+    /// statement, and the run marker still moves to that line.
+    #[gpui::test]
+    fn a_same_length_edit_moves_the_marker_to_the_new_first_code(cx: &mut TestAppContext) {
+        const BEFORE: &str = "SELECT 1;\n-- note\nSELECT 2;\n";
+        const AFTER: &str = "SELECT 1;\nx- note\nSELECT 2;\n";
+
+        let (document, _toasts, window) = open_editor_with(cx, BEFORE);
+        let installed = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                let editor = document.read(cx).editor.input_state.read(cx);
+                editor
+                    .gutter_statements()
+                    .expect("statement gutter")
+                    .statements
+                    .clone()
+            })
+        };
+
+        let before = installed(window);
+        assert_eq!(before[1].marker, BEFORE.find("SELECT 2").expect("code"));
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.set_content(AFTER, window, cx));
+        });
+        window.run_until_parked();
+
+        let after = installed(window);
+        assert_eq!(
+            after
+                .iter()
+                .map(|statement| statement.range.clone())
+                .collect::<Vec<_>>(),
+            before
+                .iter()
+                .map(|statement| statement.range.clone())
+                .collect::<Vec<_>>(),
+            "the edit moves no statement"
+        );
+        assert_eq!(
+            after[1].marker,
+            AFTER.find("x- note").expect("code"),
+            "the marker follows the line that became code"
         );
     }
 

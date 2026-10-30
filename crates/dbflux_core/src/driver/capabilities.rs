@@ -1254,11 +1254,14 @@ impl QueryLanguage {
         self.split_statements(text).len()
     }
 
-    /// Byte bounds of the statement containing `offset` in `text`.
+    /// Byte bounds of the raw `;`-delimited segment containing `offset` in
+    /// `text`; for non-SQL editor modes the whole buffer is a single
+    /// statement.
     ///
-    /// Statement boundaries follow the same rules as
-    /// [`QueryLanguage::split_statements`]; for non-SQL editor modes the whole
-    /// buffer is a single statement.
+    /// Unlike [`QueryLanguage::split_statements`] the segment is untrimmed and
+    /// keeps every comment: a comment after a `;` on the same line opens the
+    /// next segment instead of staying with the statement it annotates, and a
+    /// segment holding only comments is returned like any other.
     pub fn statement_bounds_at(&self, text: &str, offset: usize) -> std::ops::Range<usize> {
         if self.editor_mode() != "sql" {
             return 0..text.len();
@@ -2744,6 +2747,24 @@ mod tests {
             QueryLanguage::MongoQuery.statement_code_offset("// c\ndb.users.find()"),
             0
         );
+    }
+
+    #[test]
+    fn crlf_line_endings_follow_the_same_comment_rules() {
+        let text = "SET @a = 1; -- note\r\n\r\n-- 1. Preview\r\nSELECT @a;\r\n-- end\r\n";
+
+        assert_eq!(
+            QueryLanguage::Sql.split_statements(text),
+            vec!["SET @a = 1", "-- 1. Preview\r\nSELECT @a"]
+        );
+        assert_eq!(
+            QueryLanguage::Sql.split_statements("SELECT 1; -- note\r\nSELECT 2"),
+            vec!["SELECT 1", "SELECT 2"]
+        );
+
+        let statement = "-- 1. Preview\r\nSELECT @a";
+        let offset = QueryLanguage::Sql.statement_code_offset(statement);
+        assert_eq!(&statement[offset..], "SELECT @a");
     }
 
     #[test]

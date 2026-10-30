@@ -79,6 +79,27 @@ fn sqlite_file_connect_ping_query_and_schema() -> Result<(), DbError> {
 /// names only the parent table, and `PRAGMA index_info` a NULL name for an
 /// expression column. Both are valid schemas, so reading them must neither
 /// fail nor lose the foreign key.
+/// A lone statement followed by a comment, which the editor sends as typed,
+/// runs as that one statement, bounded or not.
+#[test]
+fn sqlite_runs_a_lone_statement_followed_by_a_comment() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    for sql in [
+        "SELECT 1 AS one; -- note",
+        "SELECT 1 AS one;\n-- end of script\n",
+        "SELECT 1 AS one; /* done */",
+    ] {
+        let result = connection.execute(&QueryRequest::new(sql))?;
+        assert_eq!(result.rows, vec![vec![Value::Int(1)]], "{sql:?}");
+
+        let bounded = connection.execute(&QueryRequest::new(sql).with_limit(10))?;
+        assert_eq!(bounded.rows, vec![vec![Value::Int(1)]], "bounded {sql:?}");
+    }
+
+    Ok(())
+}
+
 #[test]
 fn sqlite_schema_reads_implicit_foreign_key_targets_and_expression_indexes() -> Result<(), DbError>
 {

@@ -1628,13 +1628,27 @@ fn render_rows(
                         .items_center()
                         .justify_end()
                         .w(ROW_NUMBER_WIDTH)
+                        .id(("row-number", row_ix))
+                        .role(gpui::Role::Button)
+                        .aria_label(SharedString::from(row_number.to_string()))
                         .cursor_pointer()
+                        // The row is selected on press, before the release a
+                        // click needs, so a drag can start from it.
                         .on_mouse_down(MouseButton::Left, {
                             let state = state_entity.clone();
                             move |event: &MouseDownEvent, window, cx| {
                                 state.update(cx, |state, cx| {
                                     state.focus(window, cx);
                                     state.click_row(row_ix, event.modifiers, cx);
+                                });
+                            }
+                        })
+                        .on_a11y_action(gpui::AccessibleAction::Click, {
+                            let state = state_entity.clone();
+                            move |_, window, cx| {
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.click_row(row_ix, gpui::Modifiers::default(), cx);
                                 });
                             }
                         })

@@ -172,8 +172,13 @@ terminal: DBFlux runs the command through your `$SHELL` and speaks SSH over its
 standard input and output, so access proxies such as
 `cloudflared access ssh --hostname %h` work. The tokens `%h`, `%p`, `%r`, `%n`
 and `%%` are expanded; any other token fails the connection before the command
-runs. The command's error output appears in the log, which is where an access
-proxy prints its login URL.
+runs. So does a value for `%h`, `%n` or `%r` that contains whitespace or a
+character the shell would interpret (quotes, `$`, backticks, `;`, `|` and the
+like) or that starts with `-`, so a host alias cannot inject shell commands.
+The command's error output appears in the log, which is where an access proxy
+prints its login URL. The log names only the program the command runs; the
+full command line, which can carry an access token, is logged at debug level
+only.
 
 A host whose config needs `ProxyJump`, or `ProxyCommand` on Windows, is listed
 and marked: DBFlux cannot reach it, and connecting fails with that reason

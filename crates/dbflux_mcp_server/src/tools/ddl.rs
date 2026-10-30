@@ -2578,7 +2578,6 @@ mod alter_table_integration_tests {
                 std::collections::HashMap::new(),
             )),
             detached_processes: Arc::new(crate::state::DetachedProcessRegistry::new()),
-            ssh_tunnels: Default::default(),
             secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
             mcp_enabled_by_default: true,
             profile_store_path: None,

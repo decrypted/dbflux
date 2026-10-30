@@ -605,7 +605,6 @@ mod tests {
                 std::collections::HashMap::new(),
             )),
             detached_processes: Arc::new(crate::state::DetachedProcessRegistry::new()),
-            ssh_tunnels: Default::default(),
             secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(
                 dbflux_core::NoopSecretStore,
             ))),

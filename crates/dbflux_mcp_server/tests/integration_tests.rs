@@ -144,7 +144,6 @@ fn build_state_with_role(connection_id: &str, role_id: &str) -> ServerState {
         connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
         connection_setup_lock: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         detached_processes: Arc::new(dbflux_mcp_server::state::DetachedProcessRegistry::new()),
-        ssh_tunnels: Default::default(),
         secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
         mcp_enabled_by_default: true,
         profile_store_path: None,

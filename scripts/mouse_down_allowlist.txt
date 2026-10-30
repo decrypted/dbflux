@@ -113,6 +113,7 @@ crates/dbflux_ui_document/src/dashboard/builder.rs:panel_resize_right: resize gr
 crates/dbflux_ui_document/src/dashboard/render.rs:render: selection start
 crates/dbflux_ui_document/src/dashboard/render.rs:render: selection start
 crates/dbflux_ui_document/src/dashboard/render.rs:render: selection start
+crates/dbflux_ui_document/src/data_grid_panel/column_chooser.rs:render_column_chooser: outside-press dismiss
 crates/dbflux_ui_document/src/data_grid_panel/context_menu/sections.rs:render_context_menu_overlay: outside-press dismiss
 crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_content_body: focus on press
 crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_content_body: focus on press

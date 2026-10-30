@@ -16,6 +16,14 @@ on:
         required: false
         type: boolean
         default: false
+      windows:
+        # Fork-only (decrypted/dbflux): stable and rc Windows builds need
+        # SignPath, which only upstream has, so the fork's builds turn the
+        # Windows job off.
+        description: 'Build the Windows package'
+        required: false
+        type: boolean
+        default: true
       cache:
         # Off for upstream's release and nightly runs, which build Linux and
         # macOS cold to stay inside the 10 GB cache limit (see the Windows
@@ -25,6 +33,14 @@ on:
         required: false
         type: boolean
         default: false
+      extra_features:
+        # Empty for upstream's release and nightly runs. The fork build passes
+        # `no-update-check`, since its versions do not match the upstream
+        # releases the update check compares against.
+        description: 'Comma-separated cargo features added to FEATURES on every platform'
+        required: false
+        type: string
+        default: ''
     secrets:
       GPG_PRIVATE_KEY:
         required: true
@@ -42,7 +58,7 @@ on:
         required: false
 
 env:
-  FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
+  FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws${{ inputs.extra_features != '' && format(',{0}', inputs.extra_features) || '' }}"
 
 permissions:
   contents: read
@@ -816,6 +832,7 @@ jobs:
 
   build-windows:
     name: Build Windows amd64
+    if: inputs.windows
     runs-on: windows-latest
     # A cold release build takes 40-60 minutes on the hosted runner, and each
     # of the two SignPath requests may wait up to one hour for manual approval.

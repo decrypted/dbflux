@@ -1905,6 +1905,29 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// The statement [`Self::update_row`] sends for `patch`, built by the
+    /// code `update_row` runs, so a preview shows what a save executes.
+    ///
+    /// `None` when the driver does not build its row mutations as SQL text
+    /// (document and key-value stores, out-of-process drivers). The statement
+    /// carries its values as literals; a driver that binds parameters
+    /// instead must say so in what it returns.
+    fn update_row_statement(&self, _patch: &RowPatch) -> Option<Result<String, DbError>> {
+        None
+    }
+
+    /// The statement [`Self::insert_row`] sends for `insert`; see
+    /// [`Self::update_row_statement`].
+    fn insert_row_statement(&self, _insert: &RowInsert) -> Option<Result<String, DbError>> {
+        None
+    }
+
+    /// The statement [`Self::delete_row`] sends for `delete`; see
+    /// [`Self::update_row_statement`].
+    fn delete_row_statement(&self, _delete: &RowDelete) -> Option<Result<String, DbError>> {
+        None
+    }
+
     // =========================================================================
     // Document Operations
     // =========================================================================

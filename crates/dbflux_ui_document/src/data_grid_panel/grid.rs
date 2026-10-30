@@ -516,6 +516,13 @@ impl DataGridPanel {
                     {
                         this.commit_document_edits(cx);
                     }
+                    // A close applying the edits has its own confirmation.
+                    DataTableEvent::SaveAllRequested { .. }
+                        if this.reviews_before_saving(cx) && !this.close_after_apply =>
+                    {
+                        this.pending.change_review = true;
+                        cx.notify();
+                    }
                     DataTableEvent::SaveAllRequested {
                         pending_deletes,
                         pending_inserts,

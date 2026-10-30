@@ -1523,6 +1523,15 @@ document:
       mode_view: "Visualização"
       mode_edit: "Edição"
   data:
+    review:
+      title: "Revisar alterações"
+      literals_note: "Os comandos que Salvar executa, em ordem, como o driver os envia. Os valores entram no SQL como literais; nenhum parâmetro vinculado é enviado."
+      cancel: "Cancelar"
+      copy: "Copiar SQL"
+      save: "Salvar"
+      unavailable: "Este driver não mostra o comando que envia para esta alteração."
+      skipped_row: "A linha %{row} não é salva: %{reason}"
+      no_connection: "A conexão não está aberta, então os comandos não podem ser montados."
     expression:
       rejected: "A expressão não pode ser salva: %{reason}"
     chart_dock:
@@ -1646,6 +1655,7 @@ document:
         clear_filter: "Limpar filtro"
         open_builder: "Abrir construtor de consultas"
         reset_builder: "Redefinir consulta do construtor"
+        review_changes: "Revisar alterações"
         save_changes: "Salvar todas as alterações"
         revert_changes: "Reverter todas as alterações"
         auto_refresh: "Intervalo de atualização automática…"
@@ -1715,6 +1725,7 @@ document:
           update_failed: "Falha ao atualizar o documento: %{error}"
     grid:
       edit_bar:
+        review: "Revisar"
         clean: Nenhuma alteração não salva
         dirty:
           one: "%{count} alteração não salva"
@@ -4125,6 +4136,9 @@ settings:
       group: "Editor"
     data_grid:
       group: "Grade de dados"
+    grid_review_before_save:
+      label: "Revisar as alterações antes de salvar"
+      hint: "Salvar mostra primeiro os comandos que vai executar, para salvá-los, copiá-los ou cancelar."
     grid_fk_labels:
       label: "Mostrar o valor do registro referenciado em células de chave estrangeira"
       hint: "Células que contêm uma chave estrangeira resolvem e mostram o valor do registro referenciado ao lado do seu id. Aplica-se às páginas carregadas após salvar; o inspetor de linhas sempre resolve referências."
@@ -4361,6 +4375,7 @@ settings:
       copy_selection_as_json: "Copiar a seleção como JSON"
       results_set_null: Definir célula como NULL
       toggle_cell_expression: "Editar célula como expressão SQL"
+      review_changes: "Revisar alterações"
       open_context_menu: Abrir menu de contexto
       open_pane_actions: Abrir ações do painel
       menu_up: Menu para cima

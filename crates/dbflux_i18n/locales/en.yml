@@ -1523,6 +1523,15 @@ document:
       mode_view: "View"
       mode_edit: "Edit"
   data:
+    review:
+      title: "Review changes"
+      literals_note: "The statements Save runs, in order, as the driver sends them. Values are written into the SQL as literals; no bind parameters are sent."
+      cancel: "Cancel"
+      copy: "Copy SQL"
+      save: "Save"
+      unavailable: "This driver does not show the statement it sends for this change."
+      skipped_row: "Row %{row} is not saved: %{reason}"
+      no_connection: "The connection is not open, so the statements cannot be built."
     expression:
       rejected: "The expression cannot be saved: %{reason}"
     chart_dock:
@@ -1646,6 +1655,7 @@ document:
         clear_filter: "Clear filter"
         open_builder: "Open query builder"
         reset_builder: "Reset builder query"
+        review_changes: "Review changes"
         save_changes: "Save all changes"
         revert_changes: "Revert all changes"
         auto_refresh: "Auto-refresh interval…"
@@ -1715,6 +1725,7 @@ document:
           update_failed: "Failed to update document: %{error}"
     grid:
       edit_bar:
+        review: "Review"
         clean: No unsaved changes
         dirty:
           one: "%{count} unsaved change"
@@ -4125,6 +4136,9 @@ settings:
       group: "Editor"
     data_grid:
       group: "Data grid"
+    grid_review_before_save:
+      label: "Review changes before saving"
+      hint: "Save first shows the statements it will run, to save, copy or cancel them."
     grid_fk_labels:
       label: "Show referenced-row labels in foreign-key cells"
       hint: "Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after saving; the row inspector always resolves references."
@@ -4361,6 +4375,7 @@ settings:
       copy_selection_as_json: "Copy selection as JSON"
       results_set_null: Set cell to NULL
       toggle_cell_expression: "Edit cell as SQL expression"
+      review_changes: "Review changes"
       open_context_menu: Open context menu
       open_pane_actions: Open pane actions
       menu_up: Menu up

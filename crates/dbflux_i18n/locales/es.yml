@@ -1523,6 +1523,15 @@ document:
       mode_view: "Ver"
       mode_edit: "Editar"
   data:
+    review:
+      title: "Revisar cambios"
+      literals_note: "Las sentencias que ejecuta Guardar, en orden, tal como las envía el driver. Los valores van en el SQL como literales; no se envían parámetros enlazados."
+      cancel: "Cancelar"
+      copy: "Copiar SQL"
+      save: "Guardar"
+      unavailable: "Este driver no muestra la sentencia que envía para este cambio."
+      skipped_row: "La fila %{row} no se guarda: %{reason}"
+      no_connection: "La conexión no está abierta, así que no se pueden construir las sentencias."
     expression:
       rejected: "La expresión no se puede guardar: %{reason}"
     chart_dock:
@@ -1646,6 +1655,7 @@ document:
         clear_filter: "Limpiar filtro"
         open_builder: "Abrir el constructor de consultas"
         reset_builder: "Restablecer la consulta del constructor"
+        review_changes: "Revisar cambios"
         save_changes: "Guardar todos los cambios"
         revert_changes: "Revertir todos los cambios"
         auto_refresh: "Intervalo de actualización automática…"
@@ -1715,6 +1725,7 @@ document:
           update_failed: "Error al actualizar el documento: %{error}"
     grid:
       edit_bar:
+        review: "Revisar"
         clean: Sin cambios pendientes
         dirty:
           one: "%{count} cambio sin guardar"
@@ -4125,6 +4136,9 @@ settings:
       group: "Editor"
     data_grid:
       group: "Cuadrícula de datos"
+    grid_review_before_save:
+      label: "Revisar los cambios antes de guardar"
+      hint: "Guardar muestra primero las sentencias que ejecutará, para guardarlas, copiarlas o cancelarlas."
     grid_fk_labels:
       label: "Mostrar el valor del registro referenciado en celdas de clave foránea"
       hint: "Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias."
@@ -4361,6 +4375,7 @@ settings:
       copy_selection_as_json: "Copiar la selección como JSON"
       results_set_null: Establecer celda en NULL
       toggle_cell_expression: "Editar celda como expresión SQL"
+      review_changes: "Revisar cambios"
       open_context_menu: Abrir menú contextual
       open_pane_actions: Abrir acciones del panel
       menu_up: "Menú: arriba"

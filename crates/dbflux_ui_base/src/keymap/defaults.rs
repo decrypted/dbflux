@@ -700,6 +700,11 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("c", Modifiers::primary_alt()),
         Command::CopySelectionAsJson,
     );
+    // Next to primary+S, which saves without the review.
+    layer.bind(
+        KeyChord::new("s", Modifiers::primary_alt()),
+        Command::ReviewChanges,
+    );
 
     // Toggle panel collapse
     layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);

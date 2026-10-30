@@ -165,6 +165,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
         ),
         ("grid-fk-labels", KeyboardPath::Command(Command::Execute)),
         (
+            "grid-review-before-save",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
             "grid-header-click-sorts",
             KeyboardPath::Command(Command::Execute),
         ),

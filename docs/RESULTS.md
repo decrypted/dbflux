@@ -199,6 +199,12 @@ In a table of MySQL, MariaDB, PostgreSQL, SQLite or SQL Server, a cell can be se
 
 A staged expression shows in the cell as an italic `fx NOW()` until it is saved; after the save the row shows the value the database computed. Undo, redo and Revert treat it like any other edit, and a new row's cells can hold one too. An expression containing a comment, a `;` or a `,` outside parentheses is refused when you commit it, because it could change more than the cell (a comment could hide the `WHERE` of the `UPDATE`). Other databases, query results and document collections do not offer expressions.
 
+### Review changes before saving
+
+**Review** in the edit bar, next to Save and Revert, or `Ctrl+Alt+S` (`Cmd+Alt+S` on macOS), shows the statements Save will run for the table's unsaved changes, in the order it runs them: deletes, then new rows, then edited rows. They are built by the save itself and rendered by the connection's driver, so they are what the database receives, with SQL expressions unquoted. Values are written into the statements as literals; the MySQL, MariaDB, PostgreSQL, SQLite and SQL Server drivers send no bind parameters. A change that cannot be saved (a row without its key) shows as a comment saying why.
+
+From the review, **Save** (or `Enter`) runs those statements, without the separate confirmation deletes otherwise ask for; **Copy SQL** copies them as a script; **Cancel** (or `Escape`) closes the review and keeps the changes. With **Review changes before saving** on in Settings > General > Data grid, every Save of a table grid opens the review first.
+
 ### When results are editable
 
 Plain table browses are editable when the table has a primary key. Results

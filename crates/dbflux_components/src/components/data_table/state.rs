@@ -17,7 +17,7 @@ use super::theme::{
     AUTO_WIDTH_SAMPLE_ROWS, AUTO_WIDTH_SLACK, CELL_PADDING_X, MAX_AUTO_COLUMN_WIDTH,
     MIN_COLUMN_WIDTH, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
 };
-use super::totals::{self, SelectionTotals, TotalsCache};
+use super::totals::{self, SelectionTotals, TotalsCache, TotalsKey};
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 use crate::fonts;
 use crate::tokens::GridMetrics;
@@ -185,9 +185,8 @@ pub struct DataTableState {
     /// columns. Empty, or all `None`, keeps the header one line tall.
     header_annotations: Vec<Option<HeaderAnnotation>>,
 
-    /// Totals of the selected cells, dropped whenever the table notifies.
+    /// Totals of the selected cells, kept until the cells they cover change.
     selection_totals: TotalsCache,
-    _totals_invalidation: Subscription,
 }
 
 impl DataTableState {
@@ -204,9 +203,6 @@ impl DataTableState {
 
         let mut edit_buffer = EditBuffer::new();
         edit_buffer.set_base_row_count(row_count);
-
-        let totals_invalidation =
-            cx.observe_self(|this: &mut Self, _cx| this.selection_totals.invalidate());
 
         Self {
             model,
@@ -243,7 +239,6 @@ impl DataTableState {
             document: None,
             header_annotations: Vec::new(),
             selection_totals: TotalsCache::default(),
-            _totals_invalidation: totals_invalidation,
         }
     }
 
@@ -804,7 +799,8 @@ impl DataTableState {
     /// grid shows them, for a host's status bar. `None` while fewer than two
     /// cells are selected.
     pub fn selection_totals(&self) -> Option<SelectionTotals> {
-        self.selection_totals.get_or_compute(|| {
+        let key = TotalsKey::new(&self.model, &self.edit_buffer, &self.selection);
+        self.selection_totals.get_or_compute(key, || {
             totals::selection_totals(&self.model, &self.edit_buffer, &self.selection)
         })
     }

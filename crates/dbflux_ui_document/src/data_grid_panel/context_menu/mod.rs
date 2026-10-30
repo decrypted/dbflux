@@ -221,7 +221,7 @@ impl DataGridPanel {
             return;
         };
 
-        let (row, col, cell_x, horizontal_offset) = {
+        let (row, col, cell_x) = {
             let ts = table_state.read(cx);
 
             let (row, col) = ts
@@ -230,10 +230,11 @@ impl DataGridPanel {
                 .map(|c| (c.row, c.col))
                 .unwrap_or((0, 0));
 
-            // Left edge of the cell's column as the screen lays it out.
-            let cell_x = ts.column_left(col).unwrap_or(0.0);
+            // Left edge of the cell's column as the screen draws it, scroll
+            // and pinned columns included.
+            let cell_x = ts.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH);
 
-            (row, col, cell_x, ts.horizontal_offset())
+            (row, col, cell_x)
         };
 
         // Calculate position in window coordinates:
@@ -241,7 +242,7 @@ impl DataGridPanel {
         // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
         let toolbar_height = px(36.0); // Approximate toolbar height
         let position = Point {
-            x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(cell_x) - horizontal_offset + px(20.0),
+            x: self.panel_origin.x + cell_x + px(20.0),
             y: self.panel_origin.y
                 + toolbar_height
                 + fonts::grid_header_height(cx)
@@ -2054,7 +2055,9 @@ impl DataGridPanel {
             ContextMenuAction::FitColumnWidth
             | ContextMenuAction::HideColumn
             | ContextMenuAction::MoveColumnLeft
-            | ContextMenuAction::MoveColumnRight => {
+            | ContextMenuAction::MoveColumnRight
+            | ContextMenuAction::PinColumn
+            | ContextMenuAction::UnpinColumn => {
                 self.handle_column_menu_action(action, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {

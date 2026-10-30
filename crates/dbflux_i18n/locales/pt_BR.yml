@@ -1636,6 +1636,8 @@ document:
       column:
         title: Coluna
         fit_width: Ajustar largura
+        pin: Fixar coluna
+        unpin: Desafixar coluna
         hide: Ocultar coluna
         choose: "Colunas…"
         move_left: Mover para a esquerda

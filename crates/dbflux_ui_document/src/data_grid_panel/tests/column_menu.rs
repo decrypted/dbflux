@@ -256,3 +256,61 @@ fn a_table_reopens_with_its_column_layout(cx: &mut TestAppContext) {
     });
     assert_eq!(stored, None, "the default layout keeps no row");
 }
+
+/// Pin column from the column menu keeps the column at the left edge, the
+/// menu then offers Unpin column, and a reopened table comes back with the
+/// column pinned.
+#[gpui::test]
+fn pin_column_is_kept_with_the_table_layout(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let app_state = isolated_test_app_state(cx);
+
+    let (first, window) = table_panel(cx, app_state.clone());
+    window.update(|window, cx| {
+        let table_state = table_state(&first, cx);
+        table_state.update(cx, |state, cx| {
+            state.select_cell(
+                dbflux_components::components::data_table::selection::CellCoord::new(0, 2),
+                cx,
+            );
+        });
+        let focus_handle = table_state.read(cx).focus_handle().clone();
+        focus_handle.focus(window, cx);
+    });
+    window.run_until_parked();
+    window.simulate_keystrokes("shift-m");
+    window.update(|window, cx| {
+        first.update(cx, |panel, cx| {
+            panel.handle_context_menu_action(ContextMenuAction::PinColumn, window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    let (shown, offers_unpin) = window.update(|_, cx| {
+        let panel = first.read(cx);
+        (
+            table_state(&first, cx).read(cx).visible_columns().to_vec(),
+            panel
+                .column_menu_items(2, cx)
+                .iter()
+                .any(|item| item.action == ContextMenuAction::UnpinColumn),
+        )
+    });
+    assert_eq!(shown, [2, 0, 1], "the pinned `email` leads the screen");
+    assert!(offers_unpin, "the menu offers Unpin column");
+
+    let (second, window) = table_panel(cx, app_state);
+    let pinned = window.update(|_, cx| {
+        let state = table_state(&second, cx);
+        let state = state.read(cx);
+        (
+            state.visible_columns().to_vec(),
+            state.column_layout().pinned_count(),
+        )
+    });
+    assert_eq!(
+        pinned,
+        (vec![2, 0, 1], 1),
+        "the reopened table keeps the pin"
+    );
+}

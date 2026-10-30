@@ -6,11 +6,12 @@
 
 use std::sync::Arc;
 
-use gpui::Context;
+use gpui::{Context, Pixels, px};
 
 use super::super::column_layout::{ColumnLayout, ColumnLayoutSpec};
 use super::super::events::DataTableEvent;
 use super::super::selection::CellCoord;
+use super::super::theme::ROW_NUMBER_WIDTH;
 use super::DataTableState;
 
 impl DataTableState {
@@ -66,6 +67,42 @@ impl DataTableState {
     /// indices), as dropping its header onto `target`'s does.
     pub fn move_column(&mut self, col: usize, target: usize, cx: &mut Context<Self>) -> bool {
         self.change_column_layout(cx, |layout| layout.move_to(col, target))
+    }
+
+    /// Pins `col` to the left edge, where it stays while the grid scrolls
+    /// sideways.
+    pub fn pin_column(&mut self, col: usize, cx: &mut Context<Self>) -> bool {
+        self.change_column_layout(cx, |layout| layout.pin(col))
+    }
+
+    pub fn unpin_column(&mut self, col: usize, cx: &mut Context<Self>) -> bool {
+        self.change_column_layout(cx, |layout| layout.unpin(col))
+    }
+
+    /// Total width of the shown pinned columns, the row-number gutter not
+    /// included.
+    pub fn pinned_width(&self) -> f32 {
+        self.column_offsets
+            .get(self.column_layout.pinned_count())
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Where `col`'s left edge is drawn, from the grid's left edge (the
+    /// row-number gutter included) after the horizontal scroll, which a
+    /// pinned column does not follow. `None` for a hidden column.
+    pub fn column_screen_left(&self, col: usize) -> Option<Pixels> {
+        let left = ROW_NUMBER_WIDTH + px(self.column_left(col)?);
+        let pinned = self
+            .column_layout
+            .view_position(col)
+            .is_some_and(|position| position < self.column_layout.pinned_count());
+
+        Some(if pinned {
+            left
+        } else {
+            left - self.horizontal_offset
+        })
     }
 
     /// Moves `col` one shown column left (`step` < 0) or right.

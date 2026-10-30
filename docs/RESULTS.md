@@ -82,6 +82,15 @@ columns** brings every hidden one back, and `Escape` closes it. **Move left**
 and **Move right** move the column one place; dragging a header onto another
 header moves its column into that place.
 
+**Pin column** keeps the column at the left edge, right after the row numbers,
+while the grid scrolls sideways, like a frozen pane: pin `id` and `created_at`
+to keep them in view on a wide log table. Pinned columns lead the grid in the
+order they were pinned and show a pin in their header; **Unpin column** lets
+the column scroll again, as the first of the others. Selecting, editing,
+sorting, resizing and the row numbers work the same on pinned columns. Move
+left and Move right stay on their side of the pinned edge; dragging a header
+across it pins or unpins its column.
+
 The query keeps reading every column (a table still runs `SELECT *`); to leave
 a column out of the query itself, use the query builder's projection. Copy,
 Copy as CSV and Copy as JSON follow the screen: the shown columns, in the order

@@ -771,8 +771,10 @@ impl DataTable {
         let fk_cols = state.fk_columns().clone();
         let annotated = state.has_header_annotations();
         let header_height = state.header_height(cx);
+        let pinned_width = state.pinned_width();
+        let pinned_count = state.column_layout().pinned_count();
 
-        let header_cells: Vec<_> = state
+        let mut header_cells: Vec<AnyElement> = state
             .visible_columns()
             .iter()
             .filter_map(|&col_ix| model.columns.get(col_ix).map(|spec| (col_ix, spec)))
@@ -784,6 +786,7 @@ impl DataTable {
 
                 let is_pk = pk_cols.contains(&col_ix);
                 let is_fk = fk_cols.contains(&col_ix);
+                let is_pinned = state.column_layout().is_pinned(col_ix);
 
                 let key_icon = if is_pk {
                     Some((AppIcon::KeyRound, theme.warning))
@@ -842,6 +845,14 @@ impl DataTable {
                                 });
                             });
                         }
+                    })
+                    // A pin marks a column that stays at the left edge.
+                    .when(is_pinned, |d| {
+                        d.child(
+                            Icon::new(AppIcon::Pin)
+                                .size(GridMetrics::HEADER_ICON)
+                                .color(theme.muted_foreground),
+                        )
                     })
                     // PK / FK key icon: amber key for a primary key, blue
                     // cable for a foreign key.
@@ -924,6 +935,7 @@ impl DataTable {
                         ChromeColors::tint(theme),
                     ))
             })
+            .map(IntoElement::into_any_element)
             .collect();
 
         // Header uses overflow_hidden and applies horizontal offset via margin.
@@ -938,15 +950,28 @@ impl DataTable {
             .border_b_1()
             .border_color(theme.input)
             .font_family(fonts::grid_family(cx))
-            .child(
+            .child({
+                let scrolled = header_cells.split_off(pinned_count.min(header_cells.len()));
+
                 div()
+                    .relative()
                     .flex()
                     .h_full()
                     .min_w(px(total_width))
                     .ml(-h_offset)
-                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
-                    .children(header_cells),
-            )
+                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH + px(pinned_width)))
+                    .children(scrolled)
+                    .when(pinned_count > 0, |row| {
+                        row.child(pinned_strip(
+                            h_offset,
+                            theme.table_head,
+                            None,
+                            div().flex_shrink_0().w(ROW_NUMBER_WIDTH).into_any_element(),
+                            header_cells,
+                            theme,
+                        ))
+                    })
+            })
     }
 
     /// Header of a document grid: an optional row of column-group labels over
@@ -1218,6 +1243,11 @@ impl DataTable {
                     visible_range,
                     &model,
                     state.visible_columns(),
+                    PinnedColumns {
+                        count: state.column_layout().pinned_count(),
+                        width: state.pinned_width(),
+                        h_offset: state.horizontal_offset(),
+                    },
                     state.column_widths(),
                     state.selection(),
                     editing_cell,
@@ -1266,6 +1296,7 @@ fn render_rows(
     visible_range: Range<usize>,
     model: &TableModel,
     columns: &[usize],
+    pinned: PinnedColumns,
     column_widths: &[f32],
     selection: &SelectionState,
     editing_cell: Option<CellCoord>,
@@ -1337,7 +1368,7 @@ fn render_rows(
             // number reads as their rank.
             let row_number = if reference_row { row_ix } else { row_ix + 1 };
 
-            let cells: Vec<AnyElement> = columns
+            let mut cells: Vec<AnyElement> = columns
                 .iter()
                 .map(|&col_ix| {
                     // Get cell either from model or from pending insert
@@ -1587,8 +1618,55 @@ fn render_rows(
                 })
                 .collect();
 
-            div()
+            // Row state background (dirty=yellow, error=red); otherwise the
+            // row holding the focused cell gets the selected-row wash and
+            // clean rows alternate. The pinned strip repeats it over its
+            // own opaque base.
+            let row_fill = row_bg.or(if is_reference_row {
+                Some(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
+            } else if is_active_row {
+                Some(theme.table_active)
+            } else if row_ix % 2 == 1 {
+                Some(theme.table_even)
+            } else {
+                None
+            });
+
+            let gutter = div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_end()
+                .w(ROW_NUMBER_WIDTH)
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, {
+                    let state = state_entity.clone();
+                    move |event: &MouseDownEvent, window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.focus(window, cx);
+                            state.click_row(row_ix, event.modifiers, cx);
+                        });
+                    }
+                })
+                .h_full()
+                .pr(CELL_PADDING_X)
+                .text_size(font_size)
+                .text_color(if is_active_row || is_reference_row {
+                    tint
+                } else {
+                    theme.input
+                })
+                .map(|gutter| {
+                    if is_reference_row {
+                        gutter.child(Icon::new(AppIcon::Crosshair).size(nested_icon).color(tint))
+                    } else {
+                        gutter.child(row_number.to_string())
+                    }
+                });
+
+            let row = div()
                 .id(("row", row_ix))
+                .relative()
                 .flex()
                 .flex_shrink_0()
                 .w(px(total_width))
@@ -1596,61 +1674,74 @@ fn render_rows(
                 .overflow_hidden()
                 .border_b_1()
                 .border_color(theme.table_row_border)
-                // Row state background (dirty=yellow, error=red)
-                .when_some(row_bg, |d, bg| d.bg(bg))
-                // The row holding the focused cell gets the selected-row
-                // wash; clean rows otherwise alternate.
+                .when_some(row_fill, |d, fill| d.bg(fill))
                 .when(row_bg.is_none() && is_reference_row, |d| {
-                    d.bg(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
-                        .border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
-                })
-                .when(
-                    row_bg.is_none() && !is_reference_row && is_active_row,
-                    |d| d.bg(theme.table_active),
-                )
-                .when(
-                    row_bg.is_none() && !is_reference_row && !is_active_row && row_ix % 2 == 1,
-                    |d| d.bg(theme.table_even),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .justify_end()
-                        .w(ROW_NUMBER_WIDTH)
-                        .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, {
-                            let state = state_entity.clone();
-                            move |event: &MouseDownEvent, window, cx| {
-                                state.update(cx, |state, cx| {
-                                    state.focus(window, cx);
-                                    state.click_row(row_ix, event.modifiers, cx);
-                                });
-                            }
-                        })
-                        .h_full()
-                        .pr(CELL_PADDING_X)
-                        .text_size(font_size)
-                        .text_color(if is_active_row || is_reference_row {
-                            tint
-                        } else {
-                            theme.input
-                        })
-                        .map(|gutter| {
-                            if is_reference_row {
-                                gutter.child(
-                                    Icon::new(AppIcon::Crosshair).size(nested_icon).color(tint),
-                                )
-                            } else {
-                                gutter.child(row_number.to_string())
-                            }
-                        }),
-                )
-                .children(cells)
+                    d.border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
+                });
+
+            if pinned.count == 0 {
+                return row.child(gutter).children(cells).into_any_element();
+            }
+
+            // With pinned columns the gutter and those columns move into a
+            // strip that cancels the horizontal scroll; a spacer of the same
+            // width keeps the scrolling cells where they were.
+            let scrolled = cells.split_off(pinned.count.min(cells.len()));
+            row.child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH + px(pinned.width)))
+                .children(scrolled)
+                .child(pinned_strip(
+                    pinned.h_offset,
+                    theme.table,
+                    row_fill,
+                    gutter.into_any_element(),
+                    cells,
+                    theme,
+                ))
                 .into_any_element()
         })
         .collect()
+}
+
+/// What the body needs to draw the pinned columns: how many of the shown
+/// columns are pinned, their total width, and the horizontal scroll the
+/// strip holding them cancels.
+#[derive(Clone, Copy)]
+struct PinnedColumns {
+    count: usize,
+    width: f32,
+    h_offset: Pixels,
+}
+
+/// The strip that keeps the row-number gutter and the pinned columns at the
+/// grid's left edge, like a frozen pane. It sits inside a row (or the header
+/// row) that scrolls by `-h_offset`, so it is placed `h_offset` in to stay
+/// put. Drawn after the scrolling cells, it covers the ones passing under it,
+/// on an opaque `base` with the row's own `fill` on top.
+fn pinned_strip(
+    h_offset: Pixels,
+    base: Hsla,
+    fill: Option<Hsla>,
+    gutter: AnyElement,
+    cells: Vec<AnyElement>,
+    theme: &gpui_component::theme::Theme,
+) -> impl IntoElement {
+    div()
+        .debug_selector(|| "pinned-columns".to_string())
+        .absolute()
+        .top_0()
+        .left(h_offset)
+        .h_full()
+        .bg(base)
+        .border_r_2()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex()
+                .h_full()
+                .when_some(fill, |strip, fill| strip.bg(fill))
+                .child(gutter)
+                .children(cells),
+        )
 }
 
 /// What a header carries while it is dragged onto another header to move

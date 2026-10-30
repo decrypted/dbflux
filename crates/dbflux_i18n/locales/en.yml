@@ -1636,6 +1636,8 @@ document:
       column:
         title: Column
         fit_width: Fit width
+        pin: Pin column
+        unpin: Unpin column
         hide: Hide column
         choose: "Columns…"
         move_left: Move left

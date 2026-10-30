@@ -88,6 +88,17 @@ columnas** devuelve todas las ocultas, y `Escape` la cierra. **Mover a la
 izquierda** y **Mover a la derecha** mueven la columna un lugar; arrastrar una
 cabecera sobre otra mueve su columna a ese lugar.
 
+**Fijar columna** mantiene la columna en el borde izquierdo, justo después de
+los números de fila, mientras la grilla se desplaza en horizontal, como un panel
+inmovilizado: fija `id` y `created_at` para tenerlas a la vista en una tabla de
+logs ancha. Las columnas fijadas van al principio de la grilla en el orden en
+que se fijaron y muestran un alfiler en su cabecera; **Soltar columna** deja que
+la columna vuelva a desplazarse, como la primera de las demás. Seleccionar,
+editar, ordenar, redimensionar y los números de fila funcionan igual en las
+columnas fijadas. Mover a la izquierda y Mover a la derecha se quedan en su lado
+del borde de las fijadas; arrastrar una cabecera a través de él fija o suelta su
+columna.
+
 La consulta sigue leyendo todas las columnas (una tabla sigue ejecutando
 `SELECT *`); para dejar una columna fuera de la consulta misma, usa la
 proyección del constructor de consultas. Copiar, Copiar como CSV y Copiar como

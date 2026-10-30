@@ -132,6 +132,10 @@ pub enum ContextMenuAction {
     MoveColumnLeft,
     /// Move the column one place right on screen.
     MoveColumnRight,
+    /// Keep the column at the left edge while the grid scrolls sideways.
+    PinColumn,
+    /// Let a pinned column scroll with the others again.
+    UnpinColumn,
 }
 
 /// Events emitted by the DataTable component.

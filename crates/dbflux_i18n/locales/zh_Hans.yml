@@ -1776,8 +1776,12 @@ document:
           average: "平均 %{value}"
           min: "最小 %{value}"
           max: "最大 %{value}"
-          nulls_skipped: "已跳过 %{count} 个 NULL"
-          non_numeric_skipped: "已跳过 %{count} 个非数字值"
+          nulls_skipped:
+            one: "已跳过 %{count} 个 NULL"
+            many: "已跳过 %{count} 个 NULL"
+          non_numeric_skipped:
+            one: "已跳过 %{count} 个非数字值"
+            many: "已跳过 %{count} 个非数字值"
       export:
         trigger: 导出
         save_as_file: 将已加载的行保存为文件
@@ -4124,6 +4128,9 @@ settings:
     grid_fk_labels:
       label: "在外键单元格中显示被引用行的标签"
       hint: "保存后加载的页面会解析外键单元格，并在其 ID 旁显示被引用行的标签。行检查器始终解析引用。"
+    grid_header_click_sorts:
+      label: "点击列标题时对该列排序"
+      hint: "关：点击列标题选择整列，标题右侧的箭头用于排序。开：点击即对该列排序；Shift+单击和 Ctrl+单击仍然选择列。"
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"

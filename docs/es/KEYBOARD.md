@@ -445,8 +445,8 @@ command palette.
 Una pestaña de análisis de dump toma las teclas de tabla en cada una de sus dos
 tablas: `Alt+l` y `Alt+h` pasan de Claves más grandes a Por prefijo y viceversa,
 `Escape` cancela un análisis que todavía lee el archivo, y `m` lista la otra
-tabla, un orden por columna de la tabla donde está el teclado (como lo hace un
-clic en la cabecera) y Cancelar mientras se lee el archivo.
+tabla, un orden por columna de la tabla donde está el teclado (como lo hace la
+flecha de orden de la cabecera) y Cancelar mientras se lee el archivo.
 
 La vista Columnas de una tabla toma `j` / `k` para moverse entre columnas,
 `Space` para agregar a la vista Datos la columna bajo el cursor o quitarla,

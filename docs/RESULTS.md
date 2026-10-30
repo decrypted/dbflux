@@ -46,7 +46,7 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
-With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. Dragging past an edge of the grid scrolls it that way, faster the further out the pointer is, and keeps extending the range until the button is released or the pointer comes back.
+With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. The extra ranges are for copying: delete, duplicate, save and the other row actions act on the row of the cursor, a right-click selects the cell under the pointer, and the record view treats `Ctrl`+click as a plain click. Dragging past an edge of the grid scrolls it that way, faster the further out the pointer is, and keeps extending the range until the button is released or the pointer comes back.
 
 When the selection covers more than one cell, the status bar shows how many cells it holds and, for the numbers among them, their sum, average, minimum and maximum. NULLs and text are counted but left out of the figures, and the status bar says how many it skipped. The totals are worked out from the rows already loaded, unsaved edits included, without querying the database again.
 
@@ -68,7 +68,7 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: order ascending
 or descending, clear the ordering, and every filter operator, in one flat
-list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted.
+list. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does.
 
 ## Value panel
 
@@ -172,7 +172,7 @@ In the data grid:
 - `y` — copy the selected row.
 - `Ctrl+c` (`Cmd+c`) — copy the selected cell(s) to the clipboard.
 
-With several cells selected, `Enter`, `F2` or a double-click on one of them opens the editor for all of them, and the status bar says how many cells the edit will change. The value you commit is written to every selected cell that can take it, as unsaved changes that Save and Revert handle like any other edit, and one undo (`u` or `Ctrl+z`) takes the whole edit back. Cells in read-only columns, rows marked for deletion and values the inline editor does not edit (JSON, long or multi-line text) are skipped; a value picked from a column's list of allowed values goes only to columns with the same list.
+With several cells selected, `Enter`, `F2` or a double-click on one of them opens the editor for all of them, and the status bar says how many cells the edit will change. The value you commit is written to every selected cell of the same column type that can take it, as unsaved changes that Save and Revert handle like any other edit, and one undo (`u` or `Ctrl+z`) takes the whole edit back. Cells in read-only columns, rows marked for deletion and values the inline editor does not edit (JSON, long or multi-line text) are skipped, and so are key columns when the selection spans several rows, since one value in every row's key could never be saved; a value picked from a column's list of allowed values goes only to columns with the same list.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/results/editing-dark.webp">
@@ -240,8 +240,11 @@ clipboard**: CSV starts with a header row of the column names, and JSON is an
 array with one object per row, keyed by column name, with numbers, booleans and
 `null` kept as such. Every row and column the selection covers is included; a
 cell inside that area but outside the selection is empty in CSV and `null` in
-JSON. Plain **Copy** (`Ctrl+c`) still copies tab-separated text without a
-header.
+JSON. The copies follow what the grid shows: an unsaved edit is copied with
+its new value and an added row that is not saved yet at its place. In JSON,
+columns that share a name (`a.id` and `b.id` of a join) share one key, which
+takes the value of the last of them. Plain **Copy** (`Ctrl+c`) still copies
+tab-separated text without a header.
 `Ctrl+Alt+c` (`Cmd+Alt+c` on macOS) runs **Copy as JSON** from the keyboard;
 the menu shows it next to the item.
 

@@ -210,7 +210,8 @@ impl Workspace {
             | Command::CopyEditorTextCompact
             | Command::FormatEditorText
             | Command::CompactEditorText
-            | Command::ToggleDialogMaximized => Some(false),
+            | Command::ToggleDialogMaximized
+            | Command::ResetDialogSize => Some(false),
 
             _ => None,
         }

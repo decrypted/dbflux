@@ -1583,9 +1583,14 @@ fn input_layer() -> KeymapLayer {
         KeyChord::new("enter", Modifiers::primary()),
         Command::RunQuery,
     );
-    layer.bind(
+    // Not in the cell editor's text editor, where the same chord maximizes
+    // the dialog: a binding at the input's depth outranks the dialog's, and
+    // the workspace always takes the run command (it hands it to the active
+    // tab), so the dialog's binding never got the key.
+    layer.bind_with_predicate(
         KeyChord::new("enter", Modifiers::primary_shift()),
         Command::RunQueryInNewTab,
+        "Input && !CellEditorModal",
     );
 
     // The input binds only Ctrl+Y as redo on Linux and Windows (macOS
@@ -1660,35 +1665,27 @@ fn sql_preview_modal_layer() -> KeymapLayer {
 /// The cell editor modal: Escape closes it (a focused editor only lets
 /// Escape through when it has nothing of its own to cancel) and the primary
 /// modifier + S saves the value. With the primary modifier + Shift, K copies
-/// the text and H copies it compacted, U formats it and J compacts it, and
-/// Enter maximizes the dialog. These are chords the text editor and the
-/// workspace leave alone, so the primary modifier + C keeps copying the
-/// selection (Ctrl+Shift+I is gpui's inspector).
+/// the text and H copies it compacted, U formats it and J compacts it, Enter
+/// maximizes the dialog and Backspace gives it its default size back. The
+/// primary modifier + C keeps copying the selection (Ctrl+Shift+I is gpui's
+/// inspector). The input layer leaves the maximize chord to this layer (see
+/// `input_layer`).
 fn cell_editor_modal_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::CellEditorModal);
 
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
     layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
-    layer.bind(
-        KeyChord::new("k", Modifiers::primary_shift()),
-        Command::CopyEditorText,
-    );
-    layer.bind(
-        KeyChord::new("h", Modifiers::primary_shift()),
-        Command::CopyEditorTextCompact,
-    );
-    layer.bind(
-        KeyChord::new("u", Modifiers::primary_shift()),
-        Command::FormatEditorText,
-    );
-    layer.bind(
-        KeyChord::new("j", Modifiers::primary_shift()),
-        Command::CompactEditorText,
-    );
-    layer.bind(
-        KeyChord::new("enter", Modifiers::primary_shift()),
-        Command::ToggleDialogMaximized,
-    );
+
+    for (key, command) in [
+        ("k", Command::CopyEditorText),
+        ("h", Command::CopyEditorTextCompact),
+        ("u", Command::FormatEditorText),
+        ("j", Command::CompactEditorText),
+        ("enter", Command::ToggleDialogMaximized),
+        ("backspace", Command::ResetDialogSize),
+    ] {
+        layer.bind(KeyChord::new(key, Modifiers::primary_shift()), command);
+    }
 
     layer
 }

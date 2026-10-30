@@ -8,9 +8,9 @@ use dbflux_core::LogErr;
 use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
-    AbsoluteLength, AnyElement, AnyWindowHandle, App, CursorStyle, Div, ElementId, FocusHandle,
-    Hsla, KeyContext, MouseButton, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
-    div, point, px,
+    AbsoluteLength, AnyElement, AnyWindowHandle, App, Bounds, CursorStyle, DefiniteLength, Div,
+    ElementId, FocusHandle, Hsla, KeyContext, MouseButton, Pixels, Point, ScrollHandle,
+    SharedString, Size, Stateful, Window, canvas, div, point, px, relative,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, FocusTrapElement};
@@ -23,6 +23,8 @@ type ConfirmHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 type ResizeStartHandler = Rc<dyn Fn(ResizeEdge, Point<Pixels>, &mut Window, &mut App) + 'static>;
 type ResizeMoveHandler = Rc<dyn Fn(Point<Pixels>, &mut Window, &mut App) + 'static>;
 type ResizeEndHandler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
+type AreaHandler = Box<dyn Fn(Size<Pixels>, &mut Window, &mut App) + 'static>;
+type TitleDoubleClickHandler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
 /// The edge of a [`Modal::resizable`] card a grip drags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +73,9 @@ struct ModalResize {
 /// Element id of the modal's close button.
 pub const MODAL_CLOSE_ID: &str = "modal-close";
 
+/// Element id of the title bar of a modal with [`Modal::on_title_double_click`].
+pub const MODAL_TITLE_BAR_ID: &str = "modal-title-bar";
+
 /// Default element id of the modal's backdrop.
 pub const MODAL_BACKDROP_ID: &str = "modal-backdrop";
 
@@ -80,11 +85,15 @@ pub const MODAL_BODY_SELECTOR: &str = "modal-body";
 /// Debug selector of the footer, for layout tests.
 pub const MODAL_FOOTER_SELECTOR: &str = "modal-footer";
 
-/// Share of the viewport height a modal without a fixed height may take.
-const MAX_VIEWPORT_HEIGHT: f32 = 0.9;
+/// Share of the backdrop's height a modal without a fixed height may take.
+///
+/// The caps are shares of the backdrop, not of the window: a panel draws its
+/// modals over itself only, and a card sized from the window overflows the
+/// panel there and loses its header and footer.
+const MAX_AREA_HEIGHT: f32 = 0.9;
 
-/// Share of the viewport width a modal may take.
-const MAX_VIEWPORT_WIDTH: f32 = 0.95;
+/// Share of the backdrop's width a modal may take.
+const MAX_AREA_WIDTH: f32 = 0.95;
 
 /// Key context identifier every modal backdrop carries. The keymap's modal
 /// keys are bound in it, and `!Modal` in a predicate keeps a binding away from
@@ -183,7 +192,7 @@ pub enum ModalVariant {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ModalHeight {
-    /// Fits the content, up to 90% of the viewport; the padded body scrolls.
+    /// Fits the content, up to 90% of the backdrop; the padded body scrolls.
     Auto,
     Fixed(Pixels),
     Max(Pixels),
@@ -206,7 +215,7 @@ enum ModalPlacement {
 ///
 /// Content goes in one of two ways:
 /// - [`Modal::body`] and [`Modal::footer`]: a padded body that fits its
-///   content and scrolls once the card reaches 90% of the viewport, then a
+///   content and scrolls once the card reaches 90% of the backdrop, then a
 ///   right-aligned footer. Use this for dialogs.
 /// - [`Modal::child`]: raw children laid out in the card's column, for
 ///   editors and wizards that size and scroll their own content.
@@ -230,12 +239,14 @@ pub struct Modal {
     icon: Option<IconSource>,
     icon_color: Option<Hsla>,
     variant: ModalVariant,
-    width: AbsoluteLength,
+    width: DefiniteLength,
     height: ModalHeight,
     placement: ModalPlacement,
     header_extra: Option<AnyElement>,
     header_actions: Option<AnyElement>,
     resize: Option<ModalResize>,
+    on_area: Option<AreaHandler>,
+    on_title_double_click: Option<TitleDoubleClickHandler>,
     body: Option<AnyElement>,
     footer: Option<AnyElement>,
     children: Vec<AnyElement>,
@@ -267,6 +278,8 @@ impl Modal {
             header_extra: None,
             header_actions: None,
             resize: None,
+            on_area: None,
+            on_title_double_click: None,
             body: None,
             footer: None,
             children: Vec::new(),
@@ -312,9 +325,16 @@ impl Modal {
         self
     }
 
-    /// Card width (default: `ModalMetrics::WIDTH`), capped at 95% of the viewport.
+    /// Card width (default: `ModalMetrics::WIDTH`), capped at 95% of the
+    /// backdrop.
     pub fn width(mut self, width: impl Into<AbsoluteLength>) -> Self {
-        self.width = width.into();
+        self.width = DefiniteLength::Absolute(width.into());
+        self
+    }
+
+    /// Size the card as a fraction of the backdrop's width (e.g. `0.8` = 80%).
+    pub fn width_fraction(mut self, fraction: f32) -> Self {
+        self.width = relative(fraction);
         self
     }
 
@@ -328,7 +348,7 @@ impl Modal {
         self
     }
 
-    /// Size the card as a fraction of the viewport height (e.g. `0.8` = 80%).
+    /// Size the card as a fraction of the backdrop's height (e.g. `0.8` = 80%).
     pub fn height_fraction(mut self, fraction: f32) -> Self {
         self.height = ModalHeight::Fraction(fraction);
         self
@@ -373,6 +393,23 @@ impl Modal {
             on_move: Rc::new(on_move),
             on_end: Rc::new(on_end),
         });
+        self
+    }
+
+    /// Called after every layout with the size of the backdrop, the area the
+    /// card is centered in and capped to. That is the window for a modal
+    /// drawn at the window root, and only the panel for one a panel draws,
+    /// so an owner that sizes the card itself measures against this rather
+    /// than the window.
+    pub fn on_area(mut self, f: impl Fn(Size<Pixels>, &mut Window, &mut App) + 'static) -> Self {
+        self.on_area = Some(Box::new(f));
+        self
+    }
+
+    /// A double click on the title bar (the title and the free space after
+    /// it, not the header buttons) calls `f`, as it maximizes a window.
+    pub fn on_title_double_click(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_title_double_click = Some(Rc::new(f));
         self
     }
 
@@ -571,7 +608,7 @@ impl ModalFocus {
 }
 
 impl RenderOnce for Modal {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let line = theme.border;
         let surface = inspect_surface_role(SurfaceRole::Modal);
@@ -581,11 +618,6 @@ impl RenderOnce for Modal {
         } else {
             ChromeColors::tint(theme)
         });
-
-        // Cap the card to the viewport so a tall body scrolls inside the modal
-        // instead of pushing the footer off-screen, and so a wide card shrinks
-        // on narrow windows.
-        let viewport = window.viewport_size();
 
         let close_handler = self.on_close;
         let escape_label = shortcut_label(cx, ContextId::Modal.id(), Command::Cancel.id(), "Esc");
@@ -624,14 +656,11 @@ impl RenderOnce for Modal {
             .when_some(self.icon, |header, icon| {
                 header.child(Icon::new(icon).size(ModalMetrics::ICON).color(icon_color))
             })
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .child(Text::heading(self.title).font_size(ModalMetrics::TITLE_SIZE)),
-            )
-            .when_some(self.header_extra, |header, extra| header.child(extra))
-            .child(div().flex_1())
+            .child(title_bar(
+                Text::heading(self.title).font_size(ModalMetrics::TITLE_SIZE),
+                self.header_extra,
+                self.on_title_double_click,
+            ))
             .when_some(self.header_actions, |header, actions| header.child(actions))
             .when_some(close_control, |header, close| header.child(close));
 
@@ -646,7 +675,7 @@ impl RenderOnce for Modal {
         let mut card = div()
             .relative()
             .w(self.width)
-            .max_w(viewport.width * MAX_VIEWPORT_WIDTH)
+            .max_w(relative(MAX_AREA_WIDTH))
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -656,8 +685,8 @@ impl RenderOnce for Modal {
             .children(self.children);
 
         card = match self.height {
-            ModalHeight::Auto => card.max_h(viewport.height * MAX_VIEWPORT_HEIGHT),
-            ModalHeight::Fixed(height) => card.h(height),
+            ModalHeight::Auto => card.max_h(relative(MAX_AREA_HEIGHT)),
+            ModalHeight::Fixed(height) => card.h(height).max_h(relative(1.0)),
             ModalHeight::Max(height) => card.max_h(height),
             ModalHeight::Fraction(fraction) => card.h(gpui::relative(fraction)),
         };
@@ -812,7 +841,19 @@ impl RenderOnce for Modal {
             });
         }
 
-        let backdrop = backdrop.child(card).children(drag_mask);
+        let area_probe = self.on_area.map(|on_area| {
+            canvas(
+                move |bounds: Bounds<Pixels>, window, cx| on_area(bounds.size, window, cx),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full()
+        });
+
+        let backdrop = backdrop
+            .children(area_probe)
+            .child(card)
+            .children(drag_mask);
 
         // The trap tracks the modal's focus handle and keeps Tab and Shift+Tab
         // cycling inside the modal, so they never reach the view behind it.
@@ -820,6 +861,38 @@ impl RenderOnce for Modal {
             Some(handle) => backdrop.focus_trap(trap_id, &handle).into_any_element(),
             None => backdrop.into_any_element(),
         }
+    }
+}
+
+/// The title, the extra header content and the free space after them, which
+/// a double click on toggles the owner's maximized state when it asked for
+/// one. The header buttons stay outside, so a double click on them is two
+/// presses of the button only.
+fn title_bar(
+    title: impl IntoElement,
+    extra: Option<AnyElement>,
+    on_double_click: Option<TitleDoubleClickHandler>,
+) -> AnyElement {
+    let bar = div()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .items_center()
+        .gap(ModalMetrics::HEADER_GAP)
+        .child(div().min_w_0().truncate().child(title))
+        .children(extra);
+
+    match on_double_click {
+        Some(handler) => bar
+            .id(MODAL_TITLE_BAR_ID)
+            .h_full()
+            .on_click(move |event, window, cx| {
+                if event.click_count() == 2 {
+                    (handler)(window, cx);
+                }
+            })
+            .into_any_element(),
+        None => bar.into_any_element(),
     }
 }
 

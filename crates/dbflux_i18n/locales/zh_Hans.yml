@@ -3738,6 +3738,7 @@ modals:
     title_xml: 编辑 XML
     maximize: 最大化
     restore: 恢复大小
+    reset_size: 重置大小
     invalid_warning: "已不是有效的 %{format}：%{error}。再次保存将以纯文本存储。"
     copied: 值已复制到剪贴板
     copied_compact: 紧凑值已复制到剪贴板
@@ -4434,6 +4435,7 @@ settings:
       format_editor_text: 格式化编辑器文本
       compact_editor_text: 紧凑编辑器文本
       toggle_dialog_maximized: 最大化或恢复对话框
+      reset_dialog_size: 重置对话框大小
       import_items: "导入…"
       import_from_client: "从其他客户端导入…"
       reset_binding: "重置快捷键"

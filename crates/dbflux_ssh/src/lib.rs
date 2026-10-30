@@ -386,7 +386,11 @@ pub fn establish_session(
     establish_resolved_session(&target, secret)
 }
 
-/// I/O timeout for the transport and the libssh2 session.
+/// I/O timeout for the transport and the libssh2 session. It also bounds the
+/// handshake through a `ProxyCommand`, so an access proxy that waits longer
+/// for a first browser login fails the attempt; connecting again after the
+/// login succeeds, which is preferable to a connection attempt that can hang
+/// without limit.
 const SSH_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn establish_resolved_session(
@@ -1143,6 +1147,80 @@ mod resolve_for_dial_tests {
 
         assert!(message.contains("viacmd"), "got: {message}");
         assert!(message.contains("%C"), "got: {message}");
+    }
+
+    /// The alias is profile data, not SSH config, and an imported bundle can
+    /// set it. Through `%n`, or `%h` when no `HostName` applies, it must never
+    /// reach the shell as code.
+    #[cfg(unix)]
+    #[test]
+    fn an_alias_with_shell_metacharacters_never_runs_as_shell_code() {
+        let fixture = Fixture::new();
+        let marker = fixture.dir.path().join("pwned");
+        let marker = marker.display();
+        let cases = [
+            (
+                "Host *\n  ProxyCommand nc %n 22\n",
+                format!("a;touch {marker}"),
+            ),
+            (
+                "Host *.corp.example\n  ProxyCommand nc %h %p\n",
+                format!("$(touch {marker}).corp.example"),
+            ),
+            (
+                "Host *.corp.example\n  ProxyCommand nc %h %p\n",
+                format!("`touch {marker}`.corp.example"),
+            ),
+        ];
+
+        for (ssh_config, alias) in cases {
+            fixture.write_ssh_config(ssh_config);
+            let config = aliased_tunnel(&alias, None);
+
+            match resolve_for_dial_in(&config, "alice", &fixture.home()) {
+                Ok(target) => {
+                    let _ = establish_resolved_session(&target, None);
+                    panic!(
+                        "alias {alias:?} resolved to {:?}; payload ran: {}",
+                        target.proxy_command,
+                        fixture.dir.path().join("pwned").exists()
+                    );
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    assert!(
+                        message.contains("shell metacharacter"),
+                        "alias {alias:?}: {message}"
+                    );
+                }
+            }
+            assert!(!fixture.dir.path().join("pwned").exists());
+        }
+    }
+
+    /// Drives the session setup through the transport: the command runs, the
+    /// stored host is never dialled, and a command that exits without
+    /// speaking SSH fails the handshake.
+    #[cfg(unix)]
+    #[test]
+    fn a_proxy_command_carries_the_session_instead_of_a_tcp_connection() {
+        let fixture = Fixture::new();
+        let marker = fixture.dir.path().join("ran");
+        fixture.write_ssh_config(&format!(
+            "Host viacmd\n  HostName unreachable.invalid\n  ProxyCommand touch {}\n",
+            marker.display()
+        ));
+        let target =
+            resolve_for_dial_in(&aliased_tunnel("viacmd", None), "alice", &fixture.home()).unwrap();
+
+        let message = match establish_resolved_session(&target, None) {
+            Ok(_) => panic!("a command that exits cannot carry an SSH session"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(marker.exists(), "the ProxyCommand never ran");
+        assert!(message.contains("SSH handshake failed"), "got: {message}");
+        assert!(!message.contains("Failed to connect"), "got: {message}");
     }
 
     #[cfg(not(unix))]

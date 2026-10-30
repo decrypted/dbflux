@@ -1814,6 +1814,150 @@ mod tests {
         })
     }
 
+    /// The bounds of the element `id` in the latest frame of `visual`.
+    fn element_bounds(visual: &mut VisualTestContext, id: &str) -> Option<gpui::Bounds<Pixels>> {
+        let capture = crate::accessibility::FrameCapture::observe(visual);
+        let frame = capture.frame(visual);
+        frame
+            .nodes()
+            .find(|(_, node)| node.id() == id)
+            .map(|(_, node)| node.bounds())
+    }
+
+    /// The center of the element `id` in the latest frame of `visual`.
+    fn element_center(visual: &mut VisualTestContext, id: &str) -> Option<gpui::Point<Pixels>> {
+        element_bounds(visual, id).map(|bounds| bounds.center())
+    }
+
+    /// A header table over the overflow model, with or without the document
+    /// presentation (whose header is drawn by `render_document_header`).
+    fn header_table(
+        cx: &mut TestAppContext,
+        document: bool,
+        sortable: bool,
+    ) -> (Entity<DataTableState>, &mut VisualTestContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut state = DataTableState::new(overflow_model(), cx);
+                state.set_sortable(sortable);
+                if document {
+                    state.set_document_presentation(
+                        Some(super::super::document::DocumentPresentation::default()),
+                        cx,
+                    );
+                }
+                state
+            });
+            let table = cx.new(|cx| DataTable::new("header-paths-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+        (state, visual)
+    }
+
+    /// Ctrl+click (Cmd+click on macOS) on a header adds the column and takes
+    /// it out again, in the plain header and in the document header.
+    #[gpui::test]
+    fn ctrl_click_on_a_header_adds_and_removes_the_column(cx: &mut TestAppContext) {
+        for document in [false, true] {
+            let (state, visual) = header_table(cx, document, true);
+            let row_count = visual.update(|_, cx| state.read(cx).row_count());
+            let first = element_center(visual, "header-col-0").expect("header 0 drawn");
+            let second = element_center(visual, "header-col-1").expect("header 1 drawn");
+            let secondary = gpui::Modifiers::secondary_key();
+
+            visual.simulate_click(first, gpui::Modifiers::default());
+            visual.simulate_click(second, secondary);
+            visual.run_until_parked();
+            visual.update(|_, cx| {
+                let selection = state.read(cx).selection();
+                assert!(
+                    selection.is_full_column_selected(0, row_count),
+                    "{document}"
+                );
+                assert!(
+                    selection.is_full_column_selected(1, row_count),
+                    "{document}"
+                );
+                assert_eq!(selection.ranges().len(), 2, "{document}");
+            });
+
+            visual.simulate_click(second, secondary);
+            visual.run_until_parked();
+            visual.update(|_, cx| {
+                let selection = state.read(cx).selection();
+                assert!(
+                    selection.is_full_column_selected(0, row_count),
+                    "{document}"
+                );
+                assert!(
+                    !selection.is_full_column_selected(1, row_count),
+                    "{document}"
+                );
+            });
+        }
+    }
+
+    /// A table that does not sort draws no sort control, ignores a sort and
+    /// still selects the column on a header click.
+    #[gpui::test]
+    fn an_unsortable_table_has_no_sort_control_and_keeps_its_order(cx: &mut TestAppContext) {
+        let (state, visual) = header_table(cx, false, false);
+        assert!(element_center(visual, "header-sort-0").is_none());
+
+        visual.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.cycle_sort(0, cx);
+                state.set_sort(Some(super::super::events::SortState::ascending(1)), cx);
+            });
+        });
+        assert!(visual.update(|_, cx| state.read(cx).sort().is_none()));
+
+        let header = element_center(visual, "header-col-0").expect("header drawn");
+        visual.simulate_click(header, gpui::Modifiers::default());
+        visual.run_until_parked();
+        let row_count = visual.update(|_, cx| state.read(cx).row_count());
+        visual.update(|_, cx| {
+            assert!(
+                state
+                    .read(cx)
+                    .selection()
+                    .is_full_column_selected(0, row_count)
+            );
+            assert!(state.read(cx).sort().is_none());
+        });
+    }
+
+    /// A press on a header's resize handle resizes; it neither selects the
+    /// column nor sorts it.
+    #[gpui::test]
+    fn pressing_the_resize_handle_does_not_select_the_column(cx: &mut TestAppContext) {
+        let (state, visual) = header_table(cx, false, true);
+        // The handle is the 6px strip at the header cell's right edge.
+        let header = element_bounds(visual, "header-col-0").expect("header drawn");
+        let grip = gpui::point(
+            header.origin.x + header.size.width - px(2.0),
+            header.origin.y + header.size.height / 2.0,
+        );
+
+        visual.simulate_mouse_down(grip, MouseButton::Left, gpui::Modifiers::default());
+        visual.simulate_mouse_up(grip, MouseButton::Left, gpui::Modifiers::default());
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let state = state.read(cx);
+            assert!(state.selection().is_empty(), "{:?}", state.selection());
+            assert!(state.sort().is_none());
+        });
+    }
+
     /// A click on a column header selects the whole column, and Shift+click
     /// on another header every column in between; the sort control at the
     /// header's right edge sorts without changing the selection.

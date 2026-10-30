@@ -72,9 +72,9 @@ pub struct DataTableState {
     /// Current sort state.
     sort: Option<SortState>,
 
-    /// Whether a header offers the sort arrow. A host that keeps rows in
-    /// source order (a file opened as a table) turns it off rather than
-    /// undoing every sort it receives.
+    /// Whether the table sorts: a header offers the sort arrow and the sort
+    /// can be set. A host that keeps rows in source order (a file opened as a
+    /// table) turns it off.
     sortable: bool,
 
     /// Viewport size (updated on layout).
@@ -302,8 +302,8 @@ impl DataTableState {
         }
     }
 
-    /// The width a column opens with: wide enough for its header (name, type
-    /// and a key or sort icon) and for the longest value among the first
+    /// The width a column opens with: wide enough for its header (name, type,
+    /// a key icon and the sort control) and for the longest value among the first
     /// `AUTO_WIDTH_SAMPLE_ROWS` rows, so short values are not cut while the
     /// pane has room. Content counts up to `MAX_AUTO_COLUMN_WIDTH`; a header
     /// wider than that still gets its full width.
@@ -327,7 +327,10 @@ impl DataTableState {
         } else {
             gap + type_chars as f32 * type_char
         };
-        let icon_width = gap + f32::from(GridMetrics::HEADER_ICON);
+        // Two icons: a key column draws its key icon and, on a table that
+        // sorts, every header draws the sort control. The keys are not known
+        // yet when the widths are first worked out, so both are budgeted.
+        let icon_width = 2.0 * (gap + f32::from(GridMetrics::HEADER_ICON));
         let header_width =
             padding + column.title.chars().count() as f32 * cell_char + type_width + icon_width;
 
@@ -633,11 +636,21 @@ impl DataTableState {
         self.sortable
     }
 
+    /// Turning sorting off drops the current sort, and from then on
+    /// [`Self::set_sort`] and [`Self::cycle_sort`] keep the rows in order.
     pub fn set_sortable(&mut self, sortable: bool) {
         self.sortable = sortable;
+        if !sortable {
+            self.sort = None;
+        }
     }
 
+    /// Sets the sort and reports it. A table that does not sort ignores a
+    /// new sort.
     pub fn set_sort(&mut self, sort: Option<SortState>, cx: &mut Context<Self>) {
+        if sort.is_some() && !self.sortable {
+            return;
+        }
         if self.sort != sort {
             self.sort = sort;
             cx.emit(DataTableEvent::SortChanged(sort));
@@ -3318,6 +3331,28 @@ mod tests {
         assert!(
             with_content >= value_width,
             "the value fits without being cut ({with_content} < {value_width})"
+        );
+    }
+
+    /// A header opens wide enough for its name, its type and two icons: the
+    /// key icon of a key column and the sort control, which every header of
+    /// a sorting table draws.
+    #[test]
+    fn a_header_budgets_a_key_icon_and_the_sort_control() {
+        let metrics = default_metrics();
+        let model = model_with_values("customer_id", &[]);
+        let width = super::DataTableState::initial_column_width(&model, 0, &metrics);
+
+        let gap = f32::from(crate::tokens::GridMetrics::HEADER_GAP);
+        let icon = f32::from(crate::tokens::GridMetrics::HEADER_ICON);
+        let text = f32::from(CELL_PADDING_X) * 2.0
+            + "customer_id".chars().count() as f32 * metrics.cell_char_advance
+            + gap
+            + "text".chars().count() as f32 * metrics.type_char_advance;
+
+        assert!(
+            width >= text + 2.0 * (gap + icon),
+            "{width} leaves no room for both icons beside {text}"
         );
     }
 

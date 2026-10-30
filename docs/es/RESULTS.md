@@ -49,6 +49,8 @@ Cuando el panel de resultados tiene el foco:
 - `z` alterna el colapso del panel.
 - `m` (o `Shift+F10`) abre el menú contextual de fila/celda.
 
+Con el ratón, un clic selecciona una celda y `Shift`+clic selecciona el rango hasta otra celda. Un clic en un número de fila selecciona la fila entera, y `Shift`+clic en otro número de fila selecciona todas las filas intermedias.
+
 ## Vista de registro
 
 Pulsa `i`, o usa el conmutador Registro en la barra de estado del

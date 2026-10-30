@@ -146,25 +146,30 @@ impl SelectionState {
     }
 
     /// Select an entire row.
-    #[allow(dead_code)]
+    ///
+    /// The active cell is the row's first column, so the focus ring, Enter
+    /// and the value panel stay at the left edge; the anchor takes the last
+    /// column to span the row.
     pub fn select_row(&mut self, row: usize, col_count: usize) {
         if col_count == 0 {
             return;
         }
-        self.anchor = Some(CellCoord::new(row, 0));
-        self.active = Some(CellCoord::new(row, col_count - 1));
+        self.anchor = Some(CellCoord::new(row, col_count - 1));
+        self.active = Some(CellCoord::new(row, 0));
     }
 
-    /// Extend selection to include an entire row.
-    #[allow(dead_code)]
+    /// Extend the selection to whole rows, from the anchor's row to `row`.
+    ///
+    /// The anchor moves to the last column and the active cell to the first,
+    /// so a range started on a cell becomes full rows, as a Shift+click on a
+    /// row number does in a grid. Without an anchor, `row` alone is selected.
     pub fn extend_to_row(&mut self, row: usize, col_count: usize) {
         if col_count == 0 {
             return;
         }
-        if self.anchor.is_none() {
-            self.anchor = Some(CellCoord::new(row, 0));
-        }
-        self.active = Some(CellCoord::new(row, col_count - 1));
+        let anchor_row = self.anchor.map_or(row, |anchor| anchor.row);
+        self.anchor = Some(CellCoord::new(anchor_row, col_count - 1));
+        self.active = Some(CellCoord::new(row, 0));
     }
 
     /// Select all cells in the table.
@@ -211,5 +216,61 @@ mod tests {
 
         sel.extend_to(CellCoord::new(4, 5));
         assert!(sel.is_selected(CellCoord::new(3, 4)));
+    }
+
+    #[test]
+    fn select_row_keeps_the_active_cell_in_the_first_column() {
+        let mut sel = SelectionState::new();
+        sel.select_row(2, 4);
+
+        assert_eq!(sel.active, Some(CellCoord::new(2, 0)));
+        assert_eq!(sel.anchor, Some(CellCoord::new(2, 3)));
+        assert!(sel.is_full_row_selected(2, 4));
+        assert!(!sel.is_full_row_selected(1, 4));
+    }
+
+    #[test]
+    fn extend_to_row_upward_selects_every_row_back_to_the_anchor() {
+        let mut sel = SelectionState::new();
+        sel.select_row(5, 3);
+        sel.extend_to_row(2, 3);
+
+        assert_eq!(sel.active, Some(CellCoord::new(2, 0)));
+        for row in 2..=5 {
+            assert!(sel.is_full_row_selected(row, 3), "row {row}");
+        }
+        assert!(!sel.is_full_row_selected(1, 3));
+        assert!(!sel.is_full_row_selected(6, 3));
+    }
+
+    #[test]
+    fn extend_to_row_from_a_cell_widens_the_range_to_full_rows() {
+        let mut sel = SelectionState::new();
+        sel.select_cell(CellCoord::new(1, 2));
+        sel.extend_to_row(3, 4);
+
+        assert_eq!(sel.active, Some(CellCoord::new(3, 0)));
+        for row in 1..=3 {
+            assert!(sel.is_full_row_selected(row, 4), "row {row}");
+        }
+    }
+
+    #[test]
+    fn extend_to_row_without_an_anchor_selects_that_row() {
+        let mut sel = SelectionState::new();
+        sel.extend_to_row(4, 3);
+
+        assert_eq!(sel.active, Some(CellCoord::new(4, 0)));
+        assert!(sel.is_full_row_selected(4, 3));
+        assert!(!sel.is_full_row_selected(3, 3));
+    }
+
+    #[test]
+    fn row_selection_without_columns_changes_nothing() {
+        let mut sel = SelectionState::new();
+        sel.select_row(1, 0);
+        sel.extend_to_row(2, 0);
+
+        assert!(sel.is_empty());
     }
 }

@@ -46,6 +46,8 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
+With the mouse, a click selects a cell and `Shift`+click selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between.
+
 ## Record view
 
 Press `i`, or use the Record toggle in the result status bar, to show

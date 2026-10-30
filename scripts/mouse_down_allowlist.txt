@@ -73,6 +73,7 @@ crates/dbflux_ui_windows/src/connection_manager/render.rs:render_form_header: cu
 crates/dbflux_ui_windows/src/connection_manager/render.rs:render_password_field: cursor sync
 crates/dbflux_ui_windows/src/connection_manager/render.rs:render_password_field: cursor sync
 crates/dbflux_ui_windows/src/connection_manager/render_tabs.rs:render_mcp_tab: cursor sync
+crates/dbflux_ui_windows/src/connection_manager/render_tabs.rs:render_settings_tab: focus on press
 crates/dbflux_ui_windows/src/settings/audit_section.rs:render_audit_dropdown: cursor sync
 crates/dbflux_ui_windows/src/settings/audit_section.rs:render_audit_input_field: cursor sync
 crates/dbflux_ui_windows/src/settings/audit_section.rs:render_audit_unsupported_checkbox: cursor sync

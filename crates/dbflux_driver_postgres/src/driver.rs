@@ -229,7 +229,25 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
 /// PostgreSQL SQL dialect implementation.
 pub struct PostgresDialect;
 
+/// Cell expressions for PostgreSQL. `gen_random_uuid()` is built in from
+/// PostgreSQL 13 on.
+static POSTGRES_CELL_EXPRESSIONS: dbflux_core::CellExpressionVocabulary =
+    dbflux_core::CellExpressionVocabulary {
+        timestamp: &["now()", "current_timestamp", "now() + interval '1 day'"],
+        date: &["current_date", "current_date + 1"],
+        time: &["current_time", "localtime"],
+        uuid: &["gen_random_uuid()"],
+        uuid_text: &["gen_random_uuid()::text"],
+        uuid_binary: &[],
+        text: &["{col} || ''", "upper({col})", "lower({col})", "trim({col})"],
+        supports_default: true,
+    };
+
 impl SqlDialect for PostgresDialect {
+    fn cell_expression_vocabulary(&self) -> Option<&'static dbflux_core::CellExpressionVocabulary> {
+        Some(&POSTGRES_CELL_EXPRESSIONS)
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         pg_quote_ident(name)
     }
@@ -8409,6 +8427,7 @@ mod tests {
                     Value::Text("b".to_string()),
                 ]),
                 type_name: Some("text[]".to_string()),
+                is_expression: false,
             }],
         );
 
@@ -8831,3 +8850,72 @@ mod notice_buffer_tests {
 
 #[cfg(test)]
 mod prefer_fallback_tests;
+
+#[cfg(test)]
+mod cell_expression_tests {
+    use super::*;
+    use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch, SqlQueryBuilder};
+
+    fn suggestions(column: &str, type_name: &str) -> Vec<String> {
+        POSTGRES_DIALECT
+            .cell_expression_suggestions(column, type_name)
+            .expect("PostgreSQL offers cell expressions")
+    }
+
+    #[test]
+    fn cell_expressions_are_suggested_per_column_type() {
+        assert_eq!(
+            suggestions("created_at", "timestamp with time zone"),
+            [
+                "now()",
+                "current_timestamp",
+                "now() + interval '1 day'",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+        assert_eq!(
+            suggestions("born", "date"),
+            ["current_date", "current_date + 1", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("id", "uuid"),
+            ["gen_random_uuid()", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("qty", "integer"),
+            ["\"qty\" + 1", "\"qty\" - 1", "NULL", "DEFAULT"]
+        );
+        assert_eq!(
+            suggestions("name", "text"),
+            [
+                "\"name\" || ''",
+                "upper(\"name\")",
+                "lower(\"name\")",
+                "trim(\"name\")",
+                "NULL",
+                "DEFAULT"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_row_update_writes_an_expression_unquoted_and_its_text_as_a_literal() {
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "events".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("seen_at", "now()", None),
+                ColumnAssignment::new("note", Value::Text("now()".to_string())),
+            ],
+        );
+
+        let sql = SqlQueryBuilder::new(&POSTGRES_DIALECT)
+            .build_update(&patch, true)
+            .unwrap();
+
+        assert!(sql.contains("\"seen_at\" = now()"), "{sql}");
+        assert!(!sql.contains("\"note\" = now()"), "{sql}");
+    }
+}

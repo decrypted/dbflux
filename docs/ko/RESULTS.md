@@ -108,6 +108,26 @@
   <img src="../images/results/editing-light.webp" alt="저장하지 않은 편집 셀 하나와 활성화된 Save, Revert 버튼이 있는 customers 테이블">
 </picture>
 
+### 셀의 SQL 식
+
+MySQL, MariaDB, PostgreSQL, SQLite, SQL Server 테이블에서는 셀에 값 대신 `NOW()`, `"qty" + 1`, `DEFAULT` 같은 SQL 식을 넣을 수 있습니다. 식은 행의 `UPDATE` 또는 `INSERT`에 따옴표 없이 저장되고, 값은 데이터베이스가 계산합니다.
+
+- 셀 컨텍스트 메뉴의 **SQL 식으로 편집…** 또는 `Ctrl+Alt+E`(macOS에서는 `Cmd+Alt+E`)를 누르면 `fx` 스위치가 켜진 편집기가 열립니다. 더 큰 선택 영역의 셀에서는 여러 셀 편집처럼 선택된 모든 셀에 식이 들어갑니다.
+- 편집기가 열린 상태에서 `fx`를 클릭하거나 같은 단축키를 누르면 입력한 내용을 유지한 채 값과 식 사이를 전환합니다.
+- `fx`가 켜져 있으면 편집기 아래 목록에 열의 타입과 데이터베이스에 맞는 식이 제안되며, `Down` / `Up`으로 하나씩 편집기에 입력됩니다. 다른 식을 직접 입력할 수도 있습니다.
+
+| 열 타입 | MySQL / MariaDB | PostgreSQL | SQLite | SQL Server |
+|---|---|---|---|---|
+| 날짜와 시간 | `NOW()`, `CURRENT_TIMESTAMP`, `UTC_TIMESTAMP()`, `DATE_ADD(NOW(), INTERVAL 1 DAY)` | `now()`, `current_timestamp`, `now() + interval '1 day'` | `CURRENT_TIMESTAMP`, `datetime('now')`, `datetime('now', 'localtime')`, `datetime('now', '+1 day')` | `GETDATE()`, `CURRENT_TIMESTAMP`, `SYSDATETIME()`, `GETUTCDATE()`, `DATEADD(day, 1, GETDATE())` |
+| 날짜 | `CURDATE()`, `CURRENT_DATE`, `UTC_DATE()` | `current_date`, `current_date + 1` | `CURRENT_DATE`, `date('now')` | `CAST(GETDATE() AS date)` |
+| 시간 | `CURTIME()`, `CURRENT_TIME`, `UTC_TIME()` | `current_time`, `localtime` | `CURRENT_TIME`, `time('now')` | `CAST(GETDATE() AS time)` |
+| uuid | `UUID()` (`char(36)`), `UNHEX(REPLACE(UUID(), '-', ''))` (`binary(16)`) | `gen_random_uuid()` | | `NEWID()` |
+| 숫자 | `col + 1`, `col - 1` | 동일 | 동일 | 동일 |
+| 텍스트 | `CONCAT(col, '')`, `UPPER`, `LOWER`, `TRIM` | `col \|\| ''`, `upper`, `lower`, `trim` | `col \|\| ''`, `upper`, `lower`, `trim` | `CONCAT(col, '')`, `UPPER`, `LOWER`, `LTRIM(RTRIM(col))` |
+| 모든 타입 | `NULL`, `DEFAULT` | `NULL`, `DEFAULT` | `NULL` | `NULL`, `DEFAULT` |
+
+저장 전의 식은 셀에 기울임꼴 `fx NOW()`로 표시되고, 저장한 뒤에는 데이터베이스가 계산한 값이 행에 표시됩니다. 실행 취소, 다시 실행, 되돌리기는 다른 편집과 똑같이 동작하며, 새 행의 셀에도 식을 넣을 수 있습니다. 주석, `;`, 괄호 밖의 `,`가 들어 있는 식은 셀보다 더 많은 것을 바꿀 수 있으므로(주석이 `UPDATE`의 `WHERE`를 가릴 수 있음) 확정할 때 거부됩니다. 다른 데이터베이스, 쿼리 결과, 문서 컬렉션에서는 식을 제공하지 않습니다.
+
 ### 결과를 편집할 수 있는 경우
 
 기본 키가 있는 테이블의 단순 테이블 조회는 편집할 수 있습니다. **시각적 쿼리 빌더**(SELECT 모드)가 만든 결과도 편집할 수 있지만, 하나의 테이블에 확실하게 바인딩된 경우뿐입니다. 즉, 결과가 하나의 기반이 되는 테이블과 1:1로 대응하고 그 테이블의 모든 기본 키 열이 원래 이름 그대로 프로젝션되어 있어야 합니다. 이 경우 편집과 삭제는 프로젝션된 기본 키 값으로 `WHERE`를 만듭니다.

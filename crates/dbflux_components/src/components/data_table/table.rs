@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use crate::controls::{GpuiInput as Input, InputState};
+use crate::controls::{GpuiInput as Input, InputMoveDown, InputMoveUp, InputState};
 use crate::fonts;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferRing, Icon};
@@ -11,8 +11,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
     IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
-    ParentElement, Pixels, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
-    Window, canvas, div, px, uniform_list,
+    ParentElement, Pixels, Role, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
+    Styled, Toggled, Window, anchored, canvas, deferred, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
@@ -70,6 +70,10 @@ pub mod actions {
             StartEdit,
             ConfirmEdit,
             CancelEdit,
+            /// The editor's `fx` switch: edit the active cell as a SQL
+            /// expression, or flip the open editor between value and
+            /// expression.
+            ToggleCellExpression,
             SaveRow,
             // Row operations (vim-style)
             DeleteRow,
@@ -103,6 +107,7 @@ pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Key
     let table_action: Box<dyn Action> = match action {
         ContextMenuAction::Copy => Box::new(Copy),
         ContextMenuAction::Edit => Box::new(StartEdit),
+        ContextMenuAction::EditAsExpression => Box::new(ToggleCellExpression),
         ContextMenuAction::DeleteRow => Box::new(DeleteRow),
         ContextMenuAction::SetNull => Box::new(SetNull),
         ContextMenuAction::AddRow => Box::new(AddRow),
@@ -300,6 +305,12 @@ impl gpui::Render for DataTable {
                 }
             });
         };
+
+        let s = self.state.clone();
+        let on_toggle_cell_expression =
+            move |_: &ToggleCellExpression, window: &mut Window, cx: &mut App| {
+                s.update(cx, |state, cx| state.toggle_cell_expression(window, cx));
+            };
 
         let s = self.state.clone();
         let on_confirm_edit = move |_: &ConfirmEdit, _: &mut Window, cx: &mut App| {
@@ -597,6 +608,7 @@ impl gpui::Render for DataTable {
             .on_action(on_select_all)
             .on_action(on_clear_selection)
             .on_action(on_start_edit)
+            .on_action(on_toggle_cell_expression)
             .on_action(on_confirm_edit)
             .on_action(on_cancel_edit)
             .on_action(on_save_row)
@@ -1250,6 +1262,7 @@ impl DataTable {
                 let cell_input = state.cell_input().cloned();
                 let enum_dropdown = state.enum_dropdown().cloned();
                 let edit_buffer = state.edit_buffer();
+                let expression_editor = ExpressionEditorView::of(state);
 
                 render_rows(
                     &state_entity,
@@ -1260,6 +1273,7 @@ impl DataTable {
                     editing_cell,
                     cell_input.as_ref(),
                     enum_dropdown.as_ref(),
+                    expression_editor.as_ref(),
                     edit_buffer,
                     state.document_presentation(),
                     state.has_reference_row(),
@@ -1300,6 +1314,147 @@ impl DataTable {
     }
 }
 
+/// What the open inline editor draws for a column that can hold a SQL
+/// expression: the `fx` switch, and the suggestions while it is on.
+struct ExpressionEditorView {
+    active: bool,
+    suggestions: Vec<String>,
+    highlight: Option<usize>,
+}
+
+impl ExpressionEditorView {
+    fn of(state: &DataTableState) -> Option<Self> {
+        let coord = state.editing_cell()?;
+        if state.cell_input().is_none() || !state.accepts_cell_expressions(coord.col) {
+            return None;
+        }
+
+        let active = state.is_editing_expression();
+        Some(Self {
+            active,
+            suggestions: if active {
+                state.cell_expression_suggestions(coord.col).to_vec()
+            } else {
+                Vec::new()
+            },
+            highlight: state.expression_highlight(),
+        })
+    }
+
+    fn shows_suggestions(&self) -> bool {
+        self.active && !self.suggestions.is_empty()
+    }
+}
+
+/// The `fx` switch at the start of the inline editor. On, the typed text is
+/// saved as a SQL expression rather than as a value.
+fn render_expression_toggle(
+    state_entity: &Entity<DataTableState>,
+    active: bool,
+    font_size: Pixels,
+    theme: &gpui_component::theme::Theme,
+) -> AnyElement {
+    let state = state_entity.clone();
+
+    div()
+        .id("cell-expression-toggle")
+        .role(Role::Switch)
+        .aria_label(SharedString::from(dbflux_i18n::t!(
+            "components.data_table.expression.toggle"
+        )))
+        .aria_toggled(if active {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .flex_shrink_0()
+        .h_full()
+        .px(Spacing::XS)
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .text_size(font_size)
+        .italic()
+        .font_weight(FontWeight::SEMIBOLD)
+        .when(active, |d| {
+            d.bg(theme.info.opacity(0.15)).text_color(theme.info)
+        })
+        .when(!active, |d| d.text_color(theme.muted_foreground))
+        // A press would move focus out of the input and close the editor
+        // before the click lands.
+        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+            window.prevent_default();
+            cx.stop_propagation();
+        })
+        .on_click(move |_, window, cx| {
+            state.update(cx, |state, cx| state.toggle_cell_expression(window, cx));
+        })
+        .child("fx")
+        .into_any_element()
+}
+
+/// The expressions suggested for the column, under the inline editor. The
+/// arrow keys step through them from the editor and write the one stepped to
+/// into it; a click does the same.
+fn render_expression_suggestions(
+    state_entity: &Entity<DataTableState>,
+    view: &ExpressionEditorView,
+    min_width: Pixels,
+    font_size: Pixels,
+    theme: &gpui_component::theme::Theme,
+) -> AnyElement {
+    let rows = view
+        .suggestions
+        .iter()
+        .enumerate()
+        .map(|(index, suggestion)| {
+            let state = state_entity.clone();
+            let highlighted = view.highlight == Some(index);
+
+            div()
+                .id(("cell-expression-suggestion", index))
+                .role(Role::MenuItem)
+                .px(Spacing::SM)
+                .py(Spacing::XS)
+                .cursor_pointer()
+                .whitespace_nowrap()
+                .text_size(font_size)
+                .text_color(theme.foreground)
+                .when(highlighted, |d| d.bg(theme.accent))
+                .hover(|d| d.bg(theme.accent.opacity(0.5)))
+                .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(move |_, window, cx| {
+                    state.update(cx, |state, cx| {
+                        state.apply_expression_suggestion(index, window, cx)
+                    });
+                })
+                .child(suggestion.clone())
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+
+    let menu = div()
+        .id("cell-expression-suggestions")
+        .min_w(min_width)
+        .py(Spacing::XS)
+        .bg(theme.popover)
+        .border_1()
+        .border_color(theme.border)
+        .shadow_lg()
+        .occlude()
+        .children(rows);
+
+    div()
+        .absolute()
+        .top_full()
+        .left_0()
+        .child(deferred(anchored().snap_to_window().child(menu)).with_priority(1))
+        .into_any_element()
+}
+
 /// Renders the visible rows for the uniform_list.
 #[allow(clippy::too_many_arguments)]
 fn render_rows(
@@ -1311,6 +1466,7 @@ fn render_rows(
     editing_cell: Option<CellCoord>,
     cell_input: Option<&Entity<InputState>>,
     enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
+    expression_editor: Option<&ExpressionEditorView>,
     edit_buffer: &super::model::EditBuffer,
     document: Option<&DocumentPresentation>,
     reference_row: bool,
@@ -1411,16 +1567,68 @@ fn render_rows(
                         if let Some(input_state) = cell_input {
                             return div()
                                 .id(("cell", row_ix * 10000 + col_ix))
+                                .relative()
                                 .flex()
                                 .flex_shrink_0()
                                 .items_center()
                                 .h_full()
                                 .w(px(width))
-                                .overflow_hidden()
                                 .border_1()
                                 .border_color(theme.ring)
                                 .bg(theme.background)
-                                .child(Input::new(input_state).small())
+                                .when_some(expression_editor, |cell, view| {
+                                    cell.child(render_expression_toggle(
+                                        state_entity,
+                                        view.active,
+                                        font_size,
+                                        theme,
+                                    ))
+                                    .when(
+                                        view.shows_suggestions(),
+                                        |cell| {
+                                            let down = state_entity.clone();
+                                            let up = state_entity.clone();
+                                            cell.capture_action(
+                                                move |_: &InputMoveDown, window, cx| {
+                                                    down.update(cx, |state, cx| {
+                                                        state.step_expression_suggestion(
+                                                            true, window, cx,
+                                                        )
+                                                    });
+                                                    cx.stop_propagation();
+                                                },
+                                            )
+                                            .capture_action(move |_: &InputMoveUp, window, cx| {
+                                                up.update(cx, |state, cx| {
+                                                    state.step_expression_suggestion(
+                                                        false, window, cx,
+                                                    )
+                                                });
+                                                cx.stop_propagation();
+                                            })
+                                            .child(
+                                                render_expression_suggestions(
+                                                    state_entity,
+                                                    view,
+                                                    px(width),
+                                                    font_size,
+                                                    theme,
+                                                ),
+                                            )
+                                        },
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .when(
+                                            expression_editor.is_some_and(|view| view.active),
+                                            |d| d.italic(),
+                                        )
+                                        .child(Input::new(input_state).small()),
+                                )
                                 .into_any_element();
                         }
                     }
@@ -1454,6 +1662,7 @@ fn render_rows(
                     let is_auto_generated = display_value.is_auto_generated();
                     let is_placeholder = display_value.is_placeholder();
                     let is_missing = display_value.is_missing();
+                    let is_expression = display_value.is_expression();
                     let nested_kind = match display_value.kind {
                         super::model::CellKind::Nested { is_array, .. } => Some(is_array),
                         _ => None,
@@ -1470,7 +1679,7 @@ fn render_rows(
                         theme.warning
                     } else if is_missing {
                         theme.input
-                    } else if nested_kind.is_some() {
+                    } else if nested_kind.is_some() || is_expression {
                         theme.info
                     } else if is_pending_delete || is_auto_generated || is_placeholder {
                         theme.muted_foreground
@@ -1518,7 +1727,11 @@ fn render_rows(
                             d.child(Chamfer::new(Pixels::ZERO).ring(ChamferRing::focus(tint)))
                         })
                         .when(
-                            is_null || is_auto_generated || is_placeholder || is_missing,
+                            is_null
+                                || is_auto_generated
+                                || is_placeholder
+                                || is_missing
+                                || is_expression,
                             |d| d.italic(),
                         )
                         .when(is_pending_delete, |d| d.line_through())

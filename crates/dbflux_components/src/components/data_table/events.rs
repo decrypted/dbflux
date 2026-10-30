@@ -72,6 +72,9 @@ pub enum ContextMenuAction {
     Paste,
     /// Start inline editing of the selected cell.
     Edit,
+    /// Start inline editing of the selected cell, or of every selected cell,
+    /// as a SQL expression.
+    EditAsExpression,
     /// Open modal editor for the selected cell.
     EditInModal,
     /// Show the selected cell in the value panel.
@@ -188,6 +191,10 @@ pub enum DataTableEvent {
 
     /// Document grid: leave the nested value shown now (Backspace).
     StepOutRequested,
+
+    /// Enter on an expression the save would refuse (a comment, a `;`); the
+    /// editor stays open on it.
+    CellExpressionRejected { message: String },
 
     /// Request to save all pending changes at once (deletes, inserts, edits).
     SaveAllRequested {

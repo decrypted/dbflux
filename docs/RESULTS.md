@@ -179,6 +179,26 @@ With several cells selected, `Enter`, `F2` or a double-click on one of them open
   <img src="images/results/editing-light.webp" alt="The customers table with one edited cell not yet saved, and the Save and Revert buttons enabled">
 </picture>
 
+### SQL expressions in cells
+
+In a table of MySQL, MariaDB, PostgreSQL, SQLite or SQL Server, a cell can be set to a SQL expression instead of a value, such as `NOW()`, `"qty" + 1` or `DEFAULT`. The expression is saved unquoted in the row's `UPDATE` or `INSERT`, and the database computes the value.
+
+- **Edit as SQL expression…** in the cell's context menu, or `Ctrl+Alt+E` (`Cmd+Alt+E` on macOS), opens the editor with its `fx` switch on. On a cell of a larger selection the expression goes to every selected cell, as a multi-cell edit does.
+- In an open editor, a click on `fx` or the same shortcut switches between a value and an expression, keeping what was typed.
+- While `fx` is on, a list under the editor suggests expressions for the column's type and the database, and `Down` / `Up` write them into the editor one by one. Any other expression can be typed.
+
+| Column type | MySQL / MariaDB | PostgreSQL | SQLite | SQL Server |
+|---|---|---|---|---|
+| Date and time | `NOW()`, `CURRENT_TIMESTAMP`, `UTC_TIMESTAMP()`, `DATE_ADD(NOW(), INTERVAL 1 DAY)` | `now()`, `current_timestamp`, `now() + interval '1 day'` | `CURRENT_TIMESTAMP`, `datetime('now')`, `datetime('now', 'localtime')`, `datetime('now', '+1 day')` | `GETDATE()`, `CURRENT_TIMESTAMP`, `SYSDATETIME()`, `GETUTCDATE()`, `DATEADD(day, 1, GETDATE())` |
+| Date | `CURDATE()`, `CURRENT_DATE`, `UTC_DATE()` | `current_date`, `current_date + 1` | `CURRENT_DATE`, `date('now')` | `CAST(GETDATE() AS date)` |
+| Time | `CURTIME()`, `CURRENT_TIME`, `UTC_TIME()` | `current_time`, `localtime` | `CURRENT_TIME`, `time('now')` | `CAST(GETDATE() AS time)` |
+| uuid | `UUID()` (`char(36)`), `UNHEX(REPLACE(UUID(), '-', ''))` (`binary(16)`) | `gen_random_uuid()` | | `NEWID()` |
+| Number | `col + 1`, `col - 1` | same | same | same |
+| Text | `CONCAT(col, '')`, `UPPER`, `LOWER`, `TRIM` | `col \|\| ''`, `upper`, `lower`, `trim` | `col \|\| ''`, `upper`, `lower`, `trim` | `CONCAT(col, '')`, `UPPER`, `LOWER`, `LTRIM(RTRIM(col))` |
+| Any | `NULL`, `DEFAULT` | `NULL`, `DEFAULT` | `NULL` | `NULL`, `DEFAULT` |
+
+A staged expression shows in the cell as an italic `fx NOW()` until it is saved; after the save the row shows the value the database computed. Undo, redo and Revert treat it like any other edit, and a new row's cells can hold one too. An expression containing a comment, a `;` or a `,` outside parentheses is refused when you commit it, because it could change more than the cell (a comment could hide the `WHERE` of the `UPDATE`). Other databases, query results and document collections do not offer expressions.
+
 ### When results are editable
 
 Plain table browses are editable when the table has a primary key. Results

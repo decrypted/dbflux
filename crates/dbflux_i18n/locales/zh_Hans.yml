@@ -158,6 +158,8 @@ components:
     title: 值
     wrap: 自动换行
   data_table:
+    expression:
+      toggle: "作为 SQL 表达式编辑"
     record:
       empty: 没有可显示的行
       name_header: 名称
@@ -1521,6 +1523,8 @@ document:
       mode_view: "查看"
       mode_edit: "编辑"
   data:
+    expression:
+      rejected: "无法保存该表达式：%{reason}"
     chart_dock:
       toolbar:
         apply: 应用
@@ -1604,6 +1608,7 @@ document:
         paste: 粘贴
         edit: 编辑
         edit_in_modal: 在弹窗中编辑…
+        edit_as_expression: "作为 SQL 表达式编辑…"
         set_default: 设为默认值
         set_null: 设为 NULL
         add_row: 添加行
@@ -4348,6 +4353,7 @@ settings:
       find_similar_rows: 查找相似行
       copy_selection_as_json: "将选区复制为 JSON"
       results_set_null: 将单元格设为 NULL
+      toggle_cell_expression: "将单元格作为 SQL 表达式编辑"
       open_context_menu: 打开上下文菜单
       open_pane_actions: 打开面板操作
       menu_up: 菜单上移

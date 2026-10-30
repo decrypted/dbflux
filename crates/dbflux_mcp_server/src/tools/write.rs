@@ -334,6 +334,7 @@ impl DbFluxServer {
                     name: name.clone(),
                     value: json_to_db_value(value.clone()),
                     type_name: column_types.get(name).cloned(),
+                    is_expression: false,
                 })
                 .collect();
 
@@ -447,6 +448,7 @@ impl DbFluxServer {
                 name: col.clone(),
                 value: json_to_db_value(val.clone()),
                 type_name: column_types.get(col).cloned(),
+                is_expression: false,
             })
             .collect();
 
@@ -601,6 +603,7 @@ impl DbFluxServer {
                 name: name.clone(),
                 value: json_to_db_value(value.clone()),
                 type_name: column_types.get(name).cloned(),
+                is_expression: false,
             })
             .collect();
 
@@ -684,6 +687,7 @@ impl DbFluxServer {
                 type_name: column_types.get(&column).cloned(),
                 name: column,
                 value: json_to_db_value(value),
+                is_expression: false,
             })
             .collect())
     }

@@ -1143,7 +1143,8 @@ mod panel_tests {
             reason = "test-only stub connection: the aggregate tests that construct it stay on dialect-independent paths"
         )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-            unimplemented!("the aggregate tests never reach a dialect")
+            // Read when the grid builds a table, for its cell expressions.
+            &dbflux_core::DefaultSqlDialect
         }
 
         fn ping(&self) -> Result<(), DbError> {

@@ -210,7 +210,8 @@ impl dbflux_core::Connection for StubBrowseConnection {
         reason = "test-only stub connection: raw browse does not call the dialect"
     )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!("StubBrowseConnection::dialect is not reached by a raw browse")
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {

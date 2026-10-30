@@ -1,4 +1,5 @@
 mod builder;
+mod cell_expressions;
 mod chart;
 mod chrome;
 pub(crate) mod context_menu;

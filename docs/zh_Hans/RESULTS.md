@@ -128,6 +128,26 @@ JSON、XML 或纯文本显示值（根据内容检测，且仅在确实能解析
   <img src="../images/results/editing-light.webp" alt="customers 表中有一个已编辑但尚未保存的单元格，Save 与 Revert 按钮处于可用状态">
 </picture>
 
+### 单元格中的 SQL 表达式
+
+在 MySQL、MariaDB、PostgreSQL、SQLite 或 SQL Server 的表中，单元格可以设为 SQL 表达式而不是值，例如 `NOW()`、`"qty" + 1` 或 `DEFAULT`。表达式会不加引号地写入该行的 `UPDATE` 或 `INSERT`，由数据库计算出值。
+
+- 单元格上下文菜单中的 **作为 SQL 表达式编辑…**，或 `Ctrl+Alt+E`（macOS 上为 `Cmd+Alt+E`），会打开 `fx` 开关已打开的编辑器。在更大选区中的单元格上，表达式会像多单元格编辑一样写入每个选中的单元格。
+- 编辑器打开时，点击 `fx` 或按同一快捷键可在值和表达式之间切换，已输入的内容保留。
+- `fx` 打开时，编辑器下方的列表会按列的类型和数据库给出建议的表达式，`Down` / `Up` 会逐个把它们写入编辑器。也可以输入任何其他表达式。
+
+| 列类型 | MySQL / MariaDB | PostgreSQL | SQLite | SQL Server |
+|---|---|---|---|---|
+| 日期和时间 | `NOW()`、`CURRENT_TIMESTAMP`、`UTC_TIMESTAMP()`、`DATE_ADD(NOW(), INTERVAL 1 DAY)` | `now()`、`current_timestamp`、`now() + interval '1 day'` | `CURRENT_TIMESTAMP`、`datetime('now')`、`datetime('now', 'localtime')`、`datetime('now', '+1 day')` | `GETDATE()`、`CURRENT_TIMESTAMP`、`SYSDATETIME()`、`GETUTCDATE()`、`DATEADD(day, 1, GETDATE())` |
+| 日期 | `CURDATE()`、`CURRENT_DATE`、`UTC_DATE()` | `current_date`、`current_date + 1` | `CURRENT_DATE`、`date('now')` | `CAST(GETDATE() AS date)` |
+| 时间 | `CURTIME()`、`CURRENT_TIME`、`UTC_TIME()` | `current_time`、`localtime` | `CURRENT_TIME`、`time('now')` | `CAST(GETDATE() AS time)` |
+| uuid | `UUID()`（`char(36)`）、`UNHEX(REPLACE(UUID(), '-', ''))`（`binary(16)`） | `gen_random_uuid()` | | `NEWID()` |
+| 数字 | `col + 1`、`col - 1` | 同上 | 同上 | 同上 |
+| 文本 | `CONCAT(col, '')`、`UPPER`、`LOWER`、`TRIM` | `col \|\| ''`、`upper`、`lower`、`trim` | `col \|\| ''`、`upper`、`lower`、`trim` | `CONCAT(col, '')`、`UPPER`、`LOWER`、`LTRIM(RTRIM(col))` |
+| 任意类型 | `NULL`、`DEFAULT` | `NULL`、`DEFAULT` | `NULL` | `NULL`、`DEFAULT` |
+
+尚未保存的表达式在单元格中显示为斜体的 `fx NOW()`；保存后，该行显示数据库计算出的值。撤销、重做和还原会像处理其他编辑一样处理它，新行的单元格也可以使用表达式。包含注释、`;` 或括号外 `,` 的表达式在提交时会被拒绝，因为它可能改变单元格以外的内容（注释可能把 `UPDATE` 的 `WHERE` 隐藏掉）。其他数据库、查询结果和文档集合不提供表达式。
+
 ### 结果何时可编辑
 
 普通的表浏览在表有主键时可编辑。由**构建器**（SELECT 模式）产生的结果同样可编辑，但前提是该结果可证明绑定到单一表：结果与唯一的底层表 1:1 映射，且该表的每个主键列都以原始名称被投影出来。此后，编辑和删除会依据投影出的主键值构造 `WHERE`。

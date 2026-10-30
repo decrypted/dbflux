@@ -361,6 +361,7 @@ IME 확정을 포함한 네이티브 텍스트 편집 시 마크는 텍스트를
 | `d d` / `Delete` | 행 삭제 |
 | `a a` / `Shift+a Shift+a` | 행 추가 / 복제 |
 | `Ctrl+n` | 셀을 NULL로 설정 |
+| `Ctrl+Alt+e` / `Cmd+Alt+e` | 셀을 SQL 식으로 편집. 편집기가 열려 있으면 값과 식 사이를 전환 (`fx`) |
 | `u` / `Ctrl+z` / `Cmd+z` | 실행 취소 |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | 다시 실행 |
 | `e` | 중첩 열 펼치기 / 접기(문서 그리드) |

@@ -84,6 +84,7 @@ struct FakeDriverState {
     refuse_read_only: AtomicBool,
     delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
+    dialect: RwLock<Option<&'static dyn SqlDialect>>,
 }
 
 #[derive(Clone)]
@@ -128,6 +129,14 @@ impl FakeDriver {
             .transactions
             .get_or_insert_with(TransactionCapabilities::default);
         transactions.supports_read_only = supported;
+    }
+
+    /// Connections answer `dialect()` with `dialect` instead of the default
+    /// ANSI one, for callers that read SQL syntax or dialect capabilities
+    /// from the connection.
+    pub fn with_dialect(self, dialect: &'static dyn SqlDialect) -> Self {
+        *rwlock_write(&self.state.dialect) = Some(dialect);
+        self
     }
 
     pub fn with_schema(self, schema: SchemaSnapshot) -> Self {
@@ -762,7 +771,8 @@ impl Connection for FakeConnection {
     }
 
     fn dialect(&self) -> &dyn SqlDialect {
-        &DEFAULT_SQL_DIALECT
+        let dialect: Option<&'static dyn SqlDialect> = *rwlock_read(&self.state.dialect);
+        dialect.unwrap_or(&DEFAULT_SQL_DIALECT)
     }
 
     fn secret_stores(&self) -> Vec<&dyn SecretStoreSource> {

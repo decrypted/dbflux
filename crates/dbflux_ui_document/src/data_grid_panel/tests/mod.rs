@@ -163,7 +163,8 @@ impl dbflux_core::Connection for StubConnection {
         reason = "test-only stub connection: no test path in this suite calls the dialect"
     )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!()
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
@@ -527,7 +528,8 @@ impl dbflux_core::Connection for StubBuilderConnection {
         reason = "test-only stub connection: no test path in this suite calls the dialect"
     )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!("StubBuilderConnection::dialect not needed for this test")
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
@@ -686,6 +688,7 @@ mod builder_binding;
 mod builder_draft_and_fk;
 mod builder_mutations;
 mod bulk_delete_outcome;
+mod cell_expressions;
 mod close_completion;
 mod collection_views;
 mod export_all;

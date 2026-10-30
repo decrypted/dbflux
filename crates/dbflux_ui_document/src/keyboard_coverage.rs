@@ -79,6 +79,17 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ContextId::Inspector,
     ],
     entries: &[
+        // The inline editor's `fx` switch and the expressions it suggests,
+        // listed before `cell-*`, which their ids also match. Down and Up in
+        // the editor step through the suggestions.
+        (
+            "cell-expression-toggle",
+            KeyboardPath::Command(Command::ToggleCellExpression),
+        ),
+        (
+            "cell-expression-suggestion-*",
+            KeyboardPath::Command(Command::SelectNext),
+        ),
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
         // The table menu of the column carries Order ascending / descending,
         // which is also the keyboard path of the header's sort arrow.

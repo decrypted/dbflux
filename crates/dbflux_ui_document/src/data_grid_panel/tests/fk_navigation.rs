@@ -1219,7 +1219,8 @@ impl dbflux_core::Connection for CountingLabelConnection {
         reason = "test-only stub connection: the label lookup path never asks for a dialect"
     )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        unimplemented!("CountingLabelConnection::dialect not needed")
+        // Read when the grid builds a table, for its cell expressions.
+        &dbflux_core::DefaultSqlDialect
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {

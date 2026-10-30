@@ -2,6 +2,7 @@ use super::layout;
 use super::{SettingsSection, SettingsSectionId};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::primitives::Text;
+use dbflux_ui_base::build_stamp::BuildStamp;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use gpui::prelude::*;
 use gpui::*;
@@ -116,6 +117,11 @@ impl Render for AboutSection {
             _ => "branding/stable/mark-256.png",
         };
 
+        let version_line = match cx.try_global::<BuildStamp>() {
+            Some(stamp) => format!("{VERSION} ({PROFILE}) · {}", stamp.label()),
+            None => format!("{VERSION} ({PROFILE})"),
+        };
+
         let report_bug_focused = self.link_focused(AboutLink::ReportBug);
         let view_source_focused = self.link_focused(AboutLink::ViewSource);
         let author_name = AUTHORS.split('<').next().unwrap_or(AUTHORS).trim();
@@ -158,10 +164,7 @@ impl Render for AboutSection {
                                             .flex_col()
                                             .gap_1()
                                             .child(Text::heading("DBFlux"))
-                                            .child(
-                                                Text::code(format!("{} ({})", VERSION, PROFILE))
-                                                    .muted_foreground(),
-                                            ),
+                                            .child(Text::code(version_line).muted_foreground()),
                                     ),
                             )
                             .child(

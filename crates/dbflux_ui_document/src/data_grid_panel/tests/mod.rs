@@ -157,11 +157,6 @@ impl dbflux_core::Connection for StubConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: no test path in this suite calls the dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
         // Read when the grid builds a table, for its cell expressions.
         &dbflux_core::DefaultSqlDialect
@@ -522,11 +517,6 @@ impl dbflux_core::Connection for StubBuilderConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: no test path in this suite calls the dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
         // Read when the grid builds a table, for its cell expressions.
         &dbflux_core::DefaultSqlDialect

@@ -1033,11 +1033,6 @@ fn h3_approval_required_does_not_open_confirmation_modal(cx: &mut TestAppContext
         fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
             SchemaLoadingStrategy::SingleDatabase
         }
-
-        #[expect(
-            clippy::unimplemented,
-            reason = "test-only stub connection: no test path in this suite calls the dialect"
-        )]
         fn dialect(&self) -> &dyn SqlDialect {
             // Read when the grid builds a table, for its cell expressions.
             &dbflux_core::DefaultSqlDialect
@@ -1208,11 +1203,6 @@ impl dbflux_core::Connection for FkResolveConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: the fk display path never asks for a dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
         // Read when the grid builds a table, for its cell expressions.
         &dbflux_core::DefaultSqlDialect
@@ -1783,11 +1773,6 @@ impl dbflux_core::Connection for FkBatchConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: the fk display batch path never asks for a dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
         // Read when the grid builds a table, for its cell expressions.
         &dbflux_core::DefaultSqlDialect
@@ -2554,11 +2539,6 @@ impl dbflux_core::Connection for TableOpenFkConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "test-only stub connection: the table-open path never asks for a dialect"
-    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
         // Read when the grid builds a table, for its cell expressions.
         &dbflux_core::DefaultSqlDialect

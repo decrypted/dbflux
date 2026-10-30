@@ -1137,11 +1137,6 @@ mod panel_tests {
         fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
             dbflux_core::SchemaLoadingStrategy::SingleDatabase
         }
-
-        #[expect(
-            clippy::unimplemented,
-            reason = "test-only stub connection: the aggregate tests that construct it stay on dialect-independent paths"
-        )]
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             // Read when the grid builds a table, for its cell expressions.
             &dbflux_core::DefaultSqlDialect

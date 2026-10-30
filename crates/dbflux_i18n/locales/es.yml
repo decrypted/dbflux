@@ -1705,6 +1705,7 @@ document:
           copied_rows:
             one: "Se copió 1 fila cargada como %{format} (%{bytes} bytes) al portapapeles"
             many: "Se copiaron %{count} filas cargadas como %{format} (%{bytes} bytes) al portapapeles"
+          in_list_only_nulls: "No se copió nada: todos los valores seleccionados son NULL y una lista SQL IN no coincide con NULL"
       document:
         toast:
           inserted: Documento insertado
@@ -4116,7 +4117,7 @@ settings:
       hint: "Las celdas que contienen una clave foránea resuelven y muestran el valor del registro referenciado junto a su id. Se aplica a las páginas cargadas después de guardar; el inspector de filas siempre resuelve las referencias."
     grid_copy_column_names:
       label: "Incluir los nombres de columna al copiar"
-      hint: "Copiar (Ctrl+C) en la cuadrícula de datos empieza el texto separado por tabulaciones con una línea de nombres de columna. Copiar como CSV, JSON y las demás entradas Copiar como no cambian."
+      hint: "Copiar (Ctrl+C, Cmd+C en macOS) en la cuadrícula de datos empieza el texto separado por tabulaciones con una línea de nombres de columna. Copiar como CSV, JSON y las demás entradas Copiar como no cambian."
     vim_mode:
       label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."

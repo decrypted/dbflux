@@ -268,17 +268,25 @@ Debajo, el menú tiene tres extractores más:
   columna como lista para un `WHERE ... IN`, por ejemplo `('a', 'O''Brien')` o
   `(1, 2, 3)`, con las comillas que usa el driver de la conexión (comillas ANSI
   en un resultado sin conexión). Un valor seleccionado varias veces aparece una
-  sola vez y `NULL` se omite, porque `IN (NULL)` no coincide con nada. Con
-  varias columnas seleccionadas usa la de más a la izquierda.
+  sola vez y `NULL` se omite, porque `IN (NULL)` no coincide con nada; una
+  selección que solo tiene NULL no copia nada y lo avisa. Con varias columnas
+  seleccionadas usa la de más a la izquierda. El menú de una colección no la
+  ofrece.
 - **Copiar como sentencias INSERT**, en una tabla, copia un `INSERT` por cada
   fila seleccionada con las columnas seleccionadas, escrito por el mismo
   generador del driver que **Copiar como query**. Cada fila aporta sus propios
   valores para esas columnas, aunque una celda dentro del área no esté
-  seleccionada.
+  seleccionada, y una fila con un valor que el driver no puede escribir se
+  omite. No se ofrece en filas agrupadas ni en un join del constructor de
+  consultas, cuyas columnas no son todas de la tabla.
 - **Copiar como tabla Markdown** copia las mismas filas y columnas que Copiar
   como CSV como una tabla Markdown con fila de cabecera; las celdas `NULL` y
-  las no seleccionadas quedan vacías, y `|` y los saltos de línea dentro de los
-  valores se escapan.
+  las no seleccionadas quedan vacías, los bytes se escriben en hexadecimal
+  `\x` y los arrays y documentos como JSON, y `|`, `&`, `<` y los saltos de
+  línea dentro de los valores se escapan.
+
+Los tres copian las filas cargadas que cubre la selección, con sus valores tal
+como se cargaron. Una fila añadida en la cuadrícula y aún sin guardar se omite.
 
 ## Copiar como query
 

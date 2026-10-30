@@ -1705,6 +1705,7 @@ document:
           copied_rows:
             one: "已将 1 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
             many: "已将 %{count} 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
+          in_list_only_nulls: "未复制任何内容：所选值全部为 NULL，SQL IN 列表无法匹配 NULL"
       document:
         toast:
           inserted: 文档已插入
@@ -4116,7 +4117,7 @@ settings:
       hint: "保存后加载的页面会解析外键单元格，并在其 ID 旁显示被引用行的标签。行检查器始终解析引用。"
     grid_copy_column_names:
       label: "复制时包含列名"
-      hint: "从数据网格复制（Ctrl+C）时，制表符分隔的文本以一行列名开头。复制为 CSV、JSON 及其他“复制为”项不受影响。"
+      hint: "从数据网格复制（Ctrl+C，macOS 上为 Cmd+C）时，制表符分隔的文本以一行列名开头。复制为 CSV、JSON 及其他“复制为”项不受影响。"
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"

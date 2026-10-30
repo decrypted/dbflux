@@ -246,15 +246,23 @@ Below them the menu has three more extractors:
   for a `WHERE ... IN`, such as `('a', 'O''Brien')` or `(1, 2, 3)`, quoted the
   way the connection's driver writes literals (ANSI quoting for a result
   without a connection). A value selected more than once is listed once and
-  `NULL` is left out, since `IN (NULL)` matches nothing. With several columns
-  selected it lists the leftmost one.
+  `NULL` is left out, since `IN (NULL)` matches nothing; a selection of NULLs
+  alone copies nothing and says so. With several columns selected it lists the
+  leftmost one. A collection's menu does not offer it.
 - **Copy as INSERT statements**, on a table, copies one `INSERT` per selected
   row with the selected columns, written by the same driver generator as
   **Copy as Query**. Each row gives its own values for those columns, even
-  where a cell inside the selected area is not itself selected.
+  where a cell inside the selected area is not itself selected, and a row
+  holding a value the driver cannot write is left out. It is not offered on
+  grouped rows or on a query builder join, whose columns are not all the
+  table's.
 - **Copy as Markdown table** copies the same rows and columns as Copy as CSV as
-  a Markdown table with a header row; `NULL` and unselected cells are empty and
-  `|` and line breaks inside values are escaped.
+  a Markdown table with a header row; `NULL` and unselected cells are empty,
+  bytes are written as `\x` hex and arrays and documents as JSON, and `|`,
+  `&`, `<` and line breaks inside values are escaped.
+
+All three copy the loaded rows the selection covers, with their values as
+loaded. A row added in the grid and not saved yet is left out.
 
 ## Copy as Query
 

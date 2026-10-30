@@ -221,20 +221,11 @@ impl DataGridPanel {
             pk_indices,
         );
 
-        // When a builder binding is present, respect its `insertable` flag to
-        // prevent INSERT on join results (column origin is ambiguous).
-        let binding_insertable = self
-            .builder
-            .builder_editable_binding
-            .as_ref()
-            .map(|b| b.insertable)
-            .unwrap_or(true);
-
         let is_insertable = matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
         ) && self.mutations_enabled()
-            && (self.builder.current_visual_spec.is_none() || binding_insertable)
+            && self.builder_rows_insertable()
             && !stepped_into;
 
         let column_details = self.get_column_details(cx);
@@ -528,6 +519,25 @@ impl DataGridPanel {
         self.rebuild_result_views(cx);
     }
 
+    /// Whether rows shown by the query builder can go into the panel's table
+    /// as INSERTs: always without a builder query, and with one only when its
+    /// binding allows it, which a join does not (its columns come from more
+    /// than one table). A builder query with no binding (no key known) has
+    /// no join to rule it out and counts as insertable. Shared by the grid's
+    /// Add row and the menu's Copy as INSERT statements.
+    pub(super) fn builder_rows_insertable(&self) -> bool {
+        let Some(spec) = &self.builder.current_visual_spec else {
+            return true;
+        };
+
+        spec.joins.is_empty()
+            && self
+                .builder
+                .builder_editable_binding
+                .as_ref()
+                .is_none_or(|binding| binding.insertable)
+    }
+
     /// The footer's sort item: a label naming every sort key, the first
     /// key's direction for its arrow, and whether the database sorts.
     pub(super) fn current_sort_info(&self) -> Option<(String, SortDirection, bool)> {
@@ -630,4 +640,3 @@ fn sort_keys_label(keys: &[(String, SortDirection)]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
-

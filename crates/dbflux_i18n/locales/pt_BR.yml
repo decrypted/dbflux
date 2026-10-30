@@ -1705,6 +1705,7 @@ document:
           copied_rows:
             one: "1 linha carregada copiada como %{format} (%{bytes} bytes) para a área de transferência"
             many: "%{count} linhas carregadas copiadas como %{format} (%{bytes} bytes) para a área de transferência"
+          in_list_only_nulls: "Nada copiado: todos os valores selecionados são NULL e uma lista SQL IN não corresponde a NULL"
       document:
         toast:
           inserted: Documento inserido
@@ -4116,7 +4117,7 @@ settings:
       hint: "Células que contêm uma chave estrangeira resolvem e mostram o valor do registro referenciado ao lado do seu id. Aplica-se às páginas carregadas após salvar; o inspetor de linhas sempre resolve referências."
     grid_copy_column_names:
       label: "Incluir os nomes das colunas ao copiar"
-      hint: "Copiar (Ctrl+C) na grade de dados começa o texto separado por tabulações com uma linha de nomes de colunas. Copiar como CSV, JSON e as outras entradas Copiar como não mudam."
+      hint: "Copiar (Ctrl+C, Cmd+C no macOS) na grade de dados começa o texto separado por tabulações com uma linha de nomes de colunas. Copiar como CSV, JSON e as outras entradas Copiar como não mudam."
     vim_mode:
       label: "Modo Vim nos editores"
       hint: "Modos Normal e Insert: h, j, k, l e Enter movem, i insere, Esc volta ao Normal, x exclui um caractere, u desfaz. Aplicado aos editores abertos ao salvar."

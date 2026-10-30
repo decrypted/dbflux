@@ -1705,6 +1705,7 @@ document:
           copied_rows:
             one: "Copied 1 loaded row as %{format} (%{bytes} bytes) to clipboard"
             many: "Copied %{count} loaded rows as %{format} (%{bytes} bytes) to clipboard"
+          in_list_only_nulls: "Nothing copied: the selected values are all NULL, and an SQL IN list never matches NULL"
       document:
         toast:
           inserted: Document inserted
@@ -4116,7 +4117,7 @@ settings:
       hint: "Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after saving; the row inspector always resolves references."
     grid_copy_column_names:
       label: "Include column names when copying"
-      hint: "Copy (Ctrl+C) from the data grid starts the tab-separated text with a line of column names. Copy as CSV, JSON and the other Copy as entries are not affected."
+      hint: "Copy (Ctrl+C, Cmd+C on macOS) from the data grid starts the tab-separated text with a line of column names. Copy as CSV, JSON and the other Copy as entries are not affected."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."

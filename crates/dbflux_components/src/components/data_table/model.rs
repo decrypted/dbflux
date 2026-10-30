@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dbflux_core::{ColumnMeta, QueryResult, RowState, Value};
 use gpui::TextAlign;
@@ -866,11 +867,30 @@ pub struct EditBuffer {
     /// Undo stack length when an undo group opened; see
     /// [`Self::begin_undo_group`].
     group_start: Option<usize>,
+
+    /// Stamp of the last change, see [`EditBuffer::revision`].
+    revision: u64,
 }
+
+/// Source of [`EditBuffer::revision`] stamps. Shared by every buffer, so a
+/// buffer swapped in whole (a restored copy) never carries the stamp of a
+/// different state of the one it replaces.
+static NEXT_EDIT_REVISION: AtomicU64 = AtomicU64::new(1);
 
 impl EditBuffer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Changes whenever the buffer may have changed, so a reader can cache
+    /// what it derives from the buffer and recompute only on a new revision.
+    /// Two buffers with the same revision hold the same edits.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn touch(&mut self) {
+        self.revision = NEXT_EDIT_REVISION.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Push an action to the undo stack, enforcing the max history limit.
@@ -921,6 +941,7 @@ impl EditBuffer {
 
     /// Set a cell value in the buffer.
     pub fn set_cell(&mut self, row: usize, col: usize, value: CellValue) {
+        self.touch();
         let old_value = self.overrides.get(&(row, col)).cloned();
 
         self.push_undo(EditAction::SetCell {
@@ -936,6 +957,7 @@ impl EditBuffer {
 
     /// Drop a staged value so the cell shows the row's own value again.
     pub fn clear_cell(&mut self, row: usize, col: usize) {
+        self.touch();
         let Some(replaced_value) = self.overrides.remove(&(row, col)) else {
             return;
         };
@@ -954,12 +976,14 @@ impl EditBuffer {
 
     /// Clear all overrides for a specific row.
     pub fn clear_row(&mut self, row: usize) {
+        self.touch();
         self.overrides.retain(|&(r, _), _| r != row);
         self.row_states.remove(&row);
     }
 
     /// Clear all overrides.
     pub fn clear_all(&mut self) {
+        self.touch();
         self.overrides.clear();
         self.row_states.clear();
         self.pending_inserts.clear();
@@ -973,6 +997,7 @@ impl EditBuffer {
     /// being replaced, so keeping any of them would apply them to unrelated
     /// rows.
     pub fn reset_for_base(&mut self, base_row_count: usize) {
+        self.touch();
         self.overrides.clear();
         self.row_states.clear();
         self.pending_inserts.clear();
@@ -1070,6 +1095,7 @@ impl EditBuffer {
     /// carries their identity (or it could not be read). Undo history is not
     /// restored: it addresses the rows of the replaced model.
     pub fn restore_by_identity(&mut self, edits: KeyedPendingEdits, model: &TableModel) -> usize {
+        self.touch();
         let mut dropped_rows = edits.unkeyed_rows;
 
         // Cells are addressed by column index, which only means the same
@@ -1132,6 +1158,7 @@ impl EditBuffer {
 
     /// Set the state of a row.
     pub fn set_row_state(&mut self, row: usize, state: RowState) {
+        self.touch();
         if state.is_clean() {
             self.row_states.remove(&row);
         } else {
@@ -1165,6 +1192,7 @@ impl EditBuffer {
     /// Set the base row count (from the model).
     /// This is needed to correctly index pending inserts.
     pub fn set_base_row_count(&mut self, count: usize) {
+        self.touch();
         self.base_row_count = count;
     }
 
@@ -1184,6 +1212,7 @@ impl EditBuffer {
     /// Returns the index in pending_inserts.
     #[allow(dead_code)]
     pub fn add_pending_insert(&mut self, row_data: Vec<CellValue>) -> usize {
+        self.touch();
         let idx = self.pending_inserts.len();
         self.pending_inserts.push(PendingInsert {
             data: row_data,
@@ -1199,6 +1228,7 @@ impl EditBuffer {
         after_row: usize,
         row_data: Vec<CellValue>,
     ) -> usize {
+        self.touch();
         self.add_pending_insert_at(InsertAnchor::After(after_row), row_data)
     }
 
@@ -1210,6 +1240,7 @@ impl EditBuffer {
         anchor: InsertAnchor,
         row_data: Vec<CellValue>,
     ) -> usize {
+        self.touch();
         let idx = self.pending_inserts.len();
 
         self.push_undo(EditAction::AddInsert {
@@ -1237,6 +1268,7 @@ impl EditBuffer {
         anchor: InsertAnchor,
         row_data: Vec<CellValue>,
     ) -> usize {
+        self.touch();
         let insert_idx = position.min(self.pending_inserts.len());
 
         self.push_undo(EditAction::AddInsert {
@@ -1272,6 +1304,7 @@ impl EditBuffer {
         &mut self,
         insert_idx: usize,
     ) -> Option<&mut Vec<CellValue>> {
+        self.touch();
         self.pending_inserts
             .get_mut(insert_idx)
             .map(|pi| &mut pi.data)
@@ -1337,6 +1370,7 @@ impl EditBuffer {
 
     /// Mark an existing row for deletion.
     pub fn mark_for_delete(&mut self, row: usize) {
+        self.touch();
         if row < self.base_row_count {
             self.push_undo(EditAction::MarkDelete { row });
             self.row_states.insert(row, RowState::PendingDelete);
@@ -1346,6 +1380,7 @@ impl EditBuffer {
     /// Unmark a row from deletion.
     #[allow(dead_code)]
     pub fn unmark_delete(&mut self, row: usize) {
+        self.touch();
         if let Some(state) = self.row_states.get(&row)
             && state.is_pending_delete()
         {
@@ -1411,6 +1446,7 @@ impl EditBuffer {
     /// This shifts subsequent pending insert indices.
     #[allow(dead_code)]
     pub fn remove_pending_insert(&mut self, row: usize) {
+        self.touch();
         if row >= self.base_row_count {
             let insert_idx = row - self.base_row_count;
             self.remove_pending_insert_by_idx(insert_idx);
@@ -1419,6 +1455,7 @@ impl EditBuffer {
 
     /// Remove a pending insert by its index in the pending_inserts array.
     pub fn remove_pending_insert_by_idx(&mut self, insert_idx: usize) {
+        self.touch();
         if insert_idx >= self.pending_inserts.len() {
             return;
         }
@@ -1445,6 +1482,7 @@ impl EditBuffer {
     /// Clear pending inserts but keep other edits.
     #[allow(dead_code)]
     pub fn clear_pending_inserts(&mut self) {
+        self.touch();
         for i in 0..self.pending_inserts.len() {
             let virtual_idx = self.base_row_count + i;
             self.row_states.remove(&virtual_idx);
@@ -1457,11 +1495,13 @@ impl EditBuffer {
     /// Clear pending deletes but keep other edits.
     #[allow(dead_code)]
     pub fn clear_pending_deletes(&mut self) {
+        self.touch();
         self.row_states.retain(|_, s| !s.is_pending_delete());
     }
 
     /// Set a cell value in a pending insert (with undo support).
     pub fn set_insert_cell(&mut self, insert_idx: usize, col: usize, value: CellValue) {
+        self.touch();
         // Get old value first (before mutable borrow for push_undo)
         let old_value = self
             .pending_inserts
@@ -1504,6 +1544,7 @@ impl EditBuffer {
 
     /// Undo the last action. Returns true if an action was undone.
     pub fn undo(&mut self) -> bool {
+        self.touch();
         let Some(action) = self.undo_stack.pop() else {
             return false;
         };
@@ -1643,6 +1684,7 @@ impl EditBuffer {
 
     /// Redo the last undone action. Returns true if an action was redone.
     pub fn redo(&mut self) -> bool {
+        self.touch();
         let Some(action) = self.redo_stack.pop() else {
             return false;
         };

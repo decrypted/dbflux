@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::sync::{Arc, Weak};
 
 use super::model::{CellKind, CellValue, ColumnKind, EditBuffer, TableModel, VisualRowSource};
 use super::selection::{CellCoord, CellRange, SelectionState};
@@ -65,22 +66,22 @@ impl NumericTotals {
         &self.max.1
     }
 
-    fn new(value: f64, integer: Option<i64>, text: String) -> Self {
+    fn new(value: f64, integer: Option<i128>, text: String) -> Self {
         Self {
             count: 1,
             sum: value,
-            int_sum: integer.map(i128::from),
+            int_sum: integer,
             decimals: fractional_digits(&text),
             min: (value, text.clone()),
             max: (value, text),
         }
     }
 
-    fn add(&mut self, value: f64, integer: Option<i64>, text: String) {
+    fn add(&mut self, value: f64, integer: Option<i128>, text: String) {
         self.count += 1;
         self.sum += value;
         self.int_sum = match (self.int_sum, integer) {
-            (Some(sum), Some(integer)) => sum.checked_add(i128::from(integer)),
+            (Some(sum), Some(integer)) => sum.checked_add(integer),
             _ => None,
         };
         self.decimals = self.decimals.max(fractional_digits(&text));
@@ -103,6 +104,13 @@ pub(super) fn selection_totals(
     edit_buffer: &EditBuffer,
     selection: &SelectionState,
 ) -> Option<SelectionTotals> {
+    let ranges = selection.ranges();
+    match ranges.as_slice() {
+        [] => return None,
+        [only] if only.start == only.end => return None,
+        _ => {}
+    }
+
     let visual_order = edit_buffer.compute_visual_order();
     let row_count = visual_order.len();
     let col_count = model.col_count();
@@ -110,8 +118,7 @@ pub(super) fn selection_totals(
         return None;
     }
 
-    let ranges: Vec<CellRange> = selection
-        .ranges()
+    let ranges: Vec<CellRange> = ranges
         .into_iter()
         .filter_map(|range| clamp_range(range, row_count, col_count))
         .collect();
@@ -156,18 +163,22 @@ fn add_cell(totals: &mut SelectionTotals, cell: &CellValue, numeric_column: bool
 }
 
 /// The number a cell holds, with its exact integer value when it is one and
-/// the text it is written as.
+/// the text it is written as in the grid.
 ///
 /// Text counts only in a numeric column: decimals arrive as text, and so
 /// does every value typed into a cell, while a number-looking text in a
-/// text column (a zip code, an id) is not meant to be summed.
-fn number_of(cell: &CellValue, numeric_column: bool) -> Option<(f64, Option<i64>, String)> {
+/// text column (a zip code, an id) is not meant to be summed. Integer text
+/// is read as `i128`, so `NUMERIC(38,0)` and unsigned 64-bit keys still sum
+/// exactly.
+fn number_of(cell: &CellValue, numeric_column: bool) -> Option<(f64, Option<i128>, String)> {
     match &cell.kind {
-        CellKind::Int(value) => Some((*value as f64, Some(*value), value.to_string())),
-        CellKind::Float(value) if value.is_finite() => Some((*value, None, value.to_string())),
+        CellKind::Int(value) => Some((*value as f64, Some(i128::from(*value)), value.to_string())),
+        CellKind::Float(value) if value.is_finite() => {
+            Some((*value, None, cell.display_text().to_string()))
+        }
         CellKind::Text(text) if numeric_column => {
             let text = text.trim();
-            if let Ok(integer) = text.parse::<i64>() {
+            if let Ok(integer) = text.parse::<i128>() {
                 return Some((integer as f64, Some(integer), text.to_string()));
             }
             text.parse::<f64>()
@@ -232,25 +243,60 @@ fn format_decimal(value: f64, decimals: usize) -> String {
     }
 }
 
-/// The totals of the current selection, kept until the table next notifies.
+/// The totals of the current selection, kept while the cells they were
+/// worked out from stay the same.
 ///
-/// Every change that can move them (selection, edits, a new model) notifies
-/// the table, while the host's footer is drawn on every frame, scrolling
-/// included; recomputing a whole selected column per frame would cost far
-/// more than this one cached value.
+/// The host's footer reads them on every frame, scrolling and column resizing
+/// included, and summing a whole selected column per frame would cost far
+/// more than comparing the key: the model, the edit buffer's revision and the
+/// selected ranges.
 #[derive(Default)]
-pub(super) struct TotalsCache(RefCell<Option<Option<SelectionTotals>>>);
+pub(super) struct TotalsCache(RefCell<Option<(TotalsKey, Option<SelectionTotals>)>>);
+
+/// What the totals are worked out from. The model is held weakly, which
+/// keeps its allocation (not its rows) alive, so a later model can never sit
+/// at the same address and pass for it.
+pub(super) struct TotalsKey {
+    model: Weak<TableModel>,
+    edit_revision: u64,
+    ranges: Vec<CellRange>,
+}
+
+impl TotalsKey {
+    pub(super) fn new(
+        model: &Arc<TableModel>,
+        edit_buffer: &EditBuffer,
+        selection: &SelectionState,
+    ) -> Self {
+        Self {
+            model: Arc::downgrade(model),
+            edit_revision: edit_buffer.revision(),
+            ranges: selection.ranges(),
+        }
+    }
+
+    fn same_as(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.model, &other.model)
+            && self.edit_revision == other.edit_revision
+            && self.ranges == other.ranges
+    }
+}
 
 impl TotalsCache {
     pub(super) fn get_or_compute(
         &self,
+        key: TotalsKey,
         compute: impl FnOnce() -> Option<SelectionTotals>,
     ) -> Option<SelectionTotals> {
-        self.0.borrow_mut().get_or_insert_with(compute).clone()
-    }
-
-    pub(super) fn invalidate(&self) {
-        self.0.borrow_mut().take();
+        let mut cached = self.0.borrow_mut();
+        if let Some((cached_key, totals)) = cached.as_ref()
+            && cached_key.same_as(&key)
+        {
+            return totals.clone();
+        }
+        let totals = compute();
+        *cached = Some((key, totals.clone()));
+        totals
     }
 }
 
@@ -375,6 +421,119 @@ mod tests {
             .expect("numbers");
         assert_eq!(numeric.sum_text(), "103");
         assert_eq!(numeric.max_text(), "100");
+    }
+
+    #[test]
+    fn a_pending_insert_in_the_selection_is_summed() {
+        let model = model();
+        let mut buffer = buffer(&model);
+        buffer.add_pending_insert(vec![
+            CellValue::text("7"),
+            CellValue::null(),
+            CellValue::text("new"),
+        ]);
+        // The insert is the fifth visual row, after the four base rows.
+        let totals = selection_totals(&model, &buffer, &column_selection(0, 5))
+            .expect("a column has totals");
+        assert_eq!(totals.cells, 5);
+        let numeric = totals.numeric.expect("numbers");
+        assert_eq!(numeric.count, 4);
+        assert_eq!(numeric.sum_text(), "11");
+        assert_eq!(numeric.max_text(), "7");
+    }
+
+    fn float_model(cells: Vec<CellValue>) -> TableModel {
+        TableModel::new(
+            vec![column("x", ColumnKind::Float)],
+            cells
+                .into_iter()
+                .map(|cell| RowData { cells: vec![cell] })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn int_cells_in_a_float_column_sum_with_the_floats() {
+        let model = float_model(vec![
+            CellValue::int(2),
+            CellValue::float(0.5),
+            CellValue::float(5.0),
+        ]);
+        let numeric = selection_totals(&model, &buffer(&model), &column_selection(0, 3))
+            .and_then(|totals| totals.numeric)
+            .expect("numbers");
+        assert_eq!(numeric.count, 3);
+        assert_eq!(numeric.sum_text(), "7.5");
+        assert_eq!(numeric.min_text(), "0.5");
+        assert_eq!(numeric.max_text(), "5.0", "written as the grid writes it");
+    }
+
+    #[test]
+    fn non_finite_text_in_a_numeric_column_is_skipped() {
+        let model = float_model(vec![
+            CellValue::text("NaN"),
+            CellValue::text("inf"),
+            CellValue::text("-infinity"),
+            CellValue::text("1.5"),
+        ]);
+        let totals = selection_totals(&model, &buffer(&model), &column_selection(0, 4))
+            .expect("a column has totals");
+        assert_eq!(totals.non_numeric(), 3);
+        let numeric = totals.numeric.expect("one number");
+        assert_eq!(numeric.count, 1);
+        assert_eq!(numeric.sum_text(), "1.5");
+    }
+
+    #[test]
+    fn integers_past_i64_sum_exactly() {
+        let model = TableModel::new(
+            vec![column("big", ColumnKind::Integer)],
+            ["18446744073709551615", "1"]
+                .into_iter()
+                .map(|text| RowData {
+                    cells: vec![CellValue::text(text)],
+                })
+                .collect(),
+        );
+        let numeric = selection_totals(&model, &buffer(&model), &column_selection(0, 2))
+            .and_then(|totals| totals.numeric)
+            .expect("numbers");
+        assert_eq!(numeric.sum_text(), "18446744073709551616");
+    }
+
+    #[test]
+    fn the_cache_recomputes_only_when_its_inputs_change() {
+        let model = Arc::new(model());
+        let mut buffer = buffer(&model);
+        let selection = column_selection(0, 4);
+        let cache = TotalsCache::default();
+        let computed = std::cell::Cell::new(0);
+        let read = |buffer: &EditBuffer, selection: &SelectionState| {
+            cache.get_or_compute(TotalsKey::new(&model, buffer, selection), || {
+                computed.set(computed.get() + 1);
+                selection_totals(&model, buffer, selection)
+            })
+        };
+
+        let first = read(&buffer, &selection);
+        assert_eq!(read(&buffer, &selection), first);
+        assert_eq!(computed.get(), 1, "the same inputs reuse the cached totals");
+
+        buffer.set_cell(0, 0, CellValue::text("100"));
+        let edited = read(&buffer, &selection).and_then(|totals| totals.numeric);
+        assert_eq!(edited.expect("numbers").sum_text(), "103");
+        assert_eq!(computed.get(), 2, "an edit recomputes");
+
+        let other = column_selection(1, 4);
+        let _ = read(&buffer, &other);
+        assert_eq!(computed.get(), 3, "another selection recomputes");
+
+        let reloaded = Arc::new(TableModel::clone(&model));
+        let _ = cache.get_or_compute(TotalsKey::new(&reloaded, &buffer, &other), || {
+            computed.set(computed.get() + 1);
+            None
+        });
+        assert_eq!(computed.get(), 4, "a new model recomputes");
     }
 
     #[test]

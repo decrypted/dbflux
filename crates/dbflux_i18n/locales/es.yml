@@ -1771,8 +1771,12 @@ document:
           average: "Media %{value}"
           min: "Mín %{value}"
           max: "Máx %{value}"
-          nulls_skipped: "%{count} NULL omitidos"
-          non_numeric_skipped: "%{count} no numéricos omitidos"
+          nulls_skipped:
+            one: "%{count} NULL omitido"
+            many: "%{count} NULL omitidos"
+          non_numeric_skipped:
+            one: "%{count} no numérico omitido"
+            many: "%{count} no numéricos omitidos"
       export:
         trigger: Exportar
         save_as_file: Guardar filas cargadas como archivo

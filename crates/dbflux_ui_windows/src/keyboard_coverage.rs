@@ -257,6 +257,11 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
         ("mcp-policy-*", KeyboardPath::Command(Command::Execute)),
         ("mcp-policy-*.*", KeyboardPath::Command(Command::Execute)),
         ("policy-tool-*", KeyboardPath::Command(Command::Execute)),
+        // OK and Cancel of the confirmation dialogs (delete, discard
+        // changes). The dialog keeps Tab inside it; Enter confirms and
+        // Escape cancels from anywhere in it.
+        ("ok", KeyboardPath::TabStop),
+        ("cancel", KeyboardPath::TabStop),
     ],
 };
 

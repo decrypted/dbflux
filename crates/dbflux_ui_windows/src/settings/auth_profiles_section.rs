@@ -24,7 +24,7 @@ use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
+use gpui_component::dialog::{AlertDialog, DialogButtonProps};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -3076,12 +3076,11 @@ impl Render for AuthProfilesSection {
                     crate::labels::auth_profiles_delete_body(&delete_name, affected_connections);
 
                 element.child(
-                    Dialog::new(cx)
+                    AlertDialog::new(cx)
                         .title(dbflux_i18n::t!(
                             "settings.auth_profiles.delete_dialog_title"
                         ))
                         .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
                         .close_button(false)
                         .on_ok(move |_, window, cx| {
                             entity.update(cx, |section, cx| {

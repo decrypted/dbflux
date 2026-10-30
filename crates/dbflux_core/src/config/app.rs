@@ -434,6 +434,12 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub grid_header_click_sorts: bool,
 
+    /// Insert a pair of quotes, with the caret between them, after a
+    /// comparison typed in the data grid's WHERE filter on a string or
+    /// date/time column. Off by default.
+    #[serde(default)]
+    pub grid_filter_autoquote: bool,
+
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -567,6 +573,7 @@ impl Default for GeneralSettings {
             grid_review_before_save: false,
             grid_copy_column_names: false,
             grid_header_click_sorts: false,
+            grid_filter_autoquote: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -597,6 +604,7 @@ mod font_settings_tests {
         assert!(!legacy.grid_review_before_save);
         assert!(!legacy.grid_copy_column_names);
         assert!(!legacy.grid_header_click_sorts);
+        assert!(!legacy.grid_filter_autoquote);
         assert_eq!(legacy, settings);
     }
 

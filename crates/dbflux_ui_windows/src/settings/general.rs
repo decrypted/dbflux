@@ -56,6 +56,7 @@ impl GeneralSection {
             current.grid_review_before_save != saved.grid_review_before_save,
             current.grid_copy_column_names != saved.grid_copy_column_names,
             current.grid_header_click_sorts != saved.grid_header_click_sorts,
+            current.grid_filter_autoquote != saved.grid_filter_autoquote,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
         ];
 
@@ -134,6 +135,7 @@ impl GeneralSection {
             GeneralFormRow::GridReviewBeforeSave,
             GeneralFormRow::GridCopyColumnNames,
             GeneralFormRow::GridHeaderClickSorts,
+            GeneralFormRow::GridFilterAutoquote,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -305,6 +307,10 @@ impl GeneralSection {
             Some(GeneralFormRow::GridHeaderClickSorts) => {
                 self.gen_settings.grid_header_click_sorts =
                     !self.gen_settings.grid_header_click_sorts;
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridFilterAutoquote) => {
+                self.gen_settings.grid_filter_autoquote = !self.gen_settings.grid_filter_autoquote;
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -1091,6 +1097,17 @@ impl GeneralSection {
                 self.gen_settings.grid_header_click_sorts,
                 GeneralFormRow::GridHeaderClickSorts,
                 |this, value, _cx| this.gen_settings.grid_header_click_sorts = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-filter-autoquote",
+                dbflux_i18n::t!("settings.general.grid_filter_autoquote.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.grid_filter_autoquote.hint"
+                )),
+                self.gen_settings.grid_filter_autoquote,
+                GeneralFormRow::GridFilterAutoquote,
+                |this, value, _cx| this.gen_settings.grid_filter_autoquote = value,
                 cx,
             ));
 

@@ -201,6 +201,63 @@ builder — see [Schema-aware autocomplete](QUERY_BUILDER.md#schema-aware-autoco
   <img src="images/results/filtering-light.webp" alt="The customers table filtered by a WHERE condition typed in the filter bar">
 </picture>
 
+### Filtering by a cell
+
+The **Filter** submenu of a cell's context menu (`m`, or a right click) narrows
+the filter to the cell's value with `=`, `<>`, `<`, `>`, `LIKE`, `IS NULL` and
+the other operators the column's type allows. `Alt`+click on a cell does the
+same with `=` in one step (`IS NULL` for a NULL cell) and selects the cell. Both
+keep the current filter as an `AND` term, in parentheses when it has a top-level
+`OR`, so `status = 500` becomes `status = 500 AND "method" = 'getbets'`, and a
+condition the filter already holds is not added twice. Binary, JSON and nested
+values cannot be added this way. Some Linux window managers use `Alt`+drag to
+move windows; a plain `Alt`+click without moving the pointer still works.
+
+### Undoing a filter
+
+Every new `WHERE` filter a table is read with is a step of the grid's Undo and
+Redo, whichever way it was applied (`Enter`, a history entry, `Alt`+click, the
+Filter submenu, clearing the filter). With the grid focused, Undo first takes
+back the cell edits made since the table was last read, newest first, and then
+puts the previous filter back and reads the table with it from the first page;
+Redo goes forward the same way. While the `WHERE` field has the keyboard, Undo
+and Redo edit its text as before. A filter step never drops pending edits: with
+edits that Undo cannot take back, it is refused with the same message a reload
+shows. It also works in a read-only grid, where there are no edits to undo.
+Sort order and `LIMIT` changes are not undo steps.
+
+### Filter history
+
+Every filter a table was read with successfully is kept for that table
+(connection, database, schema and table), newest first, up to 50 per table,
+and survives a restart. Applying a filter again moves it to the top instead of
+listing it twice, and a filter the database rejected is not kept. Only the
+filter text is stored, never rows.
+
+Open the list with the history icon at the left of the `WHERE` field, with
+**Filter history** in the Toolbar entry of the table menu (`m`), or with `Up` /
+`Down` in the field while it is empty or the caret is at its start. Typing while
+the list is open narrows it to the filters that contain the text. `Up` / `Down`
+move the highlight and `Enter` applies the highlighted filter; with nothing
+highlighted, `Enter` applies what you typed. `Shift+Delete` or the × of a row
+removes that filter, the last row, **Clear history**, forgets every filter of the
+table, and `Escape` closes the list.
+
+The query history of a document collection (the history button of its query bar)
+is kept across restarts the same way.
+
+### Quotes after a comparison
+
+With **Insert quotes after a comparison in the WHERE filter** on (Settings →
+General → Data grid, off by default), typing a comparison after a text or
+date/time column of a SQL table inserts the quotes for its value: `method =`
+becomes `method = '|'` with the caret between them. A space or quote typed right
+after, out of habit, is absorbed; once you typed the value, a `'` typed in front
+of the closing quote steps over it instead of adding one; and `Backspace` right
+after the insertion removes the quotes again. Numbers, booleans, `IS NULL`,
+`IN (...)`, text inside a string literal and pasted text get no quotes. See
+[Settings](SETTINGS.md#data-grid) for the operators.
+
 ## Similar rows
 
 On a table with a vector column (today a PostgreSQL table with a pgvector

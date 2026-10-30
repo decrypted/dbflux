@@ -409,8 +409,11 @@ impl gpui::Render for DataTable {
         let on_undo = move |_: &Undo, _: &mut Window, cx: &mut App| {
             s.update(cx, |state, cx| {
                 // A host makes the table read-only while its edits must not
-                // change, so the history must not change them either.
+                // change, so the history must not change them either. The
+                // host may still step a history of its own, which changes no
+                // data (the grid's filters).
                 if !state.is_editable() && !state.is_insertable() {
+                    cx.emit(DataTableEvent::HistoryStepRequested { redo: false });
                     return;
                 }
 
@@ -419,7 +422,9 @@ impl gpui::Render for DataTable {
                     state.stop_editing(false, cx);
                 }
 
-                if state.edit_buffer_mut().undo() {
+                if !state.edit_buffer().can_undo() {
+                    cx.emit(DataTableEvent::HistoryStepRequested { redo: false });
+                } else if state.edit_buffer_mut().undo() {
                     // Validate selection after undo - indices may have shifted
                     let visual_count = state.edit_buffer().compute_visual_order().len();
                     if let Some(active) = state.selection().active
@@ -436,8 +441,11 @@ impl gpui::Render for DataTable {
         let on_redo = move |_: &Redo, _: &mut Window, cx: &mut App| {
             s.update(cx, |state, cx| {
                 // A host makes the table read-only while its edits must not
-                // change, so the history must not change them either.
+                // change, so the history must not change them either. The
+                // host may still step a history of its own, which changes no
+                // data (the grid's filters).
                 if !state.is_editable() && !state.is_insertable() {
+                    cx.emit(DataTableEvent::HistoryStepRequested { redo: true });
                     return;
                 }
 
@@ -446,7 +454,9 @@ impl gpui::Render for DataTable {
                     state.stop_editing(false, cx);
                 }
 
-                if state.edit_buffer_mut().redo() {
+                if !state.edit_buffer().can_redo() {
+                    cx.emit(DataTableEvent::HistoryStepRequested { redo: true });
+                } else if state.edit_buffer_mut().redo() {
                     // Validate selection after redo - indices may have shifted
                     let visual_count = state.edit_buffer().compute_visual_order().len();
                     if let Some(active) = state.selection().active
@@ -1765,7 +1775,11 @@ fn render_rows(
                                 state.focus(window, cx);
                             });
 
-                            if event.click_count() == 2 {
+                            let modifiers = event.modifiers();
+
+                            // A quick second Alt+click filters again rather
+                            // than opening the editor.
+                            if event.click_count() == 2 && !modifiers.alt {
                                 state_for_click.update(cx, |state, cx| {
                                     // A Ctrl+double-click on the cell selected
                                     // on its own took it out on the first press.
@@ -1783,7 +1797,6 @@ fn render_rows(
                             // selection events twice. Keyboard and touch
                             // activation have no press, so they select here.
                             if !matches!(event, ClickEvent::Mouse(_)) {
-                                let modifiers = event.modifiers();
                                 state_for_click.update(cx, |state, cx| {
                                     state.click_cell(coord, modifiers, cx);
                                 });
@@ -3704,6 +3717,65 @@ mod tests {
         set_editable(visual, &state, true);
         visual.dispatch_action(actions::Redo);
         assert_eq!(dirty_cells(visual, &state), 1, "redo runs");
+    }
+
+    /// Undo or Redo with no step left in the table's history, or in a
+    /// read-only table, asks the host for a step of its own; one the
+    /// history can take is not reported.
+    #[gpui::test]
+    fn undo_past_the_edits_asks_the_host_for_its_history(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("history-test-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        let state = state_holder.borrow().clone().expect("the state entity");
+
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let _subscription = visual.update(|_, cx| {
+            let asked = asked.clone();
+            cx.subscribe(&state, move |_, event: &DataTableEvent, _| {
+                if let DataTableEvent::HistoryStepRequested { redo } = event {
+                    asked.borrow_mut().push(*redo);
+                }
+            })
+        });
+
+        visual.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.set_positional_editing(true);
+                state
+                    .edit_buffer_mut()
+                    .set_cell(0, 1, CellValue::text("edited"));
+                state.focus(window, cx);
+            });
+        });
+        visual.run_until_parked();
+        set_editable(visual, &state, true);
+
+        visual.dispatch_action(actions::Undo);
+        visual.run_until_parked();
+        assert!(asked.borrow().is_empty(), "the table undid its own edit");
+
+        visual.dispatch_action(actions::Undo);
+        visual.dispatch_action(actions::Redo);
+        visual.dispatch_action(actions::Redo);
+        visual.run_until_parked();
+        assert_eq!(asked.borrow().as_slice(), &[false, true]);
+
+        set_editable(visual, &state, false);
+        visual.dispatch_action(actions::Undo);
+        visual.run_until_parked();
+        assert_eq!(asked.borrow().as_slice(), &[false, true, false]);
+        assert_eq!(dirty_cells(visual, &state), 1, "the edit stays");
     }
 
     fn header_harness(

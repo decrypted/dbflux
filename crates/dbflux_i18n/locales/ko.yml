@@ -1924,6 +1924,13 @@ document:
         builder_notice: 행은 빌더 쿼리에서 가져옵니다
         edit_in_builder: 빌더에서 편집
         reset_builder: 초기화
+        value_not_filterable: "이 값은 필터에 추가할 수 없습니다"
+        history:
+          toggle: "필터 기록"
+          delete: "기록에서 제거"
+          clear: "기록 지우기"
+          empty: "이 테이블의 필터가 아직 없습니다"
+          no_match: "일치하는 필터가 없습니다"
       nearest:
         summary: "%{column} 기준 %{anchor}와 유사"
         similar_to: "유사 대상"
@@ -4238,6 +4245,9 @@ settings:
     grid_header_click_sorts:
       label: "열 헤더를 클릭하면 열 정렬"
       hint: "끔: 열 헤더를 클릭하면 열 전체가 선택되고, 헤더 오른쪽 끝의 화살표로 정렬합니다. 켬: 클릭하면 열이 정렬됩니다. Shift+클릭과 Ctrl+클릭은 계속 열을 선택합니다."
+    grid_filter_autoquote:
+      label: "WHERE 필터에서 비교 연산자 뒤에 따옴표 삽입"
+      hint: "테이블의 WHERE 필터에서 텍스트 또는 날짜/시간 열 뒤에 =, !=, <>, <=, >=, <, >, LIKE 또는 NOT LIKE를 입력하면 ''가 추가되고 캐럿이 따옴표 사이에 놓입니다. 숫자, 불리언, NULL 검사는 입력한 그대로 둡니다."
     vim_mode:
       label: "편집기에서 Vim 모드 사용"
       hint: "노멀 모드와 삽입 모드: h, j, k, l, Enter로 이동하고, i로 입력을 시작하고, Esc로 노멀 모드로 돌아가고, x로 문자를 삭제하고, u로 실행을 취소합니다. 저장하면 열려 있는 편집기에 적용됩니다."

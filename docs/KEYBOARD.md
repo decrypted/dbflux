@@ -419,6 +419,17 @@ Revert all changes run the edit bar's Commit and Revert. Query history opens the
 history menu with the keyboard in it: the context menu keys move, `Enter` runs
 the highlighted query again and `Escape` closes it.
 
+In the `WHERE` field of a table, `Up` or `Down` opens the table's filter history
+while the field is empty or the caret is at its start; **Filter history** in the
+Toolbar submenu opens it too. While it is open, typing narrows the list, `Up` /
+`Down` move the highlight, `Enter` applies the highlighted filter, `Shift+Delete`
+removes it and `Escape` closes the list; its last row clears the table's history.
+See [Filter history](RESULTS.md#filter-history).
+
+The Filter submenu of a cell's context menu (`m`) is the keyboard counterpart of
+`Alt`+click on a cell: its entries add the cell's value to the table's filter as
+an `AND` condition. See [Filtering by a cell](RESULTS.md#filtering-by-a-cell).
+
 When the results offer no context menu of their own, `m` opens the pane actions
 menu instead, the same one the command palette's **Open pane actions** shows.
 
@@ -624,8 +635,8 @@ edited.
 | `a a` / `Shift+a Shift+a` | Add / duplicate a row |
 | `Ctrl+n` | Set the cell to NULL |
 | `Ctrl+Alt+e` / `Cmd+Alt+e` | Edit the cell as a SQL expression; in an open editor, switch between a value and an expression (`fx`) |
-| `u` / `Ctrl+z` / `Cmd+z` | Undo |
-| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo |
+| `u` / `Ctrl+z` / `Cmd+z` | Undo; once the edits since the table was last read are undone, the previous `WHERE` filter (see [Undoing a filter](RESULTS.md#undoing-a-filter)) |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo, the filters included |
 | `e` | Expand or collapse a nested column (document grids) |
 | `Backspace` | Step out of a nested value (document grids) |
 

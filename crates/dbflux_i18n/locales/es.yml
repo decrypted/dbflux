@@ -1924,6 +1924,13 @@ document:
         builder_notice: Las filas vienen de la consulta del generador
         edit_in_builder: Editar en el generador
         reset_builder: Restablecer
+        value_not_filterable: "Este valor no se puede añadir al filtro"
+        history:
+          toggle: "Historial de filtros"
+          delete: "Quitar del historial"
+          clear: "Borrar historial"
+          empty: "Aún no hay filtros para esta tabla"
+          no_match: "Ningún filtro coincide"
       nearest:
         summary: "Similares a %{anchor} por %{column}"
         similar_to: "Similares a"
@@ -4238,6 +4245,9 @@ settings:
     grid_header_click_sorts:
       label: "Hacer clic en la cabecera de una columna la ordena"
       hint: "Desactivado: un clic en la cabecera de una columna selecciona la columna entera y la flecha de su borde derecho ordena. Activado: el clic ordena la columna; Shift+clic y Ctrl+clic siguen seleccionando columnas."
+    grid_filter_autoquote:
+      label: "Insertar comillas tras una comparación en el filtro WHERE"
+      hint: "Al escribir =, !=, <>, <=, >=, <, >, LIKE o NOT LIKE tras una columna de texto o de fecha/hora en el filtro WHERE de una tabla, se añade '' con el cursor entre las comillas. Los números, booleanos y comprobaciones de NULL quedan como se escriben."
     vim_mode:
       label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."

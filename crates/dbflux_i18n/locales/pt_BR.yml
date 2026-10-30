@@ -1924,6 +1924,13 @@ document:
         builder_notice: As linhas vêm da consulta do construtor
         edit_in_builder: Editar no construtor
         reset_builder: Redefinir
+        value_not_filterable: "Este valor não pode ser adicionado ao filtro"
+        history:
+          toggle: "Histórico de filtros"
+          delete: "Remover do histórico"
+          clear: "Limpar histórico"
+          empty: "Ainda não há filtros para esta tabela"
+          no_match: "Nenhum filtro corresponde"
       nearest:
         summary: "Semelhantes a %{anchor} por %{column}"
         similar_to: "Semelhantes a"
@@ -4238,6 +4245,9 @@ settings:
     grid_header_click_sorts:
       label: "Clicar no cabeçalho de uma coluna a ordena"
       hint: "Desligado: um clique no cabeçalho de uma coluna seleciona a coluna inteira e a seta na borda direita ordena. Ligado: o clique ordena a coluna; Shift+clique e Ctrl+clique continuam selecionando colunas."
+    grid_filter_autoquote:
+      label: "Inserir aspas após uma comparação no filtro WHERE"
+      hint: "Ao digitar =, !=, <>, <=, >=, <, >, LIKE ou NOT LIKE após uma coluna de texto ou de data/hora no filtro WHERE de uma tabela, '' é adicionado com o cursor entre as aspas. Números, booleanos e verificações de NULL ficam como digitados."
     vim_mode:
       label: "Modo Vim nos editores"
       hint: "Modos Normal e Insert: h, j, k, l e Enter movem, i insere, Esc volta ao Normal, x exclui um caractere, u desfaz. Aplicado aos editores abertos ao salvar."

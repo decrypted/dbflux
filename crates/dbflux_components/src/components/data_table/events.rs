@@ -194,6 +194,14 @@ pub enum DataTableEvent {
     /// Request to set the current cell to NULL (Ctrl+N).
     SetNullRequested { row: usize, col: usize },
 
+    /// Undo (or Redo) found no step in the table's own edit history, or the
+    /// table is read-only: the host may step a history of its own.
+    HistoryStepRequested { redo: bool },
+
+    /// Alt+click on a cell: the host narrows its filter to the cell's value.
+    /// The table only selects the cell; a host that cannot filter ignores it.
+    AddToFilterRequested { row: usize, col: usize },
+
     /// Request to copy the entire row as CSV (YY).
     CopyRowRequested(usize),
 

@@ -222,6 +222,67 @@ schema](QUERY_BUILDER.md#autocompletado-consciente-del-schema)).
   <img src="../images/results/filtering-light.webp" alt="La tabla customers filtrada con una condición WHERE escrita en la barra de filtro">
 </picture>
 
+### Filtrar por una celda
+
+El submenú **Filtro** del menú contextual de una celda (`m`, o clic derecho)
+reduce el filtro al valor de la celda con `=`, `<>`, `<`, `>`, `LIKE`, `IS NULL`
+y los demás operadores que admite el tipo de la columna. `Alt`+clic en una celda
+hace lo mismo con `=` en un solo paso (`IS NULL` para una celda NULL) y
+selecciona la celda. Ambos conservan el filtro actual como término `AND`, entre
+paréntesis cuando tiene un `OR` de primer nivel, así que `status = 500` pasa a
+`status = 500 AND "method" = 'getbets'`, y una condición que el filtro ya
+contiene no se añade dos veces. Los valores binarios, JSON y anidados no se
+pueden añadir así. Algunos gestores de ventanas de Linux usan `Alt`+arrastrar
+para mover ventanas; un `Alt`+clic sin mover el puntero sigue funcionando.
+
+### Deshacer un filtro
+
+Cada filtro `WHERE` nuevo con el que se lee una tabla es un paso de Deshacer y
+Rehacer del grid, se aplique como se aplique (`Enter`, una entrada del
+historial, `Alt`+clic, el submenú Filtro, limpiar el filtro). Con el foco en el
+grid, Deshacer primero revierte las ediciones de celdas hechas desde la última
+lectura de la tabla, de la más reciente a la más antigua, y después vuelve a
+poner el filtro anterior y lee la tabla con él desde la primera página; Rehacer
+avanza del mismo modo. Mientras el campo `WHERE` tiene el teclado, Deshacer y
+Rehacer editan su texto como antes. Un paso de filtro nunca descarta ediciones
+pendientes: con ediciones que Deshacer no puede revertir se rechaza con el mismo
+mensaje que una recarga. También funciona en un grid de solo lectura, donde no
+hay ediciones que deshacer. Los cambios de orden y de `LIMIT` no son pasos de
+deshacer.
+
+### Historial de filtros
+
+Cada filtro con el que una tabla se leyó correctamente se guarda para esa tabla
+(conexión, base de datos, schema y tabla), del más reciente al más antiguo,
+hasta 50 por tabla, y se conserva al reiniciar. Aplicar de nuevo un filtro lo
+sube al principio en lugar de listarlo dos veces, y un filtro que la base de
+datos rechazó no se guarda. Solo se guarda el texto del filtro, nunca filas.
+
+Abre la lista con el icono de historial a la izquierda del campo `WHERE`, con
+**Filter history** en la entrada Toolbar del menú de la tabla (`m`), o con
+`Up` / `Down` en el campo mientras está vacío o el cursor está al principio.
+Escribir con la lista abierta la reduce a los filtros que contienen el texto.
+`Up` / `Down` mueven el resaltado y `Enter` aplica el filtro resaltado; sin nada
+resaltado, `Enter` aplica lo que escribiste. `Shift+Delete` o la × de una fila
+quita ese filtro, la última fila, **Clear history**, olvida todos los filtros de
+la tabla, y `Escape` cierra la lista.
+
+El historial de queries de una colección de documentos (el botón de historial de
+su barra de query) también se conserva al reiniciar.
+
+### Comillas tras una comparación
+
+Con **Insertar comillas tras una comparación en el filtro WHERE** activado
+(Ajustes → General → Data grid, desactivado por defecto), escribir una
+comparación tras una columna de texto o de fecha/hora de una tabla SQL inserta
+las comillas de su valor: `method =` pasa a `method = '|'` con el cursor entre
+ellas. Un espacio o una comilla escritos justo después, por costumbre, se
+absorben; una vez escrito el valor, una `'` escrita delante de la comilla de
+cierre pasa por encima en lugar de añadir otra; y `Backspace` justo después de la
+inserción vuelve a quitar las comillas. Los números, booleanos, `IS NULL`,
+`IN (...)`, el texto dentro de un literal y el texto pegado no reciben comillas.
+Ver [Ajustes](SETTINGS.md) para los operadores.
+
 ## Filas similares
 
 En una tabla con una columna vectorial (hoy, una tabla PostgreSQL con una

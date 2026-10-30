@@ -151,6 +151,22 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Menu("auto-refresh"),
         ),
         ("clear-filter", KeyboardPath::Command(Command::ClearFilter)),
+        // The WHERE field's filter history: a Toolbar entry of the table
+        // menu opens it; Up / Down walk it, Enter applies, Shift+Delete
+        // removes the highlighted entry, and its last row clears it.
+        (
+            "filter-history-toggle",
+            KeyboardPath::Menu("filter-history"),
+        ),
+        (
+            "filter-history-entry-*",
+            KeyboardPath::Menu("filter-history"),
+        ),
+        (
+            "filter-history-delete-*",
+            KeyboardPath::Menu("filter-history"),
+        ),
+        ("filter-history-clear", KeyboardPath::Menu("filter-history")),
         (
             "view-toggle-btn",
             KeyboardPath::Command(Command::CycleDocumentView),

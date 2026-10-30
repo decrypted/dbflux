@@ -1924,6 +1924,13 @@ document:
         builder_notice: 行来自构建器查询
         edit_in_builder: 在构建器中编辑
         reset_builder: 重置
+        value_not_filterable: "此值无法添加到筛选条件中"
+        history:
+          toggle: "筛选历史"
+          delete: "从历史中移除"
+          clear: "清除历史"
+          empty: "此表还没有筛选条件"
+          no_match: "没有匹配的筛选条件"
       nearest:
         summary: "按 %{column} 与 %{anchor} 相似"
         similar_to: "相似于"
@@ -4238,6 +4245,9 @@ settings:
     grid_header_click_sorts:
       label: "点击列标题时对该列排序"
       hint: "关：点击列标题选择整列，标题右侧的箭头用于排序。开：点击即对该列排序；Shift+单击和 Ctrl+单击仍然选择列。"
+    grid_filter_autoquote:
+      label: "在 WHERE 筛选中比较运算符后插入引号"
+      hint: "在表的 WHERE 筛选中，于文本或日期/时间列后输入 =、!=、<>、<=、>=、<、>、LIKE 或 NOT LIKE 时，会添加 ''，并把光标放在两个引号之间。数字、布尔值和 NULL 判断保持原样。"
     vim_mode:
       label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"

@@ -89,6 +89,7 @@ converted crate by crate and stays in English for now.
 | **Review changes before saving** | Off | Save in a table grid first shows the statements it will run, with Save, Copy SQL and Cancel, as the Review button does. See Working with Results. |
 | **Include column names when copying** | Off | Copy (`Ctrl+C`, `Cmd+C` on macOS) from the data grid starts the tab-separated text with a line of the copied columns' names. Copy as CSV, JSON and the other Copy as entries are not affected. Applies to open grids when you save. |
 | **Clicking a column header sorts the column** | Off | Off: a click on a column header selects the whole column, and the arrow at the header's right edge sorts. On: a plain click sorts the column (none, ascending, descending), and `Shift`+click and `Ctrl`+click still select columns. Tables that keep their rows in file order (CSV, Parquet, spreadsheets) always select. |
+| **Insert quotes after a comparison in the WHERE filter** | Off | Typing `=`, `!=`, `<>`, `<=` or `>=` (on its last character), `<` or `>` (on the space after it), or `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE` (on the space after the keyword) after a text or date/time column in a table's `WHERE` filter inserts `''` and puts the caret between the quotes. Numbers, booleans, `IS NULL`, `IN (...)` and anything inside a string literal are left as typed, and a paste never inserts quotes. See [Filtering results](RESULTS.md#filtering-results). |
 
 ### Startup & session
 

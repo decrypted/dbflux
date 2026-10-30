@@ -193,8 +193,9 @@ impl MigrationRegistry {
         registry.register(mod_048_general_settings_grid_pk_sort_desc::MigrationImpl);
         registry.register(mod_049_connection_profile_connect_on_startup::MigrationImpl);
         registry.register(mod_050_session_tab_view_state::MigrationImpl);
-        registry.register(mod_054_general_settings_grid_review_before_save::MigrationImpl);
         registry.register(mod_052_general_settings_grid_copy_column_names::MigrationImpl);
+        registry.register(mod_054_general_settings_grid_review_before_save::MigrationImpl);
+        registry.register(mod_056_general_settings_grid_filter_autoquote::MigrationImpl);
         registry.register(mod_058_general_settings_grid_header_click_sorts::MigrationImpl);
         registry
     }
@@ -438,6 +439,7 @@ mod mod_049_connection_profile_connect_on_startup;
 mod mod_050_session_tab_view_state;
 mod mod_052_general_settings_grid_copy_column_names;
 mod mod_054_general_settings_grid_review_before_save;
+mod mod_056_general_settings_grid_filter_autoquote;
 mod mod_058_general_settings_grid_header_click_sorts;
 
 pub use mod_001_initial::MigrationImpl;
@@ -1189,8 +1191,8 @@ mod tests {
             "008_general_settings_style",
             "009_mssql_instance",
             "010_aws_reflect_migration_flag",
-            "011_connection_drop_auth_profile_fk",
             "010_viz_charts_and_dashboards",
+            "011_connection_drop_auth_profile_fk",
             "011_viz_saved_chart_metric_source",
             "012_viz_saved_chart_metric_series",
             "013_viz_dashboard_panel_kind",
@@ -1232,8 +1234,9 @@ mod tests {
             "048_general_settings_grid_pk_sort_desc",
             "049_connection_profile_connect_on_startup",
             "050_session_tab_view_state",
-            "054_general_settings_grid_review_before_save",
             "052_general_settings_grid_copy_column_names",
+            "054_general_settings_grid_review_before_save",
+            "056_general_settings_grid_filter_autoquote",
             "058_general_settings_grid_header_click_sorts",
         ];
 

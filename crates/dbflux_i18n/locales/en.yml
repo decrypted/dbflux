@@ -1924,6 +1924,13 @@ document:
         builder_notice: Rows come from the builder query
         edit_in_builder: Edit in builder
         reset_builder: Reset
+        value_not_filterable: "This value cannot be added to the filter"
+        history:
+          toggle: "Filter history"
+          delete: "Remove from history"
+          clear: "Clear history"
+          empty: "No filters yet for this table"
+          no_match: "No filter matches"
       nearest:
         summary: "Similar to %{anchor} by %{column}"
         similar_to: "Similar to"
@@ -4238,6 +4245,9 @@ settings:
     grid_header_click_sorts:
       label: "Clicking a column header sorts the column"
       hint: "Off: a click on a column header selects the whole column and the arrow at its right edge sorts. On: the click sorts the column; Shift+click and Ctrl+click still select columns."
+    grid_filter_autoquote:
+      label: "Insert quotes after a comparison in the WHERE filter"
+      hint: "Typing =, !=, <>, <=, >=, <, >, LIKE or NOT LIKE after a text or date/time column in a table's WHERE filter adds '' with the caret between the quotes. Numbers, booleans and NULL checks are left as typed."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."

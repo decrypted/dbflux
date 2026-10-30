@@ -10,7 +10,10 @@ mod documents;
 mod export_all;
 pub(crate) mod export_options;
 mod facets;
+mod filter_autoquote;
 pub(crate) mod filter_bar;
+mod filter_history;
+mod filter_undo;
 mod fk_display;
 mod generated_ids;
 mod grid;
@@ -550,6 +553,11 @@ struct PendingActions {
     /// Save was asked for while "Review changes before saving" is on. The
     /// review opens at render because focusing it needs a `Window`.
     change_review: bool,
+    /// Cell (visual row, column) an Alt+click asked to add to the filter.
+    filter_cell: Option<(usize, usize)>,
+    /// Undo (`false`) or Redo (`true`) the table's edit history had no step
+    /// for, to try on the filters.
+    filter_undo_step: Option<bool>,
 }
 
 /// How the grid should treat the state held by an existing `DataTableState`
@@ -655,6 +663,15 @@ struct FilterBarState {
     /// connection's own query language. `None` when the driver does not
     /// describe its browse query, or for table and query-result sources.
     browse_query_label: Option<String>,
+    /// The history popup of the WHERE field.
+    history: filter_history::FilterHistoryPopup,
+    /// A relational filter whose visual query is in flight: the history
+    /// keeps it once that query succeeds.
+    pending_history: Option<String>,
+    /// The quotes the WHERE field inserts after a comparison (a setting).
+    autoquote: filter_autoquote::AutoQuoteState,
+    /// The filters the table was read with, as steps of Undo / Redo.
+    undo: filter_undo::FilterUndo,
 }
 
 /// Auto-refresh policy, timer, and grid load state.
@@ -1236,20 +1253,23 @@ impl DataGridPanel {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
-                    if this.reload_blocked_by_pending_edits(cx) {
-                        return;
-                    }
-
-                    // A new filter selects a different row set.
-                    this.grid_table.reload = TableReload::ResetRows;
-                    this.refresh(window, cx);
-                    this.focus_table(window, cx);
+                    this.submit_filter_input(window, cx);
                 }
                 InputEvent::Blur => {
+                    this.close_filter_history(cx);
                     this.exit_edit_mode(window, cx);
                 }
+                InputEvent::Focus => {
+                    // A filter put in while the field was not being typed
+                    // in (history, Filter by value) is the base the next
+                    // keystroke is told apart from.
+                    this.filter_bar.autoquote.text = input.read(cx).value().to_string();
+                    this.filter_bar.autoquote.pair = None;
+                }
                 InputEvent::Change => {
+                    this.filter_autoquote_changed(window, cx);
                     let text = input.read(cx).value().to_string();
+                    this.filter_history_text_changed(&text, cx);
                     if filter_bar::classify_filter_input(&text)
                         == filter_bar::FilterMode::Relational
                     {
@@ -1472,6 +1492,10 @@ impl DataGridPanel {
                 limit_input,
                 refresh_dropdown,
                 browse_query_label: None,
+                history: Default::default(),
+                pending_history: None,
+                autoquote: Default::default(),
+                undo: Default::default(),
             },
             refresh: RefreshState {
                 refresh_policy: default_refresh,
@@ -1581,6 +1605,7 @@ impl DataGridPanel {
         };
 
         panel.follow_vim_setting(cx);
+        panel.load_collection_query_history(cx);
         panel
     }
 

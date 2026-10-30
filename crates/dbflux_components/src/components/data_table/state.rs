@@ -934,8 +934,11 @@ impl DataTableState {
     /// does; Ctrl (Cmd on macOS) adds the cell to the selection, or takes it
     /// out when it is selected on its own; a plain click starts a new
     /// selection there. The grid and the record view both route their clicks
-    /// here so Shift means the same thing in either layout. The record view
-    /// shows one field range only, so there Ctrl+click is a plain click.
+    /// here so the modifier means the same thing in either layout. The record
+    /// view shows one field range only, so there Ctrl+click is a plain click.
+    /// Alt alone selects the cell and asks the host to filter by it
+    /// (`AddToFilterRequested`), so the cell the filter came from is the one
+    /// selected.
     pub fn click_cell(
         &mut self,
         coord: CellCoord,
@@ -946,14 +949,22 @@ impl DataTableState {
     }
 
     /// `click_cell`, returning whether `coord` ended up as the start of the
-    /// range being made (false after a Ctrl+click that deselected).
+    /// range being made (false after a Ctrl+click that deselected, and after
+    /// an Alt+click, which adds to the filter and starts no drag).
     fn apply_cell_click(
         &mut self,
         coord: CellCoord,
         modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) -> bool {
-        if modifiers.shift {
+        if is_alt_only(modifiers) {
+            self.select_cell(coord, cx);
+            cx.emit(DataTableEvent::AddToFilterRequested {
+                row: coord.row,
+                col: coord.col,
+            });
+            false
+        } else if modifiers.shift {
             self.extend_selection(coord, cx);
             true
         } else if modifiers.secondary() && !self.record_mode {
@@ -2260,6 +2271,11 @@ impl Focusable for DataTableState {
     fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+/// Alt with no other modifier: the Alt+click that adds a cell to the filter.
+pub(crate) fn is_alt_only(modifiers: gpui::Modifiers) -> bool {
+    modifiers.alt && !modifiers.shift && !modifiers.control && !modifiers.platform
 }
 
 #[cfg(test)]
@@ -4677,5 +4693,76 @@ mod tests {
             vec![edited],
             "a change in the tail of a long value must be staged"
         );
+    }
+
+    /// Alt+click selects the cell like a plain click and asks the host to
+    /// filter by it; Alt with another modifier is not that gesture.
+    #[gpui::test]
+    fn alt_click_selects_the_cell_and_asks_to_filter_by_it(cx: &mut gpui::TestAppContext) {
+        use super::super::events::DataTableEvent;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let columns = ["id", "method"]
+                .into_iter()
+                .map(|name| ColumnSpec {
+                    id: name.into(),
+                    title: name.into(),
+                    kind: ColumnKind::Text,
+                    align: TextAlign::Left,
+                    type_name: "text".into(),
+                })
+                .collect();
+            let rows = (0..3)
+                .map(|row| RowData {
+                    cells: vec![CellValue::text(&row.to_string()), CellValue::text("get")],
+                })
+                .collect();
+            let state = cx.new(|cx| {
+                super::DataTableState::new(std::sync::Arc::new(TableModel::new(columns, rows)), cx)
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let requested = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let _subscription = window.update(|_, app| {
+            let requested = requested.clone();
+            app.subscribe(&state, move |_state, event: &DataTableEvent, _app| {
+                if let DataTableEvent::AddToFilterRequested { row, col } = event {
+                    requested.borrow_mut().push((*row, *col));
+                }
+            })
+        });
+
+        let click = |modifiers: gpui::Modifiers, window: &mut gpui::VisualTestContext| {
+            window.update(|_, app| {
+                state.update(app, |s, cx| {
+                    s.click_cell(CellCoord::new(2, 1), modifiers, cx)
+                });
+            });
+            window.run_until_parked();
+        };
+
+        click(gpui::Modifiers::alt(), window);
+        assert_eq!(requested.borrow().as_slice(), &[(2, 1)]);
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(2, 1)),
+            "the filtered cell is the one selected"
+        );
+
+        click(
+            gpui::Modifiers {
+                alt: true,
+                shift: true,
+                ..Default::default()
+            },
+            window,
+        );
+        click(gpui::Modifiers::default(), window);
+        assert_eq!(requested.borrow().len(), 1, "only Alt alone filters");
     }
 }

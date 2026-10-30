@@ -182,6 +182,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             "grid-header-click-sorts",
             KeyboardPath::Command(Command::Execute),
         ),
+        (
+            "grid-filter-autoquote",
+            KeyboardPath::Command(Command::Execute),
+        ),
         ("pause-on-error", KeyboardPath::Command(Command::Execute)),
         ("refresh-visible", KeyboardPath::Command(Command::Execute)),
         ("reopen-conns", KeyboardPath::Command(Command::Execute)),

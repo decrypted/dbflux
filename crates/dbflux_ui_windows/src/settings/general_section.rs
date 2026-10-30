@@ -45,6 +45,7 @@ pub(super) enum GeneralFormRow {
     GridReviewBeforeSave,
     GridCopyColumnNames,
     GridHeaderClickSorts,
+    GridFilterAutoquote,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -1991,6 +1992,10 @@ mod tests {
             (
                 "grid-header-click-sorts",
                 "settings.general.grid_header_click_sorts.label",
+            ),
+            (
+                "grid-filter-autoquote",
+                "settings.general.grid_filter_autoquote.label",
             ),
             ("restore-session", "settings.general.restore_session.label"),
             ("reopen-conns", "settings.general.reopen_connections.label"),

@@ -440,6 +440,19 @@ consultas abre el menú del historial con el teclado dentro: las teclas del men�
 contextual se mueven, `Enter` vuelve a ejecutar la consulta resaltada y `Escape`
 lo cierra.
 
+En el campo `WHERE` de una tabla, `Up` o `Down` abre el historial de filtros de
+la tabla mientras el campo está vacío o el cursor está al principio; **Filter
+history** en el submenú Barra de herramientas también lo abre. Con la lista
+abierta, escribir la reduce, `Up` / `Down` mueven el resaltado, `Enter` aplica el
+filtro resaltado, `Shift+Delete` lo quita y `Escape` cierra la lista; su última
+fila borra el historial de la tabla. Ver [Historial de
+filtros](RESULTS.md#historial-de-filtros).
+
+El submenú Filtro del menú contextual de una celda (`m`) es el equivalente de
+teclado de `Alt`+clic en una celda: sus entradas añaden el valor de la celda al
+filtro de la tabla como condición `AND`. Ver [Filtrar por una
+celda](RESULTS.md#filtrar-por-una-celda).
+
 Cuando los resultados no tienen menú contextual propio, `m` abre en su lugar el
 menú de acciones del panel, el mismo que muestra **Open pane actions** en la
 command palette.
@@ -652,8 +665,8 @@ foco y no se está editando ninguna celda.
 | `a a` / `Shift+a Shift+a` | Agregar / duplicar una fila |
 | `Ctrl+n` | Poner la celda en NULL |
 | `Ctrl+Alt+e` / `Cmd+Alt+e` | Editar la celda como expresión SQL; con el editor abierto, alternar entre valor y expresión (`fx`) |
-| `u` / `Ctrl+z` / `Cmd+z` | Deshacer |
-| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer |
+| `u` / `Ctrl+z` / `Cmd+z` | Deshacer; una vez deshechas las ediciones desde la última lectura de la tabla, el filtro `WHERE` anterior (ver [Deshacer un filtro](RESULTS.md#deshacer-un-filtro)) |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer, filtros incluidos |
 | `e` | Expandir o contraer una columna anidada (grillas de documentos) |
 | `Backspace` | Salir de un valor anidado (grillas de documentos) |
 

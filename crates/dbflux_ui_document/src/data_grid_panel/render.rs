@@ -388,6 +388,14 @@ impl DataGridPanel {
 
         dbflux_ui_base::toast::flush_pending_toast(self.pending.toast.take(), window, cx);
 
+        if let Some(redo) = self.pending.filter_undo_step.take() {
+            self.step_filter(redo, window, cx);
+        }
+
+        if let Some((row, col)) = self.pending.filter_cell.take() {
+            self.add_cell_to_filter(row, col, window, cx);
+        }
+
         if let Some(requery) = self.pending.requery.take() {
             self.run_table_query(
                 requery.profile_id,
@@ -579,6 +587,9 @@ impl DataGridPanel {
                 )
             })
             .unwrap_or((false, 0, false, false));
+        // Undo and Redo also step the filters once the edits run out.
+        let can_undo = can_undo || self.can_step_filter(false);
+        let can_redo = can_redo || self.can_step_filter(true);
 
         let is_grouped_result = self.is_grouped_result();
 
@@ -1249,9 +1260,50 @@ impl DataGridPanel {
             })),
         );
 
+        // Up / Down / Shift+Delete reach the history popup before the input:
+        // the input would otherwise move its caret or delete a character.
         let filter_editor = div()
             .flex()
             .items_center()
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::MoveUp, window, cx| {
+                    if this.filter_history_vertical_key(false, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::MoveDown, window, cx| {
+                    if this.filter_history_vertical_key(true, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            // A paste is not typing: the next change must not insert quotes.
+            .capture_action(cx.listener(|this, _: &gpui_component::input::Paste, _, _| {
+                this.filter_bar.autoquote.pasting = true;
+            }))
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Escape, _, cx| {
+                    let completion_open = this
+                        .filter_bar
+                        .filter_input
+                        .read(cx)
+                        .completion_menu_state()
+                        .open;
+                    if this.filter_bar.history.open && !completion_open {
+                        this.close_filter_history(cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Delete, window, cx| {
+                    if window.modifiers().shift && this.delete_selected_filter_history(cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -1286,10 +1338,21 @@ impl DataGridPanel {
 
         let has_filter = !filter_keyword.is_empty();
 
+        let history_toggle = (has_filter && self.offers_filter_history()).then(|| {
+            div()
+                .relative()
+                .flex()
+                .flex_none()
+                .items_center()
+                .child(self.render_filter_history_toggle(cx))
+                .children(self.render_filter_history_menu(cx))
+        });
+
         let field = FilterField::new("data-grid-filter-field")
             .when(has_filter, |field| {
                 field.filter(filter_keyword.to_string(), filter_editor)
             })
+            .when_some(history_toggle, |field, toggle| field.leading(toggle))
             .when(filter_has_value && has_filter, |field| {
                 field.trailing(
                     div()
@@ -1615,8 +1678,9 @@ impl DataGridPanel {
     /// the selection when it now points past the last row, and hand focus
     /// back to the grid.
     fn step_edit_history(&mut self, undo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let mut stepped = false;
         if let Some(table_state) = &self.grid_table.table_state {
-            table_state.update(cx, |state, cx| {
+            stepped = table_state.update(cx, |state, cx| {
                 if state.is_editing() {
                     state.stop_editing(false, cx);
                 }
@@ -1636,7 +1700,13 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 }
+                changed
             });
+        }
+
+        // The edits since the last read are newer than its filter.
+        if !stepped {
+            self.step_filter(!undo, window, cx);
         }
 
         window.focus(&self.focus_handle, cx);

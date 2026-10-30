@@ -339,6 +339,7 @@ impl DataGridPanel {
                 .push(cx);
             }
 
+            self.restore_column_layout(cx);
             self.rebuild_result_views(cx);
             return;
         }
@@ -356,6 +357,9 @@ impl DataGridPanel {
             state.set_reference_row(read_only_keys);
             state.set_insertable(is_insertable);
             state.set_document_presentation(document_presentation, cx);
+            // The grid keeps its own column layout (see column_layout_store),
+            // so a header drag only changes the screen.
+            state.set_columns_reorderable(true);
 
             if !fk_indices.is_empty() {
                 state.set_fk_columns(fk_indices);
@@ -424,6 +428,9 @@ impl DataGridPanel {
                     }
                     DataTableEvent::StepOutRequested => {
                         this.step_out_of_document_value(cx);
+                    }
+                    DataTableEvent::ColumnLayoutChanged => {
+                        this.save_column_layout(cx);
                     }
                     DataTableEvent::ContextMenuRequested {
                         row,
@@ -521,6 +528,7 @@ impl DataGridPanel {
         self.grid_table.data_table = Some(data_table);
         self.grid_table.table_subscription = Some(subscription);
 
+        self.restore_column_layout(cx);
         self.rebuild_result_views(cx);
     }
 

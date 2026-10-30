@@ -1636,6 +1636,12 @@ document:
       column:
         title: 열
         fit_width: 너비 맞춤
+        hide: 열 숨기기
+        choose: "열…"
+        move_left: 왼쪽으로 이동
+        move_right: 오른쪽으로 이동
+        chooser_title: 열
+        show_all: 모든 열 표시
       generate_sql:
         title: SQL 생성
       toolbar:

@@ -81,6 +81,25 @@ píxeles para que un valor JSON largo no saque el resto de la grilla de la
 pantalla; un doble clic en el borde de redimensionado, a la derecha de la
 cabecera, hace lo mismo.
 
+**Ocultar columna** quita la columna de la pantalla, y **Columnas…** lista todas
+las columnas con una marca en las visibles: `Enter`, `Space` o un clic muestra u
+oculta la columna resaltada mientras la lista sigue abierta, **Mostrar todas las
+columnas** devuelve todas las ocultas, y `Escape` la cierra. **Mover a la
+izquierda** y **Mover a la derecha** mueven la columna un lugar; arrastrar una
+cabecera sobre otra mueve su columna a ese lugar.
+
+La consulta sigue leyendo todas las columnas (una tabla sigue ejecutando
+`SELECT *`); para dejar una columna fuera de la consulta misma, usa la
+proyección del constructor de consultas. Copiar, Copiar como CSV y Copiar como
+JSON siguen la pantalla: las columnas visibles, en el orden en que la grilla las
+muestra. Copiar fila, Copiar como consulta y Exportar usan la fila completa en
+el orden propio del resultado, columnas ocultas incluidas. Una tabla recuerda su
+disposición para su conexión, base de datos, esquema y tabla, al cerrarla y al
+reiniciar DBFlux; volver a poner todas las columnas en el orden propio de la
+tabla, todas visibles, la olvida. Un resultado de consulta conserva su
+disposición mientras su pestaña está abierta. Una grilla de documentos mantiene
+el orden de sus campos y solo ofrece Ajustar ancho.
+
 ## Panel de valor
 
 Haz clic derecho en una celda y elige **Ver valor**, o pulsa `v`, para abrir la

@@ -124,6 +124,14 @@ pub enum ContextMenuAction {
     FindSimilarRows,
     /// Size the column to its header and loaded values.
     FitColumnWidth,
+    /// Take the column off the screen; the query still reads it.
+    HideColumn,
+    /// Open the chooser that shows and hides every column.
+    ChooseColumns,
+    /// Move the column one place left on screen.
+    MoveColumnLeft,
+    /// Move the column one place right on screen.
+    MoveColumnRight,
 }
 
 /// Events emitted by the DataTable component.
@@ -190,6 +198,10 @@ pub enum DataTableEvent {
 
     /// Document grid: leave the nested value shown now (Backspace).
     StepOutRequested,
+
+    /// The user hid, showed or moved a column. The host may keep the new
+    /// layout ([`super::DataTableState::column_layout_spec`]).
+    ColumnLayoutChanged,
 
     /// Request to save all pending changes at once (deletes, inserts, edits).
     SaveAllRequested {

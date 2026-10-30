@@ -784,11 +784,12 @@ impl DataTable {
         let fk_cols = state.fk_columns().clone();
         let annotated = state.has_header_annotations();
         let header_height = state.header_height(cx);
+        let reorderable = state.columns_reorderable();
 
-        let header_cells: Vec<_> = model
-            .columns
+        let header_cells: Vec<_> = state
+            .visible_columns()
             .iter()
-            .enumerate()
+            .filter_map(|&col_ix| model.columns.get(col_ix).map(|spec| (col_ix, spec)))
             .map(|(col_ix, col_spec)| {
                 let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
                 let sort_direction = sort
@@ -812,8 +813,9 @@ impl DataTable {
                 let state_for_click = state_entity.clone();
                 let resize_drag_for_down = resize_drag.clone();
 
-                div()
+                let header = div()
                     .id(("header-col", col_ix))
+                    .debug_selector(move || format!("header-col-{col_ix}"))
                     .relative()
                     .flex()
                     .flex_shrink_0()
@@ -826,7 +828,15 @@ impl DataTable {
                     .border_r_1()
                     .border_color(theme.border)
                     .hover(|s| s.bg(theme.table_hover))
-                    .cursor_pointer()
+                    .cursor_pointer();
+
+                let header = if reorderable {
+                    header_reorder(header, &state_entity, col_spec.title.clone(), col_ix, theme)
+                } else {
+                    header
+                };
+
+                header
                     .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.focus(window, cx);
@@ -1233,6 +1243,7 @@ impl DataTable {
                     &state_entity,
                     visible_range,
                     &model,
+                    state.visible_columns(),
                     state.column_widths(),
                     state.selection(),
                     editing_cell,
@@ -1280,6 +1291,7 @@ fn render_rows(
     state_entity: &Entity<DataTableState>,
     visible_range: Range<usize>,
     model: &TableModel,
+    columns: &[usize],
     column_widths: &[f32],
     selection: &SelectionState,
     editing_cell: Option<CellCoord>,
@@ -1351,8 +1363,9 @@ fn render_rows(
             // number reads as their rank.
             let row_number = if reference_row { row_ix } else { row_ix + 1 };
 
-            let cells: Vec<AnyElement> = (0..model.col_count())
-                .map(|col_ix| {
+            let cells: Vec<AnyElement> = columns
+                .iter()
+                .map(|&col_ix| {
                     // Get cell either from model or from pending insert
                     let cell = if let Some(insert_data) = pending_insert_data {
                         insert_data.get(col_ix)
@@ -1690,6 +1703,78 @@ fn render_rows(
                 .into_any_element()
         })
         .collect()
+}
+
+/// What a header carries while it is dragged onto another header to move
+/// its column there.
+#[derive(Clone)]
+struct ColumnDrag {
+    /// The table the header belongs to, so a drop on another table's header
+    /// (another result tab, a split) does nothing.
+    table: gpui::EntityId,
+    col: usize,
+    title: SharedString,
+}
+
+/// The floating label a dragged header shows under the pointer.
+struct ColumnDragPreview {
+    title: SharedString,
+}
+
+impl gpui::Render for ColumnDragPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        div()
+            .px(CELL_PADDING_X)
+            .py(Spacing::XS)
+            .bg(theme.popover)
+            .border_1()
+            .border_color(ChromeColors::tint(theme))
+            .text_size(fonts::grid_font_size(cx))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(ChromeColors::strong(theme))
+            .child(self.title.clone())
+    }
+}
+
+/// Lets a header be dragged onto another header of the same table, which
+/// moves its column into that place, as in a database IDE's grid. A press
+/// without a drag stays a click, so selecting the column still works.
+fn header_reorder(
+    header: gpui::Stateful<gpui::Div>,
+    state: &Entity<DataTableState>,
+    title: Arc<str>,
+    col_ix: usize,
+    theme: &gpui_component::theme::Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let table = state.entity_id();
+    let drag = ColumnDrag {
+        table,
+        col: col_ix,
+        title: SharedString::from(title.to_string()),
+    };
+    let state_for_drop = state.clone();
+    let drop_tint = ChromeColors::tint(theme).opacity(0.25);
+
+    header
+        .on_drag(drag, |drag, _offset, _window, cx| {
+            gpui::AppContext::new(cx, |_| ColumnDragPreview {
+                title: drag.title.clone(),
+            })
+        })
+        .drag_over::<ColumnDrag>(move |style, drag, _window, _cx| {
+            if drag.table == table && drag.col != col_ix {
+                style.bg(drop_tint)
+            } else {
+                style
+            }
+        })
+        .on_drop(move |drag: &ColumnDrag, _window, cx| {
+            if drag.table == table {
+                state_for_drop.update(cx, |state, cx| state.move_column(drag.col, col_ix, cx));
+            }
+        })
 }
 
 /// The strip at a header's right edge that resizes its column.

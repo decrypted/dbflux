@@ -101,6 +101,12 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ),
         // Every row of the table menu and its submenus.
         ("context-menu.*", KeyboardPath::Command(Command::MenuSelect)),
+        // The Columns chooser, opened from the column menu (`Shift+m`):
+        // Enter or Space toggles the highlighted row.
+        (
+            "column-chooser-*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
         ("export-menu.*", KeyboardPath::Command(Command::MenuSelect)),
         (
             "export-trigger",

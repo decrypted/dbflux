@@ -1461,6 +1461,32 @@ mod tests {
     }
 
     #[test]
+    fn auth_profile_hint_names_no_access_method() {
+        // The hint sits under the picker in Direct, SSM, SSH tunnel and proxy modes.
+        let direct_mode_words = [
+            ("en", "Direct"),
+            ("es", "Directo"),
+            ("pt_BR", "Direto"),
+            ("ko", "직접"),
+            ("zh_Hans", "直连"),
+        ];
+
+        for (locale, word) in direct_mode_words {
+            let hint = dbflux_i18n::t!("access.auth_profile_hint", locale = locale);
+
+            assert_ne!(
+                hint,
+                format!("{locale}.access.auth_profile_hint"),
+                "access.auth_profile_hint did not resolve for {locale}"
+            );
+            assert!(
+                !hint.contains(word),
+                "access.auth_profile_hint for {locale} still names Direct mode: {hint}"
+            );
+        }
+    }
+
+    #[test]
     fn access_method_label_differs_between_locales() {
         let en = dbflux_i18n::t!("access.method_label", locale = "en");
         let es = dbflux_i18n::t!("access.method_label", locale = "es");

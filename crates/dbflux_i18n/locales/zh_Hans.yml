@@ -6,7 +6,7 @@ access:
   manage: 管理
   login: 登录
   refresh: 刷新
-  auth_profile_hint: 用于在直连模式下解析密钥、连接参数、认证配置文件取值来源。
+  auth_profile_hint: 用于解析密钥、连接参数、认证配置文件取值来源。
   session_valid: 认证配置文件会话有效
   ssm_title: SSM 端口转发
   ssm_instance_id: 实例 ID

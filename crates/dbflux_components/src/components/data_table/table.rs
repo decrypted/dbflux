@@ -2069,12 +2069,14 @@ mod tests {
         fx.visual.run_until_parked();
 
         let jitter = gpui::point(b.x + px(1.0), b.y + px(1.0));
-        fx.visual.simulate_mouse_down(b, MouseButton::Left, secondary);
+        fx.visual
+            .simulate_mouse_down(b, MouseButton::Left, secondary);
         fx.visual
             .simulate_mouse_move(jitter, MouseButton::Left, secondary);
         fx.visual
             .simulate_mouse_move(other, MouseButton::Left, secondary);
-        fx.visual.simulate_mouse_up(other, MouseButton::Left, secondary);
+        fx.visual
+            .simulate_mouse_up(other, MouseButton::Left, secondary);
         fx.visual.run_until_parked();
 
         let state = fx.state.clone();
@@ -2126,7 +2128,10 @@ mod tests {
             let state = state.read(cx);
             assert_eq!(state.editing_cell(), Some(CellCoord::new(3, 1)));
             assert!(state.selection().is_selected(CellCoord::new(3, 1)));
-            assert!(state.selection().is_selected(CellCoord::new(0, 0)), "A kept");
+            assert!(
+                state.selection().is_selected(CellCoord::new(0, 0)),
+                "A kept"
+            );
         });
 
         // The cell selected on its own: the first press takes it out.

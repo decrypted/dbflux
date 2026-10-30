@@ -2843,7 +2843,9 @@ mod tests {
         let secondary = gpui::Modifiers::secondary_key();
 
         window.update(|_, app| {
-            state.update(app, |s, cx| s.click_cell(CellCoord::new(0, 1), secondary, cx));
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(0, 1), secondary, cx)
+            });
         });
         window.update(|_, app| {
             let selection = state.read(app).selection();
@@ -2854,8 +2856,12 @@ mod tests {
 
         // Ctrl+click on the only selected field keeps it, no jump to row 0.
         window.update(|_, app| {
-            state.update(app, |s, cx| s.click_cell(CellCoord::new(1, 1), secondary, cx));
-            state.update(app, |s, cx| s.click_cell(CellCoord::new(1, 1), secondary, cx));
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), secondary, cx)
+            });
         });
         window.update(|_, app| {
             assert_eq!(

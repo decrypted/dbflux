@@ -72,7 +72,7 @@ The `client-id` value must match a trusted client entry you created in the DBFlu
 
 The server loads inline connection hooks and reusable hook bindings from the shared database. It runs PreConnect and PostConnect around connection setup, and PreDisconnect and PostDisconnect when an open connection is disconnected. Hook outcomes are recorded in the audit log. A detached PreConnect hook must emit its configured ready signal; after that signal, the server waits for the endpoint only for direct profiles. Pipeline and SSH-tunnel profiles skip that endpoint wait because their endpoint is resolved by the pipeline or tunnel. The standalone MCP server does not include the Lua hook executor; an enabled Lua hook returns an error identifying its phase and hook instead of being skipped.
 
-A connection that uses an SSH tunnel profile opens the tunnel the way the app does, including a `ProxyCommand` from `~/.ssh/config`. The tunnel profiles are read when the server starts. The tunnel's password or key passphrase comes from the OS keyring, a key left to the SSH agent needs `SSH_AUTH_SOCK` in the server's environment, and host keys are checked against the app's own store. Proxy profiles are still refused.
+A connection that uses an SSH tunnel profile opens the tunnel the way the app does, including a host picked from `~/.ssh/config`. The tunnel profiles are read when the server starts, so restart it after adding or changing a tunnel. The tunnel's password or key passphrase comes from the OS keyring, a key left to the SSH agent needs `SSH_AUTH_SOCK` in the server's environment, and host keys are checked against the app's own store. Proxy profiles are still refused.
 
 ## 3. Governance Model (Core Concepts)
 

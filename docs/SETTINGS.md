@@ -86,6 +86,7 @@ converted crate by crate and stays in English for now.
 |---------|---------|--------------|
 | **Show referenced-row labels in foreign-key cells** | Off | Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after you save; the row inspector always resolves references. |
 | **Include column names when copying** | Off | Copy (`Ctrl+C`, `Cmd+C` on macOS) from the data grid starts the tab-separated text with a line of the copied columns' names. Copy as CSV, JSON and the other Copy as entries are not affected. Applies to open grids when you save. |
+| **Clicking a column header sorts the column** | Off | Off: a click on a column header selects the whole column, and the arrow at the header's right edge sorts. On: a plain click sorts the column (none, ascending, descending), and `Shift`+click and `Ctrl`+click still select columns. Tables that keep their rows in file order (CSV, Parquet, spreadsheets) always select. |
 
 ### Startup & session
 

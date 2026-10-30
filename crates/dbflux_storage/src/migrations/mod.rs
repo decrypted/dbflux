@@ -191,6 +191,7 @@ impl MigrationRegistry {
         registry.register(mod_046_connection_profile_read_only::MigrationImpl);
         registry.register(mod_047_general_settings_grid_fk_labels::MigrationImpl);
         registry.register(mod_052_general_settings_grid_copy_column_names::MigrationImpl);
+        registry.register(mod_058_general_settings_grid_header_click_sorts::MigrationImpl);
         registry
     }
 
@@ -429,6 +430,7 @@ mod mod_045_general_settings_table_alias;
 mod mod_046_connection_profile_read_only;
 mod mod_047_general_settings_grid_fk_labels;
 mod mod_052_general_settings_grid_copy_column_names;
+mod mod_058_general_settings_grid_header_click_sorts;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1182,6 +1184,7 @@ mod tests {
             "046_connection_profile_read_only",
             "047_general_settings_grid_fk_labels",
             "052_general_settings_grid_copy_column_names",
+            "058_general_settings_grid_header_click_sorts",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

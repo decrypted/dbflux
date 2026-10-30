@@ -4,8 +4,6 @@
 
 use super::super::{ContextMenuItem, DataGridPanel, DataSource};
 use dbflux_components::components::data_table::ContextMenuAction;
-use dbflux_components::components::data_table::model::VisualRowSource;
-use dbflux_components::components::data_table::selection::CellCoord;
 use dbflux_components::icons::AppIcon;
 use dbflux_core::{
     ColumnAssignment, ColumnMeta, DefaultSqlDialect, MutationRequest, QueryGenerator,
@@ -13,7 +11,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::toast::{Toast, now_hms};
 use gpui::{App, Context};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 
 /// Formats `values` as a parenthesized SQL list, `('a', 'b')` or `(1, 2)`,
 /// with the dialect's literals. NULLs are left out, since `x IN (NULL)` never
@@ -131,16 +129,6 @@ fn markdown_cell(text: &str) -> String {
         .replace(['\n', '\r'], "<br>")
 }
 
-/// The cells of the grid selection, in result coordinates.
-struct SelectedCells {
-    /// For every loaded row holding a selected cell, top to bottom: its
-    /// visual row in the grid and its index in `result.rows`. Rows added in
-    /// the grid and not saved yet have no loaded values and are left out.
-    rows: Vec<(usize, usize)>,
-    /// The result columns holding a selected cell, left to right.
-    cols: Vec<usize>,
-}
-
 fn copy_item(label: String, action: ContextMenuAction, icon: AppIcon) -> ContextMenuItem {
     ContextMenuItem {
         label: label.into(),
@@ -216,7 +204,15 @@ impl DataGridPanel {
     /// columns selected it takes the leftmost, since an IN list compares one
     /// column.
     pub(in crate::data_grid_panel) fn copy_selection_as_in_list(&mut self, cx: &mut Context<Self>) {
-        let Some(values) = self.selected_values_of_first_column(cx) else {
+        // Cells of the first column outside the selection come back NULL,
+        // and an IN list leaves NULLs out.
+        let Some(values) = self.selection_result(cx).map(|result| {
+            result
+                .rows
+                .into_iter()
+                .filter_map(|row| row.into_iter().next())
+                .collect::<Vec<_>>()
+        }) else {
             return;
         };
 
@@ -239,13 +235,13 @@ impl DataGridPanel {
 
     /// Copy as INSERT statements: one INSERT into the table per selected row,
     /// with the columns that hold a selected cell and each row's values for
-    /// them, selected or not.
+    /// them as the grid shows them, selected or not.
     pub(in crate::data_grid_panel) fn copy_selection_as_inserts(&mut self, cx: &mut Context<Self>) {
         let DataSource::Table { table, .. } = &self.source else {
             return;
         };
         let table = table.clone();
-        let Some((columns, rows)) = self.selected_rows_and_columns(cx) else {
+        let Some(selected) = self.selection_values(cx, false) else {
             return;
         };
         let Some(connection) = self.copy_connection(cx) else {
@@ -255,7 +251,7 @@ impl DataGridPanel {
             return;
         };
 
-        let statements = insert_statements(generator, &table, &columns, &rows);
+        let statements = insert_statements(generator, &table, &selected.columns, &selected.rows);
         if statements.is_empty() {
             return;
         }
@@ -264,14 +260,14 @@ impl DataGridPanel {
         self.finish_clipboard_text(statements.join("\n"), "SQL INSERT", Some(count), cx);
     }
 
-    /// Copy as Markdown table: every loaded row and column holding a selected
-    /// cell, with the cells outside the selection empty, as Copy as CSV takes
-    /// them.
+    /// Copy as Markdown table: every row and column the grid shows holding a
+    /// selected cell, with the cells outside the selection empty, as Copy as
+    /// CSV takes them.
     pub(in crate::data_grid_panel) fn copy_selection_as_markdown(
         &mut self,
         cx: &mut Context<Self>,
     ) {
-        let Some(selected) = self.selected_cells_result(cx) else {
+        let Some(selected) = self.selection_result(cx) else {
             return;
         };
 
@@ -319,125 +315,6 @@ impl DataGridPanel {
             .connections()
             .get(&profile_id)
             .map(|connected| connected.connection.clone())
-    }
-
-    /// The selected cells of the grid, resolved through its visual order:
-    /// a row the grid shows is not always the row at the same index of
-    /// `result.rows`, since rows added in the grid sit among the loaded ones.
-    fn selected_cells(&self, cx: &App) -> Option<SelectedCells> {
-        let state = self.grid_table.table_state.as_ref()?.read(cx);
-        let ranges = state.selection().ranges();
-        if ranges.is_empty() {
-            return None;
-        }
-
-        let visual_order = state.edit_buffer().compute_visual_order();
-        let visual_rows: BTreeSet<usize> = ranges
-            .iter()
-            .flat_map(|range| range.start.row..=range.end.row)
-            .collect();
-        let rows = visual_rows
-            .into_iter()
-            .filter_map(|visual| match visual_order.get(visual) {
-                Some(VisualRowSource::Base(base)) if *base < self.result.rows.len() => {
-                    Some((visual, *base))
-                }
-                _ => None,
-            })
-            .collect();
-        let cols: BTreeSet<usize> = ranges
-            .iter()
-            .flat_map(|range| range.start.col..=range.end.col)
-            .filter(|&col| col < self.result.columns.len())
-            .collect();
-
-        Some(SelectedCells {
-            rows,
-            cols: cols.into_iter().collect(),
-        })
-    }
-
-    fn selected_values_of_first_column(&self, cx: &App) -> Option<Vec<Value>> {
-        let cells = self.selected_cells(cx)?;
-        let column = *cells.cols.first()?;
-        let selection = self.grid_table.table_state.as_ref()?.read(cx).selection();
-
-        Some(
-            cells
-                .rows
-                .iter()
-                .filter(|(visual, _)| selection.is_selected(CellCoord::new(*visual, column)))
-                .filter_map(|(_, base)| self.result.rows.get(*base)?.get(column).cloned())
-                .collect(),
-        )
-    }
-
-    /// The columns holding a selected cell and, for every loaded row holding
-    /// one, that row's values in those columns.
-    fn selected_rows_and_columns(&self, cx: &App) -> Option<(Vec<ColumnMeta>, Vec<Vec<Value>>)> {
-        let cells = self.selected_cells(cx)?;
-
-        let columns = cells
-            .cols
-            .iter()
-            .filter_map(|&col| self.result.columns.get(col).cloned())
-            .collect();
-        let values = cells
-            .rows
-            .iter()
-            .filter_map(|(_, base)| {
-                let values = self.result.rows.get(*base)?;
-                Some(
-                    cells
-                        .cols
-                        .iter()
-                        .map(|&col| values.get(col).cloned().unwrap_or(Value::Null))
-                        .collect(),
-                )
-            })
-            .collect();
-
-        Some((columns, values))
-    }
-
-    /// The selected cells as a result: the columns and loaded rows holding
-    /// a selected cell, with `Null` in the cells outside the selection.
-    fn selected_cells_result(&self, cx: &App) -> Option<QueryResult> {
-        let cells = self.selected_cells(cx)?;
-        let selection = self.grid_table.table_state.as_ref()?.read(cx).selection();
-
-        let columns = cells
-            .cols
-            .iter()
-            .filter_map(|&col| self.result.columns.get(col).cloned())
-            .collect();
-        let rows = cells
-            .rows
-            .iter()
-            .filter_map(|&(visual, base)| {
-                let values = self.result.rows.get(base)?;
-                Some(
-                    cells
-                        .cols
-                        .iter()
-                        .map(|&col| {
-                            if selection.is_selected(CellCoord::new(visual, col)) {
-                                values.get(col).cloned().unwrap_or(Value::Null)
-                            } else {
-                                Value::Null
-                            }
-                        })
-                        .collect(),
-                )
-            })
-            .collect();
-
-        Some(QueryResult::table(
-            columns,
-            rows,
-            None,
-            std::time::Duration::ZERO,
-        ))
     }
 }
 

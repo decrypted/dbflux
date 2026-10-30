@@ -4118,6 +4118,9 @@ settings:
     grid_copy_column_names:
       label: "복사할 때 열 이름 포함"
       hint: "데이터 그리드에서 복사(Ctrl+C, macOS에서는 Cmd+C)하면 탭으로 구분된 텍스트가 열 이름 한 줄로 시작합니다. CSV, JSON 등 다른 형식으로 복사 항목에는 영향을 주지 않습니다."
+    grid_header_click_sorts:
+      label: "열 헤더를 클릭하면 열 정렬"
+      hint: "끔: 열 헤더를 클릭하면 열 전체가 선택되고, 헤더 오른쪽 끝의 화살표로 정렬합니다. 켬: 클릭하면 열이 정렬됩니다. Shift+클릭과 Ctrl+클릭은 계속 열을 선택합니다."
     vim_mode:
       label: "편집기에서 Vim 모드 사용"
       hint: "노멀 모드와 삽입 모드: h, j, k, l, Enter로 이동하고, i로 입력을 시작하고, Esc로 노멀 모드로 돌아가고, x로 문자를 삭제하고, u로 실행을 취소합니다. 저장하면 열려 있는 편집기에 적용됩니다."

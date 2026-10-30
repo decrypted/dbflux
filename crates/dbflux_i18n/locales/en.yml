@@ -4118,6 +4118,9 @@ settings:
     grid_copy_column_names:
       label: "Include column names when copying"
       hint: "Copy (Ctrl+C, Cmd+C on macOS) from the data grid starts the tab-separated text with a line of column names. Copy as CSV, JSON and the other Copy as entries are not affected."
+    grid_header_click_sorts:
+      label: "Clicking a column header sorts the column"
+      hint: "Off: a click on a column header selects the whole column and the arrow at its right edge sorts. On: the click sorts the column; Shift+click and Ctrl+click still select columns."
     vim_mode:
       label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."

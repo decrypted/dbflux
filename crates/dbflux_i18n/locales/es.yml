@@ -4118,6 +4118,9 @@ settings:
     grid_copy_column_names:
       label: "Incluir los nombres de columna al copiar"
       hint: "Copiar (Ctrl+C, Cmd+C en macOS) en la cuadrícula de datos empieza el texto separado por tabulaciones con una línea de nombres de columna. Copiar como CSV, JSON y las demás entradas Copiar como no cambian."
+    grid_header_click_sorts:
+      label: "Hacer clic en la cabecera de una columna la ordena"
+      hint: "Desactivado: un clic en la cabecera de una columna selecciona la columna entera y la flecha de su borde derecho ordena. Activado: el clic ordena la columna; Shift+clic y Ctrl+clic siguen seleccionando columnas."
     vim_mode:
       label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."

@@ -428,8 +428,9 @@ fn copy_as_inserts_is_not_offered_on_grouped_or_joined_builder_rows(cx: &mut Tes
 }
 
 /// A row added in the grid and not saved sits among the loaded rows; the
-/// extractors copy the loaded rows the selection covers, not the rows at the
-/// same index of the result, and leave the unsaved one out.
+/// extractors copy the rows the grid shows, not the rows at the same index
+/// of the result, with the unsaved row at its place and unsaved edits
+/// applied, as Copy as CSV does.
 #[gpui::test]
 fn the_extractors_copy_the_rows_shown_around_a_pending_insert(cx: &mut TestAppContext) {
     let (panel, _app_state, window) = people_panel(cx);
@@ -443,17 +444,42 @@ fn the_extractors_copy_the_rows_shown_around_a_pending_insert(cx: &mut TestAppCo
     window.update(|_, app| panel.update(app, |panel, cx| panel.copy_selection_as_markdown(cx)));
     assert_eq!(
         clipboard_text(window),
-        "| id | name |\n| --- | --- |\n| 1 | O'Brien |\n| 2 | Ann |",
-        "the unsaved row is left out"
+        "| id | name |\n| --- | --- |\n| 1 | O'Brien |\n| 9 | pending |\n| 2 | Ann |",
+        "the unsaved row at its place"
+    );
+
+    window.update(|_, app| {
+        let table_state = panel
+            .read(app)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("table state");
+        table_state.update(app, |state, cx| {
+            state.edit_buffer_mut().set_cell(
+                1,
+                1,
+                dbflux_components::components::data_table::model::CellValue::text("Edited"),
+            );
+            cx.notify();
+        });
+    });
+    select_cells(&panel, window, (2, 1), (3, 1));
+    window.update(|_, app| panel.update(app, |panel, cx| panel.copy_selection_as_in_list(cx)));
+    assert_eq!(
+        clipboard_text(window),
+        "('Edited', 'O''Brien')",
+        "an unsaved edit is copied with its new value"
     );
 
     let (panel, window) = users_table_panel(cx);
     insert_row_after_the_first(&panel, window);
-    select_cells(&panel, window, (2, 0), (3, 1));
+    select_cells(&panel, window, (1, 0), (3, 1));
     window.update(|_, app| panel.update(app, |panel, cx| panel.copy_selection_as_inserts(cx)));
     assert_eq!(
         clipboard_text(window),
         [
+            "INSERT INTO \"public\".\"users\" (\"id\", \"name\") VALUES (9, 'pending');",
             "INSERT INTO \"public\".\"users\" (\"id\", \"name\") VALUES (2, 'Ann');",
             "INSERT INTO \"public\".\"users\" (\"id\", \"name\") VALUES (3, 'Bo');",
         ]

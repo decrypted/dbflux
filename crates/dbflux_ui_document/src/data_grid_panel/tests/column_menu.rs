@@ -305,3 +305,119 @@ fn shift_m_is_ignored_without_column_headers(cx: &mut TestAppContext) {
         "the document view opens no column menu"
     );
 }
+
+/// The data grid keeps its own column layout, so it lets its headers be
+/// dragged to move columns; other tables have to opt in.
+#[gpui::test]
+fn the_data_grid_lets_headers_move_columns(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let (panel, window) = host_wide_result(cx);
+
+    assert!(window.update(|_, cx| table_state(&panel, cx).read(cx).columns_reorderable()));
+}
+
+/// A query result with `count` short text columns, more than the Columns
+/// chooser can show at once.
+fn host_many_columns(
+    cx: &mut TestAppContext,
+    count: usize,
+) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
+    let app_state = isolated_test_app_state(cx);
+    let (host, window) = host_document(
+        cx,
+        move |window, cx| {
+            cx.new(|cx| {
+                DataGridPanel::new_for_result(
+                    Arc::new(QueryResult::table(
+                        (0..count)
+                            .map(|col| key_column(&format!("c{col}"), false))
+                            .collect(),
+                        vec![
+                            (0..count)
+                                .map(|col| dbflux_core::Value::Text(format!("v{col}")))
+                                .collect(),
+                        ],
+                        None,
+                        Duration::ZERO,
+                    )),
+                    "SELECT * FROM wide".to_string(),
+                    None,
+                    app_state,
+                    window,
+                    cx,
+                )
+            })
+        },
+        |panel, cx| panel.active_context(cx),
+        DataGridPanel::dispatch_command,
+    );
+    let panel = window.update(|_, cx| host.read(cx).document.clone());
+
+    window.update(|window, cx| {
+        let focus_handle = table_state(&panel, cx).read(cx).focus_handle().clone();
+        focus_handle.focus(window, cx);
+    });
+    window.run_until_parked();
+
+    (panel, window)
+}
+
+/// The Columns chooser works from the keyboard: Down then Enter hides the
+/// first column and Enter shows it again, and moving onto a row below the
+/// chooser's height scrolls that row into view.
+#[gpui::test]
+fn the_columns_chooser_toggles_from_the_keyboard_and_keeps_its_row_in_view(
+    cx: &mut TestAppContext,
+) {
+    init_keyboard_runtime(cx);
+    let (panel, window) = host_many_columns(cx, 80);
+
+    window.simulate_keystrokes("shift-m");
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.handle_context_menu_action(ContextMenuAction::ChooseColumns, window, cx);
+        });
+    });
+    window.run_until_parked();
+    assert!(window.update(|_, cx| panel.read(cx).column_chooser.is_some()));
+
+    let first_hidden = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            table_state(&panel, cx)
+                .read(cx)
+                .column_layout()
+                .is_hidden(0)
+        })
+    };
+    window.simulate_keystrokes("down enter");
+    window.run_until_parked();
+    assert!(first_hidden(window), "the first column row hides `c0`");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    assert!(!first_hidden(window), "Enter again shows it");
+
+    let scroll_y = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            panel
+                .read(cx)
+                .column_chooser
+                .as_ref()
+                .map(|chooser| chooser.scroll_handle.offset().y)
+                .expect("the chooser is open")
+        })
+    };
+    assert_eq!(scroll_y(window), gpui::px(0.0));
+
+    // Up to Show all, then up again wraps to the last column's row.
+    window.simulate_keystrokes("up up");
+    window.run_until_parked();
+    assert!(
+        scroll_y(window) < gpui::px(0.0),
+        "the last row scrolls into view"
+    );
+
+    // Down wraps back to Show all at the top.
+    window.simulate_keystrokes("down");
+    window.run_until_parked();
+    assert_eq!(scroll_y(window), gpui::px(0.0), "back at the top");
+}

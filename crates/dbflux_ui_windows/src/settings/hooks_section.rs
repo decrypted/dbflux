@@ -11,7 +11,7 @@ use dbflux_core::{HookExecutionMode, ScriptLanguage};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
+use gpui_component::dialog::{AlertDialog, DialogButtonProps};
 use gpui_component::input::EditorState;
 use std::collections::HashMap;
 
@@ -719,10 +719,9 @@ impl Render for HooksSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(cx)
+                    AlertDialog::new(cx)
                         .title(dbflux_i18n::t!("hooks.delete.title"))
                         .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
                         .close_button(false)
                         .on_ok(move |_, window, cx| {
                             entity.update(cx, |section, cx| {
@@ -748,10 +747,9 @@ impl Render for HooksSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(cx)
+                    AlertDialog::new(cx)
                         .title(dbflux_i18n::t!("hooks.delete_unreadable.title"))
                         .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
                         .close_button(false)
                         .on_ok(move |_, _, cx| {
                             entity.update(cx, |section, cx| {

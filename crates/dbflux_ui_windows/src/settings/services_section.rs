@@ -9,7 +9,7 @@ use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
+use gpui_component::dialog::{AlertDialog, DialogButtonProps};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum ServiceFocus {
@@ -393,10 +393,9 @@ impl Render for ServicesSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(cx)
+                    AlertDialog::new(cx)
                         .title(dbflux_i18n::t!("settings.rpc_services.delete_dialog_title"))
                         .button_props(DialogButtonProps::default().show_cancel(true))
-                        .overlay_closable(false)
                         .close_button(false)
                         .on_ok(move |_, window, cx| {
                             entity.update(cx, |section, cx| {

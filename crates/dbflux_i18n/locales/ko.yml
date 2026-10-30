@@ -1696,12 +1696,8 @@ document:
         toast:
           native_picker_fallback: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
           exported: "%{path}에 내보냈습니다"
-          exported_rows:
-            one: "불러온 행 1개를 %{path}에 내보냈습니다"
-            many: "불러온 행 %{count}개를 %{path}에 내보냈습니다"
-          native_picker_fallback_rows:
-            one: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 불러온 행 1개를 %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
-            many: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 불러온 행 %{count}개를 %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
+          exported_scope: "%{scope}을(를) %{path}에 내보냈습니다"
+          native_picker_fallback_scope: "네이티브 파일 선택기를 사용할 수 없습니다 — 대신 %{scope}을(를) %{path}에 내보냈습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
       clipboard:
         error:
           binary_unsupported: 원시 바이너리는 클립보드로 복사할 수 없습니다 — 대신 Hex 또는 Base64를 선택하세요.
@@ -1712,6 +1708,7 @@ document:
           copied_rows:
             one: "불러온 행 1개를 %{format} (%{bytes}바이트)로 클립보드에 복사했습니다"
             many: "불러온 행 %{count}개를 %{format} (%{bytes}바이트)로 클립보드에 복사했습니다"
+          copied_scope: "%{scope}을(를) %{format} (%{bytes}바이트)로 클립보드에 복사했습니다"
       document:
         toast:
           inserted: 문서 삽입됨
@@ -1777,15 +1774,44 @@ document:
           many: "대기 중인 변경 사항 %{count}개"
       export:
         trigger: 내보내기
-        save_as_file: 불러온 행을 파일로 저장
-        copy_to_clipboard: 불러온 행을 클립보드로 복사
+        save_as_file: "파일로 저장"
+        copy_to_clipboard: "클립보드로 복사"
         export_all_rows: 모든 행을 파일로 내보내기
+        options:
+          title: "내보내기: %{scope}"
+          rows: "행"
+          columns: "열"
+          header: "헤더 행 포함 (열 이름)"
+          delimiter: "구분자"
+          rows_selected: "선택"
+          rows_loaded: "불러온 행"
+          rows_all: "전체"
+          columns_all: "전체"
+          columns_visible: "표시"
+          columns_selected: "선택"
+          delimiter_comma: "쉼표"
+          delimiter_semicolon: "세미콜론"
+          delimiter_tab: "탭"
+          no_selected_rows: "선택한 행을 내보내려면 셀을 선택하세요"
+          no_selected_columns: "선택한 열을 내보내려면 셀을 선택하세요"
+        scope:
+          summary: "%{rows}, %{columns}"
+          selected_rows:
+            one: "선택한 행 1개"
+            many: "선택한 행 %{count}개"
+          loaded_rows:
+            one: "불러온 행 1개"
+            many: "불러온 행 %{count}개"
+          all_rows: "모든 행"
+          all_rows_count:
+            one: "1개 행"
+            many: "모든 %{count}개 행"
+          columns:
+            one: "열 1개"
+            many: "열 %{count}개"
         all:
           task: "%{table}의 모든 행 내보내기"
           toast:
-            exported:
-              one: "1개 행을 %{path}에 내보냈습니다"
-              many: "모든 %{count}개 행을 %{path}에 내보냈습니다"
             cancelled: "내보내기를 취소했습니다 — %{path}에는 중지 전에 기록된 행만 있습니다"
             dropped_columns: "첫 페이지 이후에 처음 나타난 필드는 파일에 없습니다: %{columns}"
           error:

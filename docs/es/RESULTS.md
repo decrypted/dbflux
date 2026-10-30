@@ -300,17 +300,45 @@ resultado e incluyen:
 - **Text**
 - **Binary** (para resultados con forma binaria)
 
-Las secciones **Guardar filas cargadas como archivo** y **Copiar filas cargadas
-al portapapeles** del menú escriben las filas que tiene la cuadrícula, que en una
-tabla son la página actual, y el aviso indica cuántas filas fueron al archivo o
-al portapapeles.
+La parte superior del menú elige qué se exporta, y los formatos de **Guardar
+como archivo** y **Copiar al portapapeles** que hay debajo siguen esa elección:
 
-Cuando la cuadrícula muestra una tabla o una colección leída página a página, el
-menú añade **Exportar todas las filas a un archivo**, en CSV o en JSON con un
-objeto por línea. Vuelve a leer la tabla o la colección completa con el filtro,
-el orden y la selección de columnas actuales de la cuadrícula, una página a la
-vez, y la escribe en el único archivo que elijas, de modo que los datos nunca
-tienen que caber en memoria. Una tabla mostrada mediante el constructor de
+- **Filas**: **Seleccionadas** escribe las filas que tienen una celda
+  seleccionada tal como las muestra la cuadrícula, con las ediciones y filas
+  añadidas sin guardar, como Copiar como CSV; **Cargadas** las filas que tiene la cuadrícula (en una tabla, la
+  página actual) y **Todas** todas las filas de la tabla o la colección (ver más
+  abajo; solo se ofrece donde la cuadrícula puede volver a leerla página a
+  página). **Seleccionadas** está desactivada, con el motivo bajo la fila, hasta
+  que se selecciona una celda.
+- **Columnas**: **Visibles**, la opción por defecto, escribe las columnas
+  mostradas en el orden en que las muestra la cuadrícula, así que las columnas
+  ocultas se omiten y las movidas o fijadas conservan su lugar. **Todas**
+  escribe todas las columnas en el orden del resultado, incluidas las ocultas.
+  **Seleccionadas** escribe las columnas mostradas que tienen una celda
+  seleccionada, en el orden de la pantalla. Filas seleccionadas con columnas
+  seleccionadas escriben las celdas de un rango seleccionado con sus valores;
+  con varios rangos de `Ctrl`+clic, todas las filas y columnas que abarcan.
+- **Incluir fila de encabezado (nombres de columna)**, activada por defecto, y
+  **Separador** (coma, punto y coma o tabulador) se aplican al CSV guardado o
+  copiado desde este menú y a Exportar todas las filas en CSV. No cambian Copiar
+  como CSV del menú contextual.
+
+El título sobre las opciones indica qué escriben los formatos, por ejemplo
+"Exportar 12 filas seleccionadas, 4 columnas", y el aviso tras guardar o copiar
+indica las mismas filas y columnas con la ruta o el número de bytes. El menú se
+abre en el primer formato, así que `Ctrl+e` `Enter` sigue guardando de
+inmediato. `k` o `Arriba` sube a las opciones; `Enter`, `Derecha` o `l` en una
+fila de opción pasa a su siguiente valor, saltando los que no se aplican, o
+marca la casilla del encabezado, y un clic elige un valor directamente. Tus
+elecciones se guardan para todas las cuadrículas, no por tabla, y entre
+reinicios.
+
+Con **Filas** en **Todas**, el menú ofrece **Exportar todas las filas a un
+archivo**, en CSV o en JSON con un objeto por línea. Vuelve a leer la tabla o la
+colección completa con el filtro, el orden y la selección de columnas actuales
+de la cuadrícula, una página a la vez, escribe las columnas que elige la opción
+**Columnas** y la escribe en el único archivo que elijas, de modo que los datos
+nunca tienen que caber en memoria. Una tabla mostrada mediante el constructor de
 consultas o un filtro relacional se lee con esa misma consulta, desde su
 desplazamiento y hasta su límite cuando lo define. La exportación se ejecuta
 como una tarea en el panel de tareas, que muestra su progreso y permite

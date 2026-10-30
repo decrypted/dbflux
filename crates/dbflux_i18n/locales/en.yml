@@ -1696,12 +1696,8 @@ document:
         toast:
           native_picker_fallback: "Native file picker unavailable — exported to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
           exported: "Exported to %{path}"
-          exported_rows:
-            one: "Exported 1 loaded row to %{path}"
-            many: "Exported %{count} loaded rows to %{path}"
-          native_picker_fallback_rows:
-            one: "Native file picker unavailable — exported 1 loaded row to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
-            many: "Native file picker unavailable — exported %{count} loaded rows to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+          exported_scope: "Exported %{scope} to %{path}"
+          native_picker_fallback_scope: "Native file picker unavailable — exported %{scope} to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
       clipboard:
         error:
           binary_unsupported: Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead.
@@ -1712,6 +1708,7 @@ document:
           copied_rows:
             one: "Copied 1 loaded row as %{format} (%{bytes} bytes) to clipboard"
             many: "Copied %{count} loaded rows as %{format} (%{bytes} bytes) to clipboard"
+          copied_scope: "Copied %{scope} as %{format} (%{bytes} bytes) to clipboard"
       document:
         toast:
           inserted: Document inserted
@@ -1777,15 +1774,44 @@ document:
           many: "%{count} pending changes"
       export:
         trigger: Export
-        save_as_file: Save loaded rows as file
-        copy_to_clipboard: Copy loaded rows to clipboard
+        save_as_file: "Save as file"
+        copy_to_clipboard: "Copy to clipboard"
         export_all_rows: Export all rows to file
+        options:
+          title: "Export %{scope}"
+          rows: "Rows"
+          columns: "Columns"
+          header: "Include header row (column names)"
+          delimiter: "Delimiter"
+          rows_selected: "Selected"
+          rows_loaded: "Loaded"
+          rows_all: "All"
+          columns_all: "All"
+          columns_visible: "Visible"
+          columns_selected: "Selected"
+          delimiter_comma: "Comma"
+          delimiter_semicolon: "Semicolon"
+          delimiter_tab: "Tab"
+          no_selected_rows: "Select cells to export selected rows"
+          no_selected_columns: "Select cells to export selected columns"
+        scope:
+          summary: "%{rows}, %{columns}"
+          selected_rows:
+            one: "1 selected row"
+            many: "%{count} selected rows"
+          loaded_rows:
+            one: "1 loaded row"
+            many: "%{count} loaded rows"
+          all_rows: "all rows"
+          all_rows_count:
+            one: "1 row"
+            many: "all %{count} rows"
+          columns:
+            one: "1 column"
+            many: "%{count} columns"
         all:
           task: "Export all rows of %{table}"
           toast:
-            exported:
-              one: "Exported 1 row to %{path}"
-              many: "Exported all %{count} rows to %{path}"
             cancelled: "Export cancelled — %{path} holds only the rows written before it stopped"
             dropped_columns: "Fields that first appear after the first page are not in the file: %{columns}"
           error:

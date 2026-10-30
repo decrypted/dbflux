@@ -1696,12 +1696,8 @@ document:
         toast:
           native_picker_fallback: "原生文件选择器不可用 — 已改为导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
           exported: "已导出到 %{path}"
-          exported_rows:
-            one: "已将 1 行已加载的数据导出到 %{path}"
-            many: "已将 %{count} 行已加载的数据导出到 %{path}"
-          native_picker_fallback_rows:
-            one: "原生文件选择器不可用 — 已改为将 1 行已加载的数据导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
-            many: "原生文件选择器不可用 — 已改为将 %{count} 行已加载的数据导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
+          exported_scope: "已将%{scope}导出到 %{path}"
+          native_picker_fallback_scope: "原生文件选择器不可用 — 已改为将%{scope}导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
       clipboard:
         error:
           binary_unsupported: 原始二进制无法复制到剪贴板 — 请选择 Hex 或 Base64。
@@ -1712,6 +1708,7 @@ document:
           copied_rows:
             one: "已将 1 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
             many: "已将 %{count} 行已加载的数据以 %{format}（%{bytes} 字节）复制到剪贴板"
+          copied_scope: "已将%{scope}以 %{format}（%{bytes} 字节）复制到剪贴板"
       document:
         toast:
           inserted: 文档已插入
@@ -1777,15 +1774,44 @@ document:
           many: "%{count} 处待处理更改"
       export:
         trigger: 导出
-        save_as_file: 将已加载的行保存为文件
-        copy_to_clipboard: 将已加载的行复制到剪贴板
+        save_as_file: "保存为文件"
+        copy_to_clipboard: "复制到剪贴板"
         export_all_rows: 将所有行导出到文件
+        options:
+          title: "导出%{scope}"
+          rows: "行"
+          columns: "列"
+          header: "包含标题行（列名）"
+          delimiter: "分隔符"
+          rows_selected: "已选"
+          rows_loaded: "已加载"
+          rows_all: "全部"
+          columns_all: "全部"
+          columns_visible: "可见"
+          columns_selected: "已选"
+          delimiter_comma: "逗号"
+          delimiter_semicolon: "分号"
+          delimiter_tab: "制表符"
+          no_selected_rows: "选择单元格后可导出已选的行"
+          no_selected_columns: "选择单元格后可导出已选的列"
+        scope:
+          summary: "%{rows}，%{columns}"
+          selected_rows:
+            one: "已选的 1 行"
+            many: "已选的 %{count} 行"
+          loaded_rows:
+            one: "已加载的 1 行"
+            many: "已加载的 %{count} 行"
+          all_rows: "所有行"
+          all_rows_count:
+            one: "1 行"
+            many: "全部 %{count} 行"
+          columns:
+            one: "1 列"
+            many: "%{count} 列"
         all:
           task: "导出 %{table} 的所有行"
           toast:
-            exported:
-              one: "已将 1 行导出到 %{path}"
-              many: "已将全部 %{count} 行导出到 %{path}"
             cancelled: "导出已取消 — %{path} 仅包含停止前写入的行"
             dropped_columns: "首页之后才出现的字段未写入文件：%{columns}"
           error:

@@ -326,6 +326,32 @@ impl SelectionState {
             .collect()
     }
 
+    /// Every row that holds a selected cell, ascending, below `row_count`.
+    pub fn selected_rows(&self, row_count: usize) -> Vec<usize> {
+        self.ranges()
+            .iter()
+            .flat_map(|range| range.start.row..=range.end.row.min(row_count.saturating_sub(1)))
+            .filter(|row| *row < row_count)
+            .collect::<std::collections::BTreeSet<usize>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Every shown column that holds a selected cell, below `col_count`, in
+    /// the order the screen shows them.
+    pub fn selected_columns(&self, col_count: usize) -> Vec<usize> {
+        let mut cols: Vec<usize> = self
+            .ranges()
+            .iter()
+            .flat_map(|range| range.start.col..=range.end.col)
+            .filter(|col| *col < col_count && self.view_position(*col).is_some())
+            .collect::<std::collections::BTreeSet<usize>>()
+            .into_iter()
+            .collect();
+        self.sort_by_screen_order(&mut cols);
+        cols
+    }
+
     /// The ranges as selected on screen, corners ordered by screen position.
     fn screen_ranges(&self) -> Vec<CellRange> {
         self.selected_range()
@@ -555,6 +581,30 @@ mod tests {
         let mut cols = vec![0, 1, 2, 3, 4];
         sel.sort_by_screen_order(&mut cols);
         assert_eq!(cols, [3, 0, 4, 1, 2]);
+    }
+
+    /// The rows and columns an export of the selection takes: rows in
+    /// result order, columns in screen order without the hidden one, and
+    /// nothing at or past the grid's edge.
+    #[test]
+    fn selected_rows_and_columns_follow_the_screen() {
+        let mut layout = ColumnLayout::identity(5);
+        assert!(layout.move_to(3, 0));
+        assert!(layout.move_to(4, 1));
+        assert!(layout.hide(2));
+
+        let mut sel = SelectionState::new();
+        assert!(sel.selected_rows(10).is_empty());
+        assert!(sel.selected_columns(5).is_empty());
+
+        sel.set_column_layout(Some(Arc::new(layout)));
+        sel.select_cell(CellCoord::new(4, 4));
+        sel.extend_to(CellCoord::new(2, 3));
+        sel.toggle_cell(CellCoord::new(7, 1));
+
+        assert_eq!(sel.selected_rows(10), [2, 3, 4, 7]);
+        assert_eq!(sel.selected_columns(5), [3, 0, 4, 1]);
+        assert_eq!(sel.selected_rows(4), [2, 3], "rows past the grid drop");
     }
 
     #[test]

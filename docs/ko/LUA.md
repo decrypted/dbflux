@@ -72,6 +72,8 @@ flowchart TD
 ```rust
 let stdlib = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8;
 let lua = Lua::new_with(stdlib, LuaOptions::default())?;
+lua.set_memory_limit(16 * 1024 * 1024)?;
+remove_unsafe_builtins(&lua)?; // load, loadfile, dofile, collectgarbage, string.dump
 ```
 
 스크립트는 다음에 접근할 수 있습니다:
@@ -81,7 +83,9 @@ let lua = Lua::new_with(stdlib, LuaOptions::default())?;
 - **math**: `math.floor`, `math.ceil`, `math.random`, `math.sqrt`, `math.abs`, `math.max`, `math.min`, `math.pi`
 - **utf8**: `utf8.char`, `utf8.codepoint`, `utf8.len`
 
-그리고 라이브러리 로딩이 필요 없는 Lua 내장 함수도 있습니다: `type()`, `tostring()`, `tonumber()`, `pairs()`, `ipairs()`, `next()`, `select()`, `pcall()`, `xpcall()`, `error()`, `setmetatable()`, `getmetatable()`, `rawget()`, `rawset()`, `rawequal()`, `rawlen()`. 클로저, 지역 변수, 메타테이블, 모든 제어 흐름 — Lua를 _Lua_답게 만드는 모든 것이 정상 동작합니다.
+그리고 다음 기본 내장 함수가 있습니다: `assert()`, `error()`, `type()`, `tostring()`, `tonumber()`, `pairs()`, `ipairs()`, `next()`, `select()`, `pcall()`, `xpcall()`, `setmetatable()`, `getmetatable()`, `rawget()`, `rawset()`, `rawequal()`, `rawlen()`, `print()`, `warn()`, `_G`, `_VERSION`. 클로저, 지역 변수, 메타테이블과 모든 제어 흐름은 평소처럼 동작합니다.
+
+`string`에는 `string.dump`를 제외한 Lua 5.4의 모든 함수가 있고, `math`에는 Lua 5.3 호환 함수(`math.pow`, `math.atan2`, `math.log10`, ...)도 남아 있습니다.
 
 ### 차단되는 항목
 
@@ -90,14 +94,26 @@ let lua = Lua::new_with(stdlib, LuaOptions::default())?;
 | `io`        | 파일 읽기/쓰기. 훅이 임의의 파일을 읽거나 디스크에 쓰게 할 수 없습니다.                                                                                      |
 | `os`        | 시스템 호출: `os.execute()`는 완전한 셸 탈출이 되고, `os.remove()`는 파일을 삭제할 수 있습니다. `os.getenv()`조차 게이트가 있는 `dbflux.env.get()`으로 대체됩니다. |
 | `debug`     | `debug.sethook()`은 명령어 수 카운트 인터럽트를 방해할 수 있습니다. `debug.getlocal()`과 `debug.getinfo()`는 내부 상태를 들여다볼 수 있습니다.               |
-| `package`   | `require()`, `dofile()`, `loadfile()`은 디스크에서 임의의 코드를 로드할 수 있게 합니다.                                                                          |
+| `package`   | `require()`는 네이티브 모듈을 포함해 디스크에서 임의의 코드를 로드할 수 있게 합니다.                                                                           |
 | `coroutine` | 그 자체로 위험하지는 않지만 시간 초과/취소 모델에 복잡성을 더합니다 (코루틴이 명령어 훅을 넘어 yield할 수 있습니다).                                |
 
-샌드박스는 "차단 목록이 아니라 허용 목록" 방식입니다. 명시적으로 로드한 네 가지 라이브러리와 등록된 API 함수만 존재합니다. 위 목록에 없는 것은 Lua VM에 존재하지 않습니다.
+mlua는 기본 라이브러리를 항상 열기 때문에, VM을 만든 뒤 그중 다음 함수를 제거합니다:
+
+| 함수               | 제거하는 이유 |
+| ------------------ | ------------- |
+| `load()`           | 사전 컴파일된 바이트코드를 받습니다. Lua 5.4는 바이트코드를 검증하지 않으므로, 조작된 청크가 인터프리터 메모리를 손상시키고 샌드박스를 벗어날 수 있습니다. |
+| `loadfile()`       | DBFlux가 읽을 수 있는 모든 파일을 Lua로 읽습니다. 구문 오류가 나면 파일 일부가 훅 출력에 그대로 나옵니다. |
+| `dofile()`         | `loadfile()`과 같고, 읽은 내용을 실행까지 합니다. |
+| `collectgarbage()` | 스크립트가 DBFlux 콜백과 함께 쓰는 VM의 가비지 컬렉터를 멈추거나 조정할 수 있게 합니다. |
+| `string.dump()`    | 함수를 바이트코드로 바꿉니다. 로더가 남아 있지 않으니 쓸모가 없습니다. 문자열 메타테이블에서도 사라지므로 `("").dump`도 `nil`입니다. |
+
+훅 스크립트 자체는 항상 소스 텍스트로 컴파일됩니다. Lua 바이트코드 시그니처로 시작하는 스크립트 파일이나 인라인 스크립트는 실행되지 않고 `attempt to load a binary chunk`로 실패합니다.
+
+샌드박스는 "차단 목록이 아니라 허용 목록" 방식입니다. 명시적으로 로드한 네 가지 라이브러리, 위에 나열한 기본 내장 함수, 등록된 API 함수만 존재합니다. 위 목록에 없는 것은 Lua VM에 존재하지 않습니다. `engine/tests.rs`의 테스트(`sandbox_globals_match_the_allowlist`)는 모든 기능을 켠 상태에서 모든 전역과 `string`, `table`, `math`, `utf8`, `dbflux`의 모든 멤버를 나열하고, 명시적 목록에 없는 것이 나타나면(예: mlua 업그레이드 후) 실패합니다.
 
 ### 메모리 제한
 
-각 VM은 16 MiB의 강제 메모리 상한(`engine.rs`의 `lua.set_memory_limit(16 * 1024 * 1024)`)과 함께 만들어집니다. 이 한도를 넘어 할당하는 스크립트는 호스트의 메모리를 소진하는 대신 메모리 오류로 실패합니다.
+각 VM은 16 MiB의 강제 메모리 상한(`engine/mod.rs`의 `lua.set_memory_limit(16 * 1024 * 1024)`)과 함께 만들어집니다. 이 한도를 넘어 할당하는 스크립트는 호스트의 메모리를 소진하는 대신 메모리 오류로 실패합니다.
 
 ---
 
@@ -207,6 +223,7 @@ hook.ok()
 | `args`       | string[] | 아니요       | 명령 인수                                                      |
 | `timeout_ms` | integer  | 아니요\*     | 프로세스별 시간 초과 (ms). 그 위에 훅 수준 시간 초과도 여전히 적용됩니다. |
 | `cwd`        | string   | 아니요       | 작업 디렉터리                                                      |
+| `env`        | table    | 아니요       | 자식 프로세스에 추가할 환경 변수 `{ NAME = "value" }`; 이름과 값은 문자열이어야 합니다. [자식 프로세스 환경](#자식-프로세스-환경) 참고 |
 | `stream`     | boolean  | 아니요       | 프로세스가 아직 실행 중인 동안 호출자에게 stdout/stderr를 스트리밍합니다  |
 | `detached`   | boolean  | 아니요       | 프로세스가 끝나기를 기다리는 대신 생성된 프로세스를 호출자에게 넘기고 즉시 반환합니다 |
 
@@ -235,6 +252,30 @@ hook.ok()
 | `az_cli`      | `az`, `az.cmd`, `az.exe`                         |
 
 `program`은 **단순 명령 이름**이어야 합니다. 경로가 붙은 이름은 허용 목록을 확인하기 전에 거부됩니다: `/` 또는 `\`를 포함하거나, 여러 경로 구성 요소로 이루어졌거나, `~`로 시작하는 프로그램은 런타임 오류 `"Program '...' must be a bare command name (no path separators)"`으로 실패합니다. 따라서 `program = "/usr/local/bin/aws"`는 무조건 거부됩니다 — 대신 `program = "aws"`를 전달해 `PATH`를 통해 해석되도록 합니다. 단순 이름과 허용 목록의 대조는 대소문자를 구분하지 않습니다.
+
+#### 자식 프로세스 환경
+
+자식 프로세스는 DBFlux의 환경을 **상속하지 않습니다**. 설정되어 있을 때 다음 변수만 받습니다:
+
+- 모든 플랫폼: `PATH`, `HOME`, `LANG`, `TERM`, `TZ`와 로케일 범주 `LC_ALL`, `LC_ADDRESS`, `LC_COLLATE`, `LC_CTYPE`, `LC_IDENTIFICATION`, `LC_MEASUREMENT`, `LC_MESSAGES`, `LC_MONETARY`, `LC_NAME`, `LC_NUMERIC`, `LC_PAPER`, `LC_TELEPHONE`, `LC_TIME`
+- Linux와 macOS: `USER`, `LOGNAME`, `TMPDIR`, 그리고 CLI가 SSO 로그인용 브라우저를 계속 열 수 있도록 `XDG_RUNTIME_DIR`, `XDG_CURRENT_DESKTOP`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `BROWSER`
+- Windows: `SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `COMSPEC`, `PATHEXT`, `OS`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `ALLUSERSPROFILE`, `PROGRAMFILES`, `PROGRAMFILES(X86)`, `PROGRAMW6432`, `COMMONPROGRAMFILES`, `COMMONPROGRAMFILES(X86)`, `COMMONPROGRAMW6432`, `PROCESSOR_ARCHITECTURE`, `NUMBER_OF_PROCESSORS`
+
+Windows에서는 Windows 자체와 마찬가지로 이름을 대소문자 구분 없이 비교하고, Linux와 macOS에서는 정확히 일치해야 하므로 `Home`이나 `LC_DEPLOY_TOKEN` 같은 사용자 정의 `LC_*` 변수는 제외됩니다. 그 밖의 모든 것, 예를 들어 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, 다른 토큰, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, 프록시 설정과 DBFlux IPC 토큰은 스크립트가 `env`로 넘기지 않는 한 전달되지 않습니다. `env`의 변수는 상속된 변수 다음에 추가되며 충돌하면 우선합니다. 덮어쓴 `PATH`는 자식 프로세스에 전달되며, `program`을 어디에서 찾는지는 플랫폼에 따라 다릅니다. Linux와 macOS에서는 DBFlux 자신의 `PATH`에서 먼저 찾고, 거기서 찾지 못할 때만 덮어쓴 `PATH`를 검색합니다. Windows에서는 DBFlux 자체 검색이 `PATHEXT` 확장자를 시도하지 않습니다. `aws`처럼 확장자가 없는 이름은 먼저 DBFlux 자신의 `PATH`에서 확장자 없는 정확히 그 파일 이름으로 찾고, 그런 파일이 없을 때만 Windows에 맡겨집니다. Windows는 `.exe`를 붙여 덮어쓴 값을 포함한 자식 프로세스의 `PATH`를 DBFlux 폴더, 시스템 폴더, DBFlux 자신의 `PATH`보다 먼저 검색합니다. Windows는 `.exe`만 붙이고, Azure CLI와 Google Cloud SDK는 `.cmd` 실행기 옆에 확장자 없는 셸 스크립트를 설치하므로 `az`나 `gcloud` 대신 `az.cmd`나 `gcloud.cmd`를 넘기세요. `aws.exe`나 `az.cmd`처럼 확장자가 붙은 이름은 Linux, macOS와 마찬가지로 DBFlux 자신의 `PATH`에서 먼저 찾습니다. DBFlux가 가진 변수를 넘기려면 `dbflux.env.get`으로 읽습니다(**Environment read** 기능 필요):
+
+```lua
+local result = dbflux.process.run({
+    program = "ssh",
+    allowlist = "ssh_cli",
+    args = { "-O", "check", "bastion" },
+    timeout_ms = 10000,
+    env = {
+        SSH_AUTH_SOCK = dbflux.env.get("SSH_AUTH_SOCK"),
+    },
+})
+```
+
+`nil` 값은 그 변수를 그냥 빼 둡니다. 문자열이 아닌 값, 비어 있거나 `=`를 포함한 이름, 또는 이름이나 값에 `NUL` 바이트가 있으면 아무것도 시작하기 전에 호출이 실패합니다.
 
 이 설계는 특정 사용 사례를 위해 존재합니다: 완전한 셸 탈출을 열지 않고 클라우드 CLI 도구(SSO 로그인, 터널 설정, 비밀 검색)를 트리거해야 하는 훅입니다. 허용 목록은 사용성과 실수 방지 장치입니다 — 오타와 의도하지 않은 프로그램의 우발적인 실행을 막습니다. **보안 격리 경계가 아닙니다**: `PATH`를 통제하는 사용자는 같은 이름으로 다른 바이너리를 대체할 수 있습니다. 하드코딩된 허용 목록은 새 사용 사례가 나타나면 나중에 확장할 수 있습니다.
 
@@ -381,7 +422,7 @@ pub struct LuaVm {
 }
 ```
 
-Lua VM과 공유 상태를 묶어 실행기가 둘 다 접근할 수 있게 합니다. `vm.lua.load(&script).exec()`가 완료된 후 실행기는 `vm.state.log_buffer`와 `vm.state.outcome`을 읽어 `HookResult`를 만듭니다.
+Lua VM과 공유 상태를 묶어 실행기가 둘 다 접근할 수 있게 합니다. `vm.load_script()`가 소스 텍스트로만 컴파일한 스크립트가 실행된 후 실행기는 `vm.state.log_buffer`와 `vm.state.outcome`을 읽어 `HookResult`를 만듭니다.
 
 ### `dbflux` 테이블 지연 초기화 패턴
 
@@ -495,9 +536,9 @@ HTTP 클라이언트, 소켓 라이브러리, 네트워크 API가 없습니다. 
 
 훅이 실행될 때마다 새 VM이 만들어집니다. 호출 사이에 상태를 저장할 방법이 없습니다. 영속 상태가 필요하면 외부 프로세스를 통해 파일에 기록하고 다음 호출에서 읽어 들여야 합니다.
 
-### `require()` 없음
+### `require()`, `load()`, `dofile()` 없음
 
-`package` 라이브러리가 로드되지 않으므로 `require()`가 존재하지 않습니다. Lua 코드를 여러 파일로 나누거나 서드파티 Lua 라이브러리를 사용할 수 없습니다. 모든 훅 로직은 하나의 스크립트 안에서 자족적이어야 합니다.
+`package` 라이브러리가 로드되지 않으므로 `require()`가 존재하지 않고, `load()`, `loadfile()`, `dofile()`은 기본 라이브러리에서 제거됩니다. Lua 코드를 여러 파일로 나누거나, 문자열로 코드를 만들거나, 서드파티 Lua 라이브러리를 사용할 수 없습니다. 모든 훅 로직은 하나의 스크립트 안에서 자족적이어야 합니다.
 
 ### `os.time()` 및 `os.clock()` 없음
 
@@ -566,8 +607,8 @@ pub struct CompositeExecutor {
 모든 테스트는 크레이트 자체에 있습니다(별도의 `tests/` 디렉터리가 아닙니다). 현재 커버리지는 다음을 포함합니다:
 
 - `executor.rs`: 정상 결과, 런타임 오류, 파일 기반 스크립트, 취소, 시간 초과, 기능 게이팅, 허용 목록 강제, 스트리밍되는 프로세스 출력 동작
-- `engine.rs`: 훅 단계, 연결 메타데이터, 숨겨진 안전하지 않은 라이브러리, 선택적 API 가시성, VM 생성 동작
-- `api/dbflux.rs`: 프로세스 옵션 검증, spawn 전 만료된 훅 시간 초과 처리, 실시간 로그 이벤트 포맷팅, 취소 중 스트리밍되는 부분 stdout/stderr
+- `engine/tests.rs`: 훅 단계, 연결 메타데이터, 숨겨진 안전하지 않은 라이브러리와 제거된 로더, 거부되는 바이트코드, 전역 허용 목록 가드, 선택적 API 가시성, VM 생성 동작
+- `api/dbflux/tests.rs`: 프로세스 옵션 검증, 자식 프로세스 환경 허용 목록과 호출별 `env`, spawn 전 만료된 훅 시간 초과 처리, 실시간 로그 이벤트 포맷팅, 취소 중 스트리밍되는 부분 stdout/stderr
 
 ### 테스트 실행
 

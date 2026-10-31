@@ -454,7 +454,7 @@ A Lua hook only gets the abilities you enable:
 | **Logging** | On by default; write to the hook's output. |
 | **Environment read** | On by default; read environment variables. |
 | **Connection metadata** | On by default; read the connecting profile's metadata. |
-| **Controlled process run** | Off by default; call `dbflux.process.run(...)` to launch external processes. |
+| **Controlled process run** | Off by default; call `dbflux.process.run(...)` to launch external processes. The process gets only a short list of DBFlux's environment variables (such as `PATH`, `HOME` and the locale); anything else, such as AWS credentials or `SSH_AUTH_SOCK`, has to be passed in its `env` option. |
 
 > Enabling **Controlled process run** lets the hook execute arbitrary external
 > commands. DBFlux shows a security warning when it's on, both in the hook

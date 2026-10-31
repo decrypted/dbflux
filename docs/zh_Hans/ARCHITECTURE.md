@@ -495,8 +495,8 @@ crates/
   dbflux_ssm/               # 用于托管访问的 AWS SSM 隧道工厂
   dbflux_lua/               # 用于进程内 Hook 的嵌入式 Lua 运行时
     src/executor.rs         # Lua HookExecutor 实现
-    src/engine.rs           # Lua VM 创建与共享运行时状态
-    src/api/dbflux.rs       # dbflux.log/env/process 的 Lua API
+    src/engine/mod.rs       # Lua VM 创建与共享运行时状态
+    src/api/dbflux/mod.rs   # dbflux.log/env/process 的 Lua API
     src/api/connection.rs   # Lua connection.* API（暴露 HookContext）
     src/api/hook.rs         # Lua hook.* API（阶段、失败策略）
   dbflux_tunnel_core/       # 共享的 RAII 隧道基础设施

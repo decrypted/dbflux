@@ -490,8 +490,8 @@ crates/
   dbflux_ssm/               # 관리형 액세스를 위한 AWS SSM 터널 팩토리
   dbflux_lua/               # 인프로세스 훅을 위한 임베디드 Lua 런타임
     src/executor.rs         # Lua HookExecutor 구현
-    src/engine.rs           # Lua VM 생성 및 공유 런타임 상태
-    src/api/dbflux.rs       # dbflux.log/env/process Lua API
+    src/engine/mod.rs       # Lua VM 생성 및 공유 런타임 상태
+    src/api/dbflux/mod.rs   # dbflux.log/env/process Lua API
     src/api/connection.rs   # Lua connection.* API (HookContext 노출)
     src/api/hook.rs         # Lua hook.* API (단계, 실패 정책)
   dbflux_tunnel_core/       # 공유 RAII 터널 인프라

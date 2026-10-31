@@ -91,7 +91,9 @@ impl HookExecutor for LuaExecutor {
             )
             .map_err(|e| format!("Failed to install Lua hook: {e}"))?;
 
-        let exec_result = vm.lua.load(&script_content).exec();
+        let exec_result = vm
+            .load_script(script_content.as_bytes())
+            .and_then(|script| script.call::<()>(()));
         vm.lua.remove_hook();
 
         let stdout = {
@@ -372,6 +374,7 @@ mod tests {
 
     #[test]
     fn controlled_process_run_executes_when_enabled() {
+        let _path = crate::test_support::path_lock();
         let python = if cfg!(target_os = "windows") {
             "python"
         } else {
@@ -468,6 +471,7 @@ mod tests {
 
     #[test]
     fn controlled_process_run_reports_process_timeout() {
+        let _path = crate::test_support::path_lock();
         let python = if cfg!(target_os = "windows") {
             "python"
         } else {
@@ -498,6 +502,7 @@ mod tests {
 
     #[test]
     fn lua_executor_streams_logs_and_process_output() {
+        let _path = crate::test_support::path_lock();
         let python = if cfg!(target_os = "windows") {
             "python"
         } else {
@@ -542,6 +547,7 @@ mod tests {
 
     #[test]
     fn lua_executor_only_streams_process_output_when_requested() {
+        let _path = crate::test_support::path_lock();
         let python = if cfg!(target_os = "windows") {
             "python"
         } else {
@@ -586,6 +592,7 @@ mod tests {
 
     #[test]
     fn controlled_process_run_can_detach_explicitly() {
+        let _path = crate::test_support::path_lock();
         let python = if cfg!(target_os = "windows") {
             "python"
         } else {

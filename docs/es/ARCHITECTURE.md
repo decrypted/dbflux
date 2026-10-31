@@ -522,8 +522,8 @@ crates/
   dbflux_ssm/               # AWS SSM tunnel factory for managed access
   dbflux_lua/               # Embedded Lua runtime for in-process hooks
     src/executor.rs         # Lua HookExecutor implementation
-    src/engine.rs           # Lua VM creation and shared runtime state
-    src/api/dbflux.rs       # dbflux.log/env/process Lua APIs
+    src/engine/mod.rs       # Lua VM creation and shared runtime state
+    src/api/dbflux/mod.rs   # dbflux.log/env/process Lua APIs
     src/api/connection.rs   # Lua connection.* API (exposes HookContext)
     src/api/hook.rs         # Lua hook.* API (phase, failure policy)
   dbflux_tunnel_core/       # Shared RAII tunnel infrastructure

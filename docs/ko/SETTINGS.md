@@ -396,7 +396,7 @@ Lua 훅은 사용자가 활성화한 기능만 얻습니다:
 | **Logging** | 기본적으로 켜짐; 훅 출력에 기록합니다. |
 | **Environment read** | 기본적으로 켜짐; 환경 변수를 읽습니다. |
 | **Connection metadata** | 기본적으로 켜짐; 연결 중인 프로필의 메타데이터를 읽습니다. |
-| **Controlled process run** | 기본적으로 꺼짐; `dbflux.process.run(...)`을 호출해 외부 프로세스를 실행할 수 있습니다. |
+| **Controlled process run** | 기본적으로 꺼짐; `dbflux.process.run(...)`을 호출해 외부 프로세스를 실행할 수 있습니다. 프로세스는 DBFlux 환경 변수 중 짧은 목록(`PATH`, `HOME`, 로케일 등)만 받으며, AWS 자격 증명이나 `SSH_AUTH_SOCK` 같은 나머지 변수는 `env` 옵션으로 넘겨야 합니다. |
 
 > **Controlled process run**을 활성화하면 훅이 임의의 외부 명령을 실행할 수
 > 있습니다. 활성화하면 DBFlux가 훅 정의와 연결별 바인딩 양쪽에서 보안 경고를

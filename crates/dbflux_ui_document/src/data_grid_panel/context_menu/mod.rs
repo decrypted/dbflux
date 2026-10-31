@@ -3032,25 +3032,7 @@ impl DataGridPanel {
                 _ => return None,
             };
 
-            let needs_escape = raw.contains('\\') || raw.contains('%') || raw.contains('_');
-
-            let pattern_value = if needs_escape {
-                let escaped = raw
-                    .replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_");
-                format!("%{}%", escaped)
-            } else {
-                format!("%{}%", raw)
-            };
-
-            let pattern_literal = dialect.value_to_literal(&Value::Text(pattern_value));
-
-            if needs_escape {
-                format!("{} LIKE {} ESCAPE '\\'", comparable_column, pattern_literal)
-            } else {
-                format!("{} LIKE {}", comparable_column, pattern_literal)
-            }
+            like_contains_filter(dialect, &comparable_column, &raw)
         } else if matches!(cell_value, Value::Json(_)) {
             dialect.json_filter_expr(&col_name, op_str, &literal, &col_type_name)
         } else {
@@ -3796,6 +3778,26 @@ impl DataGridPanel {
             CellKind::Nested { .. } => Value::Text(cell.display_text().to_string()),
         }
     }
+}
+
+/// `column LIKE '%raw%'` that matches `raw` literally.
+///
+/// The escape character is `!`, not a backslash: `ESCAPE '\\'` is an
+/// unterminated string on MySQL's default `sql_mode` (and on PostgreSQL with
+/// `standard_conforming_strings` off), and a bare backslash in the pattern is
+/// already LIKE's default escape on MySQL and PostgreSQL. Declaring `!` makes
+/// a backslash an ordinary character on every dialect.
+fn like_contains_filter(dialect: &dyn dbflux_core::SqlDialect, column: &str, raw: &str) -> String {
+    let needs_escape = raw.contains(['\\', '!', '%', '_']);
+
+    if !needs_escape {
+        let pattern = dialect.value_to_literal(&Value::Text(format!("%{raw}%")));
+        return format!("{column} LIKE {pattern}");
+    }
+
+    let escaped = raw.replace('!', "!!").replace('%', "!%").replace('_', "!_");
+    let pattern = dialect.value_to_literal(&Value::Text(format!("%{escaped}%")));
+    format!("{column} LIKE {pattern} ESCAPE '!'")
 }
 
 pub(super) fn record_export_audit(

@@ -66,8 +66,11 @@ impl SqlDialect for RedshiftDialect {
         }
     }
 
+    /// Redshift reads a backslash inside a string literal as an escape, so a
+    /// value ending in `\` would escape the closing quote unless backslashes
+    /// are doubled too.
     fn escape_string(&self, s: &str) -> String {
-        s.replace('\'', "''")
+        s.replace('\\', "\\\\").replace('\'', "''")
     }
 
     fn placeholder_style(&self) -> PlaceholderStyle {
@@ -107,6 +110,22 @@ mod tests {
         assert_eq!(
             REDSHIFT_DIALECT.qualified_table(None, "orders"),
             "\"orders\""
+        );
+    }
+
+    #[test]
+    fn text_literal_doubles_backslashes_and_quotes() {
+        assert_eq!(
+            REDSHIFT_DIALECT.value_to_literal(&Value::Text("it's".to_string())),
+            "'it''s'"
+        );
+        assert_eq!(
+            REDSHIFT_DIALECT.value_to_literal(&Value::Text("\\' OR 1=1 --".to_string())),
+            "'\\\\'' OR 1=1 --'"
+        );
+        assert_eq!(
+            REDSHIFT_DIALECT.value_to_literal(&Value::Text("x\\".to_string())),
+            "'x\\\\'"
         );
     }
 

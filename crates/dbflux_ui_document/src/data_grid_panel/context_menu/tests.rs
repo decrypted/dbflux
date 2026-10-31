@@ -6,7 +6,7 @@ use super::tree::{
     self, MENU_EDGE_GAP, MenuEntry, MenuNode, MenuTarget, SUBMENU_OVERLAP, Submenu, place_menu,
     submenu_side,
 };
-use super::{ExportMenuEntry, step_export_selection};
+use super::{ExportMenuEntry, like_contains_filter, step_export_selection};
 use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
 use dbflux_components::icons::AppIcon;
 use dbflux_core::{GeneratedIdKind, SortDirection};
@@ -739,4 +739,24 @@ fn the_menu_labels_resolve_in_every_locale() {
             );
         }
     }
+}
+
+#[test]
+fn like_filter_escapes_wildcards_without_a_backslash_escape_literal() {
+    let dialect = dbflux_core::DefaultSqlDialect;
+    let filter = like_contains_filter(&dialect, "\"path\"", "50%_a!\\b");
+
+    assert_eq!(filter, "\"path\" LIKE '%50!%!_a!!\\b%' ESCAPE '!'");
+    assert!(!filter.contains("'\\'"), "{filter}");
+
+    // A lone backslash is LIKE's default escape on MySQL and PostgreSQL,
+    // so it also needs the explicit clause to match literally.
+    assert_eq!(
+        like_contains_filter(&dialect, "\"path\"", "a\\b"),
+        "\"path\" LIKE '%a\\b%' ESCAPE '!'"
+    );
+    assert_eq!(
+        like_contains_filter(&dialect, "\"name\"", "bob"),
+        "\"name\" LIKE '%bob%'"
+    );
 }

@@ -285,6 +285,59 @@ pub fn quote_double_quoted_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+/// Returns `true` when `s` is a plain numeric literal: optional sign, decimal
+/// digits with at most one `.`, and an optional `e[+-]?\d+` exponent.
+///
+/// `Value::Decimal` carries text, and producers other than a driver's own
+/// decoder (external drivers, MCP tools, pasted values) can put anything in
+/// it, so dialects check it with this before inlining it unquoted.
+pub fn is_numeric_literal(s: &str) -> bool {
+    let mut chars = s.chars().peekable();
+    if matches!(chars.peek(), Some('+' | '-')) {
+        chars.next();
+    }
+    let mut has_digit = false;
+    let mut seen_dot = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '0'..='9' => has_digit = true,
+            '.' if !seen_dot => seen_dot = true,
+            'e' | 'E' if has_digit => {
+                if matches!(chars.peek(), Some('+' | '-')) {
+                    chars.next();
+                }
+                let mut exp_digits = 0usize;
+                for ec in chars.by_ref() {
+                    if ec.is_ascii_digit() {
+                        exp_digits += 1;
+                    } else {
+                        return false;
+                    }
+                }
+                return exp_digits > 0;
+            }
+            _ => return false,
+        }
+    }
+    has_digit
+}
+
+/// Quotes `s` as a PostgreSQL string literal.
+///
+/// A plain `'...'` literal is only safe while `standard_conforming_strings`
+/// is on: with it off (a legacy setting a database or role can still carry),
+/// a backslash escapes the next character and `\'` ends the literal early.
+/// Strings with a backslash therefore use the `E'...'` form with backslashes
+/// doubled, which reads the same under either setting.
+pub fn quote_postgres_string_literal(s: &str) -> String {
+    let doubled_quotes = s.replace('\'', "''");
+    if s.contains('\\') {
+        format!("E'{}'", doubled_quotes.replace('\\', "\\\\"))
+    } else {
+        format!("'{doubled_quotes}'")
+    }
+}
+
 /// Default SQL dialect using ANSI SQL conventions (double-quote identifiers).
 pub struct DefaultSqlDialect;
 
@@ -328,7 +381,8 @@ impl SqlDialect for DefaultSqlDialect {
                 format!("X'{}'", hex)
             }
             Value::Json(s) => format!("'{}'", self.escape_string(s)),
-            Value::Decimal(s) => s.clone(),
+            Value::Decimal(s) if is_numeric_literal(s) => s.clone(),
+            Value::Decimal(_) => "NULL".to_string(),
             Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S%.f")),
             Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
             Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
@@ -423,6 +477,30 @@ mod tests {
             quote_double_quoted_identifier("we\"ird\""),
             "\"we\"\"ird\"\"\""
         );
+    }
+
+    #[test]
+    fn default_dialect_never_inlines_a_non_numeric_decimal() {
+        assert_eq!(
+            DefaultSqlDialect.value_to_literal(&Value::Decimal("123.45".into())),
+            "123.45"
+        );
+        assert_eq!(
+            DefaultSqlDialect.value_to_literal(&Value::Decimal("1); DROP TABLE t; --".into())),
+            "NULL"
+        );
+    }
+
+    #[test]
+    fn postgres_string_literal_uses_escape_form_for_backslashes() {
+        // With standard_conforming_strings off, '\'' would end the literal
+        // after the backslash-escaped quote; the E'' form keeps it closed.
+        assert_eq!(
+            quote_postgres_string_literal("x\\' OR 1=1 --"),
+            "E'x\\\\'' OR 1=1 --'"
+        );
+        assert_eq!(quote_postgres_string_literal("a\\"), "E'a\\\\'");
+        assert_eq!(quote_postgres_string_literal("it's"), "'it''s'");
     }
 
     #[test]

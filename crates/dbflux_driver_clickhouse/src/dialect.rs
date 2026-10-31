@@ -27,7 +27,8 @@ impl SqlDialect for ClickHouseDialect {
             Value::Float(value) if value.is_nan() => "nan".to_string(),
             Value::Float(value) if value.is_sign_positive() => "inf".to_string(),
             Value::Float(_) => "-inf".to_string(),
-            Value::Decimal(value) => value.clone(),
+            Value::Decimal(value) if dbflux_core::is_numeric_literal(value) => value.clone(),
+            Value::Decimal(_) => "NULL".to_string(),
             Value::Text(value) | Value::Json(value) | Value::ObjectId(value) => {
                 format!("'{}'", self.escape_string(value))
             }
@@ -73,6 +74,18 @@ pub static CLICKHOUSE_DIALECT: ClickHouseDialect = ClickHouseDialect;
 mod tests {
     use super::CLICKHOUSE_DIALECT;
     use dbflux_core::{PlaceholderStyle, SqlDialect, Value};
+
+    #[test]
+    fn decimal_is_inlined_only_when_numeric() {
+        assert_eq!(
+            CLICKHOUSE_DIALECT.value_to_literal(&Value::Decimal("-12.5e3".into())),
+            "-12.5e3"
+        );
+        assert_eq!(
+            CLICKHOUSE_DIALECT.value_to_literal(&Value::Decimal("1); DROP TABLE t; --".into())),
+            "NULL"
+        );
+    }
 
     #[test]
     fn quotes_clickhouse_identifiers() {

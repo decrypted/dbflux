@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::QueryGenerator;
+use dbflux_core::is_numeric_literal;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddColumnRequest, AlterColumnRequest, CodeGenCapabilities, CodeGenerator, ColumnAssignment,
@@ -321,8 +322,7 @@ impl SqlDialect for MssqlDialect {
     fn quote_identifier(&self, name: &str) -> String {
         // SQL Server uses [bracket] quoting. Any closing bracket inside the
         // identifier must be doubled to be safe.
-        let escaped = name.replace(']', "]]");
-        format!("[{}]", escaped)
+        mssql_bracket_identifier(name)
     }
 
     fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
@@ -417,41 +417,6 @@ impl SqlDialect for MssqlDialect {
         // an incorrect template. Use UPDATE/INSERT separately.
         None
     }
-}
-
-/// Returns `true` when `s` looks like a SQL Server-safe numeric literal:
-/// optional sign, decimal digits with at most one `.`, and an optional
-/// `e[+-]?\d+` exponent. Accepts inputs the engine itself would emit when
-/// formatting a `numeric`/`decimal`/`float` value as text.
-fn is_numeric_literal(s: &str) -> bool {
-    let mut chars = s.chars().peekable();
-    if matches!(chars.peek(), Some('+' | '-')) {
-        chars.next();
-    }
-    let mut has_digit = false;
-    let mut seen_dot = false;
-    while let Some(c) = chars.next() {
-        match c {
-            '0'..='9' => has_digit = true,
-            '.' if !seen_dot => seen_dot = true,
-            'e' | 'E' if has_digit => {
-                if matches!(chars.peek(), Some('+' | '-')) {
-                    chars.next();
-                }
-                let mut exp_digits = 0usize;
-                for ec in chars.by_ref() {
-                    if ec.is_ascii_digit() {
-                        exp_digits += 1;
-                    } else {
-                        return false;
-                    }
-                }
-                return exp_digits > 0;
-            }
-            _ => return false,
-        }
-    }
-    has_digit
 }
 
 fn value_to_mssql_literal(value: &Value) -> String {
@@ -2152,8 +2117,7 @@ impl Connection for MssqlConnection {
         // `poisoned == true`, so the next `execute()` triggers another
         // recovery attempt instead of silently running on the wrong DB.
         if let Some(db) = active_database {
-            let escaped = db.replace(']', "]]");
-            self.execute_simple(&format!("USE [{}]", escaped))?;
+            self.execute_simple(&format!("USE {}", mssql_bracket_identifier(&db)))?;
         } else if let Some(db) = new_database {
             // No previous selection to restore: the reconnect landed in the
             // login's default database, so track that actual database rather
@@ -2232,8 +2196,7 @@ impl Connection for MssqlConnection {
     fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
         log::debug!("[SCHEMA] Fetching schema for database: {}", database);
 
-        let escaped_db = database.replace(']', "]]");
-        let qualified = format!("[{}]", escaped_db);
+        let qualified = mssql_bracket_identifier(database);
 
         // Shallow table list scoped to the requested database.
         let tables_sql = format!(
@@ -2353,8 +2316,7 @@ impl Connection for MssqlConnection {
         table: &str,
     ) -> Result<Option<TableCreationMetadata>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{escaped_db}]");
+        let qualified_db = mssql_bracket_identifier(database);
         let escaped_schema = schema_name.replace('\'', "''");
         let escaped_table = table.replace('\'', "''");
         let where_clause = format!("s.name = '{escaped_schema}' AND tbl.name = '{escaped_table}'");
@@ -2712,8 +2674,7 @@ impl Connection for MssqlConnection {
         // doesn't carry a definition field. The query here also asserts
         // the view actually exists in the requested database, which is the
         // useful side-effect for error reporting.
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{}]", escaped_db);
+        let qualified_db = mssql_bracket_identifier(database);
         let escaped_schema = schema_name.replace('\'', "''");
         let escaped_view = view.replace('\'', "''");
 
@@ -2821,8 +2782,7 @@ impl Connection for MssqlConnection {
         }
 
         if let Some(db) = database {
-            let escaped = db.replace(']', "]]");
-            let sql = format!("USE [{}]", escaped);
+            let sql = format!("USE {}", mssql_bracket_identifier(db));
             self.execute_simple(&sql)?;
         }
 
@@ -3074,8 +3034,7 @@ impl Connection for MssqlConnection {
             .ok()
             .and_then(|guard| guard.clone())
             .unwrap_or_else(|| "master".to_string());
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{}]", escaped_db);
+        let qualified_db = mssql_bracket_identifier(&database);
 
         let sql = format!(
             "SELECT \
@@ -3196,8 +3155,7 @@ impl MssqlConnection {
         schema: &str,
         table: &str,
     ) -> Result<Vec<ColumnInfo>, DbError> {
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{}]", escaped_db);
+        let qualified_db = mssql_bracket_identifier(database);
         let escaped_schema = schema.replace('\'', "''");
         let escaped_table = table.replace('\'', "''");
 
@@ -3283,8 +3241,7 @@ impl MssqlConnection {
         schema: &str,
         table: &str,
     ) -> Result<Vec<IndexInfo>, DbError> {
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{}]", escaped_db);
+        let qualified_db = mssql_bracket_identifier(database);
         let escaped_schema = schema.replace('\'', "''");
         let escaped_table = table.replace('\'', "''");
 
@@ -3349,8 +3306,7 @@ impl MssqlConnection {
         schema: &str,
         table: &str,
     ) -> Result<Vec<ForeignKeyInfo>, DbError> {
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{}]", escaped_db);
+        let qualified_db = mssql_bracket_identifier(database);
         let escaped_schema = schema.replace('\'', "''");
         let escaped_table = table.replace('\'', "''");
 
@@ -3434,8 +3390,7 @@ impl MssqlConnection {
         schema: &str,
         table: &str,
     ) -> Result<Vec<ConstraintInfo>, DbError> {
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{}]", escaped_db);
+        let qualified_db = mssql_bracket_identifier(database);
         let escaped_schema = schema.replace('\'', "''");
         let escaped_table = table.replace('\'', "''");
 
@@ -3570,8 +3525,7 @@ impl MssqlConnection {
         database: &str,
         schema: &str,
     ) -> Result<Vec<CustomTypeInfo>, DbError> {
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{}]", escaped_db);
+        let qualified_db = mssql_bracket_identifier(database);
         let escaped_schema = schema.replace('\'', "''");
 
         // User-defined alias types map most cleanly to DBFlux's Domain kind
@@ -3628,8 +3582,7 @@ impl MssqlConnection {
         database: &str,
         schema: &str,
     ) -> Result<Vec<SchemaIndexInfo>, DbError> {
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{}]", escaped_db);
+        let qualified_db = mssql_bracket_identifier(database);
         let escaped_schema = schema.replace('\'', "''");
 
         let sql = format!(
@@ -3686,8 +3639,7 @@ impl MssqlConnection {
         database: &str,
         schema: &str,
     ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
-        let escaped_db = database.replace(']', "]]");
-        let qualified_db = format!("[{}]", escaped_db);
+        let qualified_db = mssql_bracket_identifier(database);
         let escaped_schema = schema.replace('\'', "''");
 
         let sql = format!(
@@ -3792,8 +3744,7 @@ fn get_schema_routines(
     database: &str,
     schema: &str,
 ) -> Result<Vec<RoutineInfo>, DbError> {
-    let escaped_db = database.replace(']', "]]");
-    let qualified_db = format!("[{}]", escaped_db);
+    let qualified_db = mssql_bracket_identifier(database);
     let escaped_schema = schema.replace('\'', "''");
 
     // Join sys.objects with sys.schemas to enumerate stored procedures,
@@ -5305,7 +5256,7 @@ fn rows_by_pks_sql(
 /// Each row is `(kind, schema, name)` with `kind` either `V` or `F`. Only the
 /// database name is part of the text, as a bracket-quoted identifier.
 fn dependents_sql(database: &str) -> String {
-    let db = format!("[{}]", database.replace(']', "]]"));
+    let db = mssql_bracket_identifier(database);
     format!(
         "SELECT DISTINCT 'V', vs.name, v.name \
          FROM {db}.sys.sql_expression_dependencies d \

@@ -689,15 +689,18 @@ fn build_create_type_definition(
 }
 
 fn build_postgres_custom_type_kind_sql(type_ref: &TableRef) -> String {
-    let type_name = type_ref.name.replace('\'', "''");
+    let type_name = dbflux_core::quote_postgres_string_literal(&type_ref.name);
 
     let schema_filter = match type_ref.schema.as_deref() {
-        Some(schema) => format!("n.nspname = '{}'", schema.replace('\'', "''")),
+        Some(schema) => format!(
+            "n.nspname = {}",
+            dbflux_core::quote_postgres_string_literal(schema)
+        ),
         None => "n.nspname = current_schema()".to_string(),
     };
 
     format!(
-        "SELECT CASE\n    WHEN t.typtype = 'e' THEN 'enum'\n    WHEN t.typtype = 'd' THEN 'domain'\n    WHEN t.typtype = 'c' AND c.relkind = 'c' THEN 'composite'\n    ELSE NULL\nEND AS type_kind\nFROM pg_catalog.pg_type t\nJOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace\nLEFT JOIN pg_catalog.pg_class c ON c.oid = t.typrelid\nWHERE t.typname = '{}'\n  AND {}\n  AND (\n        t.typtype IN ('e', 'd')\n     OR (t.typtype = 'c' AND c.relkind = 'c')\n  )\nLIMIT 1",
+        "SELECT CASE\n    WHEN t.typtype = 'e' THEN 'enum'\n    WHEN t.typtype = 'd' THEN 'domain'\n    WHEN t.typtype = 'c' AND c.relkind = 'c' THEN 'composite'\n    ELSE NULL\nEND AS type_kind\nFROM pg_catalog.pg_type t\nJOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace\nLEFT JOIN pg_catalog.pg_class c ON c.oid = t.typrelid\nWHERE t.typname = {}\n  AND {}\n  AND (\n        t.typtype IN ('e', 'd')\n     OR (t.typtype = 'c' AND c.relkind = 'c')\n  )\nLIMIT 1",
         type_name, schema_filter
     )
 }
@@ -2032,6 +2035,15 @@ mod tests {
         assert!(sql.contains("n.nspname = current_schema()"));
         assert!(sql.contains("t.typtype IN ('e', 'd')"));
         assert!(sql.contains("t.typtype = 'c' AND c.relkind = 'c'"));
+    }
+
+    #[test]
+    fn test_build_postgres_custom_type_kind_sql_quotes_names_for_either_backslash_mode() {
+        let sql =
+            build_postgres_custom_type_kind_sql(&TableRef::with_schema("s\\", "x\\' OR 1=1 --"));
+
+        assert!(sql.contains("t.typname = E'x\\\\'' OR 1=1 --'"), "{sql}");
+        assert!(sql.contains("n.nspname = E's\\\\'"), "{sql}");
     }
 
     #[test]

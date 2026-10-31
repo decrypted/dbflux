@@ -19,8 +19,8 @@ pub use code_generation::{
     validate_ddl_fragment,
 };
 pub use dialect::{
-    DefaultSqlDialect, MutationTargetAlias, PlaceholderStyle, SqlDialect,
-    quote_double_quoted_identifier,
+    DefaultSqlDialect, MutationTargetAlias, PlaceholderStyle, SqlDialect, is_numeric_literal,
+    quote_double_quoted_identifier, quote_postgres_string_literal,
 };
 pub use generation::{
     SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_create_table,

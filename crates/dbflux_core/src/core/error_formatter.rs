@@ -342,8 +342,11 @@ fn is_exact_credential_key(key: &str) -> bool {
 }
 
 fn is_sensitive_connection_key(key: &str) -> bool {
-    // `sslpassword`, `User Password`, ...
-    is_exact_credential_key(key) || key.to_ascii_lowercase().ends_with("password")
+    // `sslpassword`, `User Password`, ... A longer run of words before `=`
+    // is free text, such as `UPDATE users SET password = $1; ...` in an
+    // error message, not a connection-string key.
+    is_exact_credential_key(key)
+        || (key.split_whitespace().count() <= 2 && key.to_ascii_lowercase().ends_with("password"))
 }
 
 /// A flag such as `save_password=true` in a log line is not a secret. Only
@@ -954,6 +957,22 @@ mod tests {
             "Saving profile: save_password=true, has_password=false"
         );
         assert_eq!(count, 0);
+    }
+
+    /// SQL in an error message is not an ADO string: the text between two
+    /// `;` that merely ends in `password` keeps everything after its `=`.
+    #[test]
+    fn sql_text_is_not_cut_at_a_password_column() {
+        let (redacted, _) = redact_connection_credentials(
+            "UPDATE users SET password = $1 WHERE id = $2; SELECT 1",
+            "[REDACTED]",
+        );
+
+        assert!(redacted.contains("WHERE id = $2; SELECT 1"), "{redacted}");
+        assert!(
+            redacted.starts_with("UPDATE users SET password = "),
+            "{redacted}"
+        );
     }
 
     #[test]

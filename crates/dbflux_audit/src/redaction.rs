@@ -45,8 +45,8 @@ const SENSITIVE_JSON_KEYS: &[&str] = &[
 /// URLs and `key=value` connection strings are handled separately by
 /// `dbflux_core::redact_connection_credentials`.
 const SENSITIVE_PATTERNS: &[(&str, &str); 6] = &[
-    // AWS access key ID (AKIA...)
-    ("aws_access_key", r"(?i)AKIA[0-9A-Z]{16}"),
+    // AWS access key ID: long-term (AKIA...) or temporary STS (ASIA...)
+    ("aws_access_key", r"(?i)A[KS]IA[0-9A-Z]{16}"),
     // AWS secret access key (40 hex chars)
     ("aws_secret_key", r"(?i)[0-9a-f]{40}"),
     // Generic API key pattern (long hex or base64 strings)
@@ -297,13 +297,18 @@ mod tests {
     fn log_lines_lose_tokens_but_keep_paths() {
         let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
         let line = format!(
-            "using key AKIAIOSFODNN7EXAMPLE; Authorization: Bearer {jwt} for /home/alice/Projects/analytics/warehouse/queries/x.sql"
+            "using key AKIAIOSFODNN7EXAMPLE and ASIAIOSFODNN7EXAMPLE; Authorization: Bearer {jwt} for /home/alice/Projects/analytics/warehouse/queries/x.sql"
         );
 
         let result = redact_log_line(&line);
 
         assert!(
             !result.redacted.contains("AKIAIOSFODNN7EXAMPLE"),
+            "{}",
+            result.redacted
+        );
+        assert!(
+            !result.redacted.contains("ASIAIOSFODNN7EXAMPLE"),
             "{}",
             result.redacted
         );
@@ -315,7 +320,7 @@ mod tests {
             "{}",
             result.redacted
         );
-        assert_eq!(result.redaction_count, 2);
+        assert_eq!(result.redaction_count, 3);
     }
 
     /// Error messages get the same connection-string redaction as `sanitize_uri`.

@@ -88,7 +88,7 @@ DBFlux는 모든 중요한 작업을 SQLite에 저장된 통합 감사 트레일
 
 기본적으로 `AuditService`는 다음 설정으로 실행됩니다:
 
-- **`redact_sensitive = true`**: `details_json`과 `error_message`의 민감한 값(비밀번호, 토큰, 연결 문자열)은 저장 전에 `[REDACTED]`로 대체됩니다. 캡처된 로그 줄이 저장되는 `summary`에서는 URL과 `key=value` 연결 문자열의 자격 증명, AWS 액세스 키 ID, JWT가 대체됩니다. 긴 hex 또는 base64 문자열에 대한 일반 패턴은 여기에 적용하지 않으므로 로그 줄의 경로와 식별자는 그대로 읽을 수 있습니다.
+- **`redact_sensitive = true`**: `details_json`과 `error_message`의 민감한 값(비밀번호, 토큰, 연결 문자열)은 저장 전에 `[REDACTED]`로 대체됩니다. 캡처된 로그 줄이 저장되는 `summary`에서는 URL과 `key=value` 연결 문자열의 자격 증명, AWS 액세스 키 ID(`AKIA...`와 임시 `ASIA...`), JWT가 대체됩니다. 긴 hex 또는 base64 문자열에 대한 일반 패턴은 여기에 적용하지 않으므로 로그 줄의 경로와 식별자는 그대로 읽을 수 있습니다.
 - **`capture_query_text = false`**: 전체 쿼리 텍스트는 저장되지 않습니다. 대신 SHA256 지문과 원본 길이가 `query_length`와 함께 `[FINGERPRINT:<16-char-hex>]`로 저장됩니다. 이는 쿼리에 포함된 민감한 데이터가 감사 로그로 유출되는 것을 막습니다.
 - **`max_detail_bytes = 65536`**: 저장소 비대화를 막기 위해 64 KiB보다 큰 페이로드는 거부됩니다.
 

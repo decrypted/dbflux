@@ -88,7 +88,7 @@ Validation is enforced by `AuditService::validate_event()` before storage:
 
 By default, `AuditService` runs with these settings:
 
-- **`redact_sensitive = true`**: Sensitive values (passwords, tokens, connection strings) in `details_json` and `error_message` are replaced with `[REDACTED]` before storage. In `summary`, where captured log lines are stored, credentials in URLs and in `key=value` connection strings, AWS access key ids and JWTs are replaced; the generic patterns for long hex or base64 strings are not applied there, so paths and identifiers in log lines stay readable.
+- **`redact_sensitive = true`**: Sensitive values (passwords, tokens, connection strings) in `details_json` and `error_message` are replaced with `[REDACTED]` before storage. In `summary`, where captured log lines are stored, credentials in URLs and in `key=value` connection strings, AWS access key ids (`AKIA...` and temporary `ASIA...`) and JWTs are replaced; the generic patterns for long hex or base64 strings are not applied there, so paths and identifiers in log lines stay readable.
 - **`capture_query_text = false`**: Full query text is never stored. Instead, a SHA256 fingerprint plus the original length are stored as `[FINGERPRINT:<16-char-hex>]` with `query_length`. This prevents sensitive data in queries from leaking into the audit log.
 - **`max_detail_bytes = 65536`**: Payloads larger than 64 KiB are rejected to prevent storage bloat.
 

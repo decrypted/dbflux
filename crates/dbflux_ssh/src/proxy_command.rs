@@ -96,44 +96,83 @@ impl StderrTail {
 /// A stderr line as it may appear in an error.
 ///
 /// The error of a failed connect is stored in the audit log, and a login or
-/// device URL can carry its one-time code in the path or under any query
-/// parameter. So URLs with a scheme keep only their scheme and host, also
-/// when JSON-escaped (`https:\/\/`), any other query string is dropped, and
-/// credentials in `key=value` form are redacted. All of it happens before
-/// the line is shortened, so a cut cannot hide a secret from it.
+/// device URL can carry its one-time code anywhere after its host. So the
+/// line is redacted first (`key=value` credentials, URL userinfo), and only
+/// then is every URL cut to its host, with or without a scheme and also when
+/// JSON-escaped (`https:\/\/`), and any other query string dropped. Dropping
+/// text after redaction can only remove more, never undo a redaction. The
+/// line is shortened last, so a cut cannot hide a secret from either step.
 fn tail_line(line: &str) -> String {
     let unescaped = line.trim_end().replace("\\/", "/");
-    let reduced = drop_query_strings(&reduce_urls_to_host(&unescaped));
-    shorten(&dbflux_core::sanitize_uri(&reduced))
+    let redacted = dbflux_core::sanitize_uri(&unescaped);
+    shorten(&reduce_bare_urls(&reduce_urls_to_host(&redacted)))
 }
 
-/// Replaces `?key=...` up to the end of the word with `?…`, for URLs written
-/// without a scheme (`login.example.com/activate?code=...`).
-fn drop_query_strings(text: &str) -> String {
+fn is_word_separator(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>')
+}
+
+/// Per word: a URL without a scheme (`login.example.com/activate/CODE`,
+/// `10.0.0.1:8080?code=...`) keeps only its host, and any other word drops
+/// what follows a `?` that starts a query (`x?code=...`).
+fn reduce_bare_urls(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut rest = text;
 
-    while let Some(question) = rest.find('?') {
-        let (before, after) = rest.split_at(question);
-        output.push_str(before);
+    while !rest.is_empty() {
+        let word_start = rest
+            .find(|c: char| !is_word_separator(c))
+            .unwrap_or(rest.len());
+        let (separators, after) = rest.split_at(word_start);
+        output.push_str(separators);
 
-        let query = &after[1..];
-        let query_end = query
-            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>'))
-            .unwrap_or(query.len());
-        let (word, remainder) = query.split_at(query_end);
-
-        if word.contains('=') {
-            output.push_str("?…");
-        } else {
-            output.push('?');
-            output.push_str(word);
-        }
+        let word_end = after.find(is_word_separator).unwrap_or(after.len());
+        let (word, remainder) = after.split_at(word_end);
+        output.push_str(&reduce_bare_url_word(word));
         rest = remainder;
     }
 
-    output.push_str(rest);
     output
+}
+
+fn reduce_bare_url_word(word: &str) -> String {
+    let host_end = word.find(['/', '?', '#']).unwrap_or(word.len());
+    let (host, location) = word.split_at(host_end);
+    if !location.is_empty() && is_host_name(host) {
+        return format!("{host}/…");
+    }
+
+    match word.split_once('?') {
+        Some((before, query)) if query.contains('=') => format!("{before}?…"),
+        _ => word.to_string(),
+    }
+}
+
+/// `example.com`, `login.example.com:8443` or `10.0.0.1`: dot-separated
+/// labels ending in an alphabetic top-level label, or four numeric labels.
+fn is_host_name(candidate: &str) -> bool {
+    let name = candidate
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(candidate, |(name, _)| name);
+    let labels: Vec<&str> = name.split('.').collect();
+    if labels.len() < 2
+        || labels.iter().any(|label| {
+            label.is_empty()
+                || !label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+    {
+        return false;
+    }
+
+    let numeric = labels
+        .iter()
+        .all(|label| label.bytes().all(|b| b.is_ascii_digit()));
+    let top = labels.last().copied().unwrap_or_default();
+    (numeric && labels.len() == 4)
+        || (top.len() >= 2 && top.bytes().all(|b| b.is_ascii_alphabetic()))
 }
 
 /// Replaces every `scheme://[user@]host...` with `scheme://host/…`.
@@ -441,9 +480,41 @@ mod tests {
         );
         assert_eq!(
             tail_line("visit login.example.com/activate?code=WDJB-MJHT now"),
-            "visit login.example.com/activate?… now"
+            "visit login.example.com/… now"
         );
         assert_eq!(tail_line("are you sure? yes"), "are you sure? yes");
+    }
+
+    /// Redaction runs before anything is dropped: dropping a query cannot
+    /// remove a key and leave its quoted value behind.
+    #[test]
+    fn tail_lines_are_redacted_before_query_strings_are_dropped() {
+        let quoted = tail_line(r#"auth failed for x?password="hunter2""#);
+        assert!(!quoted.contains("hunter2"), "{quoted}");
+
+        let ado = tail_line(r#"Server=db?app=x;Password="hunter 2""#);
+        assert!(!ado.contains("hunter 2"), "{ado}");
+    }
+
+    /// A URL without a scheme loses its path and fragment too.
+    #[test]
+    fn bare_urls_keep_only_their_host() {
+        assert_eq!(
+            tail_line("visit login.example.com/activate/WDJB-MJHT now"),
+            "visit login.example.com/… now"
+        );
+        assert_eq!(
+            tail_line("open login.example.com#WDJB-MJHT"),
+            "open login.example.com/…"
+        );
+        assert_eq!(
+            tail_line("proxy 10.0.0.1:8080/cb?x=1"),
+            "proxy 10.0.0.1:8080/…"
+        );
+        assert_eq!(
+            tail_line("read /home/alice/x.sql and v1.2/notes, error #42"),
+            "read /home/alice/x.sql and v1.2/notes, error #42"
+        );
     }
 
     /// Redaction runs before the cut, so a secret past the cut point cannot

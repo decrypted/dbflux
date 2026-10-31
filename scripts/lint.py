@@ -10,6 +10,7 @@ Usage:
     scripts/lint.py fmt [--check]
     scripts/lint.py clippy [extra cargo arguments...]
     scripts/lint.py mouse-down
+    scripts/lint.py unquoted-sql
 
 Arguments given to `clippy` are passed to cargo verbatim before `--`, for
 example `--locked --features "sqlite,postgres"` or `--tests`.
@@ -19,6 +20,14 @@ under `crates/` that is not listed in `scripts/mouse_down_allowlist.txt`.
 Activations belong in `on_click`, which runs on release and is exposed to
 assistive technology as a click action; `on_mouse_down` is reserved for press
 semantics such as drag starts, resize grips and focus guards.
+
+`unquoted-sql` fails on every `format!`-style string in non-test code of the
+driver crates and `dbflux_core` that wraps a placeholder in its own quotes,
+such as "`{}`", "\"{}\"", "[{}]" or, inside a query, "'{}'", unless the site
+is listed in `scripts/unquoted_sql_allowlist.txt`. Names and values in SQL go
+through the dialect's quoting helper; a hand-written pair of quotes around a
+placeholder is how a server-provided name that contains the quote character
+ends up running as SQL.
 """
 
 import argparse
@@ -31,6 +40,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MOUSE_DOWN_ALLOWLIST = ROOT / "scripts" / "mouse_down_allowlist.txt"
+UNQUOTED_SQL_ALLOWLIST = ROOT / "scripts" / "unquoted_sql_allowlist.txt"
+UNQUOTED_SQL_SOURCES = ("crates/dbflux_driver_*/src/**/*.rs", "crates/dbflux_core/src/**/*.rs")
+FORMAT_MACRO_CALL = re.compile(r"\b(?:format|write|writeln|format_args)!\s*\(\s*(?:[^,()\"]+,\s*)?$")
+SQL_KEYWORD = re.compile(
+    r"\b(?:SELECT|FROM|WHERE|USE|SHOW|INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|TRUNCATE|PRAGMA|KILL"
+    r"|DESCRIBE|EXEC|EXECUTE|GRANT|SET|ATTACH|DETACH|VALUES|INTO|JOIN|LIKE|AND|OR|TABLE|INDEX|TYPE"
+    r"|VALUE|IN|DATABASE|SCHEMA|OPTIMIZE|VACUUM|ANALYZE|EXPLAIN|RENAME|COMMENT|CALL|LIMIT|ORDER"
+    r"|GROUP|BY|RETURNING|CAST|DEFAULT|CONSTRAINT|REFERENCES|COLUMN|VIEW|TRIGGER|PROCEDURE"
+    r"|FUNCTION)\b"
+)
+FLUX_MARKERS = ("|>", "from(bucket")
+IDENTIFIER_QUOTES = {"`": "`", '"': '"', "[": "]"}
+RUST_CHAR_LITERAL = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)|[^\\'\n])'")
+RUST_RAW_STRING_START = re.compile(r'b?r(#*)"')
+RUST_STRING_ESCAPES = {'"': '"', "\\": "\\", "n": "\n", "t": "\t", "r": "\r", "'": "'", "0": "\0"}
 LEFT_MOUSE_DOWN = re.compile(r"\.on_mouse_down\(\s*(?:gpui::)?MouseButton::Left\b")
 FUNCTION_HEADER = re.compile(r"^(\s*)(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+(\w+)")
 TEST_MODULE_HEADER = re.compile(r"^(\s*)(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
@@ -75,9 +99,9 @@ def run(command: list[str]) -> int:
     return subprocess.run(command, cwd=ROOT).returncode
 
 
-def is_test_path(path: Path) -> bool:
+def is_test_path(path: Path, root: Path = ROOT) -> bool:
     """Whether a source file only holds tests: a `tests/` directory or a `tests.rs` module."""
-    relative = path.relative_to(ROOT)
+    relative = path.relative_to(root)
 
     return "tests" in relative.parts[:-1] or path.stem == "tests" or path.stem.endswith("_tests")
 
@@ -154,27 +178,27 @@ def left_mouse_down_sites() -> list[tuple[str, str, int]]:
     return sites
 
 
-def read_mouse_down_allowlist() -> dict[tuple[str, str], int] | None:
+def read_allowlist(allowlist: Path) -> dict[tuple[str, str], int] | None:
     """Parse `path:function: reason` entries into a count per (path, function).
 
-    One entry covers one handler, so a function with three press handlers is
+    One entry covers one site, so a function with three allowed sites is
     listed three times. Returns None after printing the offending lines when
     an entry is malformed.
     """
     allowed: dict[tuple[str, str], int] = {}
     malformed = []
 
-    if not MOUSE_DOWN_ALLOWLIST.exists():
+    if not allowlist.exists():
         return allowed
 
-    for number, raw in enumerate(MOUSE_DOWN_ALLOWLIST.read_text(encoding="utf-8").splitlines(), 1):
+    for number, raw in enumerate(allowlist.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
 
         parts = [part.strip() for part in line.split(":", 2)]
         if len(parts) != 3 or not all(parts):
-            malformed.append(f"{MOUSE_DOWN_ALLOWLIST.name}:{number}: expected `path:function: reason`")
+            malformed.append(f"{allowlist.name}:{number}: expected `path:function: reason`")
             continue
 
         key = (parts[0], parts[1])
@@ -187,13 +211,15 @@ def read_mouse_down_allowlist() -> dict[tuple[str, str], int] | None:
     return allowed
 
 
-def check_mouse_down() -> int:
-    """Fail on left-button `on_mouse_down` handlers missing from the allowlist, and on stale entries."""
-    allowed = read_mouse_down_allowlist()
-    if allowed is None:
-        return 1
+def allowlist_errors(
+    sites: list[tuple[str, str, int]], allowed: dict[tuple[str, str], int], unlisted: str
+) -> list[str]:
+    """Compare found (path, function, line) sites with allowlist counts.
 
-    sites = left_mouse_down_sites()
+    Reports every function with more sites than entries, using `unlisted` to
+    describe them, and every entry left over once its sites are gone, so the
+    allowlist always matches the code exactly.
+    """
     found: dict[tuple[str, str], list[int]] = {}
     for path, function, line in sites:
         found.setdefault((path, function), []).append(line)
@@ -203,15 +229,28 @@ def check_mouse_down() -> int:
         missing = len(lines) - allowed.get(key, 0)
         if missing > 0:
             locations = ", ".join(str(line) for line in lines)
-            errors.append(
-                f"{key[0]}:{key[1]}: {missing} unlisted left-button on_mouse_down "
-                f"(lines {locations}); use on_click for activations, or allowlist a press handler"
-            )
+            errors.append(f"{key[0]}:{key[1]}: {missing} unlisted {unlisted} (lines {locations})")
 
     for key, count in sorted(allowed.items()):
         stale = count - len(found.get(key, []))
         if stale > 0:
             errors.append(f"{key[0]}:{key[1]}: {stale} stale allowlist entr{'y' if stale == 1 else 'ies'}")
+
+    return errors
+
+
+def check_mouse_down() -> int:
+    """Fail on left-button `on_mouse_down` handlers missing from the allowlist, and on stale entries."""
+    allowed = read_allowlist(MOUSE_DOWN_ALLOWLIST)
+    if allowed is None:
+        return 1
+
+    sites = left_mouse_down_sites()
+    errors = allowlist_errors(
+        sites,
+        allowed,
+        "left-button on_mouse_down; use on_click for activations, or allowlist a press handler",
+    )
 
     if errors:
         print("\n".join(errors), file=sys.stderr)
@@ -219,6 +258,166 @@ def check_mouse_down() -> int:
         return 1
 
     print(f"mouse-down: {len(sites)} allowlisted press handler(s), no unlisted activations")
+    return 0
+
+
+def rust_string_literals(text: str):
+    """Yield (offset, value) for every string literal outside comments.
+
+    Escapes in ordinary strings are decoded, so `\\"` comes back as `"`; raw
+    strings come back verbatim. Char literals and lifetimes are skipped so a
+    `'"'` never opens a string.
+    """
+    index, length = 0, len(text)
+
+    while index < length:
+        if text.startswith("//", index):
+            end = text.find("\n", index)
+            index = length if end < 0 else end
+            continue
+
+        if text.startswith("/*", index):
+            depth, index = 1, index + 2
+            while index < length and depth:
+                if text.startswith("/*", index):
+                    depth, index = depth + 1, index + 2
+                elif text.startswith("*/", index):
+                    depth, index = depth - 1, index + 2
+                else:
+                    index += 1
+            continue
+
+        character = text[index]
+        follows_identifier = index > 0 and (text[index - 1].isalnum() or text[index - 1] == "_")
+
+        raw = RUST_RAW_STRING_START.match(text, index) if character in "br" and not follows_identifier else None
+        if raw:
+            closing = '"' + raw.group(1)
+            end = text.find(closing, raw.end())
+            end = length if end < 0 else end
+            yield index, text[raw.end():end]
+            index = end + len(closing)
+            continue
+
+        if character == '"':
+            cursor, value = index + 1, []
+            while cursor < length and text[cursor] != '"':
+                if text[cursor] == "\\" and cursor + 1 < length:
+                    escaped = text[cursor + 1]
+                    if escaped == "\n":
+                        cursor += 2
+                        while cursor < length and text[cursor] in " \t\n":
+                            cursor += 1
+                        continue
+                    value.append(RUST_STRING_ESCAPES.get(escaped, "\\" + escaped))
+                    cursor += 2
+                    continue
+                value.append(text[cursor])
+                cursor += 1
+            yield index, "".join(value)
+            index = cursor + 1
+            continue
+
+        if character == "'":
+            char_literal = RUST_CHAR_LITERAL.match(text, index)
+            if char_literal:
+                index = char_literal.end()
+                continue
+
+        index += 1
+
+
+def format_placeholders(value: str):
+    """Yield (start, end) of each `{...}` placeholder, skipping `{{` and `}}`."""
+    index = 0
+
+    while index < len(value):
+        if value.startswith("{{", index) or value.startswith("}}", index):
+            index += 2
+        elif value[index] == "{":
+            end = value.find("}", index)
+            if end < 0:
+                return
+            yield index, end + 1
+            index = end + 1
+        else:
+            index += 1
+
+
+def self_quoted_placeholders(value: str) -> set[str]:
+    """Return the opening quotes this format string puts directly around a placeholder.
+
+    Identifier quotes count in query text and in bare fragments without
+    whitespace (the way helpers and partial statements are built); a single
+    quote only counts in query text, since prose messages quote values that
+    way all the time.
+    """
+    literal_text = re.sub(r"\{[^{}]*\}", "", value.replace("{{", "").replace("}}", ""))
+    is_query = bool(SQL_KEYWORD.search(literal_text)) or any(marker in value for marker in FLUX_MARKERS)
+    is_fragment = not re.search(r"\s", literal_text)
+    if not (is_query or is_fragment):
+        return set()
+
+    quotes = dict(IDENTIFIER_QUOTES)
+    if is_query:
+        quotes["'"] = "'"
+
+    found = set()
+    for start, end in format_placeholders(value):
+        before = value[start - 1] if start > 0 else ""
+        after = value[end] if end < len(value) else ""
+        if before in quotes and quotes[before] == after:
+            found.add(before)
+
+    return found
+
+
+def unquoted_sql_sites(root: Path = ROOT) -> list[tuple[str, str, int]]:
+    """Find every self-quoted placeholder in non-test format strings as (path, function, line)."""
+    sites = []
+    paths = sorted({path for pattern in UNQUOTED_SQL_SOURCES for path in root.glob(pattern)})
+
+    for path in paths:
+        if is_test_path(path, root):
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        lines = text.split("\n")
+        excluded = test_module_lines(lines)
+        relative = path.relative_to(root).as_posix()
+
+        for offset, value in rust_string_literals(text):
+            line_index = text.count("\n", 0, offset)
+            if line_index in excluded:
+                continue
+            if not FORMAT_MACRO_CALL.search(text, max(0, offset - 200), offset):
+                continue
+            if self_quoted_placeholders(value):
+                sites.append((relative, enclosing_function(lines, line_index), line_index + 1))
+
+    return sites
+
+
+def check_unquoted_sql() -> int:
+    """Fail on self-quoted SQL placeholders missing from the allowlist, and on stale entries."""
+    allowed = read_allowlist(UNQUOTED_SQL_ALLOWLIST)
+    if allowed is None:
+        return 1
+
+    sites = unquoted_sql_sites()
+    errors = allowlist_errors(
+        sites,
+        allowed,
+        "self-quoted placeholder; quote names and values with the dialect's helper, "
+        "or allowlist a site that is provably safe",
+    )
+
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        print(f"unquoted-sql: {len(errors)} problem(s), {len(sites)} site(s) found", file=sys.stderr)
+        return 1
+
+    print(f"unquoted-sql: {len(sites)} allowlisted site(s), no unlisted self-quoted placeholders")
     return 0
 
 
@@ -242,13 +441,21 @@ def main() -> int:
         help="Fail on left-button on_mouse_down handlers missing from scripts/mouse_down_allowlist.txt",
     )
 
+    subcommands.add_parser(
+        "unquoted-sql",
+        help="Fail on self-quoted SQL placeholders missing from scripts/unquoted_sql_allowlist.txt",
+    )
+
     arguments, extra = parser.parse_known_args()
 
-    if arguments.command in ("fmt", "mouse-down") and extra:
+    if arguments.command in ("fmt", "mouse-down", "unquoted-sql") and extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
     if arguments.command == "mouse-down":
         return check_mouse_down()
+
+    if arguments.command == "unquoted-sql":
+        return check_unquoted_sql()
 
     packages = package_arguments(first_party_packages())
 

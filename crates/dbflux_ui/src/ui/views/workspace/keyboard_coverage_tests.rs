@@ -132,6 +132,10 @@ const TASKS_PANEL: SurfaceRegistry = SurfaceRegistry {
             "tasks-clear-finished",
             KeyboardPath::Command(Command::ClearFinishedTasks),
         ),
+        (
+            "tasks-clear-queue*",
+            KeyboardPath::Command(Command::ClearQueryQueue),
+        ),
         ("task-row-*", KeyboardPath::Command(Command::ExpandCollapse)),
         (
             "cancel-task-button-*",

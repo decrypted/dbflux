@@ -108,9 +108,55 @@ impl Sidebar {
         }
     }
 
+    /// Refreshes a table's details once a connection-task slot is free; past
+    /// the limit the refresh waits in the queue, shown in the Tasks panel.
     pub(super) fn refresh_table_details_via_coordinator(
         &mut self,
         item_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(parts) = parse_node_id(item_id)
+            .as_ref()
+            .and_then(ItemIdParts::from_node_id)
+        else {
+            return;
+        };
+        let target = TaskTarget {
+            profile_id: parts.profile_id,
+            database: parts.database.clone(),
+        };
+
+        match dbflux_ui_base::work_queue::connection_task_slot(
+            &self.app_state,
+            TaskKind::SchemaRefresh,
+            crate::labels::refreshing_schema_object_task_label(&parts.object_name),
+            Some(target),
+            cx,
+        ) {
+            dbflux_ui_base::work_queue::ConnectionTaskSlot::Free(permit) => {
+                self.refresh_table_details_in_slot(item_id, permit, cx);
+            }
+            dbflux_ui_base::work_queue::ConnectionTaskSlot::Queued(wait) => {
+                let item_id = item_id.to_string();
+                cx.spawn(async move |this, cx| {
+                    if let Some(permit) = wait.await {
+                        this.update(cx, |sidebar, cx| {
+                            sidebar.refresh_table_details_in_slot(&item_id, permit, cx);
+                        })
+                        .ok();
+                    }
+                })
+                .detach();
+            }
+        }
+    }
+
+    /// The refresh itself. The slot is tied to the refresh task it starts;
+    /// every path that starts none frees it on return.
+    fn refresh_table_details_in_slot(
+        &mut self,
+        item_id: &str,
+        permit: dbflux_core::WorkPermit,
         cx: &mut Context<Self>,
     ) {
         let Some(parts) = parse_node_id(item_id)
@@ -127,15 +173,6 @@ impl Sidebar {
         if self.loading_items.contains(item_id) {
             return;
         }
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.pending_toast = Some(PendingToast {
-                message: crate::labels::background_task_limit_toast_label(),
-                is_error: true,
-            });
-            self.refresh_tree(cx);
-            return;
-        }
-
         let database = parts.cache_database().to_string();
         let key = ObjectTreeRequestKey::TableDetails {
             profile_id: parts.profile_id,
@@ -180,6 +217,7 @@ impl Sidebar {
                         crate::labels::refreshing_schema_object_task_label(&parts.object_name),
                         Some(target),
                     );
+                    state.tasks_mut().attach_permit(task.0, permit);
                     cx.emit(AppStateChanged);
                     task
                 });

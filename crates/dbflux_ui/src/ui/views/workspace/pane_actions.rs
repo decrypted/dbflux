@@ -300,6 +300,11 @@ impl Workspace {
         let panel = self.tasks_panel.read(cx);
         let selected = panel.selected_actions(cx);
         let context = ContextId::BackgroundTasks;
+        // What "Clear queue" would cancel: the selected task's connection,
+        // else the first connection with a queue.
+        let queued = panel.queue_to_clear(cx).map_or(0, |profile_id| {
+            self.app_state.read(cx).queued_query_count(profile_id)
+        });
 
         let output_label = if selected.is_some_and(|task| task.output_shown) {
             dbflux_i18n::t!("tasks_panel.hide_output")
@@ -340,6 +345,14 @@ impl Workspace {
             )
             .icon(AppIcon::CircleX)
             .enabled(panel.has_finished_tasks(cx)),
+            PaneAction::command(
+                "tasks-clear-queue",
+                dbflux_i18n::t!("tasks_panel.clear_queue", count = queued),
+                Command::ClearQueryQueue,
+                context,
+            )
+            .icon(AppIcon::Clock)
+            .enabled(queued > 0),
             PaneAction::command(
                 "tasks-collapse",
                 dbflux_i18n::t!("tasks_panel.collapse"),
@@ -1057,6 +1070,7 @@ mod tests {
                 "task-cancel",
                 "task-dismiss",
                 "tasks-clear-finished",
+                "tasks-clear-queue",
                 "tasks-collapse"
             ]
         );

@@ -2894,9 +2894,6 @@ document:
         sorted_set: Sorted Set
         json: JSON
         stream: Stream
-    pagination:
-      error:
-        background_task_limit: Há tarefas em segundo plano demais em execução, aguarde
     parsing:
       type:
         string: String
@@ -4132,6 +4129,8 @@ palette:
       name: Alternar painel de tarefas
     clear_finished_tasks:
       name: Limpar tarefas concluídas
+    clear_query_queue:
+      name: "Limpar fila de consultas"
     toggle_notifications:
       name: "Alternar notificações"
     show_connections_view:
@@ -4342,7 +4341,15 @@ settings:
     max_background_tasks:
       label: Máximo de tarefas simultâneas em segundo plano
       error: O máximo de tarefas em segundo plano deve ser >= 1
-      help: "Conta conexões, desconexões, hooks de conexão, trocas de banco de dados, tarefas de esquema e varreduras key-value em andamento. No limite, novas conexões, trocas de banco de dados, carregamentos de esquema e de detalhes de tabela e páginas key-value são recusados. Consultas, carregamentos da grade de dados e exportações não são limitados."
+      help: "Conta conexões, desconexões, trocas de banco de dados, carregamentos de esquema e de detalhes de tabela, remoções de esquema e varreduras chave-valor em execução em todas as conexões. Acima do limite, as novas esperam em uma fila, marcadas como Aguardando no painel de tarefas, e começam quando um espaço fica livre. Os hooks de uma conexão rodam dentro do espaço dela."
+    max_concurrent_queries:
+      label: "Máximo de consultas simultâneas por conexão"
+      error: "O máximo de consultas simultâneas deve ser >= 1"
+      help: "Consultas e comandos que rodam ao mesmo tempo em uma conexão: páginas e contagens de linhas da grade, detalhes de tabelas, rótulos de chaves estrangeiras, execuções do editor SQL, salvamentos, exportações e gráficos. O resto espera na fila dessa conexão; uma execução ou um salvamento explícito passa à frente das leituras em segundo plano na fila."
+    max_queued_queries:
+      label: "Máximo de consultas na fila por conexão"
+      error: "O máximo de consultas na fila deve ser >= 1"
+      help: "Com a fila cheia, uma nova leitura em segundo plano é cancelada com um aviso; uma execução ou um salvamento explícito toma o lugar da leitura em segundo plano mais antiga da fila."
     pause_refresh_on_error:
       label: Pausar a atualização automática em caso de erro
     refresh_only_if_visible:
@@ -4553,6 +4560,7 @@ settings:
       toggle_tasks: Alternar painel de tarefas
       cancel_task: Cancelar tarefa
       clear_finished_tasks: Limpar tarefas concluídas
+      clear_query_queue: "Limpar fila de consultas"
       toggle_sidebar: Alternar barra lateral
       toggle_full_screen: Alternar tela cheia
       open_settings: Abrir configurações
@@ -5336,6 +5344,7 @@ sidebar:
     connect_on_startup: Conectar ao iniciar
     connect_on_startup_overridden: "Sem efeito enquanto Configurações > Geral > Inicialização e sessão reconecta as conexões abertas"
     disconnect: Desconectar
+    clear_queue: "Limpar fila (%{count})"
     edit: Editar
     duplicate: Duplicar
     rename: Renomear
@@ -5438,7 +5447,6 @@ sidebar:
     startup_needs_passwords: "%{names} não foram conectadas ao iniciar porque as senhas não estão salvas. Conecte-se a cada uma para digitá-la."
     startup_needs_passphrase: "'%{name}' não foi conectada ao iniciar porque o túnel SSH precisa de uma frase secreta que não está salva. Conecte-se para digitá-la."
     operation_started_elsewhere: Operação iniciada por outra thread
-    background_task_limit: Há tarefas em segundo plano demais em execução, aguarde
     connection_cancelled_by_hook: Conexão cancelada pelo hook
     connection_cancelled_by_post_connect_hook: Conexão cancelada pelo hook de pós-conexão
     disconnect_cancelled_by_hook: Desconexão cancelada pelo hook
@@ -5665,6 +5673,14 @@ tasks_panel:
   collapse: "Ocultar o painel de tarefas"
   empty: Nenhuma tarefa em segundo plano
   output_truncated: "… saída truncada no painel"
+  waiting_count: "%{count} aguardando"
+  clear_queue: "Limpar fila (%{count})"
+  clear_queue_on: "Limpar fila de %{connection} (%{count})"
+work_queue:
+  waiting_for_slot: "Aguardando um espaço livre para consultas em %{connection}"
+  waiting_for_connection_tasks: "Aguardando um espaço livre para tarefas de conexão"
+  queue_full: "%{connection}: %{count} consultas já aguardam; esta foi cancelada"
+  untitled_query: "Consulta"
 toast:
   action:
     copy: Copiar

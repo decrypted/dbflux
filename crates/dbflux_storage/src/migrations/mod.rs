@@ -198,6 +198,7 @@ impl MigrationRegistry {
         registry.register(mod_056_general_settings_grid_filter_autoquote::MigrationImpl);
         registry.register(mod_058_general_settings_grid_header_click_sorts::MigrationImpl);
         registry.register(mod_059_connection_profile_driver_params::MigrationImpl);
+        registry.register(mod_061_general_settings_max_concurrent_queries::MigrationImpl);
         registry
     }
 
@@ -443,6 +444,7 @@ mod mod_054_general_settings_grid_review_before_save;
 mod mod_056_general_settings_grid_filter_autoquote;
 mod mod_058_general_settings_grid_header_click_sorts;
 mod mod_059_connection_profile_driver_params;
+mod mod_061_general_settings_max_concurrent_queries;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1300,6 +1302,7 @@ mod tests {
             "056_general_settings_grid_filter_autoquote",
             "058_general_settings_grid_header_click_sorts",
             "059_connection_profile_driver_params",
+            "061_general_settings_max_concurrent_queries",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

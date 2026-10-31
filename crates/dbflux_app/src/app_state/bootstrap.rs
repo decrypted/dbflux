@@ -245,9 +245,12 @@ impl AppState {
 
         let update_settings = crate::updates::load_update_settings(&storage_runtime);
 
+        let work_gate = dbflux_core::WorkGate::new(super::work_limits(&general_settings));
+
         let mut state = Self {
             facade,
             external_driver_diagnostics,
+            work_gate,
             general_settings,
             update_settings,
             update_check: crate::updates::UpdateCheckState::default(),

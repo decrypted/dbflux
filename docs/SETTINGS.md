@@ -108,9 +108,31 @@ converted crate by crate and stays in English for now.
 |---------|---------|--------------|
 | **Default refresh policy** | Manual | Manual or Interval auto-refresh for data views. |
 | **Default refresh interval (seconds)** | 5 | Interval used when the policy is Interval (minimum 1). |
-| **Max concurrent background tasks** | 8 | Cap on connection and schema tasks (minimum 1). Running connects, disconnects, connection hooks, database switches, schema loads, refreshes and drops, and key-value scans count toward it. At the cap, a new connect, database switch, schema or table-detail load, or key-value page is refused with a notice until a running task finishes; it is not queued. Queries, data-grid loads, exports, dashboards and mutations neither count nor are limited. |
+| **Max concurrent background tasks** | 8 | Cap on connection and schema tasks across all connections (minimum 1). Running connects, disconnects, database switches, schema and table-detail loads, refreshes and drops, and key-value scans count toward it. Past the cap, a new one waits in a queue, first in first out, and starts when a running one finishes. A connect's hooks run inside its slot and do not count on their own. |
+| **Max concurrent queries per connection** | 8 | How many queries and commands run at once on one connection (minimum 1): data-grid pages, row counts, table details and primary-key lookups, foreign-key labels, SQL editor runs, saves and other writes, exports, charts and dashboard panels, and similar-row searches. The rest wait in that connection's queue. Each connection has its own limit, so a busy connection never holds up another one. |
+| **Max queued queries per connection** | 50 | How many queries may wait on one connection (minimum 1). When the queue is full, a new background read is cancelled with a notice ("Prod: 50 queries already waiting; this one was cancelled") and its tab shows the cancelled state, so a reload tries again; an explicit Run or Save takes the place of the oldest queued background read instead, which is cancelled with the same notice. |
 | **Pause auto-refresh on error** | On | Stop auto-refreshing a view after it errors. |
 | **Auto-refresh only if tab is visible** | Off | Skip refreshing tabs you're not looking at. |
+
+#### The query queue
+
+Work above the limit waits in a queue per connection and starts when a slot
+frees. Interactive work, an explicit Run in the SQL editor, a Save or another
+write from the grid, and a similar-row search, starts before queued background
+work (page loads, row counts, lookups, exports, charts); within each level the
+queue is first in first out. A tab whose reads wait shows its loading state.
+
+Queued work shows in the Tasks panel as waiting, with the connection it waits
+for, and can be cancelled there like a running task: it leaves the queue and
+never runs, and the grid shows the usual cancelled state. **Clear queue (N)**
+in the Tasks panel header (`Shift+c` in the panel, the **Clear query queue**
+palette command, or the connection's sidebar menu) cancels everything waiting
+on a connection in one go; running work keeps running. Closing a tab drops its
+queued reads, and disconnecting drops everything queued on the connection.
+
+A slot is held only for the one call it was taken for, and work that follows
+from it (the read after a save, the row count after a page) asks for its own
+slot after the first one is released, so the queue cannot deadlock on itself.
 
 ### Notifications
 

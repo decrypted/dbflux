@@ -356,8 +356,15 @@ impl DataGridPanel {
             };
 
             let result: Result<dbflux_core::CrudResult, dbflux_core::DbError> = cx
-                .background_executor()
-                .spawn(async move { conn.update_document(&update) })
+                .update(|cx| {
+                    dbflux_ui_base::work_queue::spawn_query_db(
+                        &app_state,
+                        dbflux_ui_base::work_queue::QueryWork::interactive(profile_id)
+                            .for_task_id(task_id),
+                        async move { conn.update_document(&update) },
+                        cx,
+                    )
+                })
                 .await;
 
             cx.update(|cx| {
@@ -569,8 +576,15 @@ impl DataGridPanel {
             };
 
             let result: Result<dbflux_core::CrudResult, dbflux_core::DbError> = cx
-                .background_executor()
-                .spawn(async move { conn.update_row(&patch) })
+                .update(|cx| {
+                    dbflux_ui_base::work_queue::spawn_query_db(
+                        &app_state,
+                        dbflux_ui_base::work_queue::QueryWork::interactive(profile_id)
+                            .for_task_id(task_id),
+                        async move { conn.update_row(&patch) },
+                        cx,
+                    )
+                })
                 .await;
 
             cx.update(|cx| {
@@ -718,8 +732,15 @@ impl DataGridPanel {
             };
 
             let result: Result<dbflux_core::CrudResult, dbflux_core::DbError> = cx
-                .background_executor()
-                .spawn(async move { conn.update_document(&update) })
+                .update(|cx| {
+                    dbflux_ui_base::work_queue::spawn_query_db(
+                        &app_state,
+                        dbflux_ui_base::work_queue::QueryWork::interactive(profile_id)
+                            .for_task_id(task_id),
+                        async move { conn.update_document(&update) },
+                        cx,
+                    )
+                })
                 .await;
 
             cx.update(|cx| {
@@ -957,8 +978,15 @@ impl DataGridPanel {
             };
 
             let result = cx
-                .background_executor()
-                .spawn(async move { conn.insert_document(&insert) })
+                .update(|cx| {
+                    dbflux_ui_base::work_queue::spawn_query_db(
+                        &app_state,
+                        dbflux_ui_base::work_queue::QueryWork::interactive(profile_id)
+                            .for_task_id(task_id),
+                        async move { conn.insert_document(&insert) },
+                        cx,
+                    )
+                })
                 .await;
 
             cx.update(|cx| {
@@ -1080,8 +1108,15 @@ impl DataGridPanel {
             };
 
             let result = cx
-                .background_executor()
-                .spawn(async move { conn.insert_row(&insert) })
+                .update(|cx| {
+                    dbflux_ui_base::work_queue::spawn_query_db(
+                        &app_state,
+                        dbflux_ui_base::work_queue::QueryWork::interactive(profile_id)
+                            .for_task_id(task_id),
+                        async move { conn.insert_row(&insert) },
+                        cx,
+                    )
+                })
                 .await;
 
             cx.update(|cx| {
@@ -1308,8 +1343,15 @@ impl DataGridPanel {
             };
 
             let result = cx
-                .background_executor()
-                .spawn(async move { conn.delete_document(&delete) })
+                .update(|cx| {
+                    dbflux_ui_base::work_queue::spawn_query_db(
+                        &app_state,
+                        dbflux_ui_base::work_queue::QueryWork::interactive(profile_id)
+                            .for_task_id(task_id),
+                        async move { conn.delete_document(&delete) },
+                        cx,
+                    )
+                })
                 .await;
 
             cx.update(|cx| {
@@ -1453,8 +1495,15 @@ impl DataGridPanel {
             };
 
             let result = cx
-                .background_executor()
-                .spawn(async move { conn.delete_row(&delete) })
+                .update(|cx| {
+                    dbflux_ui_base::work_queue::spawn_query_db(
+                        &app_state,
+                        dbflux_ui_base::work_queue::QueryWork::interactive(profile_id)
+                            .for_task_id(task_id),
+                        async move { conn.delete_row(&delete) },
+                        cx,
+                    )
+                })
                 .await;
 
             cx.update(|cx| {
@@ -1792,8 +1841,15 @@ impl DataGridPanel {
 
                 let conn = conn.clone();
                 let result = cx
-                    .background_executor()
-                    .spawn(async move { conn.delete_row(&delete) })
+                    .update(|cx| {
+                        dbflux_ui_base::work_queue::spawn_query_db(
+                            &app_state,
+                            dbflux_ui_base::work_queue::QueryWork::interactive(profile_id)
+                                .for_task_id(task_id),
+                            async move { conn.delete_row(&delete) },
+                            cx,
+                        )
+                    })
                     .await;
 
                 match result {
@@ -1955,8 +2011,15 @@ impl DataGridPanel {
 
                 let conn = conn.clone();
                 let result = cx
-                    .background_executor()
-                    .spawn(async move { conn.delete_document(&delete) })
+                    .update(|cx| {
+                        dbflux_ui_base::work_queue::spawn_query_db(
+                            &app_state,
+                            dbflux_ui_base::work_queue::QueryWork::interactive(profile_id)
+                                .for_task_id(task_id),
+                            async move { conn.delete_document(&delete) },
+                            cx,
+                        )
+                    })
                     .await;
 
                 match result {

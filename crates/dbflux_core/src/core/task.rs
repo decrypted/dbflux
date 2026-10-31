@@ -1,10 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::Waker;
 use std::time::Instant;
 
 use uuid::Uuid;
 
+use super::work_gate::WorkPermit;
 use crate::HookPhase;
 
 const MAX_TASK_DETAILS_BYTES: usize = 4 * 1024 * 1024;
@@ -93,22 +95,74 @@ impl TaskStatus {
 
 #[derive(Clone)]
 pub struct CancelToken {
-    cancelled: Arc<AtomicBool>,
+    inner: Arc<CancelState>,
+}
+
+struct CancelState {
+    cancelled: AtomicBool,
+    /// Futures parked on this token (queued work waiting for a slot) that
+    /// must be polled again when it is cancelled, so a cancel removes them
+    /// from their queue instead of leaving them parked until a slot frees.
+    wakers: Mutex<Vec<(u64, Waker)>>,
 }
 
 impl CancelToken {
     pub fn new() -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            inner: Arc::new(CancelState {
+                cancelled: AtomicBool::new(false),
+                wakers: Mutex::new(Vec::new()),
+            }),
         }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
+        self.inner.cancelled.load(Ordering::SeqCst)
     }
 
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        self.inner.cancelled.store(true, Ordering::SeqCst);
+
+        let wakers = match self.inner.wakers.lock() {
+            Ok(mut wakers) => std::mem::take(&mut *wakers),
+            Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+        };
+
+        for (_, waker) in wakers {
+            waker.wake();
+        }
+    }
+
+    /// Wakes `waker` once this token is cancelled, or right away when it
+    /// already is, so the check-then-register race cannot lose a cancel.
+    /// `key` names the listener: registering it again replaces its waker,
+    /// and [`Self::forget_waker`] drops it once it no longer waits, so a
+    /// long-lived token does not collect the wakers of finished work.
+    pub(crate) fn wake_on_cancel(&self, key: u64, waker: &Waker) {
+        {
+            let mut wakers = match self.inner.wakers.lock() {
+                Ok(wakers) => wakers,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            if !self.is_cancelled() {
+                match wakers.iter_mut().find(|(known, _)| *known == key) {
+                    Some((_, known)) => known.clone_from(waker),
+                    None => wakers.push((key, waker.clone())),
+                }
+                return;
+            }
+        }
+
+        waker.wake_by_ref();
+    }
+
+    pub(crate) fn forget_waker(&self, key: u64) {
+        let mut wakers = match self.inner.wakers.lock() {
+            Ok(wakers) => wakers,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        wakers.retain(|(known, _)| *known != key);
     }
 
     /// Returns `Err(PipelineError::cancelled())` if cancellation was requested.
@@ -144,10 +198,17 @@ pub struct Task {
     /// description had to shorten it. Shared, so snapshots taken on every
     /// render do not copy a large script.
     pub query_text: Option<Arc<str>>,
+    /// What the task waits for while it sits in a work queue, such as the
+    /// connection whose query slots are all taken. `None` once it runs.
+    pub waiting_for: Option<String>,
     cancel_token: CancelToken,
     /// Cleared by `TaskManager::mark_uncancellable` for work that never polls
     /// its token, such as a write already sent to the server.
     accepts_cancel: bool,
+    /// A work-queue slot held for as long as the task runs. Dropped on the
+    /// task's first terminal transition, which hands the slot to the next
+    /// queued task.
+    permit: Option<WorkPermit>,
 }
 
 impl Task {
@@ -162,10 +223,23 @@ impl Task {
         &self.cancel_token
     }
 
+    /// A queued task has sent nothing yet, so it can always be cancelled,
+    /// even when its kind cannot stop once it runs.
     pub fn is_cancellable(&self) -> bool {
         self.status == TaskStatus::Running
-            && self.accepts_cancel
-            && self.kind.supports_cancellation()
+            && (self.waiting_for.is_some()
+                || (self.accepts_cancel && self.kind.supports_cancellation()))
+    }
+
+    pub fn is_waiting(&self) -> bool {
+        self.status == TaskStatus::Running && self.waiting_for.is_some()
+    }
+
+    fn finish(&mut self, status: TaskStatus) {
+        self.status = status;
+        self.completed_at = Some(Instant::now());
+        self.waiting_for = None;
+        self.permit = None;
     }
 }
 
@@ -182,6 +256,14 @@ pub struct TaskSnapshot {
     pub profile_id: Option<Uuid>,
     pub target: Option<TaskTarget>,
     pub query_text: Option<Arc<str>>,
+    /// Set while the task waits in a work queue; see [`Task::waiting_for`].
+    pub waiting_for: Option<String>,
+}
+
+impl TaskSnapshot {
+    pub fn is_waiting(&self) -> bool {
+        self.status == TaskStatus::Running && self.waiting_for.is_some()
+    }
 }
 
 impl From<&Task> for TaskSnapshot {
@@ -198,6 +280,7 @@ impl From<&Task> for TaskSnapshot {
             profile_id: task.profile_id,
             target: task.target.clone(),
             query_text: task.query_text.clone(),
+            waiting_for: task.waiting_for.clone(),
         }
     }
 }
@@ -228,8 +311,21 @@ impl TaskManager {
         description: impl Into<String>,
         target: Option<TaskTarget>,
     ) -> (TaskId, CancelToken) {
-        let id = TaskId::new_v4();
         let cancel_token = CancelToken::new();
+        let id = self.start_with_token(kind, description, target, cancel_token.clone());
+        (id, cancel_token)
+    }
+
+    /// Starts a task whose cancel shares `cancel_token`, for work that was
+    /// handed its token before it had a task.
+    pub fn start_with_token(
+        &mut self,
+        kind: TaskKind,
+        description: impl Into<String>,
+        target: Option<TaskTarget>,
+        cancel_token: CancelToken,
+    ) -> TaskId {
+        let id = TaskId::new_v4();
         let profile_id = target.as_ref().map(|target| target.profile_id);
 
         let task = Task {
@@ -244,12 +340,14 @@ impl TaskManager {
             profile_id,
             target,
             query_text: None,
-            cancel_token: cancel_token.clone(),
+            waiting_for: None,
+            cancel_token,
             accepts_cancel: true,
+            permit: None,
         };
 
         self.tasks.insert(id, task);
-        (id, cancel_token)
+        id
     }
 
     /// Hides the cancel control of a task whose work does not observe its
@@ -270,12 +368,35 @@ impl TaskManager {
         }
     }
 
+    /// Marks a task as queued behind `reason` (shown in the Tasks panel), or
+    /// as running again with `None`. Leaving the queue restarts the clock, so
+    /// the elapsed time shows how long the work itself ran.
+    pub fn set_waiting(&mut self, id: TaskId, reason: Option<String>) {
+        if let Some(task) = self.tasks.get_mut(&id)
+            && task.status == TaskStatus::Running
+        {
+            if task.waiting_for.is_some() && reason.is_none() {
+                task.started_at = Instant::now();
+            }
+            task.waiting_for = reason;
+        }
+    }
+
+    /// Ties a work-queue slot to a task, so the slot frees on the task's
+    /// terminal transition. A task that already finished frees it at once.
+    pub fn attach_permit(&mut self, id: TaskId, permit: WorkPermit) {
+        if let Some(task) = self.tasks.get_mut(&id)
+            && task.status == TaskStatus::Running
+        {
+            task.permit = Some(permit);
+        }
+    }
+
     pub fn complete(&mut self, id: TaskId) {
         if let Some(task) = self.tasks.get_mut(&id)
             && task.status == TaskStatus::Running
         {
-            task.status = TaskStatus::Completed;
-            task.completed_at = Some(Instant::now());
+            task.finish(TaskStatus::Completed);
         }
     }
 
@@ -283,8 +404,7 @@ impl TaskManager {
         if let Some(task) = self.tasks.get_mut(&id)
             && task.status == TaskStatus::Running
         {
-            task.status = TaskStatus::Completed;
-            task.completed_at = Some(Instant::now());
+            task.finish(TaskStatus::Completed);
 
             let details = details.into();
             task.details = if details.trim().is_empty() {
@@ -322,8 +442,7 @@ impl TaskManager {
         if let Some(task) = self.tasks.get_mut(&id)
             && task.status == TaskStatus::Running
         {
-            task.status = TaskStatus::Failed(error.into());
-            task.completed_at = Some(Instant::now());
+            task.finish(TaskStatus::Failed(error.into()));
         }
     }
 
@@ -336,8 +455,7 @@ impl TaskManager {
         if let Some(task) = self.tasks.get_mut(&id)
             && task.status == TaskStatus::Running
         {
-            task.status = TaskStatus::Failed(error.into());
-            task.completed_at = Some(Instant::now());
+            task.finish(TaskStatus::Failed(error.into()));
 
             let details = details.into();
             task.details = if details.trim().is_empty() {
@@ -352,9 +470,8 @@ impl TaskManager {
         if let Some(task) = self.tasks.get_mut(&id)
             && task.status == TaskStatus::Running
         {
+            task.finish(TaskStatus::Cancelled);
             task.cancel_token.cancel();
-            task.status = TaskStatus::Cancelled;
-            task.completed_at = Some(Instant::now());
             return true;
         }
         false
@@ -388,6 +505,11 @@ impl TaskManager {
         }
     }
 
+    /// The token a task's cancel flips, for work that needs to watch it.
+    pub fn cancel_token(&self, id: TaskId) -> Option<CancelToken> {
+        self.tasks.get(&id).map(|task| task.cancel_token.clone())
+    }
+
     pub fn get(&self, id: TaskId) -> Option<TaskSnapshot> {
         self.tasks.get(&id).map(TaskSnapshot::from)
     }
@@ -414,29 +536,6 @@ impl TaskManager {
         self.tasks
             .values()
             .filter(|t| t.status == TaskStatus::Running)
-            .count()
-    }
-
-    /// Count running background tasks (non-interactive: Connect, LoadSchema,
-    /// SchemaRefresh, SwitchDatabase, Disconnect). Query and Export tasks are
-    /// excluded so manual "Run Query" is never throttled.
-    pub fn background_task_count(&self) -> usize {
-        self.tasks
-            .values()
-            .filter(|t| {
-                t.status == TaskStatus::Running
-                    && matches!(
-                        t.kind,
-                        TaskKind::Connect
-                            | TaskKind::Disconnect
-                            | TaskKind::Hook { .. }
-                            | TaskKind::SwitchDatabase
-                            | TaskKind::LoadSchema
-                            | TaskKind::SchemaRefresh
-                            | TaskKind::SchemaDrop
-                            | TaskKind::KeyScan
-                    )
-            })
             .count()
     }
 

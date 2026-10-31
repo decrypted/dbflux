@@ -1115,9 +1115,13 @@ impl ChartDocument {
 
         let conn_cleanup = conn.clone();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.execute(&request) });
+        let task = dbflux_ui_base::work_queue::spawn_query_db(
+            &self.app_state,
+            dbflux_ui_base::work_queue::QueryWork::background(profile_id)
+                .for_task(task_id, &cancel_token),
+            async move { conn.execute(&request) },
+            cx,
+        );
 
         cx.spawn(async move |this, cx| {
             let result = task.await;

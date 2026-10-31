@@ -1,4 +1,5 @@
 mod coverage;
+mod query_queue;
 pub(crate) mod rail_keys;
 
 use super::{DataGridEvent, DataGridPanel, DataSource, GridState, MutationIntent, MutationRun};

@@ -718,6 +718,12 @@ impl Sidebar {
                     .reopen_last_connections;
 
                 let mut items = Vec::new();
+                let queued = match parse_node_id(item_id) {
+                    Some(SchemaNodeId::Profile { profile_id }) => {
+                        self.app_state.read(cx).queued_query_count(profile_id)
+                    }
+                    _ => 0,
+                };
 
                 if is_connected {
                     Self::append_menu_section(
@@ -733,6 +739,18 @@ impl Sidebar {
                             ),
                         ],
                     );
+
+                    // Offered only while queries wait, so the menu stays as
+                    // it was for an idle connection.
+                    if queued > 0 {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                dbflux_i18n::t!("sidebar.menu.clear_queue", count = queued),
+                                ContextMenuAction::ClearQueryQueue,
+                            )],
+                        );
+                    }
                 } else {
                     let connect_label = if connect_failed {
                         dbflux_i18n::t!("sidebar.menu.retry_connect")
@@ -1899,6 +1917,14 @@ impl Sidebar {
             ContextMenuAction::Disconnect => {
                 if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     self.request_disconnect(profile_id, cx);
+                }
+            }
+            ContextMenuAction::ClearQueryQueue => {
+                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                    self.app_state.update(cx, |state, cx| {
+                        state.clear_query_queue(profile_id);
+                        cx.emit(AppStateChanged);
+                    });
                 }
             }
             ContextMenuAction::Refresh => {

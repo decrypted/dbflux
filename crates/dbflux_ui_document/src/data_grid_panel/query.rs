@@ -416,9 +416,11 @@ impl DataGridPanel {
         let pagination_for_spawn = pagination.clone();
         let order_by_for_spawn = order_by.clone();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.browse_table(&browse_request) });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id).for_task(task_id, &cancel_token),
+            async move { conn.browse_table(&browse_request) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let mut result = task.await;
@@ -435,6 +437,7 @@ impl DataGridPanel {
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
+                    entity.update(cx, |panel, cx| panel.settle_cancelled_read(task_id, cx));
                     return;
                 }
 
@@ -568,9 +571,11 @@ impl DataGridPanel {
         // builder query leaves it empty.
         let history_filter = self.filter_bar.pending_history.take();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.execute(&request) });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id).for_task(task_id, &cancel_token),
+            async move { conn.execute(&request) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let mut result = task.await;
@@ -587,6 +592,7 @@ impl DataGridPanel {
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
+                    entity.update(cx, |panel, cx| panel.settle_cancelled_read(task_id, cx));
                     return;
                 }
 
@@ -825,9 +831,11 @@ impl DataGridPanel {
         let applied_request = browse_request.clone();
         let pagination_for_spawn = pagination.clone();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.browse_collection(&browse_request) });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id).for_task(task_id, &cancel_token),
+            async move { conn.browse_collection(&browse_request) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let mut result = task.await;
@@ -844,6 +852,7 @@ impl DataGridPanel {
                     if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
                         log::warn!("Cleanup after cancel failed: {}", e);
                     }
+                    entity.update(cx, |panel, cx| panel.settle_cancelled_read(task_id, cx));
                     return;
                 }
 
@@ -1025,6 +1034,10 @@ impl DataGridPanel {
             }
         };
 
+        let count_work = self
+            .grid_work(profile_id)
+            .on_database(database.clone())
+            .described(format!("SELECT COUNT(*) FROM {}", table.qualified_name()));
         let mut count_request = TableCountRequest::new(table.clone()).with_database(database);
         if let Some(f) = filter {
             count_request = count_request.with_filter(f);
@@ -1033,9 +1046,11 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
         let qualified = table.qualified_name();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.count_table(&count_request) });
+        let task = self.spawn_grid_call(
+            count_work,
+            async move { conn.count_table(&count_request) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -1107,9 +1122,14 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
         let qualified = collection.qualified_name();
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.count_collection(&count_request) });
+        let count_work = self
+            .grid_work(profile_id)
+            .described(format!("count {qualified}"));
+        let task = self.spawn_grid_call(
+            count_work,
+            async move { conn.count_collection(&count_request) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -1333,9 +1353,11 @@ impl DataGridPanel {
             request.database = Some(db.clone());
         }
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.execute(&request) });
+        let count_work = self
+            .grid_work(profile_id)
+            .on_database(database)
+            .described(dbflux_core::truncate_string_safe(&request.sql, 80));
+        let task = self.spawn_grid_call(count_work, async move { conn.execute(&request) }, cx);
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -1403,9 +1425,11 @@ impl DataGridPanel {
             request.database = Some(db.clone());
         }
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.execute(&request) });
+        let count_work = self
+            .grid_work(profile_id)
+            .on_database(database)
+            .described(dbflux_core::truncate_string_safe(&request.sql, 80));
+        let task = self.spawn_grid_call(count_work, async move { conn.execute(&request) }, cx);
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;

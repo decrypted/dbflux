@@ -560,6 +560,8 @@ pub enum ContextMenuAction {
     GenerateCode(String),
     Connect,
     Disconnect,
+    /// Cancels the queries waiting on the profile's connection.
+    ClearQueryQueue,
     Refresh,
     Edit,
     Duplicate,
@@ -736,6 +738,7 @@ impl ContextMenuAction {
             Self::GenerateCode(_) => Some(AppIcon::Code),
             Self::Connect => Some(AppIcon::Plug),
             Self::Disconnect => Some(AppIcon::Unplug),
+            Self::ClearQueryQueue => Some(AppIcon::Clock),
             Self::Refresh => Some(AppIcon::RefreshCcw),
             Self::Edit => Some(AppIcon::Pencil),
             Self::Duplicate => Some(AppIcon::Copy),

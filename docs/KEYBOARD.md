@@ -563,10 +563,13 @@ The tasks panel sits under the documents and starts collapsed. Collapsed, it tak
 | `c` | Cancel the selected task |
 | `x` | Dismiss the selected task once it has finished |
 | `Shift+x` | Clear the finished tasks |
+| `Shift+c` | Clear the query queue of the selected task's connection |
 | `m` / `Shift+F10` | Open the panel's actions menu |
 | `z` | Toggle panel collapse |
 
-The selected task is highlighted while the panel has focus; clicking a row selects it too. The actions menu lists the selected task's **Show output**, **Cancel task** and **Dismiss**, then **Clear finished** and **Hide the tasks panel**, each with its shortcut; the context menu keys drive it. **Clear finished tasks** is also a command palette entry.
+The selected task is highlighted while the panel has focus; clicking a row selects it too. The actions menu lists the selected task's **Show output**, **Cancel task** and **Dismiss**, then **Clear finished**, **Clear queue (N)** and **Hide the tasks panel**, each with its shortcut; the context menu keys drive it. **Clear finished tasks** and **Clear query queue** are also command palette entries; from the palette, Clear query queue acts on the active connection when queries wait there.
+
+Work waiting for a free slot (see the query limits in [Settings](SETTINGS.md)) is listed with a clock and what it waits for, and can be cancelled like running work. **Clear queue (N)** in the panel header cancels everything waiting on a connection; with queues on several connections there is one button per connection.
 
 **Cancel task** is offered only for work that stops when cancelled, such as a query, an export or a key scan. A write already sent to the server, a key read, or a single metadata request runs to the end and shows no cancel.
 

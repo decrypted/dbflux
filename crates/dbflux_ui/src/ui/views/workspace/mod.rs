@@ -2038,6 +2038,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
+                "clear_query_queue",
+                dbflux_i18n::t!("palette.command.clear_query_queue.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
                 "toggle_notifications",
                 dbflux_i18n::t!("palette.command.toggle_notifications.name"),
                 dbflux_i18n::t!("palette.category.view"),

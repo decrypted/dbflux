@@ -57,6 +57,21 @@ impl SettingsWindow {
             return true;
         }
 
+        let queries_val = self.input_max_queries.read(cx).value().trim().to_string();
+        if queries_val != saved.max_concurrent_queries.to_string() {
+            return true;
+        }
+
+        let queued_val = self
+            .input_max_queued_queries
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        if queued_val != saved.max_queued_queries.to_string() {
+            return true;
+        }
+
         false
     }
 

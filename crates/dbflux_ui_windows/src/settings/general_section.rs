@@ -54,6 +54,8 @@ pub(super) enum GeneralFormRow {
     DefaultRefreshPolicy,
     DefaultRefreshInterval,
     MaxBackgroundTasks,
+    MaxConcurrentQueries,
+    MaxQueuedQueries,
     PauseRefreshOnError,
     RefreshOnlyIfVisible,
     ConfirmDangerous,
@@ -121,6 +123,8 @@ pub(super) struct GeneralSection {
     pub(super) input_auto_save: Entity<InputState>,
     pub(super) input_refresh_interval: Entity<InputState>,
     pub(super) input_max_bg_tasks: Entity<InputState>,
+    pub(super) input_max_queries: Entity<InputState>,
+    pub(super) input_max_queued_queries: Entity<InputState>,
     pub(super) input_editor_row_limit: Entity<InputState>,
     pub(super) input_object_preview_limit: Entity<InputState>,
     pub(super) input_key_value_size_limit: Entity<InputState>,
@@ -161,6 +165,8 @@ impl GeneralSection {
         let auto_save_interval = settings.auto_save_interval_ms.to_string();
         let refresh_interval = settings.default_refresh_interval_secs.to_string();
         let max_background_tasks = settings.max_concurrent_background_tasks.to_string();
+        let max_queries = settings.max_concurrent_queries.to_string();
+        let max_queued_queries = settings.max_queued_queries.to_string();
         let editor_row_limit = settings.editor_row_limit.to_string();
         let object_preview_limit = settings.object_preview_size_limit_mib.to_string();
         let key_value_size_limit = settings.key_value_size_limit_mib.to_string();
@@ -280,6 +286,16 @@ impl GeneralSection {
                 .placeholder("8")
                 .default_value(max_background_tasks.clone())
         });
+        let input_max_queries = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("8")
+                .default_value(max_queries.clone())
+        });
+        let input_max_queued_queries = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("50")
+                .default_value(max_queued_queries.clone())
+        });
 
         let input_editor_row_limit = cx.new(|cx| {
             InputState::new(window, cx)
@@ -377,6 +393,9 @@ impl GeneralSection {
                     cx.emit(SectionFocusEvent::RequestFocusReturn);
                 }
             });
+        let blur_max_queries = cx.subscribe(&input_max_queries, Self::return_focus_on_blur);
+        let blur_max_queued_queries =
+            cx.subscribe(&input_max_queued_queries, Self::return_focus_on_blur);
 
         let blur_editor_row_limit = cx.subscribe(
             &input_editor_row_limit,
@@ -437,6 +456,8 @@ impl GeneralSection {
             input_auto_save,
             input_refresh_interval,
             input_max_bg_tasks,
+            input_max_queries,
+            input_max_queued_queries,
             input_editor_row_limit,
             input_object_preview_limit,
             input_key_value_size_limit,
@@ -457,6 +478,8 @@ impl GeneralSection {
                 blur_auto_save,
                 blur_refresh_interval,
                 blur_max_bg_tasks,
+                blur_max_queries,
+                blur_max_queued_queries,
                 blur_editor_row_limit,
                 blur_object_preview_limit,
                 blur_key_value_size_limit,

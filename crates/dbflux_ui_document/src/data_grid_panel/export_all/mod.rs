@@ -292,11 +292,24 @@ impl DataGridPanel {
         let target_path = run.target_path.clone();
         let column_count = run.column_count;
 
-        cx.spawn(async move |_this, cx| {
-            let result = cx
+        let stream = async move { stream_all_rows(run, &progress) };
+        let export = match self.source_profile_id() {
+            Some(profile_id) => {
+                let work = dbflux_ui_base::work_queue::QueryWork::background(profile_id)
+                    .for_task_id(task_id);
+                dbflux_ui_base::work_queue::spawn_query(&self.app_state, work, stream, cx)
+            }
+            None => cx
                 .background_executor()
-                .spawn(async move { stream_all_rows(run, &progress) })
-                .await;
+                .spawn(async move { Ok(stream.await) }),
+        };
+
+        cx.spawn(async move |_this, cx| {
+            // Cancelled while it waited for a query slot: the task is already
+            // marked cancelled and no file was written.
+            let Ok(result) = export.await else {
+                return;
+            };
 
             cx.update(|cx| {
                 finish_export_all(&app_state, task_id, &target_path, column_count, result, cx);

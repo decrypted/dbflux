@@ -40,6 +40,9 @@ pub struct SelectedTaskActions {
     pub cancellable: bool,
     /// The task is no longer running, so it can be dismissed.
     pub finished: bool,
+    /// Queries waiting on the selected task's connection, which "Clear
+    /// queue" would cancel.
+    pub queued_on_connection: usize,
 }
 
 impl EventEmitter<CollapseTasksPanel> for TasksPanel {}
@@ -149,7 +152,50 @@ impl TasksPanel {
             output_shown: self.expanded_task_ids.contains(&task.id),
             cancellable: task.is_cancellable,
             finished: task.status != TaskStatus::Running,
+            queued_on_connection: task.profile_id.map_or(0, |profile_id| {
+                self.app_state.read(cx).queued_query_count(profile_id)
+            }),
         })
+    }
+
+    /// The connection "Clear queue" acts on from the keyboard: the selected
+    /// task's, when queries wait there, else the first connection with a
+    /// queue.
+    pub fn queue_to_clear(&self, cx: &App) -> Option<Uuid> {
+        let state = self.app_state.read(cx);
+        let selected = self
+            .selected_task(cx)
+            .and_then(|task| task.profile_id)
+            .filter(|profile_id| state.queued_query_count(*profile_id) > 0);
+
+        selected.or_else(|| {
+            state
+                .work_gate()
+                .queued_query_lanes()
+                .first()
+                .map(|(profile_id, _)| *profile_id)
+        })
+    }
+
+    /// Cancels every query waiting on the connection [`Self::queue_to_clear`]
+    /// picks. Returns `false` when nothing waits anywhere.
+    pub fn clear_selected_queue(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.queue_to_clear(cx) {
+            Some(profile_id) => {
+                self.clear_queue(profile_id, cx);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Cancels every query waiting on `profile_id`'s connection; running
+    /// ones keep running.
+    pub fn clear_queue(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        self.app_state.update(cx, |state, cx| {
+            state.clear_query_queue(profile_id);
+            cx.emit(AppStateChanged);
+        });
     }
 
     /// Shows or hides the output of the selected task, like a click on its
@@ -329,8 +375,12 @@ impl TasksPanel {
         (progress.clamp(0.0, 1.0) * 100.0).round() as u32
     }
 
-    fn status_icon(status: &TaskStatus, theme: &gpui_component::Theme) -> (AppIcon, Hsla) {
-        match status {
+    fn status_icon(task: &TaskSnapshot, theme: &gpui_component::Theme) -> (AppIcon, Hsla) {
+        if task.is_waiting() {
+            return (AppIcon::Clock, theme.muted_foreground);
+        }
+
+        match &task.status {
             TaskStatus::Running => (AppIcon::Loader, ChromeColors::tint(theme)),
             TaskStatus::Completed => (AppIcon::CircleCheck, theme.success),
             TaskStatus::Failed(_) => (AppIcon::CircleX, theme.danger),
@@ -341,8 +391,10 @@ impl TasksPanel {
     fn render_header(
         &self,
         running: usize,
+        waiting: usize,
         failed: usize,
         finished: usize,
+        queues: Vec<(Uuid, String, usize)>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = cx.theme();
@@ -387,6 +439,12 @@ impl TasksPanel {
                     BadgeTone::Accent,
                 ))
             })
+            .when(waiting > 0, |header| {
+                header.child(Badge::new(
+                    dbflux_i18n::t!("tasks_panel.waiting_count", count = waiting),
+                    BadgeTone::Neutral,
+                ))
+            })
             .when(failed > 0, |header| {
                 header.child(Badge::new(
                     dbflux_i18n::t!("tasks_panel.failed", count = failed),
@@ -394,6 +452,7 @@ impl TasksPanel {
                 ))
             })
             .child(div().flex_1())
+            .children(Self::clear_queue_buttons(queues, cx))
             .child(
                 Button::new(
                     "tasks-clear-finished",
@@ -406,6 +465,51 @@ impl TasksPanel {
                     this.clear_finished(cx);
                 })),
             )
+    }
+
+    /// One "Clear queue (N)" per connection with waiting queries, named after
+    /// the connection when more than one has a queue; a single disabled one
+    /// while nothing waits.
+    fn clear_queue_buttons(
+        queues: Vec<(Uuid, String, usize)>,
+        cx: &mut Context<Self>,
+    ) -> Vec<Button> {
+        if queues.is_empty() {
+            return vec![
+                Button::new(
+                    "tasks-clear-queue",
+                    dbflux_i18n::t!("tasks_panel.clear_queue", count = 0),
+                )
+                .icon(AppIcon::Clock)
+                .disabled(true),
+            ];
+        }
+
+        let named = queues.len() > 1;
+        queues
+            .into_iter()
+            .map(|(profile_id, connection, count)| {
+                let label = if named {
+                    dbflux_i18n::t!(
+                        "tasks_panel.clear_queue_on",
+                        connection = connection,
+                        count = count
+                    )
+                } else {
+                    dbflux_i18n::t!("tasks_panel.clear_queue", count = count)
+                };
+
+                Button::new(
+                    SharedString::from(format!("tasks-clear-queue-{profile_id}")),
+                    label,
+                )
+                .icon(AppIcon::Clock)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.clear_queue(profile_id, cx);
+                }))
+            })
+            .collect()
     }
 
     fn render_task_row(
@@ -428,7 +532,12 @@ impl TasksPanel {
         let details_text = task.details.clone();
         let has_details = has_output(task);
         let is_expanded = self.expanded_task_ids.contains(&task_id);
-        let (status_icon, status_color) = Self::status_icon(&task.status, theme);
+        let (status_icon, status_color) = Self::status_icon(task, theme);
+        // A queued task shows what it waits for instead of a running clock.
+        let meta = match &task.waiting_for {
+            Some(reason) if is_running => reason.clone(),
+            _ => Self::format_elapsed(task.elapsed_secs),
+        };
         let name_color = if is_running {
             ChromeColors::strong(theme)
         } else {
@@ -504,7 +613,7 @@ impl TasksPanel {
                             .font_family(dbflux_components::fonts::editor_family(cx))
                             .text_size(ShellMetrics::TASK_META_FONT)
                             .text_color(muted)
-                            .child(Self::format_elapsed(task.elapsed_secs)),
+                            .child(meta),
                     )
                     .child(div().flex_1())
                     .when_some(progress, |row, progress| {
@@ -664,7 +773,24 @@ impl Render for TasksPanel {
         let running_tasks = state.tasks().running_tasks();
         let finished_tasks = visible_finished_tasks(state.tasks().recent_tasks(usize::MAX));
 
-        let running_count = running_tasks.len();
+        let waiting_count = running_tasks
+            .iter()
+            .filter(|task| task.is_waiting())
+            .count();
+        let running_count = running_tasks.len() - waiting_count;
+        let queues: Vec<(Uuid, String, usize)> = state
+            .work_gate()
+            .queued_query_lanes()
+            .into_iter()
+            .map(|(profile_id, count)| {
+                let name = state
+                    .connections()
+                    .get(&profile_id)
+                    .map(|connected| connected.profile.name.clone())
+                    .unwrap_or_else(|| profile_id.to_string());
+                (profile_id, name, count)
+            })
+            .collect();
         let failed_count = finished_tasks
             .iter()
             .filter(|task| matches!(task.status, TaskStatus::Failed(_)))
@@ -687,7 +813,14 @@ impl Render for TasksPanel {
             task_rows.push(self.render_task_row(task, index, selected == Some(index), cx));
         }
 
-        let header = self.render_header(running_count, failed_count, finished_count, cx);
+        let header = self.render_header(
+            running_count,
+            waiting_count,
+            failed_count,
+            finished_count,
+            queues,
+            cx,
+        );
         let theme = cx.theme();
 
         div()

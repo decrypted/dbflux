@@ -333,8 +333,20 @@ pub struct GeneralSettings {
     #[serde(default = "default_refresh_interval_secs")]
     pub default_refresh_interval_secs: u32,
 
+    /// Connection and schema tasks that run at once across all connections;
+    /// more wait in a queue.
     #[serde(default = "default_max_concurrent_background_tasks")]
     pub max_concurrent_background_tasks: usize,
+
+    /// Queries and commands that run at once on one connection; more wait in
+    /// that connection's queue.
+    #[serde(default = "default_max_concurrent_queries")]
+    pub max_concurrent_queries: usize,
+
+    /// Queries that may wait on one connection; past it, new background work
+    /// is cancelled and interactive work replaces the oldest background work.
+    #[serde(default = "default_max_queued_queries")]
+    pub max_queued_queries: usize,
 
     #[serde(default = "default_true")]
     pub auto_refresh_pause_on_error: bool,
@@ -552,6 +564,8 @@ impl Default for GeneralSettings {
             default_refresh_policy: RefreshPolicySetting::Manual,
             default_refresh_interval_secs: 5,
             max_concurrent_background_tasks: 8,
+            max_concurrent_queries: default_max_concurrent_queries(),
+            max_queued_queries: default_max_queued_queries(),
             auto_refresh_pause_on_error: true,
             auto_refresh_only_if_visible: false,
 
@@ -605,6 +619,8 @@ mod font_settings_tests {
         assert!(!legacy.grid_copy_column_names);
         assert!(!legacy.grid_header_click_sorts);
         assert!(!legacy.grid_filter_autoquote);
+        assert_eq!(legacy.max_concurrent_queries, 8);
+        assert_eq!(legacy.max_queued_queries, 50);
         assert_eq!(legacy, settings);
     }
 
@@ -730,6 +746,14 @@ fn default_refresh_interval_secs() -> u32 {
 
 fn default_max_concurrent_background_tasks() -> usize {
     8
+}
+
+fn default_max_concurrent_queries() -> usize {
+    crate::DEFAULT_MAX_CONCURRENT_QUERIES
+}
+
+fn default_max_queued_queries() -> usize {
+    crate::DEFAULT_MAX_QUEUED_QUERIES
 }
 
 fn default_schema_snapshot_retention() -> usize {

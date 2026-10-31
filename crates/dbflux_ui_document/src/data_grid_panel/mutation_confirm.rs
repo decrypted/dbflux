@@ -392,6 +392,8 @@ impl DataGridPanel {
             return;
         }
 
+        let work_profile_id = pending.profile_id;
+
         let (connection, event_sink, policy) = {
             let state = self.app_state.read(cx);
             let connected = match state.connections().get(&pending.profile_id) {
@@ -588,29 +590,42 @@ impl DataGridPanel {
             intent,
         };
 
+        let app_state = self.app_state.clone();
         cx.spawn(async move |this, cx| {
             use crate::data_grid_panel::mutation_executor::MutationExecutor;
             use dbflux_ui_base::user_error::report_error_async;
 
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let executor = MutationExecutor::new(spec, opts, deps);
-                    match mode {
-                        crate::labels::VisualMutationTaskMode::Chunked => {
-                            let pk_refs: Vec<&str> =
-                                pk_columns.iter().map(String::as_str).collect();
-                            executor.run_chunked_tx(&pk_refs, &cancel_handle)
+            let work = dbflux_ui_base::work_queue::QueryWork::interactive(work_profile_id)
+                .for_task_id(task_id);
+            let run_mutation = cx.update(|cx| {
+                dbflux_ui_base::work_queue::spawn_query(
+                    &app_state,
+                    work,
+                    async move {
+                        let executor = MutationExecutor::new(spec, opts, deps);
+                        match mode {
+                            crate::labels::VisualMutationTaskMode::Chunked => {
+                                let pk_refs: Vec<&str> =
+                                    pk_columns.iter().map(String::as_str).collect();
+                                executor.run_chunked_tx(&pk_refs, &cancel_handle)
+                            }
+                            crate::labels::VisualMutationTaskMode::Direct => {
+                                executor.run_direct(&cancel_handle)
+                            }
+                            crate::labels::VisualMutationTaskMode::SingleTransaction => {
+                                executor.run_single_tx(&cancel_handle)
+                            }
                         }
-                        crate::labels::VisualMutationTaskMode::Direct => {
-                            executor.run_direct(&cancel_handle)
-                        }
-                        crate::labels::VisualMutationTaskMode::SingleTransaction => {
-                            executor.run_single_tx(&cancel_handle)
-                        }
-                    }
-                })
-                .await;
+                    },
+                    cx,
+                )
+            });
+            // Cancelled while it waited for a query slot: nothing was sent.
+            let result = run_mutation.await.unwrap_or(Ok(
+                crate::data_grid_panel::mutation_executor::MutationOutcome::Cancelled {
+                    rows_affected: 0,
+                },
+            ));
 
             // Raising the failure needs an `AsyncApp` and recording it needs the
             // entity, so the report travels back out instead of being raised here.

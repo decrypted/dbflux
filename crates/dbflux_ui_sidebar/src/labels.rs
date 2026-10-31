@@ -423,12 +423,6 @@ pub(crate) fn operation_started_elsewhere_toast_label() -> String {
     dbflux_i18n::t!("sidebar.toast.operation_started_elsewhere")
 }
 
-/// Translated toast shown when the background task limit blocks a new
-/// connect or disconnect request.
-pub(crate) fn background_task_limit_toast_label() -> String {
-    dbflux_i18n::t!("sidebar.toast.background_task_limit")
-}
-
 /// Translated toast shown when a pre-connect hook cancels the connect flow.
 pub(crate) fn connection_cancelled_by_hook_toast_label() -> String {
     dbflux_i18n::t!("sidebar.toast.connection_cancelled_by_hook")
@@ -1297,7 +1291,7 @@ mod tests {
         );
     }
 
-    const D1A_KEYS: [&str; 18] = [
+    const D1A_KEYS: [&str; 17] = [
         "sidebar.task.connecting",
         "sidebar.task.disconnecting",
         "sidebar.task.connection_hook_cancelled",
@@ -1306,7 +1300,6 @@ mod tests {
         "sidebar.task.post_disconnect_hook_cancelled",
         "sidebar.toast.connection_already_pending",
         "sidebar.toast.operation_started_elsewhere",
-        "sidebar.toast.background_task_limit",
         "sidebar.toast.connection_cancelled_by_hook",
         "sidebar.toast.connection_cancelled_by_post_connect_hook",
         "sidebar.toast.disconnect_cancelled_by_hook",

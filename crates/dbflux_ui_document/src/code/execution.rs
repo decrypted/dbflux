@@ -952,42 +952,63 @@ impl CodeDocument {
 
         let session_binding = self.execution_session.clone();
         let session_generation = session_binding.current_generation();
-        let task = cx.background_executor().spawn({
-            let connection = connection.clone();
-            let session_binding = session_binding.clone();
-            let dispatch_token = cancel_token.clone();
-            async move {
-                // The editor is released as soon as its task is cancelled, so a
-                // cancel that lands before this worker runs must keep the
-                // statement from reaching the database at all.
-                let execution = if dispatch_token.is_cancelled() {
-                    None
-                } else if on_session {
-                    session_binding.execute_unless_cancelled(
-                        connection,
-                        session_database,
-                        &request,
-                        &dispatch_token,
-                    )
-                } else {
-                    Some(super::execution_session::SessionExecution {
-                        result: connection.execute(&request),
-                        isolated: false,
-                    })
-                };
-
-                match execution {
-                    Some(execution) => (true, execution),
-                    None => {
-                        let skipped = super::execution_session::SessionExecution {
-                            result: Err(DbError::Cancelled),
+        // An explicit Run is interactive: it starts before the connection's
+        // queued background reads (restored tabs, counts).
+        let work = dbflux_ui_base::work_queue::QueryWork::interactive(conn_id)
+            .on_database(task_target.database.clone())
+            .for_task(task_id, &cancel_token);
+        let task = dbflux_ui_base::work_queue::spawn_query_with(
+            &self.app_state,
+            work,
+            {
+                let connection = connection.clone();
+                let session_binding = session_binding.clone();
+                let dispatch_token = cancel_token.clone();
+                async move {
+                    // The editor is released as soon as its task is cancelled, so a
+                    // cancel that lands before this worker runs must keep the
+                    // statement from reaching the database at all.
+                    let execution = if dispatch_token.is_cancelled() {
+                        None
+                    } else if on_session {
+                        session_binding.execute_unless_cancelled(
+                            connection,
+                            session_database,
+                            &request,
+                            &dispatch_token,
+                        )
+                    } else {
+                        Some(super::execution_session::SessionExecution {
+                            result: connection.execute(&request),
                             isolated: false,
-                        };
-                        (false, skipped)
+                        })
+                    };
+
+                    match execution {
+                        Some(execution) => (true, execution),
+                        None => {
+                            let skipped = super::execution_session::SessionExecution {
+                                result: Err(DbError::Cancelled),
+                                isolated: false,
+                            };
+                            (false, skipped)
+                        }
                     }
                 }
-            }
-        });
+            },
+            // Refused by the queue (cancelled while it waited, or a full
+            // queue): nothing reached the database.
+            |_| {
+                (
+                    false,
+                    super::execution_session::SessionExecution {
+                        result: Err(DbError::Cancelled),
+                        isolated: false,
+                    },
+                )
+            },
+            cx,
+        );
 
         cx.spawn(async move |this, cx| {
             let (dispatched, session_execution) = task.await;
@@ -2239,8 +2260,19 @@ impl CodeDocument {
     }
 
     pub fn cancel_query(&mut self, cx: &mut Context<Self>) {
+        // A run still queued for a query slot sent nothing; a server cancel
+        // would hit whichever query is running on the connection instead.
+        let was_queued = self
+            .execution
+            .active_query_task
+            .as_ref()
+            .and_then(|task| self.app_state.read(cx).tasks().get(task.task_id))
+            .is_some_and(|task| task.is_waiting());
+
         if self.runner.cancel_primary(cx) {
-            if let Some(task) = self.execution.active_query_task.as_ref() {
+            if was_queued {
+                // Nothing to stop on the server.
+            } else if let Some(task) = self.execution.active_query_task.as_ref() {
                 if !task.uses_isolated_session {
                     self.app_state
                         .read(cx)

@@ -358,16 +358,6 @@ impl Sidebar {
             return;
         };
 
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.pending_toast = Some(PendingToast {
-                message: crate::labels::background_task_limit_toast_label(),
-                is_error: true,
-            });
-            self.refresh_tree(cx);
-            cx.notify();
-            return;
-        }
-
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let task = state.start_task_for_target(
                 TaskKind::SchemaDrop,
@@ -383,8 +373,26 @@ impl Sidebar {
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
         let released_database = operation.target.name.clone();
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
 
         let operation_task = cx.spawn(async move |_this, cx| {
+            // Cancelled while it waited for a connection-task slot: nothing
+            // was dropped.
+            if !admission.await {
+                cx.update(|cx| {
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.clear_tracked_operation_task(task_id);
+                        sidebar.refresh_tree(cx);
+                    });
+                });
+                return;
+            }
+
             let release_plan = if operation.is_database {
                 match cx.update(|cx| {
                     app_state.update(cx, |state, _cx| {

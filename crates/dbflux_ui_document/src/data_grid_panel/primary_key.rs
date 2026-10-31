@@ -86,11 +86,28 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
         let app_state = self.app_state.clone();
 
+        let fetch = dbflux_ui_base::work_queue::spawn_query(
+            &self.app_state,
+            self.grid_work(profile_id)
+                .on_database(Some(database.clone()))
+                .described(format!("Table details: {}", table.qualified_name())),
+            async move { params.execute() },
+            cx,
+        );
+
         cx.spawn(async move |_this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { params.execute() })
-                .await;
+            // Cancelled while it waited for a query slot: the held-back first
+            // page is dropped with it, and a reload starts over.
+            let Ok(result) = fetch.await else {
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        panel.pk_details_pending = false;
+                        panel.first_page_awaits_pk = None;
+                        cx.notify();
+                    });
+                });
+                return;
+            };
 
             cx.update(|cx| {
                 let fetch_result = match result {

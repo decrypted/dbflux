@@ -23,6 +23,7 @@
 //! not fetched again. A round that lands after another page replaced the
 //! rows still feeds the cache but never swaps the model (see
 //! [`FkDisplayLoader::generation`]).
+use dbflux_ui_base::work_queue::QueryWork;
 
 use super::*;
 use dbflux_components::components::data_table::model::{CellKind, CellValue};
@@ -427,15 +428,13 @@ impl FkDisplayRound {
     /// and lands every label of the round in one model swap through
     /// [`DataGridPanel::apply_fk_display_batch`].
     async fn run(mut self, panel: WeakEntity<DataGridPanel>, cx: &mut AsyncApp) {
-        let executor = cx.background_executor().clone();
-
         // A round a newer page already outran skips its metadata
         // queries, not just its group fetches.
         if !self.still_current(&panel, cx) {
             return;
         }
 
-        self.fetch_unknown_display_columns(&executor, cx).await;
+        self.fetch_unknown_display_columns(cx).await;
 
         // One batch per referenced table, in sequence: a page references
         // a handful of tables, and the plain loop keeps the generation
@@ -481,8 +480,11 @@ impl FkDisplayRound {
             let table_for_task = table.clone();
             let pk_for_task = pk_column.clone();
 
-            let rows = executor
-                .spawn(async move {
+            let rows = dbflux_ui_base::work_queue::spawn_query_db_async(
+                &self.app_state,
+                QueryWork::background(self.profile_id)
+                    .described(format!("Foreign-key labels: {table}")),
+                async move {
                     connection.fetch_rows_by_pks(
                         &database,
                         schema_for_task.as_deref().unwrap_or(""),
@@ -491,8 +493,10 @@ impl FkDisplayRound {
                         &values,
                         Some(&projection),
                     )
-                })
-                .await;
+                },
+                cx,
+            )
+            .await;
 
             match rows {
                 Ok(rows) => {
@@ -524,22 +528,22 @@ impl FkDisplayRound {
     /// Fetches the metadata of the referenced tables the connection's
     /// cache could not answer, records it in the app's table-details
     /// cache and folds each table's display column into `display_columns`.
-    async fn fetch_unknown_display_columns(
-        &mut self,
-        executor: &BackgroundExecutor,
-        cx: &mut AsyncApp,
-    ) {
+    async fn fetch_unknown_display_columns(&mut self, cx: &mut AsyncApp) {
         for (schema, table) in &self.unknown_tables {
             let connection = self.connection.clone();
             let database = self.resolved_database.clone();
             let schema_for_task = schema.clone();
             let table_for_task = table.clone();
 
-            let details = executor
-                .spawn(async move {
+            let details = dbflux_ui_base::work_queue::spawn_query_db_async(
+                &self.app_state,
+                QueryWork::background(self.profile_id).described(format!("Table details: {table}")),
+                async move {
                     connection.table_details(&database, schema_for_task.as_deref(), &table_for_task)
-                })
-                .await;
+                },
+                cx,
+            )
+            .await;
 
             let column = match details {
                 Ok(details) => {

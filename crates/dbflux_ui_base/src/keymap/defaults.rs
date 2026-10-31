@@ -819,6 +819,11 @@ fn background_tasks_layer() -> KeymapLayer {
         KeyChord::new("x", Modifiers::shift()),
         Command::ClearFinishedTasks,
     );
+    // Cancels the queries waiting on the selected task's connection.
+    layer.bind(
+        KeyChord::new("c", Modifiers::shift()),
+        Command::ClearQueryQueue,
+    );
 
     layer.bind(
         KeyChord::new("m", Modifiers::none()),

@@ -2894,9 +2894,6 @@ document:
         sorted_set: Sorted Set
         json: JSON
         stream: Stream
-    pagination:
-      error:
-        background_task_limit: Demasiadas tareas en segundo plano en ejecución, espere por favor
     parsing:
       type:
         string: String
@@ -4132,6 +4129,8 @@ palette:
       name: Mostrar u ocultar panel de tareas
     clear_finished_tasks:
       name: Borrar tareas terminadas
+    clear_query_queue:
+      name: "Vaciar cola de consultas"
     toggle_notifications:
       name: "Mostrar u ocultar notificaciones"
     show_connections_view:
@@ -4342,7 +4341,15 @@ settings:
     max_background_tasks:
       label: Máximo de tareas en segundo plano simultáneas
       error: El máximo de tareas en segundo plano debe ser >= 1
-      help: "Cuenta las conexiones, desconexiones, hooks de conexión, cambios de base de datos, tareas de esquema y escaneos key-value en curso. Al llegar al tope se rechazan nuevas conexiones, cambios de base de datos, cargas de esquema y de detalles de tabla, y páginas key-value. Las queries, las cargas del data grid y los exports no tienen límite."
+      help: "Cuenta las conexiones, desconexiones, cambios de base de datos, cargas de esquema y de detalles de tabla, eliminaciones de esquema y escaneos clave-valor en curso de todas las conexiones. Por encima del límite, las nuevas esperan en una cola, marcadas como En espera en el panel de tareas, y empiezan cuando queda un hueco libre. Los hooks de una conexión se ejecutan dentro de su hueco."
+    max_concurrent_queries:
+      label: "Máximo de consultas simultáneas por conexión"
+      error: "El máximo de consultas simultáneas debe ser >= 1"
+      help: "Consultas y comandos que se ejecutan a la vez en una conexión: páginas y recuentos de filas de la cuadrícula, detalles de tablas, etiquetas de claves foráneas, ejecuciones del editor SQL, guardados, exportaciones y gráficos. El resto espera en la cola de esa conexión; una ejecución o un guardado explícitos pasan por delante de las lecturas en segundo plano en cola."
+    max_queued_queries:
+      label: "Máximo de consultas en cola por conexión"
+      error: "El máximo de consultas en cola debe ser >= 1"
+      help: "Con la cola llena, una nueva lectura en segundo plano se cancela con un aviso; una ejecución o un guardado explícitos ocupan el lugar de la lectura en segundo plano más antigua de la cola."
     pause_refresh_on_error:
       label: Pausar la actualización automática ante un error
     refresh_only_if_visible:
@@ -4553,6 +4560,7 @@ settings:
       toggle_tasks: Mostrar u ocultar panel de tareas
       cancel_task: Cancelar tarea
       clear_finished_tasks: Borrar tareas terminadas
+      clear_query_queue: "Vaciar cola de consultas"
       toggle_sidebar: Mostrar u ocultar barra lateral
       toggle_full_screen: Alternar pantalla completa
       open_settings: Abrir configuración
@@ -5336,6 +5344,7 @@ sidebar:
     connect_on_startup: Conectar al iniciar
     connect_on_startup_overridden: "Sin efecto mientras Ajustes > General > Inicio y sesión reconecta las conexiones abiertas"
     disconnect: Desconectar
+    clear_queue: "Vaciar cola (%{count})"
     edit: Editar
     duplicate: Duplicar
     rename: Renombrar
@@ -5438,7 +5447,6 @@ sidebar:
     startup_needs_passwords: "%{names} no se conectaron al iniciar porque sus contraseñas no están guardadas. Conéctate a cada una para introducirla."
     startup_needs_passphrase: "'%{name}' no se conectó al iniciar porque su túnel SSH necesita una frase de contraseña que no está guardada. Conéctate para introducirla."
     operation_started_elsewhere: Otro proceso ya inició la operación
-    background_task_limit: Hay demasiadas tareas en segundo plano, espera un momento
     connection_cancelled_by_hook: Conexión cancelada por un hook
     connection_cancelled_by_post_connect_hook: Conexión cancelada por el hook posterior a la conexión
     disconnect_cancelled_by_hook: Desconexión cancelada por un hook
@@ -5665,6 +5673,14 @@ tasks_panel:
   collapse: "Ocultar el panel de tareas"
   empty: No hay tareas en segundo plano
   output_truncated: "… salida truncada en el panel"
+  waiting_count: "%{count} en espera"
+  clear_queue: "Vaciar cola (%{count})"
+  clear_queue_on: "Vaciar cola de %{connection} (%{count})"
+work_queue:
+  waiting_for_slot: "Esperando un hueco libre para consultas en %{connection}"
+  waiting_for_connection_tasks: "Esperando un hueco libre para tareas de conexión"
+  queue_full: "%{connection}: ya hay %{count} consultas en espera; esta se ha cancelado"
+  untitled_query: "Consulta"
 toast:
   action:
     copy: Copiar

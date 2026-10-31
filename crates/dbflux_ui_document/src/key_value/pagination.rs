@@ -213,14 +213,6 @@ impl super::KeyValueDocument {
             return;
         };
 
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.last_error = Some(dbflux_i18n::t!(
-                "document.key_value.pagination.error.background_task_limit"
-            ));
-            cx.notify();
-            return;
-        }
-
         let filter = self.filter_input.read(cx).value().trim().to_string();
         let pattern = key_scan_pattern(&filter);
         let type_filter = self.type_filter.filter(|_| {
@@ -251,12 +243,26 @@ impl super::KeyValueDocument {
             type_filter,
         };
 
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
+
         cx.spawn(async move |_this, cx| {
+            // Past the connection-task limit the scan waits for a slot; one
+            // cancelled while it waits ends as a cancelled scan.
+            let admitted = admission.await;
             let result = cx
                 .background_executor()
                 .spawn({
                     let cancel_token = cancel_token.clone();
                     async move {
+                        if !admitted {
+                            return Err(DbError::Cancelled);
+                        }
+
                         let api = connection.key_value_api().ok_or_else(|| {
                             DbError::NotSupported("Key-value API unavailable".to_string())
                         })?;
@@ -779,24 +785,5 @@ mod tests {
             key_scan_pattern("session:[ab]*"),
             Some("session:[ab]*".to_string())
         );
-    }
-
-    #[test]
-    fn key_value_pagination_keys_resolve_in_both_locales() {
-        let keys = ["document.key_value.pagination.error.background_task_limit"];
-
-        for key in keys {
-            for locale in ["en", "es"] {
-                let value = dbflux_i18n::t!(key, locale = locale);
-
-                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
-                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
-                assert_ne!(
-                    value,
-                    format!("{locale}.{key}"),
-                    "{key} missing from {locale} catalog"
-                );
-            }
-        }
     }
 }

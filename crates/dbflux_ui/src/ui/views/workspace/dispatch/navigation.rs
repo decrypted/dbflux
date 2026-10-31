@@ -330,6 +330,26 @@ impl Workspace {
                 Some(true)
             }
 
+            // In the tasks panel the selected task's connection; elsewhere
+            // the active connection, else the first one with a queue.
+            Command::ClearQueryQueue => {
+                let target = if self.focus_target == FocusTarget::BackgroundTasks {
+                    self.tasks_panel.read(cx).queue_to_clear(cx)
+                } else {
+                    let state = self.app_state.read(cx);
+                    state
+                        .active_connection_id()
+                        .filter(|profile_id| state.queued_query_count(*profile_id) > 0)
+                        .or_else(|| self.tasks_panel.read(cx).queue_to_clear(cx))
+                };
+
+                if let Some(profile_id) = target {
+                    self.tasks_panel
+                        .update(cx, |panel, cx| panel.clear_queue(profile_id, cx));
+                }
+                Some(true)
+            }
+
             Command::CreateFolder => {
                 if self.focus_target == FocusTarget::Sidebar {
                     // Dashboards have no folders, so the key is left for another handler.

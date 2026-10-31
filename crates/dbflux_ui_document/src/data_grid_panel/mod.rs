@@ -39,6 +39,7 @@ mod table_documents;
 mod table_views;
 mod utils;
 pub(crate) mod value_panel;
+mod work;
 
 use super::query_builder::completion::{
     CompletionMode, FkLink, SchemaCache, SchemaCompletionProvider,
@@ -886,6 +887,8 @@ pub struct DataGridPanel {
     table_views: table_views::TableViewsState,
     pk_columns: Vec<String>,
     runner: DocumentTaskRunner,
+    /// Cancelled when the tab closes, which drops the grid's queued reads.
+    work_scope: dbflux_core::CancelToken,
     focus_handle: FocusHandle,
     panel_origin: Point<Pixels>,
     /// The window's size at the last render, which the export menu is kept
@@ -1563,6 +1566,7 @@ impl DataGridPanel {
             collection,
             table_views: table_views::TableViewsState::default(),
             runner,
+            work_scope: dbflux_core::CancelToken::new(),
             focus_handle,
             panel_origin: Point::default(),
             viewport_size: Size::default(),

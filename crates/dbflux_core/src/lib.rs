@@ -120,6 +120,11 @@ pub use core::{
     SourceQueryMode, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
     TransactionStateNote, Value, VersioningStatus, redact_uri_credentials, sanitize_uri,
 };
+pub use core::{
+    DEFAULT_MAX_CONCURRENT_QUERIES, DEFAULT_MAX_CONNECTION_TASKS, DEFAULT_MAX_QUEUED_QUERIES,
+    WaitingWork, WorkGate, WorkLane, WorkLimits, WorkPermit, WorkPriority, WorkRefusal,
+    WorkRequest, WorkTicket,
+};
 
 pub use data::{AggregatePipelineError, CollectionAggregateRequest, parse_aggregate_pipeline};
 pub use data::{

@@ -436,19 +436,6 @@ impl Sidebar {
                 }
             };
 
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.app_state.update(cx, |state, _cx| {
-                state.finish_pending_operation(profile_id, None);
-            });
-            self.pending_toast = Some(PendingToast {
-                message: crate::labels::background_task_limit_toast_label(),
-                is_error: true,
-            });
-            self.refresh_tree(cx);
-            cx.notify();
-            return;
-        }
-
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             state.clear_connect_failure(profile_id);
             let result = state.start_task_for_profile(
@@ -467,8 +454,27 @@ impl Sidebar {
 
         let detached_hook_scope = DetachedHookScope::default();
         let session_password = password;
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
+            // Past the connection-task limit the connect waits here; its
+            // hooks run inside its slot and never ask for one of their own.
+            if !admission.await {
+                cx.update(|cx| {
+                    app_state.update(cx, |state, cx| {
+                        state.finish_pending_operation(profile_id, None);
+                        cx.emit(AppStateChanged);
+                    });
+                    sidebar.update(cx, |sidebar, cx| sidebar.refresh_tree(cx));
+                });
+                return;
+            }
+
             let mut hook_warnings = Vec::new();
 
             match run_hook_phase(
@@ -980,16 +986,6 @@ impl Sidebar {
             return;
         };
 
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.pending_toast = Some(PendingToast {
-                message: crate::labels::background_task_limit_toast_label(),
-                is_error: true,
-            });
-            self.refresh_tree(cx);
-            cx.notify();
-            return;
-        }
-
         let profile_name = profile.name.clone();
         let hook_context = self.app_state.read(cx).build_hook_context(&profile);
         let hooks = self.app_state.read(cx).resolve_profile_hooks(&profile);
@@ -1008,8 +1004,19 @@ impl Sidebar {
         let sidebar = cx.entity().clone();
 
         let detached_hook_scope = DetachedHookScope::default();
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
+            if !admission.await {
+                cx.update(|cx| sidebar.update(cx, |sidebar, cx| sidebar.refresh_tree(cx)));
+                return;
+            }
+
             let mut hook_warnings = Vec::new();
 
             match run_hook_phase(
@@ -1353,7 +1360,7 @@ mod tests {
         condvar.notify_all();
     }
 
-    const CONNECTION_TOAST_KEYS: [&str; 14] = [
+    const CONNECTION_TOAST_KEYS: [&str; 13] = [
         "sidebar.task.connecting",
         "sidebar.task.disconnecting",
         "sidebar.task.connection_hook_cancelled",
@@ -1362,7 +1369,6 @@ mod tests {
         "sidebar.task.post_disconnect_hook_cancelled",
         "sidebar.toast.connection_already_pending",
         "sidebar.toast.operation_started_elsewhere",
-        "sidebar.toast.background_task_limit",
         "sidebar.toast.connection_cancelled_by_hook",
         "sidebar.toast.connection_cancelled_by_post_connect_hook",
         "sidebar.toast.disconnect_cancelled_by_hook",

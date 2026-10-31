@@ -20,6 +20,7 @@ use dbflux_core::{
 };
 use dbflux_export::ExportFormat;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::work_queue::QueryWork;
 use dbflux_ui_base::{AsyncUpdateResultExt, SaveTargetOutcome};
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
@@ -2374,12 +2375,15 @@ impl DataGridPanel {
                 .with_database(collection.database.clone());
 
             let entity = cx.entity().clone();
+            let task = self.spawn_grid_call(
+                self.interactive_work(*profile_id)
+                    .described(format!("Insert into {}", collection.name)),
+                async move { conn.insert_document(&insert) },
+                cx,
+            );
 
             cx.spawn(async move |_this, cx| {
-                let result = cx
-                    .background_executor()
-                    .spawn(async move { conn.insert_document(&insert) })
-                    .await;
+                let result = task.await;
 
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
@@ -2511,12 +2515,14 @@ impl DataGridPanel {
             .with_database(collection.database.clone());
 
         let entity = cx.entity().clone();
+        let task = self.spawn_grid_call(
+            QueryWork::interactive(*profile_id).described(format!("Update {}", collection.name)),
+            async move { conn.update_document(&update) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { conn.update_document(&update) })
-                .await;
+            let result = task.await;
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
@@ -3942,10 +3948,18 @@ async fn cached_or_fetched_schema_foreign_keys(
         })
         .map_err(|error| error.to_string())?;
 
+    let work = QueryWork::background(profile_id).described(format!("Foreign keys: {database}"));
     let fetched = cx
-        .background_executor()
-        .spawn(async move { params.execute() })
-        .await?;
+        .update(|cx| {
+            dbflux_ui_base::work_queue::spawn_query(
+                app_state,
+                work,
+                async move { params.execute() },
+                cx,
+            )
+        })
+        .await
+        .map_err(|_| dbflux_core::DbError::Cancelled.to_string())??;
 
     let foreign_keys = fetched.foreign_keys.clone();
 
@@ -4012,9 +4026,13 @@ async fn reference_display_columns(
                     let database = database.to_string();
                     let schema = schema.clone();
                     let table = table.clone();
-                    cx.background_executor().spawn(async move {
-                        connection.table_details(&database, schema.as_deref(), &table)
-                    })
+                    let description = format!("Table details: {table}");
+                    dbflux_ui_base::work_queue::spawn_query_db_async(
+                        app_state,
+                        QueryWork::background(profile_id).described(description),
+                        async move { connection.table_details(&database, schema.as_deref(), &table) },
+                        cx,
+                    )
                 };
 
                 match request.await {

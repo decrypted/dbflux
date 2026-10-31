@@ -376,9 +376,11 @@ impl DataGridPanel {
             });
         }
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { connection.table_profile(&table) });
+        let task = self.spawn_table_view_call(
+            format!("Profile {}", table.qualified_name()),
+            async move { connection.table_profile(&table) },
+            cx,
+        );
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -683,10 +685,14 @@ impl DataGridPanel {
         self.table_views.estimate_generation += 1;
         let generation = self.table_views.estimate_generation;
 
-        let task = cx.background_executor().spawn({
-            let profile = profile.clone();
-            async move { connection.estimate_table_read(&request, &profile) }
-        });
+        let task = self.spawn_table_view_call(
+            format!("Estimate read of {}", request.table.qualified_name()),
+            {
+                let profile = profile.clone();
+                async move { connection.estimate_table_read(&request, &profile) }
+            },
+            cx,
+        );
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -743,9 +749,11 @@ impl DataGridPanel {
         let generation = self.table_views.partitions_generation;
         view.update(cx, |view, cx| view.set_loading(cx));
 
-        let task = cx
-            .background_executor()
-            .spawn(async move { connection.table_partitions(&table) });
+        let task = self.spawn_table_view_call(
+            format!("Partitions of {}", table.qualified_name()),
+            async move { connection.table_partitions(&table) },
+            cx,
+        );
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -827,10 +835,14 @@ impl DataGridPanel {
         let generation = self.table_views.profile_generation;
         let started_at = Instant::now();
 
-        let task = cx.background_executor().spawn({
-            let table = table.clone();
-            async move { connection.sample_table_profile(&table, &columns, SAMPLE_PROFILE_ROWS) }
-        });
+        let task = self.spawn_table_view_call(
+            format!("Sample profile of {qualified}"),
+            {
+                let table = table.clone();
+                async move { connection.sample_table_profile(&table, &columns, SAMPLE_PROFILE_ROWS) }
+            },
+            cx,
+        );
 
         cx.spawn(async move |this, cx| {
             let result = task.await;

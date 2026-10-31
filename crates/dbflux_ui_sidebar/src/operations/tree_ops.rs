@@ -569,6 +569,14 @@ impl Sidebar {
             self.refresh_tree(cx);
             return;
         };
+        // Past the connection-task limit the refresh waits for a slot; a
+        // cancel while it waits ends it as a cancelled refresh.
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
 
         self.refresh_tree(cx);
 
@@ -578,19 +586,23 @@ impl Sidebar {
 
         let refresh_guard = held_state.refresh_guard.clone();
         let operation_task = cx.spawn(async move |_this, cx| {
-            let outcome = match cx
-                .background_executor()
-                .spawn(async move { params.execute() })
-                .await
-            {
-                Ok(_) if cancel_token.is_cancelled() => {
-                    DatabaseRefreshExecutionOutcome::Cancelled { held_state }
+            let outcome = if !admission.await {
+                DatabaseRefreshExecutionOutcome::Cancelled { held_state }
+            } else {
+                match cx
+                    .background_executor()
+                    .spawn(async move { params.execute() })
+                    .await
+                {
+                    Ok(_) if cancel_token.is_cancelled() => {
+                        DatabaseRefreshExecutionOutcome::Cancelled { held_state }
+                    }
+                    Ok(result) => DatabaseRefreshExecutionOutcome::Refreshed {
+                        schema: None,
+                        database_schema: Some(result.schema),
+                    },
+                    Err(error) => DatabaseRefreshExecutionOutcome::Failed { error, held_state },
                 }
-                Ok(result) => DatabaseRefreshExecutionOutcome::Refreshed {
-                    schema: None,
-                    database_schema: Some(result.schema),
-                },
-                Err(error) => DatabaseRefreshExecutionOutcome::Failed { error, held_state },
             };
 
             cx.update(|cx| {
@@ -662,6 +674,14 @@ impl Sidebar {
             self.refresh_tree(cx);
             return;
         };
+        // Past the connection-task limit the refresh waits for a slot; a
+        // cancel while it waits ends it as a cancelled refresh.
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
 
         self.refresh_tree(cx);
 
@@ -671,10 +691,15 @@ impl Sidebar {
 
         let refresh_guard = held_state.refresh_guard.clone();
         let operation_task = cx.spawn(async move |_this, cx| {
+            let admitted = admission.await;
             let outcome = cx
                 .background_executor()
                 .spawn(async move {
                     let mut held_state = held_state;
+
+                    if !admitted {
+                        return DatabaseRefreshExecutionOutcome::Cancelled { held_state };
+                    }
 
                     let Some(held_connection) = held_state.held_connection.as_mut() else {
                         return DatabaseRefreshExecutionOutcome::Failed {
@@ -752,6 +777,14 @@ impl Sidebar {
             self.refresh_tree(cx);
             return;
         };
+        // Past the connection-task limit the refresh waits for a slot; a
+        // cancel while it waits ends it as a cancelled refresh.
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
 
         self.refresh_tree(cx);
 
@@ -761,6 +794,7 @@ impl Sidebar {
 
         let refresh_guard = held_state.refresh_guard.clone();
         let operation_task = cx.spawn(async move |_this, cx| {
+            let admitted = admission.await;
             let connection = match cx.update(|cx| {
                 app_state
                     .read(cx)
@@ -796,22 +830,26 @@ impl Sidebar {
                 }
             };
 
-            let outcome = match cx
-                .background_executor()
-                .spawn(async move { connection.schema() })
-                .await
-            {
-                Ok(_) if cancel_token.is_cancelled() => {
-                    DatabaseRefreshExecutionOutcome::Cancelled { held_state }
+            let outcome = if !admitted {
+                DatabaseRefreshExecutionOutcome::Cancelled { held_state }
+            } else {
+                match cx
+                    .background_executor()
+                    .spawn(async move { connection.schema() })
+                    .await
+                {
+                    Ok(_) if cancel_token.is_cancelled() => {
+                        DatabaseRefreshExecutionOutcome::Cancelled { held_state }
+                    }
+                    Ok(schema) => DatabaseRefreshExecutionOutcome::Refreshed {
+                        schema: Some(schema),
+                        database_schema: None,
+                    },
+                    Err(error) => DatabaseRefreshExecutionOutcome::Failed {
+                        error: error.to_string(),
+                        held_state,
+                    },
                 }
-                Ok(schema) => DatabaseRefreshExecutionOutcome::Refreshed {
-                    schema: Some(schema),
-                    database_schema: None,
-                },
-                Err(error) => DatabaseRefreshExecutionOutcome::Failed {
-                    error: error.to_string(),
-                    held_state,
-                },
             };
 
             cx.update(|cx| {
@@ -923,21 +961,6 @@ impl Sidebar {
             }
         };
 
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.app_state.update(cx, |state, _cx| {
-                if state.database_refresh_guard_is_current(&guard) {
-                    state.finish_pending_operation(profile_id, Some(db_name));
-                }
-            });
-            self.pending_toast = Some(PendingToast {
-                message: crate::labels::background_task_limit_toast_label(),
-                is_error: true,
-            });
-            self.refresh_tree(cx);
-            cx.notify();
-            return;
-        }
-
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result = state.start_task(
                 TaskKind::SwitchDatabase,
@@ -952,12 +975,22 @@ impl Sidebar {
         let app_state = self.app_state.clone();
         let db_name_owned = db_name.to_string();
         let sidebar = cx.entity().clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { params.execute() });
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
+        let executor = cx.background_executor().clone();
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            // Refused while queued: the task is cancelled, so the cancelled
+            // branch below cleans up with nothing sent.
+            let result = if admission.await {
+                executor.spawn(async move { params.execute() }).await
+            } else {
+                Err(dbflux_core::DbError::Cancelled.to_string())
+            };
 
             cx.update(|cx| {
                 if !app_state.read(cx).database_refresh_guard_is_current(&guard) {
@@ -1031,16 +1064,6 @@ impl Sidebar {
         let Some(mode) = self.resolve_database_refresh_mode(profile_id, &db_name, cx) else {
             return;
         };
-
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.pending_toast = Some(PendingToast {
-                message: crate::labels::background_task_limit_toast_label(),
-                is_error: true,
-            });
-            self.refresh_tree(cx);
-            cx.notify();
-            return;
-        }
 
         let root_expanded = self.database_root_expanded(item_id, cx);
         let held_state = match self.take_database_refresh_state(profile_id, &db_name, item_id, cx) {
@@ -1119,16 +1142,6 @@ impl Sidebar {
         } else if self.loading_items.contains(item_id) {
             return;
         }
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.pending_toast = Some(PendingToast {
-                message: crate::labels::background_task_limit_toast_label(),
-                is_error: true,
-            });
-            self.refresh_tree(cx);
-            cx.notify();
-            return;
-        }
-
         let cache_db = parts.cache_database().to_string();
         let Ok(request) = self.app_state.update(cx, |state, _| {
             state.prepare_refresh_views(parts.profile_id, &cache_db, &parts.schema_name)
@@ -1163,16 +1176,25 @@ impl Sidebar {
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
         let item_id = item_id.to_string();
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
         let operation_task = cx.spawn(async move |_this, cx| {
             let execution_request = request.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    execution_request
-                        .execute()
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = if admission.await {
+                cx.background_executor()
+                    .spawn(async move {
+                        execution_request
+                            .execute()
+                            .map_err(|error| error.to_string())
+                    })
+                    .await
+            } else {
+                Err(dbflux_core::DbError::Cancelled.to_string())
+            };
             cx.update(|cx| {
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.clear_tracked_operation_task(task_id);

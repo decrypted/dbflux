@@ -690,9 +690,12 @@ impl DataGridPanel {
 
         let query = QueryRequest::new(generated.text).with_database(database);
         let connection_for_cleanup = connection.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { connection.execute(&query) });
+        let task = self.spawn_grid_call(
+            self.interactive_work(profile_id)
+                .for_task(task_id, &cancel_token),
+            async move { connection.execute(&query) },
+            cx,
+        );
 
         let entity = cx.entity().clone();
         cx.spawn(async move |_this, cx| {

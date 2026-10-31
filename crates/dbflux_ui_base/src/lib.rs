@@ -31,6 +31,7 @@ pub mod ui_automation;
 pub mod updates;
 pub mod user_error;
 pub mod window_state;
+pub mod work_queue;
 
 mod style_guardrails;
 

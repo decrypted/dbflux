@@ -1147,9 +1147,12 @@ impl DataGridPanel {
 
         let qualified = collection.qualified_name();
         let entity = cx.entity().clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { connection.estimate_collection_count(&request) });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id.to_owned())
+                .described(format!("count {}", collection.name)),
+            async move { connection.estimate_collection_count(&request) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -1213,9 +1216,12 @@ impl DataGridPanel {
         cx.notify();
 
         let entity = cx.entity().clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { connection.sample_collection_schema(&request) });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id.to_owned())
+                .described(format!("sample schema of {}", collection.name)),
+            async move { connection.sample_collection_schema(&request) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;
@@ -1640,9 +1646,12 @@ impl DataGridPanel {
         };
 
         let entity = cx.entity().clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { connection.fetch_document(&request) });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id.to_owned())
+                .described(format!("find one in {}", collection.name)),
+            async move { connection.fetch_document(&request) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let fetched = task.await;
@@ -1839,22 +1848,31 @@ impl DataGridPanel {
         let identity = commit.identity.clone();
         let entity = cx.entity().clone();
 
-        let task = cx.background_executor().spawn(async move {
-            match edit {
-                DocumentEdit::Patch(patch) => connection.patch_document(&DocumentPatchRequest {
-                    collection,
-                    identity,
-                    patch,
-                }),
-                DocumentEdit::Replace(document) => {
-                    connection.replace_document(&DocumentReplaceRequest {
-                        collection,
-                        identity,
-                        document,
-                    })
+        let work = self
+            .interactive_work(profile_id.to_owned())
+            .for_task_id(task_id);
+        let task = self.spawn_grid_call(
+            work,
+            async move {
+                match edit {
+                    DocumentEdit::Patch(patch) => {
+                        connection.patch_document(&DocumentPatchRequest {
+                            collection,
+                            identity,
+                            patch,
+                        })
+                    }
+                    DocumentEdit::Replace(document) => {
+                        connection.replace_document(&DocumentReplaceRequest {
+                            collection,
+                            identity,
+                            document,
+                        })
+                    }
                 }
-            }
-        });
+            },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;

@@ -577,13 +577,19 @@ impl DataGridPanel {
         let ref_schema_for_task = ref_schema.clone();
         let database_for_task = database.clone();
 
-        let task = cx.background_executor().spawn(async move {
-            conn.table_details(
-                &database_for_task,
-                ref_schema_for_task.as_deref(),
-                &ref_table_for_task,
-            )
-        });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id)
+                .on_database(Some(database.clone()))
+                .described(format!("Table details: {ref_table}")),
+            async move {
+                conn.table_details(
+                    &database_for_task,
+                    ref_schema_for_task.as_deref(),
+                    &ref_table_for_task,
+                )
+            },
+            cx,
+        );
 
         let key_for_finish = key.clone();
         let cache_for_finish = cache_rc.clone();
@@ -682,13 +688,19 @@ impl DataGridPanel {
         let table_for_task = table.clone();
         let database_for_task = database.clone();
 
-        let task = cx.background_executor().spawn(async move {
-            conn.table_details(
-                &database_for_task,
-                table_for_task.schema.as_deref(),
-                &table_for_task.name,
-            )
-        });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id)
+                .on_database(Some(database.clone()))
+                .described(format!("Table details: {}", table.qualified_name())),
+            async move {
+                conn.table_details(
+                    &database_for_task,
+                    table_for_task.schema.as_deref(),
+                    &table_for_task.name,
+                )
+            },
+            cx,
+        );
 
         let key_for_finish = key.clone();
         let cache_for_finish = cache_rc.clone();
@@ -824,9 +836,13 @@ impl DataGridPanel {
         };
 
         let schema_for_task = schema;
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.schema_foreign_keys(&database, schema_for_task.as_deref()) });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id)
+                .on_database(Some(database.clone()))
+                .described(format!("Foreign keys: {database}")),
+            async move { conn.schema_foreign_keys(&database, schema_for_task.as_deref()) },
+            cx,
+        );
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -869,9 +885,13 @@ impl DataGridPanel {
         };
 
         let schema_for_task = schema.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.schema_foreign_keys(&database, schema_for_task.as_deref()) });
+        let task = self.spawn_grid_call(
+            self.grid_work(profile_id)
+                .on_database(Some(database.clone()))
+                .described(format!("Foreign keys: {database}")),
+            async move { conn.schema_foreign_keys(&database, schema_for_task.as_deref()) },
+            cx,
+        );
 
         let panel_weak = panel.downgrade();
         cx.spawn(async move |this, cx| {

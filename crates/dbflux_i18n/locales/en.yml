@@ -2894,9 +2894,6 @@ document:
         sorted_set: Sorted Set
         json: JSON
         stream: Stream
-    pagination:
-      error:
-        background_task_limit: Too many background tasks running, please wait
     parsing:
       type:
         string: String
@@ -4132,6 +4129,8 @@ palette:
       name: Toggle tasks panel
     clear_finished_tasks:
       name: Clear finished tasks
+    clear_query_queue:
+      name: "Clear query queue"
     toggle_notifications:
       name: "Toggle notifications"
     show_connections_view:
@@ -4342,7 +4341,15 @@ settings:
     max_background_tasks:
       label: Max concurrent background tasks
       error: Max background tasks must be >= 1
-      help: "Counts running connects, disconnects, connection hooks, database switches, schema tasks and key-value scans. At the cap, new connects, database switches, schema and table-detail loads and key-value pages are refused. Queries, data-grid loads and exports are not limited."
+      help: "Counts running connects, disconnects, database switches, schema and table-detail loads, schema drops and key-value scans across all connections. Past the cap, new ones wait in a queue, shown as Waiting in the Tasks panel, and start when a slot frees. A connect's hooks run inside its slot."
+    max_concurrent_queries:
+      label: "Max concurrent queries per connection"
+      error: "Max concurrent queries must be >= 1"
+      help: "Queries and commands that run at once on one connection: data-grid pages and row counts, table details, foreign-key labels, SQL editor runs, saves, exports and charts. The rest wait in that connection's queue; an explicit Run or Save goes ahead of queued background reads."
+    max_queued_queries:
+      label: "Max queued queries per connection"
+      error: "Max queued queries must be >= 1"
+      help: "When the queue is full, a new background read is cancelled with a notice; an explicit Run or Save takes the place of the oldest queued background read."
     pause_refresh_on_error:
       label: Pause auto-refresh on error
     refresh_only_if_visible:
@@ -4553,6 +4560,7 @@ settings:
       toggle_tasks: Toggle tasks panel
       cancel_task: Cancel task
       clear_finished_tasks: Clear finished tasks
+      clear_query_queue: "Clear query queue"
       toggle_sidebar: Toggle sidebar
       toggle_full_screen: Toggle full screen
       open_settings: Open settings
@@ -5336,6 +5344,7 @@ sidebar:
     connect_on_startup: Connect on startup
     connect_on_startup_overridden: "No effect while Settings > General > Startup and session reconnects open connections"
     disconnect: Disconnect
+    clear_queue: "Clear queue (%{count})"
     edit: Edit
     duplicate: Duplicate
     rename: Rename
@@ -5438,7 +5447,6 @@ sidebar:
     startup_needs_passwords: "%{names} were not connected on startup because their passwords are not saved. Connect to each one to enter it."
     startup_needs_passphrase: "'%{name}' was not connected on startup because its SSH tunnel needs a passphrase that is not saved. Connect to enter it."
     operation_started_elsewhere: Operation started by another thread
-    background_task_limit: Too many background tasks running, please wait
     connection_cancelled_by_hook: Connection cancelled by hook
     connection_cancelled_by_post_connect_hook: Connection cancelled by post-connect hook
     disconnect_cancelled_by_hook: Disconnect cancelled by hook
@@ -5665,6 +5673,14 @@ tasks_panel:
   collapse: "Hide the tasks panel"
   empty: No background tasks
   output_truncated: "… output truncated in panel"
+  waiting_count: "%{count} waiting"
+  clear_queue: "Clear queue (%{count})"
+  clear_queue_on: "Clear queue on %{connection} (%{count})"
+work_queue:
+  waiting_for_slot: "Waiting for a free query slot on %{connection}"
+  waiting_for_connection_tasks: "Waiting for a free connection-task slot"
+  queue_full: "%{connection}: %{count} queries already waiting; this one was cancelled"
+  untitled_query: "Query"
 toast:
   action:
     copy: Copy

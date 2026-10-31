@@ -513,6 +513,7 @@ impl DataGridPanel {
         let DataSource::Collection { profile_id, .. } = &self.source else {
             return;
         };
+        let aggregate_profile_id = *profile_id;
 
         let Some(connection) = self
             .app_state
@@ -547,9 +548,12 @@ impl DataGridPanel {
         cx.notify();
 
         let entity = cx.entity().clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { connection.aggregate_collection(&request) });
+        let task = self.spawn_grid_call(
+            self.interactive_work(aggregate_profile_id)
+                .for_task_id(task_id),
+            async move { connection.aggregate_collection(&request) },
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
             let result = task.await;

@@ -299,19 +299,6 @@ impl Sidebar {
             }
         };
 
-        if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.app_state.update(cx, |state, _cx| {
-                state.finish_pending_operation(profile_id, None);
-            });
-            self.pending_toast = Some(PendingToast {
-                message: crate::labels::background_task_limit_toast_label(),
-                is_error: true,
-            });
-            self.refresh_tree(cx);
-            cx.notify();
-            return;
-        }
-
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             state.clear_connect_failure(profile_id);
             let result = state.start_task_for_profile(
@@ -447,8 +434,28 @@ impl Sidebar {
         });
 
         let detached_hook_scope = DetachedHookScope::default();
+        let admission = dbflux_ui_base::work_queue::admit_connection_task(
+            &self.app_state,
+            task_id,
+            &cancel_token,
+            cx,
+        );
 
         cx.spawn(async move |_this, cx| {
+            // Past the connection-task limit the pipeline waits here; its
+            // stages and hooks run inside the one slot.
+            if !admission.await {
+                let _ = state_tx.send(dbflux_core::PipelineState::Cancelled);
+                cx.update(|cx| {
+                    app_state.update(cx, |state, cx| {
+                        state.finish_pending_operation(profile_id, None);
+                        cx.emit(AppStateChanged);
+                    });
+                    sidebar.update(cx, |sidebar, cx| sidebar.refresh_tree(cx));
+                });
+                return;
+            }
+
             let mut hook_warnings = Vec::new();
 
             match run_hook_phase(

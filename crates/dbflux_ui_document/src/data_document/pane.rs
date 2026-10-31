@@ -229,6 +229,15 @@ impl DataDocument {
             Box::new(move |cx| e.read(cx).session_tab_snapshot(cx))
         });
 
+        // Reads still waiting for a query slot belong to this tab only.
+        handle.on_close = Some({
+            let e = entity.clone();
+            Box::new(move |cx| {
+                let grid = e.read(cx).data_grid.clone();
+                grid.update(cx, |grid, _cx| grid.drop_queued_work());
+            })
+        });
+
         handle
     }
 }

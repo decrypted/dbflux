@@ -84,6 +84,14 @@ impl GeneralSection {
                 saved.max_concurrent_background_tasks.to_string(),
             ),
             (
+                &self.input_max_queries,
+                saved.max_concurrent_queries.to_string(),
+            ),
+            (
+                &self.input_max_queued_queries,
+                saved.max_queued_queries.to_string(),
+            ),
+            (
                 &self.input_editor_row_limit,
                 saved.editor_row_limit.to_string(),
             ),
@@ -144,6 +152,8 @@ impl GeneralSection {
             GeneralFormRow::DefaultRefreshPolicy,
             GeneralFormRow::DefaultRefreshInterval,
             GeneralFormRow::MaxBackgroundTasks,
+            GeneralFormRow::MaxConcurrentQueries,
+            GeneralFormRow::MaxQueuedQueries,
             GeneralFormRow::PauseRefreshOnError,
             GeneralFormRow::RefreshOnlyIfVisible,
             GeneralFormRow::ConfirmDangerous,
@@ -378,6 +388,8 @@ impl GeneralSection {
             | Some(GeneralFormRow::AutoSaveInterval)
             | Some(GeneralFormRow::DefaultRefreshInterval)
             | Some(GeneralFormRow::MaxBackgroundTasks)
+            | Some(GeneralFormRow::MaxConcurrentQueries)
+            | Some(GeneralFormRow::MaxQueuedQueries)
             | Some(GeneralFormRow::EditorRowLimit)
             | Some(GeneralFormRow::ObjectPreviewLimit)
             | Some(GeneralFormRow::KeyValueSizeLimit) => {
@@ -432,6 +444,14 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::MaxBackgroundTasks) => {
                 self.input_max_bg_tasks
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::MaxConcurrentQueries) => {
+                self.input_max_queries
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::MaxQueuedQueries) => {
+                self.input_max_queued_queries
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             Some(GeneralFormRow::EditorRowLimit) => {
@@ -820,6 +840,39 @@ impl GeneralSection {
             }
         };
 
+        let max_queries_str = self.input_max_queries.read(cx).value().trim().to_string();
+        let max_queries = match max_queries_str.parse::<usize>() {
+            Ok(value) if value >= 1 => value,
+            _ => {
+                self.reject_field(
+                    GeneralFormRow::MaxConcurrentQueries,
+                    dbflux_i18n::t!("settings.general.max_concurrent_queries.error"),
+                    window,
+                    cx,
+                );
+                return;
+            }
+        };
+
+        let max_queued_str = self
+            .input_max_queued_queries
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let max_queued_queries = match max_queued_str.parse::<usize>() {
+            Ok(value) if value >= 1 => value,
+            _ => {
+                self.reject_field(
+                    GeneralFormRow::MaxQueuedQueries,
+                    dbflux_i18n::t!("settings.general.max_queued_queries.error"),
+                    window,
+                    cx,
+                );
+                return;
+            }
+        };
+
         let editor_row_limit_str = self.input_editor_row_limit.read(cx).value().to_string();
         let Some(editor_row_limit) = Self::parse_editor_row_limit(&editor_row_limit_str) else {
             self.reject_field(
@@ -876,6 +929,8 @@ impl GeneralSection {
         self.gen_settings.auto_save_interval_ms = auto_save_ms;
         self.gen_settings.default_refresh_interval_secs = refresh_interval;
         self.gen_settings.max_concurrent_background_tasks = max_bg_tasks;
+        self.gen_settings.max_concurrent_queries = max_queries;
+        self.gen_settings.max_queued_queries = max_queued_queries;
         self.gen_settings.editor_row_limit = editor_row_limit;
         self.gen_settings.object_preview_size_limit_mib = object_preview_limit;
         self.gen_settings.key_value_size_limit_mib = key_value_size_limit;
@@ -1198,6 +1253,24 @@ impl GeneralSection {
                     "settings.general.max_background_tasks.help"
                 )),
                 GeneralFormRow::MaxBackgroundTasks,
+                cx,
+            ))
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.max_concurrent_queries.label"),
+                &self.input_max_queries,
+                None,
+                Some(dbflux_i18n::t!(
+                    "settings.general.max_concurrent_queries.help"
+                )),
+                GeneralFormRow::MaxConcurrentQueries,
+                cx,
+            ))
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.max_queued_queries.label"),
+                &self.input_max_queued_queries,
+                None,
+                Some(dbflux_i18n::t!("settings.general.max_queued_queries.help")),
+                GeneralFormRow::MaxQueuedQueries,
                 cx,
             ))
             .child(self.render_gen_checkbox(
@@ -1584,6 +1657,8 @@ impl GeneralSection {
             GeneralFormRow::AutoSaveInterval => "general-auto-save",
             GeneralFormRow::DefaultRefreshInterval => "general-refresh-interval",
             GeneralFormRow::MaxBackgroundTasks => "general-max-background-tasks",
+            GeneralFormRow::MaxConcurrentQueries => "general-max-concurrent-queries",
+            GeneralFormRow::MaxQueuedQueries => "general-max-queued-queries",
             GeneralFormRow::ObjectPreviewLimit => "general-object-preview-limit",
             GeneralFormRow::KeyValueSizeLimit => "general-key-value-size-limit",
             _ => "editor-row-limit",

@@ -117,6 +117,8 @@ pub fn save_general_settings(
         grid_review_before_save: i32::from(settings.grid_review_before_save),
         grid_copy_column_names: i32::from(settings.grid_copy_column_names),
         grid_header_click_sorts: i32::from(settings.grid_header_click_sorts),
+        max_concurrent_queries: settings.max_concurrent_queries as i64,
+        max_queued_queries: settings.max_queued_queries as i64,
         grid_filter_autoquote: i32::from(settings.grid_filter_autoquote),
         updated_at: String::new(),
     };
@@ -1081,6 +1083,15 @@ pub fn load_config(
 // General Settings helpers
 // ---------------------------------------------------------------------------
 
+/// A stored count below 1 (a hand-edited or damaged row) would stop all work
+/// on a connection, so it falls back to the default instead.
+fn positive_count(stored: i64, default: usize) -> usize {
+    usize::try_from(stored)
+        .ok()
+        .filter(|count| *count >= 1)
+        .unwrap_or(default)
+}
+
 fn load_general_settings(
     repo: &dbflux_storage::repositories::general_settings::GeneralSettingsRepository,
 ) -> GeneralSettings {
@@ -1153,6 +1164,8 @@ fn load_general_settings(
         grid_review_before_save: dto.grid_review_before_save != 0,
         grid_copy_column_names: dto.grid_copy_column_names != 0,
         grid_header_click_sorts: dto.grid_header_click_sorts != 0,
+        max_concurrent_queries: positive_count(dto.max_concurrent_queries, 8),
+        max_queued_queries: positive_count(dto.max_queued_queries, 50),
         grid_filter_autoquote: dto.grid_filter_autoquote != 0,
     }
 }
@@ -2743,6 +2756,8 @@ mod tests {
             grid_review_before_save: 0,
             grid_copy_column_names: 0,
             grid_header_click_sorts: 0,
+            max_concurrent_queries: 3,
+            max_queued_queries: 12,
             grid_filter_autoquote: 0,
             updated_at: String::new(),
         };
@@ -2770,6 +2785,8 @@ mod tests {
         );
         assert_eq!(loaded.general_settings.default_refresh_interval_secs, 15);
         assert_eq!(loaded.general_settings.max_concurrent_background_tasks, 4);
+        assert_eq!(loaded.general_settings.max_concurrent_queries, 3);
+        assert_eq!(loaded.general_settings.max_queued_queries, 12);
         assert!(!loaded.general_settings.auto_refresh_pause_on_error);
         assert!(loaded.general_settings.auto_refresh_only_if_visible);
         assert!(!loaded.general_settings.confirm_dangerous_queries);
@@ -2846,6 +2863,8 @@ mod tests {
             grid_review_before_save: 0,
             grid_copy_column_names: 0,
             grid_header_click_sorts: 0,
+            max_concurrent_queries: 8,
+            max_queued_queries: 50,
             grid_filter_autoquote: 0,
             updated_at: String::new(),
         };
@@ -3200,6 +3219,8 @@ mod tests {
             grid_review_before_save: 0,
             grid_copy_column_names: 0,
             grid_header_click_sorts: 0,
+            max_concurrent_queries: 8,
+            max_queued_queries: 50,
             grid_filter_autoquote: 0,
             updated_at: String::new(),
         };

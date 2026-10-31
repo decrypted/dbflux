@@ -7,6 +7,7 @@ pub(crate) mod shutdown;
 pub(crate) mod task;
 pub(crate) mod traits;
 pub(crate) mod value;
+pub(crate) mod work_gate;
 
 pub use error::{DbError, TransactionStateNote};
 pub use error_formatter::{
@@ -30,3 +31,8 @@ pub use traits::{
     SourceContextSpec, SourceQueryMode, VersioningStatus,
 };
 pub use value::Value;
+pub use work_gate::{
+    DEFAULT_MAX_CONCURRENT_QUERIES, DEFAULT_MAX_CONNECTION_TASKS, DEFAULT_MAX_QUEUED_QUERIES,
+    WaitingWork, WorkGate, WorkLane, WorkLimits, WorkPermit, WorkPriority, WorkRefusal,
+    WorkRequest, WorkTicket,
+};

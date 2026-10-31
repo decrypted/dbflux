@@ -159,6 +159,9 @@ pub enum Command {
     CancelTask,
     /// Removes every finished task from the background tasks panel.
     ClearFinishedTasks,
+    /// Cancels the queries waiting for a slot on one connection; running
+    /// ones keep running.
+    ClearQueryQueue,
     ToggleSidebar,
     ToggleFullScreen,
     OpenSettings,
@@ -337,6 +340,7 @@ impl Command {
             "toggle_results_position" => Some(Command::ToggleResultsPosition),
             "toggle_tasks" => Some(Command::ToggleTasks),
             "clear_finished_tasks" => Some(Command::ClearFinishedTasks),
+            "clear_query_queue" => Some(Command::ClearQueryQueue),
             "open_settings" => Some(Command::OpenSettings),
             "open_login_modal" => Some(Command::OpenLoginModal),
             "open_sso_wizard" => Some(Command::OpenSsoWizard),
@@ -475,6 +479,7 @@ impl Command {
             Command::ToggleTasks => "Toggle tasks panel",
             Command::CancelTask => "Cancel task",
             Command::ClearFinishedTasks => "Clear finished tasks",
+            Command::ClearQueryQueue => "Clear query queue",
             Command::ToggleSidebar => "Toggle sidebar",
             Command::ToggleFullScreen => "Toggle full screen",
             Command::OpenSettings => "Open settings",
@@ -687,6 +692,7 @@ impl Command {
             Command::ToggleTasks => "toggle_tasks",
             Command::CancelTask => "cancel_task",
             Command::ClearFinishedTasks => "clear_finished_tasks",
+            Command::ClearQueryQueue => "clear_query_queue",
             Command::ToggleSidebar => "toggle_sidebar",
             Command::ToggleFullScreen => "toggle_full_screen",
             Command::OpenSettings => "open_settings",
@@ -914,6 +920,7 @@ impl Command {
             Command::ToggleTasks,
             Command::CancelTask,
             Command::ClearFinishedTasks,
+            Command::ClearQueryQueue,
             Command::ToggleSidebar,
             Command::ToggleFullScreen,
             Command::OpenSettings,
@@ -1119,6 +1126,7 @@ impl Command {
             | Command::ToggleTasks
             | Command::CancelTask
             | Command::ClearFinishedTasks
+            | Command::ClearQueryQueue
             | Command::ToggleSidebar
             | Command::ToggleFullScreen
             | Command::TogglePanel

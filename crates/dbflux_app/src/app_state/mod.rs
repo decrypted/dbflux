@@ -107,6 +107,9 @@ pub struct ConnectionPasswordPrompt {
 pub struct AppState {
     pub facade: SessionFacade,
     external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
+    /// Slots and queues for database work; its limits follow the general
+    /// settings.
+    work_gate: dbflux_core::WorkGate,
     general_settings: GeneralSettings,
     update_settings: crate::updates::UpdateSettings,
     update_check: crate::updates::UpdateCheckState,
@@ -233,6 +236,7 @@ impl AppState {
         profile_id: Uuid,
     ) -> Option<std::thread::JoinHandle<Result<(), dbflux_core::DbError>>> {
         let teardown = self.facade.connections.disconnect(profile_id);
+        self.clear_query_queue(profile_id);
 
         // Evict stale metric catalog data for this connection.
         self.metric_catalog_cache.invalidate(profile_id);
@@ -2203,6 +2207,15 @@ impl AppState {
     }
 }
 
+/// The gate limits the general settings ask for.
+pub(crate) fn work_limits(settings: &GeneralSettings) -> dbflux_core::WorkLimits {
+    dbflux_core::WorkLimits {
+        max_concurrent_queries: settings.max_concurrent_queries,
+        max_queued_queries: settings.max_queued_queries,
+        max_connection_tasks: settings.max_concurrent_background_tasks,
+    }
+}
+
 // --- Field accessors ---
 
 impl AppState {
@@ -2293,6 +2306,12 @@ impl AppState {
         let Some(task) = self.facade.tasks.get(task_id) else {
             return;
         };
+
+        // Queued work sent nothing; a server cancel would stop whichever
+        // query runs on the connection instead.
+        if task.is_waiting() {
+            return;
+        }
 
         let target = task.target.or_else(|| {
             task.profile_id.map(|profile_id| dbflux_core::TaskTarget {
@@ -2588,14 +2607,30 @@ impl AppState {
         &self.driver_settings
     }
 
-    pub fn is_background_task_limit_reached(&self) -> bool {
-        let limit = self.general_settings.max_concurrent_background_tasks;
-        self.facade.tasks.background_task_count() >= limit
+    pub fn work_gate(&self) -> &dbflux_core::WorkGate {
+        &self.work_gate
+    }
+
+    /// Cancels every query waiting on `profile_id`'s connection; running ones
+    /// keep running. Returns how many were cancelled.
+    pub fn clear_query_queue(&mut self, profile_id: Uuid) -> usize {
+        self.work_gate
+            .clear_queue(dbflux_core::WorkLane::Queries(profile_id))
+            .into_iter()
+            .filter(|task_id| self.facade.tasks.cancel(*task_id))
+            .count()
+    }
+
+    /// Queries waiting on `profile_id`'s connection.
+    pub fn queued_query_count(&self, profile_id: Uuid) -> usize {
+        self.work_gate
+            .waiting_count(dbflux_core::WorkLane::Queries(profile_id))
     }
 
     pub fn update_general_settings(&mut self, settings: GeneralSettings) {
         self.history_manager
             .set_max_entries(settings.max_history_entries);
+        self.work_gate.set_limits(work_limits(&settings));
 
         self.general_settings = settings;
     }

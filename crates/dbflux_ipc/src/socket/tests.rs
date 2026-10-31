@@ -268,12 +268,102 @@ fn an_explicit_dir_is_used_at_its_exact_path() {
     std::fs::create_dir(base.join("foreign")).expect("pre-created dir");
     let error = resolve_ipc_dir(&foreign, own_uid().wrapping_add(1))
         .expect_err("an explicit dir of another user is refused");
-    assert!(
-        error.to_string().contains("belongs to another user"),
-        "{error}"
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+}
+fn explicit(path: PathBuf) -> DirSources {
+    DirSources {
+        explicit: Some(path),
+        runtime: None,
+        cache: None,
+    }
+}
+
+/// With a trailing `/` the final lstat follows a symlink, so the link's 0700
+/// target would pass the checks meant for the link itself.
+#[test]
+fn an_explicit_dir_with_a_trailing_slash_cannot_hide_a_symlink() {
+    let base = scratch_dir();
+    let target = base.join("target");
+    std::fs::create_dir(&target).expect("target dir");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    std::os::unix::fs::symlink(&target, base.join("link")).expect("symlink");
+
+    let mut with_slash = base.join("link").into_os_string();
+    with_slash.push("/");
+    let error = resolve_ipc_dir(&explicit(PathBuf::from(with_slash)), own_uid())
+        .expect_err("a trailing slash must be refused");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
+
+    let error = resolve_ipc_dir(&explicit(base.join("link")), own_uid())
+        .expect_err("the link itself is refused");
+    assert!(error.to_string().contains("is not a directory"), "{error}");
+}
+
+#[test]
+fn an_explicit_dir_must_name_a_plain_entry() {
+    let base = scratch_dir();
+    std::fs::create_dir(base.join("a")).expect("dir");
+    std::fs::set_permissions(base.join("a"), std::fs::Permissions::from_mode(0o755))
+        .expect("chmod");
+
+    for bad in [
+        base.join("a").join(".."),
+        base.join("a").join("."),
+        base.join("a").join("..").join("b"),
+        PathBuf::from("/"),
+    ] {
+        let error = resolve_ipc_dir(&explicit(bad.clone()), own_uid())
+            .expect_err("a dot component or the root must be refused");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::InvalidInput,
+            "{bad:?}: {error}"
+        );
+    }
+
+    // `a/.` names `a` itself: it must stay as it was, not be narrowed to 0700.
+    assert_eq!(
+        std::fs::metadata(base.join("a")).expect("a").mode() & 0o777,
+        0o755
     );
 }
 
+#[test]
+fn an_explicit_dir_below_a_dir_others_can_write_is_refused() {
+    let base = scratch_dir();
+    let open = base.join("open");
+    std::fs::create_dir(&open).expect("open dir");
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).expect("chmod 0777");
+
+    let error = resolve_ipc_dir(&explicit(open.join("ipc")), own_uid())
+        .expect_err("another user could swap the entry in a writable ancestor");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(!open.join("ipc").exists(), "nothing is created there");
+
+    // Sticky, like /tmp: others cannot rename an entry they do not own.
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o1777)).expect("chmod 1777");
+    assert_eq!(
+        resolve_ipc_dir(&explicit(open.join("ipc")), own_uid()).expect("sticky ancestor"),
+        open.join("ipc")
+    );
+}
+
+#[test]
+fn a_symlink_above_the_explicit_dir_is_resolved_and_checked() {
+    let base = scratch_dir();
+    std::fs::create_dir(base.join("real")).expect("real dir");
+    std::os::unix::fs::symlink(base.join("real"), base.join("alias")).expect("symlink");
+
+    let dir = resolve_ipc_dir(&explicit(base.join("alias").join("ipc")), own_uid())
+        .expect("a linked ancestor of ours is fine");
+    assert_eq!(
+        dir,
+        base.join("real")
+            .canonicalize()
+            .expect("canonical")
+            .join("ipc")
+    );
+}
 #[test]
 fn a_listener_of_another_uid_at_the_path_receives_nothing() {
     let dir = scratch_dir();

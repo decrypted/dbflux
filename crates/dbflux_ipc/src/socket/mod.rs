@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 #[cfg(unix)]
@@ -309,7 +309,8 @@ pub fn own_uid() -> u32 {
     0
 }
 
-/// The private directory that holds the sockets: `$DBFLUX_IPC_DIR`, else
+/// The private directory that holds the sockets: `$DBFLUX_IPC_DIR` (a plain
+/// absolute path whose parent exists; an empty value counts as unset), else
 /// `$XDG_RUNTIME_DIR/dbflux` (`/run/user/<uid>/dbflux` on Linux when unset),
 /// else `dbflux-ipc` in the user cache directory.
 /// Created `0700` when missing; an existing one is used only when it is a
@@ -372,21 +373,8 @@ impl DirSources {
 }
 
 fn resolve_ipc_dir(sources: &DirSources, owner: u32) -> io::Result<PathBuf> {
-    // Used exactly as given: a hand-started host binds `$DBFLUX_IPC_DIR/<name>`,
-    // so any rewriting of the path would put the two ends in different places.
     if let Some(explicit) = &sources.explicit {
-        if !explicit.is_absolute() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "{IPC_DIR_ENV}={} must be an absolute path",
-                    explicit.display()
-                ),
-            ));
-        }
-
-        return dbflux_core::local_files::private_dir_at_owned_by(explicit, owner)
-            .map_err(not_private);
+        return explicit_ipc_dir(explicit, owner);
     }
 
     if let Some(runtime) = sources
@@ -406,6 +394,74 @@ fn resolve_ipc_dir(sources: &DirSources, owner: u32) -> io::Result<PathBuf> {
 
     std::fs::create_dir_all(cache)?;
     private_dir(cache, CACHE_SUBDIR, owner)
+}
+
+/// `$DBFLUX_IPC_DIR`, not rewritten: a hand-started host binds
+/// `$DBFLUX_IPC_DIR/<name>`, so any renaming would put the two ends in
+/// different places. Only a plain absolute path is accepted: with a trailing
+/// `/`, `.` or `..` the final lstat resolves the last component, so a symlink
+/// there would pass the checks meant for the entry itself.
+fn explicit_ipc_dir(explicit: &Path, owner: u32) -> io::Result<PathBuf> {
+    let normalized: PathBuf = explicit.components().collect();
+    let plain = explicit.is_absolute()
+        && normalized.as_os_str() == explicit.as_os_str()
+        && !explicit
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir));
+
+    let (true, Some(parent), Some(leaf)) = (plain, explicit.parent(), explicit.file_name()) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{IPC_DIR_ENV}={} must be an absolute directory path without a trailing `/`, \
+                 `.` or `..`",
+                explicit.display()
+            ),
+        ));
+    };
+
+    // Links above the directory are the user's choice (`/tmp` is one on
+    // macOS); resolving them lets every ancestor be checked as what it is.
+    let parent = parent.canonicalize()?;
+    check_ancestors(&parent, owner)?;
+
+    dbflux_core::local_files::private_dir_at_owned_by(&parent.join(leaf), owner)
+        .map_err(not_private)
+}
+
+/// Every directory above the IPC directory must belong to this user or root
+/// and be closed to writes by everyone, unless sticky like `/tmp`: whoever can
+/// rename an entry in an ancestor can swap the IPC directory after the checks.
+/// Group write is allowed above it, unlike on the directory itself: with the
+/// per-user groups and umask 002 of common distributions, a user's own folders
+/// are group-writable for that user alone.
+#[cfg(unix)]
+fn check_ancestors(parent: &Path, owner: u32) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    for dir in parent.ancestors() {
+        let metadata = std::fs::metadata(dir)?;
+        let trusted_owner = metadata.uid() == owner || metadata.uid() == 0;
+        let others_can_rename = metadata.mode() & 0o002 != 0 && metadata.mode() & 0o1000 == 0;
+
+        if !trusted_owner || others_can_rename {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "IPC socket directory is not private: {} above it can be changed by \
+                     another user",
+                    dir.display()
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_ancestors(_parent: &Path, _owner: u32) -> io::Result<()> {
+    Ok(())
 }
 
 /// The XDG spec requires the runtime directory to belong to the user; one

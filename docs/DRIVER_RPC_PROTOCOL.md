@@ -52,8 +52,10 @@ DBFlux uses local sockets via `interprocess`:
 
 A managed host receives the directory DBFlux uses in `DBFLUX_IPC_DIR` and must
 bind `$DBFLUX_IPC_DIR/<name>`. A host you start yourself must resolve the same
-directory; `$DBFLUX_IPC_DIR` is used exactly as given and must be an absolute
-path. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (or
+directory; `$DBFLUX_IPC_DIR` is used exactly as given and must be a plain
+absolute path (no trailing `/`, no `.` or `..`) whose parent exists, with no
+directory above it that another user can change. An empty value counts as
+unset. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (or
 `auth_provider_socket` / `secret_provider_socket`) does both.
 
 The socket file name depends on the service kind:
@@ -76,7 +78,8 @@ check is made yet.
 
 A host built for an older DBFlux binds the Linux abstract name or `/tmp/<name>`,
 which this version no longer connects to. When a socket is not available, the
-error says that such a host must be updated to listen on the new path.
+error adds that a host built for an older DBFlux may be the cause and must be
+updated to listen on the new path.
 
 Messages are framed as:
 

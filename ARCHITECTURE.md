@@ -440,7 +440,7 @@ crates/
     src/protocol.rs         # Single-instance app-control messages
     src/driver_protocol.rs  # Driver RPC request/response schema (DTOs + errors)
     src/framing.rs          # Length-prefixed postcard transport framing
-    src/socket.rs           # Cross-platform socket naming helpers
+    src/socket/             # Private per-user IPC socket directory, socket names, peer checks
   dbflux_driver_ipc/        # DbDriver adapter for external RPC services
     src/driver.rs           # IpcDriver + managed host lifecycle
     src/transport.rs        # RPC client transport and handshake

@@ -66,7 +66,9 @@ DBFlux usa sockets locales vía `interprocess`:
 Un host gestionado recibe el directorio que usa DBFlux en `DBFLUX_IPC_DIR` y
 debe hacer bind de `$DBFLUX_IPC_DIR/<name>`. Un host que arrancas tú mismo debe
 resolver el mismo directorio; `$DBFLUX_IPC_DIR` se usa tal cual y debe ser una
-ruta absoluta. En Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
+ruta absoluta simple (sin `/` final, sin `.` ni `..`) cuyo directorio padre
+exista, sin ningún directorio por encima que otro usuario pueda cambiar. Un
+valor vacío cuenta como no definido. En Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
 (o `auth_provider_socket` / `secret_provider_socket`) hace ambas cosas.
 
 El nombre del archivo de socket depende del tipo de service:
@@ -90,8 +92,9 @@ Rust. En Windows todavía no se hace ninguna comprobación del peer.
 
 Un host compilado para una versión anterior de DBFlux hace bind del nombre
 abstracto de Linux o de `/tmp/<name>`, donde esta versión ya no se conecta.
-Cuando un socket no está disponible, el error indica que ese host debe
-actualizarse para escuchar en la nueva ruta.
+Cuando un socket no está disponible, el error añade que la causa puede ser un
+host compilado para una versión anterior de DBFlux, que debe actualizarse para
+escuchar en la nueva ruta.
 
 Los mensajes se enmarcan como:
 

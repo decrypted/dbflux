@@ -98,8 +98,9 @@ Por defecto, `AuditService` se ejecuta con estos ajustes:
   connection strings) en `details_json` y `error_message` se reemplazan por
   `[REDACTED]` antes de almacenarse. En `summary`, donde se guardan las líneas
   de log capturadas, se reemplazan las credenciales de URL y de connection
-  strings `clave=valor`; ahí no se aplican los patrones de tokens largos, así
-  que las rutas e identificadores de las líneas de log siguen siendo legibles.
+  strings `clave=valor`, los access key id de AWS y los JWT; ahí no se aplican
+  los patrones genéricos de cadenas hex o base64 largas, así que las rutas e
+  identificadores de las líneas de log siguen siendo legibles.
 - **`capture_query_text = false`**: el texto completo de la query nunca se
   almacena. En su lugar, se guardan un fingerprint SHA256 más la longitud
   original como `[FINGERPRINT:<16-char-hex>]` con `query_length`. Esto evita que

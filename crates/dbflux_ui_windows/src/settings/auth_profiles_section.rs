@@ -75,10 +75,8 @@ pub(super) struct AuthProfilesSection {
     /// `None` for stored (non-reflected) profiles — those use the standard
     /// SQLite save path which has no snapshot concept.
     edit_snapshot: Option<AuthEditSnapshot>,
-    /// Non-`None` when a `save_edit` call returned `Conflict` or `PartialSaved`.
-    /// Contains a human-readable message to display, plus `true` if a Reload
-    /// button should be shown.
-    edit_conflict_msg: Option<(String, bool)>,
+    /// Non-`None` when a `save_edit` call did not fully succeed.
+    edit_conflict_msg: Option<EditBanner>,
 
     input_name: Entity<InputState>,
     form_inputs: HashMap<String, Entity<InputState>>,
@@ -294,6 +292,47 @@ fn resolve_partial_saved_message(
     conflicted: &dbflux_core::AuthEditTarget,
 ) -> String {
     crate::labels::auth_profiles_partial_saved_message(&written.label, &conflicted.label)
+}
+
+/// What the edit banner shows after a save that did not fully succeed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EditBanner {
+    title: String,
+    message: String,
+    /// Reload only helps when the file moved past the form's snapshot: after
+    /// a conflict, or after a two-file edit that wrote its first file. A
+    /// refused write fails the same way after a reload, which would only
+    /// throw the edits away.
+    show_reload: bool,
+}
+
+fn edit_banner_for(outcome: &AuthSaveOutcome) -> Option<EditBanner> {
+    let changed_on_disk = || dbflux_i18n::t!("settings.auth_profiles.changed_on_disk");
+    match outcome {
+        AuthSaveOutcome::Saved => None,
+        AuthSaveOutcome::Conflict { target } => Some(EditBanner {
+            title: changed_on_disk(),
+            message: resolve_conflict_message(target),
+            show_reload: true,
+        }),
+        AuthSaveOutcome::PartialSaved {
+            written,
+            conflicted,
+        } => Some(EditBanner {
+            title: changed_on_disk(),
+            message: resolve_partial_saved_message(written, conflicted),
+            show_reload: true,
+        }),
+        AuthSaveOutcome::Failed {
+            target,
+            written,
+            message,
+        } => Some(EditBanner {
+            title: dbflux_i18n::t!("settings.auth_profiles.save_failed"),
+            message: resolve_write_failed_message(target, written.as_ref(), message),
+            show_reload: written.is_some(),
+        }),
+    }
 }
 
 /// Build the user-visible message for a `Failed` save outcome, naming the
@@ -1739,31 +1778,20 @@ impl AuthProfilesSection {
                 cx.notify();
             }
 
-            AuthSaveOutcome::Conflict { target } => {
-                // Section changed on disk since the form was opened — block save.
-                self.edit_conflict_msg = Some((resolve_conflict_message(&target), true));
+            AuthSaveOutcome::Conflict { .. } | AuthSaveOutcome::PartialSaved { .. } => {
+                self.edit_conflict_msg = edit_banner_for(&outcome);
                 cx.notify();
             }
 
-            AuthSaveOutcome::PartialSaved {
-                written,
-                conflicted,
-            } => {
-                // One resource succeeded; the other conflicted.
-                self.edit_conflict_msg =
-                    Some((resolve_partial_saved_message(&written, &conflicted), true));
-                cx.notify();
-            }
-
-            AuthSaveOutcome::Failed {
-                target,
-                written,
-                message,
-            } => {
-                self.edit_conflict_msg = Some((
-                    resolve_write_failed_message(&target, written.as_ref(), &message),
-                    true,
-                ));
+            AuthSaveOutcome::Failed { .. } => {
+                let banner = edit_banner_for(&outcome);
+                if let Some(banner) = &banner {
+                    report_error(
+                        UserFacingError::new(ErrorKind::Storage, banner.message.clone()),
+                        cx,
+                    );
+                }
+                self.edit_conflict_msg = banner;
                 cx.notify();
             }
         }
@@ -2577,14 +2605,11 @@ impl AuthProfilesSection {
             div()
                 .flex()
                 .flex_col()
-                .when_some(conflict_msg, |content, (msg, show_reload)| {
-                    let mut banner = BannerBlock::new(
-                        BannerVariant::Warning,
-                        dbflux_i18n::t!("settings.auth_profiles.changed_on_disk"),
-                    )
-                    .with_body(msg);
+                .when_some(conflict_msg, |content, edit_banner| {
+                    let mut banner = BannerBlock::new(BannerVariant::Warning, edit_banner.title)
+                        .with_body(edit_banner.message);
 
-                    if show_reload {
+                    if edit_banner.show_reload {
                         banner = banner.with_actions(
                             Button::new(
                                 "edit-reload-profile",
@@ -3855,6 +3880,55 @@ mod tests {
         }
     }
 
+    /// A refused write is not a conflict: it gets its own title and no
+    /// Reload, unless a first file of the edit was already written.
+    #[::core::prelude::v1::test]
+    fn a_failed_save_gets_its_own_banner_without_reload() {
+        let config = dbflux_core::AuthEditTarget {
+            id: "config".to_string(),
+            label: "~/.aws/config".to_string(),
+        };
+        let credentials = dbflux_core::AuthEditTarget {
+            id: "credentials".to_string(),
+            label: "~/.aws/credentials".to_string(),
+        };
+        let changed_on_disk = dbflux_i18n::t!("settings.auth_profiles.changed_on_disk");
+
+        let failed = edit_banner_for(&AuthSaveOutcome::Failed {
+            target: config.clone(),
+            written: None,
+            message: "~/.aws/config is a symbolic link".to_string(),
+        })
+        .expect("banner");
+        assert_ne!(failed.title, changed_on_disk);
+        assert_eq!(
+            failed.title,
+            dbflux_i18n::t!("settings.auth_profiles.save_failed")
+        );
+        assert!(
+            failed.message.contains("symbolic link"),
+            "{}",
+            failed.message
+        );
+        assert!(!failed.show_reload);
+
+        let half_written = edit_banner_for(&AuthSaveOutcome::Failed {
+            target: credentials.clone(),
+            written: Some(config.clone()),
+            message: "permission denied".to_string(),
+        })
+        .expect("banner");
+        assert_ne!(half_written.title, changed_on_disk);
+        assert!(half_written.show_reload);
+
+        let conflict =
+            edit_banner_for(&AuthSaveOutcome::Conflict { target: config }).expect("banner");
+        assert_eq!(conflict.title, changed_on_disk);
+        assert!(conflict.show_reload);
+
+        assert_eq!(edit_banner_for(&AuthSaveOutcome::Saved), None);
+    }
+
     // -----------------------------------------------------------------------
     // W1 — S7: Provider without edit capabilities uses fallback strings
     // -----------------------------------------------------------------------
@@ -4072,6 +4146,7 @@ mod tests {
         "settings.auth_profiles.auth_profile_label",
         "settings.auth_profiles.editor_subtitle",
         "settings.auth_profiles.changed_on_disk",
+        "settings.auth_profiles.save_failed",
         "settings.auth_profiles.reload",
         "settings.auth_profiles.name_label",
         "settings.auth_profiles.provider_label",

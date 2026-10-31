@@ -315,10 +315,11 @@ pub fn sanitize_uri(uri: &str) -> String {
 /// `Server=h;User Id=u;Password=p` or a libpq `host=h password=p` string is
 /// accepted wherever drivers take a URI.
 ///
-/// The libpq pass (pairs end at whitespace) and the ADO pass (pairs end at
-/// `;`) both run, one after the other, because either kind may contain the
-/// other's separator inside a value. Each only replaces values of credential
-/// keys, so the worst case is redacting too much.
+/// The libpq pass (pairs end at whitespace) runs first; the ADO pass (pairs
+/// end at `;`) follows when the text contains a `;`. Either kind may contain
+/// the other's separator inside a value, so neither is picked alone. Each
+/// only replaces values of credential keys, so the worst case is redacting
+/// too much.
 ///
 /// Returns the redacted text and the number of values replaced.
 pub fn redact_connection_credentials(text: &str, replacement: &str) -> (String, usize) {
@@ -334,15 +335,19 @@ pub fn redact_connection_credentials(text: &str, replacement: &str) -> (String, 
     (ado, url_count + libpq_count + ado_count)
 }
 
-fn is_sensitive_connection_key(key: &str) -> bool {
+fn is_exact_credential_key(key: &str) -> bool {
     SENSITIVE_URI_PARAMETERS
         .iter()
         .any(|name| key.eq_ignore_ascii_case(name))
-        // `sslpassword`, `User Password`, ...
-        || key.to_ascii_lowercase().ends_with("password")
 }
 
-/// A flag such as `save_password=true` in a log line is not a secret.
+fn is_sensitive_connection_key(key: &str) -> bool {
+    // `sslpassword`, `User Password`, ...
+    is_exact_credential_key(key) || key.to_ascii_lowercase().ends_with("password")
+}
+
+/// A flag such as `save_password=true` in a log line is not a secret. Only
+/// compound keys get this exemption: `Password=true` is a password.
 fn is_flag_value(value: &str) -> bool {
     let value = value.trim().trim_end_matches([',', '.', ')']);
     value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false")
@@ -422,9 +427,10 @@ fn redact_key_value_credentials(
             value_start + connection_value_length(&rest[value_start..], is_pair_separator);
         let value = &rest[value_start..value_end];
 
-        if is_sensitive_connection_key(key.trim())
+        let key = key.trim();
+        if is_sensitive_connection_key(key)
             && !value.trim().is_empty()
-            && !is_flag_value(value)
+            && (is_exact_credential_key(key) || !is_flag_value(value))
         {
             let leading = value.len() - value.trim_start().len();
             output.push_str(&rest[..value_start + leading]);
@@ -948,6 +954,18 @@ mod tests {
             "Saving profile: save_password=true, has_password=false"
         );
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn a_password_that_is_literally_true_or_false_is_still_redacted() {
+        assert_eq!(
+            sanitize_uri("Server=h;User Id=sa;Password=False;"),
+            "Server=h;User Id=sa;Password=***;"
+        );
+        assert_eq!(
+            sanitize_uri("host=db password=true"),
+            "host=db password=***"
+        );
     }
 
     #[test]

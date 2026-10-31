@@ -195,8 +195,8 @@ del comando, donde un proxy de acceso imprime su URL de inicio de sesión, solo
 se registra en el nivel debug, para que las URL de un solo uso y los tokens no
 acaben en el log de auditoría; ejecuta DBFlux con `RUST_LOG=debug` para verla.
 Si el handshake SSH a través del comando falla, el error muestra sus tres
-últimas líneas, acortadas, con las URL reducidas a su host y las credenciales
-sustituidas por `***`. El log solo nombra el programa que ejecuta el comando; la
+últimas líneas, acortadas, con las URL reducidas a su host (y otras query strings
+eliminadas) y las credenciales sustituidas por `***`. El log solo nombra el programa que ejecuta el comando; la
 línea de comando completa, que puede llevar un token de acceso, solo se
 registra en el nivel debug.
 

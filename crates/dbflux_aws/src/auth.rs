@@ -1068,13 +1068,12 @@ fn apply_value_source_endpoint_edit(
 }
 
 /// A failed write is not a conflict: a reload cannot fix a symlinked or
-/// unwritable file, so the reason has to reach the user.
+/// unwritable file, so the reason has to reach the user, whose UI reports it.
 fn write_failed(
     file: AwsEditFileKind,
     written: Option<dbflux_core::auth::AuthEditTarget>,
     error: &std::io::Error,
 ) -> AuthSaveOutcome {
-    log::warn!("Saving the AWS auth profile failed: {error}");
     AuthSaveOutcome::Failed {
         target: file.to_target(),
         written,

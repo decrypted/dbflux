@@ -94,8 +94,8 @@ pub enum AuthSaveOutcome {
     /// Writing `target` failed for a reason a reload cannot fix, such as a
     /// file that is a symbolic link or a permission error. `written` names a
     /// resource of a two-resource edit that was written before; it is not
-    /// rolled back. `message` names the file and the reason and never
-    /// carries file content.
+    /// rolled back. `message` is the I/O error text, shown together with the
+    /// target's label; it never carries file content.
     Failed {
         target: AuthEditTarget,
         written: Option<AuthEditTarget>,

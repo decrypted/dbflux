@@ -18,7 +18,7 @@ use thiserror::Error;
 use crate::export::{AuditExportFormat, export_entries};
 use crate::purge::{PurgeStats, purge_old_events};
 use crate::query::AuditQueryFilter;
-use crate::redaction::{redact_error_message, redact_json};
+use crate::redaction::{redact_error_message, redact_json, redact_log_line};
 use crate::store::sqlite::SqliteAuditStore;
 
 pub use crate::query::{AuditAggregateParams, AuditGroupColumn};
@@ -632,14 +632,10 @@ impl AuditService {
     /// error_message.
     fn apply_redaction(&self, mut event: EventRecord) -> EventRecord {
         // Captured log lines become events with the log message as summary,
-        // so a connection string with credentials in a log line lands here
-        // too. Only credential syntax is redacted: the entropy patterns used
-        // for error messages would also eat ordinary paths and identifiers
-        // in log lines.
-        let (summary, redactions) =
-            dbflux_core::redact_connection_credentials(&event.summary, "[REDACTED]");
-        if redactions > 0 {
-            event.summary = summary;
+        // so a connection string or token in a log line lands here too.
+        let result = redact_log_line(&event.summary);
+        if result.redaction_count > 0 {
+            event.summary = result.redacted;
         }
 
         // Redact sensitive values in details_json

@@ -97,13 +97,43 @@ impl StderrTail {
 ///
 /// The error of a failed connect is stored in the audit log, and a login or
 /// device URL can carry its one-time code in the path or under any query
-/// parameter, so URLs keep only their scheme and host. Credentials in
-/// `key=value` form are redacted too. Both happen before the line is
-/// shortened, so a cut cannot hide a secret from them.
+/// parameter. So URLs with a scheme keep only their scheme and host, also
+/// when JSON-escaped (`https:\/\/`), any other query string is dropped, and
+/// credentials in `key=value` form are redacted. All of it happens before
+/// the line is shortened, so a cut cannot hide a secret from it.
 fn tail_line(line: &str) -> String {
-    shorten(&dbflux_core::sanitize_uri(&reduce_urls_to_host(
-        line.trim_end(),
-    )))
+    let unescaped = line.trim_end().replace("\\/", "/");
+    let reduced = drop_query_strings(&reduce_urls_to_host(&unescaped));
+    shorten(&dbflux_core::sanitize_uri(&reduced))
+}
+
+/// Replaces `?key=...` up to the end of the word with `?…`, for URLs written
+/// without a scheme (`login.example.com/activate?code=...`).
+fn drop_query_strings(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while let Some(question) = rest.find('?') {
+        let (before, after) = rest.split_at(question);
+        output.push_str(before);
+
+        let query = &after[1..];
+        let query_end = query
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>'))
+            .unwrap_or(query.len());
+        let (word, remainder) = query.split_at(query_end);
+
+        if word.contains('=') {
+            output.push_str("?…");
+        } else {
+            output.push('?');
+            output.push_str(word);
+        }
+        rest = remainder;
+    }
+
+    output.push_str(rest);
+    output
 }
 
 /// Replaces every `scheme://[user@]host...` with `scheme://host/…`.
@@ -403,6 +433,17 @@ mod tests {
             "auth failed: password=***"
         );
         assert_eq!(tail_line("no url here"), "no url here");
+        assert_eq!(
+            tail_line(
+                r#"{"verification_uri_complete":"https:\/\/device.sso.example\/?user_code=WDJB-MJHT"}"#
+            ),
+            r#"{"verification_uri_complete":"https://device.sso.example/…"}"#
+        );
+        assert_eq!(
+            tail_line("visit login.example.com/activate?code=WDJB-MJHT now"),
+            "visit login.example.com/activate?… now"
+        );
+        assert_eq!(tail_line("are you sure? yes"), "are you sure? yes");
     }
 
     /// Redaction runs before the cut, so a secret past the cut point cannot

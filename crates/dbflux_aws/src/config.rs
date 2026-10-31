@@ -623,25 +623,33 @@ fn is_legacy_backup_name(name: &str) -> bool {
 }
 
 /// Whether a legacy backup is a copy of the credentials file rather than of
-/// the config file.
+/// the config file: it holds access keys and has no `[profile ...]` or
+/// `[sso-session ...]` header, which only the config file uses. A config file
+/// may hold static keys inside a `[profile ...]` section.
 fn holds_credentials(path: &Path) -> bool {
     use std::io::Read as _;
 
     let mut head = Vec::new();
     let read = open_no_follow(path).and_then(|file| file.take(64 * 1024).read_to_end(&mut head));
-    if read.is_err() {
+    if let Err(err) = read {
+        log::warn!("Could not read old AWS backup {}: {err}", path.display());
         return false;
     }
     let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
-    head.contains("aws_secret_access_key") || head.contains("aws_access_key_id")
+    let has_keys = head.contains("aws_secret_access_key") || head.contains("aws_access_key_id");
+    let has_config_header = head
+        .lines()
+        .map(str::trim_start)
+        .any(|line| line.starts_with("[profile ") || line.starts_with("[sso-session "));
+    has_keys && !has_config_header
 }
 
 /// Whether `name` is a timestamped backup of `file` at `path`.
 ///
 /// Legacy `config.dbflux-backup.<secs>` files are told apart by content: a
 /// copy of the credentials file counts against the credentials cap, so a
-/// credentials save prunes old keys and a config save never deletes real
-/// config backups to keep them.
+/// credentials save prunes old keys, and a config save does not count those
+/// copies towards its own cap.
 fn is_own_rolling_backup(file: AwsFile, prefix: &str, name: &str, entry: &Path) -> bool {
     let legacy = is_legacy_backup_name(name);
     match file {
@@ -656,7 +664,22 @@ fn is_own_rolling_backup(file: AwsFile, prefix: &str, name: &str, entry: &Path) 
 
 /// Deletes all but the newest [`ROLLING_BACKUPS_KEPT`] timestamped backups of
 /// `path`. The first backup is never touched.
+///
+/// A config save also caps the legacy copies of the credentials file, as a
+/// group of their own: someone who now only edits SSO profiles never writes
+/// the credentials file, and those copies hold old access keys.
 fn prune_rolling_backups(path: &Path, file: AwsFile) {
+    prune_backups_matching(path, |prefix, name, entry| {
+        is_own_rolling_backup(file, prefix, name, entry)
+    });
+    if file == AwsFile::Config {
+        prune_backups_matching(path, |_, name, entry| {
+            is_legacy_backup_name(name) && holds_credentials(entry)
+        });
+    }
+}
+
+fn prune_backups_matching(path: &Path, matches: impl Fn(&str, &str, &Path) -> bool) {
     let (Some(dir), Some(prefix)) = (path.parent(), rolling_backup_prefix(path)) else {
         return;
     };
@@ -682,7 +705,7 @@ fn prune_rolling_backups(path: &Path, file: AwsFile) {
             // `DirEntry::metadata` does not follow symlinks, so only regular
             // files DBFlux could have written are candidates.
             let metadata = entry.metadata().ok().filter(|m| m.is_file())?;
-            if !is_own_rolling_backup(file, &prefix, name, &entry.path()) {
+            if !matches(&prefix, name, &entry.path()) {
                 return None;
             }
             let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
@@ -3435,6 +3458,53 @@ output=json
         let surviving_configs: Vec<_> = old_configs.iter().filter(|path| path.exists()).collect();
         assert_eq!(surviving_configs, [&old_configs[2], &old_configs[3]]);
         assert!(old_keys[3].exists() && old_keys[4].exists());
+    }
+
+    /// A config backup with static keys in a `[profile ...]` section is a
+    /// config backup, and a config save also caps old credentials copies
+    /// for someone who never saves the credentials file.
+    #[test]
+    fn config_saves_classify_key_bearing_profiles_and_cap_old_key_copies() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("config");
+        std::fs::write(&config, "[profile a]\nregion = us-east-1\n").expect("seed config");
+        std::fs::write(config.with_extension("dbflux-backup"), "original config").expect("base");
+
+        let legacy = |stamp: i64, content: &str| {
+            let path = dir.path().join(format!("config.dbflux-backup.{stamp}"));
+            std::fs::write(&path, content).expect("legacy");
+            filetime::set_file_mtime(&path, filetime::FileTime::from_unix_time(stamp, 0))
+                .expect("mtime");
+            path
+        };
+        let old_keys: Vec<PathBuf> = (0..5)
+            .map(|n| {
+                legacy(
+                    1_700_000_000 + n,
+                    &format!("[a]\naws_secret_access_key = OLDKEY{n}\n"),
+                )
+            })
+            .collect();
+        let keyed_configs: Vec<PathBuf> = (0..4)
+            .map(|n| {
+                legacy(
+                    1_700_000_100 + n,
+                    "[profile a]\naws_access_key_id = AKIAOLD\nregion = eu-west-1\n",
+                )
+            })
+            .collect();
+
+        update_aws_config_atomic(&config, |existing| {
+            existing.replace("us-east-1", "us-west-2")
+        })
+        .expect("config write");
+
+        // Config cap: the new backup plus the two newest keyed config backups.
+        let surviving_configs: Vec<_> = keyed_configs.iter().filter(|path| path.exists()).collect();
+        assert_eq!(surviving_configs, [&keyed_configs[2], &keyed_configs[3]]);
+        // Old key copies are capped on their own, not against the config cap.
+        let surviving_keys: Vec<_> = old_keys.iter().filter(|path| path.exists()).collect();
+        assert_eq!(surviving_keys, [&old_keys[2], &old_keys[3], &old_keys[4]]);
     }
 
     /// A failed rename leaves the original content and no temp file behind.

@@ -4843,6 +4843,7 @@ settings:
     auth_profile_label: Perfil de autenticação
     editor_subtitle: Perfil de autenticação reutilizável para acesso e resolução de valores
     changed_on_disk: Perfil alterado em disco
+    save_failed: Perfil não salvo
     reload: Recarregar
     name_label: Nome
     provider_label: Provedor

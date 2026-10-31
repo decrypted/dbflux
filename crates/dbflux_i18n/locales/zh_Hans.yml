@@ -4843,6 +4843,7 @@ settings:
     auth_profile_label: 认证配置文件
     editor_subtitle: 用于访问与值解析的可复用认证配置文件
     changed_on_disk: 配置文件已在磁盘上更改
+    save_failed: 配置文件未保存
     reload: 重新加载
     name_label: 名称
     provider_label: 提供程序

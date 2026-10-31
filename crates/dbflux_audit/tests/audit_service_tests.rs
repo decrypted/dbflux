@@ -847,6 +847,14 @@ fn summary_redaction_covers_key_value_strings_and_keeps_paths() {
 
     let path = "Opened /home/alice/Projects/analytics/warehouse/queries/x.sql";
     assert_eq!(record(path), path);
+
+    let key = record("using key AKIAIOSFODNN7EXAMPLE for the upload");
+    assert!(!key.contains("AKIAIOSFODNN7EXAMPLE"), "{key}");
+
+    let jwt = record(
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    );
+    assert!(!jwt.contains("eyJhbGci"), "{jwt}");
 }
 
 #[test]

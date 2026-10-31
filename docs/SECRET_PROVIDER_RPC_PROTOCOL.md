@@ -54,7 +54,7 @@ with the reserved ids `aws-secrets-manager` and `aws-ssm`, and keep working unch
 |---|---|
 | Socket name | `dbflux-secret-provider-<socket_id>.sock`, or `dbflux-secret-provider-<socket_id>-debug.sock` from a debug build |
 | Location | As for drivers: a Unix socket file in the private IPC directory (`$DBFLUX_IPC_DIR`, else `$XDG_RUNTIME_DIR/dbflux/`, else `dbflux-ipc/` in the user cache directory), or a named pipe on Windows; see [Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md#transport) |
-| Peer check | DBFlux refuses a provider that runs as another user before sending `Hello`; refuse clients of other users the same way |
+| Peer check | On Linux and macOS DBFlux refuses a provider that runs as another user before sending `Hello`; refuse clients of other users the same way. On Windows no peer check is made yet |
 | Framing | 4-byte little-endian `u32` length, then a postcard payload; 16 MiB maximum |
 | Connections | One connection per request: DBFlux connects, sends one envelope, reads one response, closes |
 | Auth token | Sent in `Hello.auth_token`; a managed host receives it in `DBFLUX_SECRET_PROVIDER_RPC_AUTH_TOKEN` |

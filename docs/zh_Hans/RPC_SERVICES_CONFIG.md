@@ -94,7 +94,8 @@ CREATE TABLE cfg_service_env (
 - `socket_id`（必填）：DBFlux 与服务共同使用的本地 Socket 名称。
   - 允许的字符：ASCII 字母、数字、`.`、`_`、`-`
   - 路径分隔符、空格及其他标点会被拒绝。
-  - 该值会作为私有 IPC 目录中的 Socket 文件名（参见 [Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md#传输层)）；完整路径不能超过平台限制（Linux 107 字节，macOS 103 字节），因此应保持简短且稳定。
+  - 该值决定私有 IPC 目录中的 Socket 文件名（参见 [Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md#传输层)）：驱动原样使用 `<socket_id>`，认证提供者使用 `dbflux-auth-provider-<socket_id>.sock`，密钥提供者使用 `dbflux-secret-provider-<socket_id>.sock`（调试构建在 `.sock` 前加 `-debug`）。
+  - 包含前缀在内的完整路径不能超过平台限制（Linux 107 字节，macOS 103 字节），因此应保持简短且稳定。
 - `command`（可选）：DBFlux 需要启动服务时运行的可执行文件。
   - 若省略该项且 `args` 也为空，DBFlux 会认为服务已在运行，不会启动任何进程。
   - 对于 `driver`，若省略该项而 `args` 非空，DBFlux 会启动 `dbflux-driver-host`。

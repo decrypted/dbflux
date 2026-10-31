@@ -48,10 +48,28 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
   `0700` 权限创建该目录，并拒绝符号链接、属于其他用户或其他用户可写的目录。
 - **Windows**：命名管道（`\\.\pipe\<name>`）
 
-受管主机通过 `DBFLUX_IPC_DIR` 获得该目录，必须绑定 `$DBFLUX_IPC_DIR/<name>`。
-双方都会校验对端：DBFlux 在发送携带认证令牌的 `Hello` 之前拒绝以其他用户身份运行的服务端，
-`dbflux-driver-host` 会断开其他用户的客户端。为旧版本构建的主机监听 Linux 抽象名称或
-`/tmp/<name>`，本版本不再连接；在 Linux 上错误信息会指出这一点。
+受管主机通过 `DBFLUX_IPC_DIR` 获得 DBFlux 使用的目录，必须绑定
+`$DBFLUX_IPC_DIR/<name>`。手动启动的主机也必须解析出同一目录；`$DBFLUX_IPC_DIR`
+按原样使用，且必须是绝对路径。在 Rust 中，`dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
+（或 `auth_provider_socket` / `secret_provider_socket`）会同时处理这两点。
+
+Socket 文件名取决于服务类型：
+
+| 类型 | 文件名 |
+|---|---|
+| 驱动 | 原样使用 `<socket_id>` |
+| 认证提供者 | `dbflux-auth-provider-<socket_id>.sock` |
+| 密钥提供者 | `dbflux-secret-provider-<socket_id>.sock` |
+
+DBFlux 的调试构建会在提供者名称的 `.sock` 前加上 `-debug`。完整路径必须符合平台限制：
+Linux 107 字节，macOS 103 字节。
+
+在 Linux 和 macOS 上，双方都会校验对端。DBFlux 在发送携带认证令牌的 `Hello` 之前拒绝以其他用户身份运行的服务端，
+`dbflux-driver-host` 会在读取帧之前断开其他用户的客户端。主机也应做同样的校验：Linux 上用
+`SO_PEERCRED`，macOS 上用 `getpeereid`，Rust 中用 `dbflux_ipc::verify_peer`。Windows 上目前尚不做对端校验。
+
+为旧版本 DBFlux 构建的主机绑定 Linux 抽象名称或 `/tmp/<name>`，本版本不再连接这些位置。
+当 Socket 不可用时，错误信息会提示必须更新此类主机以监听新路径。
 
 消息帧格式如下：
 
@@ -423,7 +441,7 @@ DBFlux 关闭时：
 
 你的服务应当：
 
-1. 通过 `interprocess` 绑定 Socket
+1. 在私有 IPC 目录中绑定 Socket（参见[传输层](#传输层)），并拒绝其他用户的对端
 2. 处理 `Hello` 并返回元数据与 `kind`
 3. 在 `Hello` 中返回表单定义
 4. 处理 `OpenSession` / `CloseSession`

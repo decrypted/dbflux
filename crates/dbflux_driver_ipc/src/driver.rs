@@ -87,9 +87,9 @@ pub fn shutdown_managed_hosts() -> usize {
 
 /// An IPC-based driver that proxies all operations to a remote driver-host process.
 ///
-/// The driver connects to a driver-host over a local socket identified by a
-/// string name (not a filesystem path). The underlying transport is cross-platform:
-/// abstract namespace UDS on Linux, UDS in /tmp on macOS, named pipes on Windows.
+/// The driver connects to a driver host over the local socket named by the
+/// service's `socket_id`: a socket file in the private IPC directory on Linux
+/// and macOS (see `dbflux_ipc::socket`), a named pipe on Windows.
 ///
 /// `kind`, `metadata`, and `form_definition` are provided at construction time
 /// (typically from a probe against the driver host), so the driver can satisfy

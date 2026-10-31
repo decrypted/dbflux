@@ -1677,7 +1677,9 @@ mod tests {
         let (result_tx, result_rx) = mpsc::channel();
         let prober = std::thread::spawn(move || {
             let result = IpcDriver::probe_driver(&socket_id, None).map(|_| ());
-            let _ = result_tx.send(result);
+            result_tx
+                .send(result)
+                .expect("the test waits for the probe result");
         });
 
         let received = bytes_received_by_squatter(&old_host, || prober.is_finished());

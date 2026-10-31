@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 #![recursion_limit = "256"]
 
+mod app_control;
 mod cli;
 #[cfg(unix)]
 mod shell_path;
@@ -278,7 +279,7 @@ fn main() {
     }
 
     if args.get(1).map(|s| s.as_str()) == Some("--gui") {
-        run_gui();
+        run_gui(false);
         return;
     }
 
@@ -287,7 +288,7 @@ fn main() {
             return;
         }
 
-        run_gui();
+        run_gui(true);
         return;
     }
 
@@ -306,9 +307,11 @@ fn focus_running_instance() -> bool {
         return false;
     };
 
-    // A peer that accepts but never answers must not hang the launch. Best
-    // effort: Windows named pipes have no timeouts and report an error.
-    let _ = stream.set_recv_timeout(Some(APP_CONTROL_REPLY_TIMEOUT));
+    // A peer that accepts but never answers must not hang the launch. Windows
+    // named pipes have no timeouts and report an error.
+    if let Err(error) = stream.set_recv_timeout(Some(APP_CONTROL_REPLY_TIMEOUT)) {
+        log::debug!("app-control reply timeout not applied: {error}");
+    }
 
     send_focus_request(&mut stream, 1).is_ok()
 }
@@ -360,7 +363,7 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
               initialization runs under its guard, so panic-freedom is an \
               assumption, not a mutex guarantee"
 )]
-fn run_gui() {
+fn run_gui(running_instance_checked: bool) {
     // Runs first: it sets PATH, which is only sound before any other thread
     // exists, and the tracing bridge below may start one.
     #[cfg(unix)]
@@ -392,23 +395,20 @@ fn run_gui() {
     shell_path_import.log();
 
     // Before the token is rewritten: the running instance only accepts the
-    // token it wrote itself.
-    if focus_running_instance() {
+    // token it wrote itself. A plain launch already asked, so a window that
+    // accepts but never answers costs one reply timeout, not two.
+    if !running_instance_checked && focus_running_instance() {
         std::process::exit(0);
     }
 
-    let auth_token = match init_process_auth_tokens() {
-        Ok(token) => token,
-        Err(error) => {
-            eprintln!("Failed to initialize IPC auth token: {}", error);
-            std::process::exit(1);
-        }
-    };
-
-    let listener = match bind_ipc_socket() {
-        Ok(l) => l,
-        Err(()) => std::process::exit(1),
-    };
+    let (listener, auth_token) =
+        match app_control::claim_app_control(|| bind_ipc_socket().ok(), init_process_auth_tokens) {
+            Ok(claimed) => claimed,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        };
 
     info!("IPC socket bound successfully");
 

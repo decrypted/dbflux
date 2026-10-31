@@ -40,8 +40,11 @@ pub(crate) fn run(args: &[String]) -> i32 {
 fn try_send(path: Option<&PathBuf>) -> io::Result<()> {
     // A peer that is not this user is refused before the token is sent.
     let mut stream = app_control_socket()?.connect()?;
-    // Best effort: Windows named pipes have no timeouts and report an error.
-    let _ = stream.set_recv_timeout(Some(REPLY_TIMEOUT));
+    // Windows named pipes have no timeouts and report an error; the read then
+    // simply has no limit, as before.
+    if let Err(error) = stream.set_recv_timeout(Some(REPLY_TIMEOUT)) {
+        log::debug!("app-control reply timeout not applied: {error}");
+    }
 
     let msg = match path {
         Some(p) => IpcMessage::OpenScript { path: p.clone() },

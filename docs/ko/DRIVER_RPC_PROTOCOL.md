@@ -49,11 +49,32 @@ DBFlux는 `interprocess`를 통해 로컬 소켓을 사용합니다:
   심볼릭 링크이거나 다른 사용자 소유이거나 다른 사용자가 쓸 수 있는 디렉터리는 거부합니다.
 - **Windows**: 네임드 파이프 (`\\.\pipe\<name>`)
 
-관리형 호스트는 `DBFLUX_IPC_DIR`로 디렉터리를 전달받으며 `$DBFLUX_IPC_DIR/<name>`에
-바인드해야 합니다. 양쪽 모두 상대를 확인합니다. DBFlux는 인증 토큰이 담긴 `Hello`를
-보내기 전에 다른 사용자로 실행 중인 서버를 거부하고, `dbflux-driver-host`는 다른
-사용자의 클라이언트를 끊습니다. 이전 버전용 호스트는 Linux 추상 이름이나
-`/tmp/<name>`에서 대기하므로 이 버전은 연결하지 않으며, Linux에서는 오류 메시지가 이를 알려 줍니다.
+관리형 호스트는 DBFlux가 사용하는 디렉터리를 `DBFLUX_IPC_DIR`로 전달받으며
+`$DBFLUX_IPC_DIR/<name>`에 바인드해야 합니다. 직접 실행하는 호스트도 같은 디렉터리를
+찾아야 합니다. `$DBFLUX_IPC_DIR`는 주어진 그대로 사용되며 절대 경로여야 합니다.
+Rust에서는 `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`(또는
+`auth_provider_socket` / `secret_provider_socket`)이 두 가지를 모두 처리합니다.
+
+소켓 파일 이름은 서비스 종류에 따라 다릅니다:
+
+| 종류 | 파일 이름 |
+|---|---|
+| 드라이버 | `<socket_id>` 그대로 |
+| 인증 제공자 | `dbflux-auth-provider-<socket_id>.sock` |
+| 시크릿 제공자 | `dbflux-secret-provider-<socket_id>.sock` |
+
+DBFlux 디버그 빌드는 제공자 이름의 `.sock` 앞에 `-debug`를 붙입니다. 전체 경로는
+플랫폼 한도(Linux 107바이트, macOS 103바이트)를 넘으면 안 됩니다.
+
+Linux와 macOS에서는 양쪽 모두 상대를 확인합니다. DBFlux는 인증 토큰이 담긴 `Hello`를
+보내기 전에 다른 사용자로 실행 중인 서버를 거부하고, `dbflux-driver-host`는 프레임을
+읽기 전에 다른 사용자의 클라이언트를 끊습니다. 호스트도 같은 확인을 해야 합니다:
+Linux는 `SO_PEERCRED`, macOS는 `getpeereid`, Rust에서는 `dbflux_ipc::verify_peer`.
+Windows에서는 아직 상대 확인을 하지 않습니다.
+
+이전 버전용으로 빌드된 호스트는 Linux 추상 이름이나 `/tmp/<name>`에 바인드하며, 이
+버전은 그곳에 연결하지 않습니다. 소켓을 사용할 수 없을 때 오류 메시지는 그런 호스트를
+새 경로에서 대기하도록 업데이트해야 한다고 알려 줍니다.
 
 메시지는 다음처럼 프레이밍됩니다:
 
@@ -425,7 +446,7 @@ DBFlux 종료 시:
 
 서비스는 다음을 수행해야 합니다:
 
-1. `interprocess`로 소켓을 바인딩합니다
+1. 비공개 IPC 디렉터리에 소켓을 바인딩하고([전송](#전송) 참고) 다른 사용자의 상대를 거부합니다
 2. `Hello`를 처리하고 메타데이터/종류를 반환합니다
 3. `Hello`에서 폼 정의를 반환합니다
 4. `OpenSession`/`CloseSession`을 처리합니다

@@ -75,8 +75,15 @@ fn handle_connection(
     cmd_tx: &Sender<IpcCommand>,
     expected_auth_token: &str,
 ) -> io::Result<()> {
-    // Best effort: Windows named pipes have no timeouts and report an error.
-    let _ = stream.set_recv_timeout(Some(REQUEST_READ_TIMEOUT));
+    // Windows named pipes have no timeouts and report an error; elsewhere a
+    // failure means a silent client can hold the channel, so say so.
+    if let Err(error) = stream.set_recv_timeout(Some(REQUEST_READ_TIMEOUT)) {
+        if cfg!(windows) {
+            log::debug!("IPC read timeout not applied: {error}");
+        } else {
+            log::warn!("IPC read timeout not applied: {error}");
+        }
+    }
     let request: AppControlRequest = framing::recv_msg(&mut stream)?;
     let request_id = request.request_id;
 

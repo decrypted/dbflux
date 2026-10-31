@@ -35,6 +35,15 @@ pub fn private_dir_in_owned_by(parent: &Path, name: &str, owner: u32) -> io::Res
     Ok(path)
 }
 
+/// `path` itself as a directory only `owner` can use, with the checks of
+/// [`private_dir_in`] but no rewriting of the name: for a directory the user
+/// configured, which other programs locate by the exact same path. The parent
+/// must exist. `owner` is ignored outside Unix.
+pub fn private_dir_at_owned_by(path: &Path, owner: u32) -> io::Result<PathBuf> {
+    ensure_private_dir(path, owner)?;
+    Ok(path.to_path_buf())
+}
+
 /// Creates a new, empty file only this user can read and write, named
 /// `name` in `directory` or the first [`SafeFileName::numbered`] form of it
 /// that is free, and returns its path.

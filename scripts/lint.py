@@ -40,7 +40,7 @@ absolute or `..` name writes outside the directory; such names become
 `dbflux_core::local_files::SafeFileName` and are placed with `confined_join`.
 
 `abstract-sockets` fails on every namespaced local-socket name built anywhere
-under `crates/` or `examples/`, tests included, outside `crates/dbflux_ipc/src/socket.rs`.
+under `crates/` or `examples/`, tests included, outside `crates/dbflux_ipc/src/socket/mod.rs`.
 A Linux abstract socket (and the `/tmp` file `interprocess` uses for such a
 name on macOS) has no owner, so another local user can bind it first and
 receive the token and secrets sent to it; every socket comes from the
@@ -60,7 +60,7 @@ MOUSE_DOWN_ALLOWLIST = ROOT / "scripts" / "mouse_down_allowlist.txt"
 UNQUOTED_SQL_ALLOWLIST = ROOT / "scripts" / "unquoted_sql_allowlist.txt"
 FILE_NAME_ALLOWLIST = ROOT / "scripts" / "file_name_allowlist.txt"
 FILE_NAME_EXEMPT = ("crates/dbflux_core/src/local_files/",)
-ABSTRACT_SOCKET_HELPER = "crates/dbflux_ipc/src/socket.rs"
+ABSTRACT_SOCKET_HELPER = "crates/dbflux_ipc/src/socket/mod.rs"
 ABSTRACT_SOCKET_NAME = re.compile(
     r"\b(?:GenericNamespaced|AbstractNsUdSocket|SpecialDirUdSocket|NamespacedNameType|ToNsName"
     r"|to_ns_name|from_abstract_name|from_abstract_namespace)\b"
@@ -570,7 +570,7 @@ def main() -> int:
 
     subcommands.add_parser(
         "abstract-sockets",
-        help="Fail on namespaced local-socket names outside crates/dbflux_ipc/src/socket.rs",
+        help="Fail on namespaced local-socket names outside crates/dbflux_ipc/src/socket/mod.rs",
     )
 
     arguments, extra = parser.parse_known_args()

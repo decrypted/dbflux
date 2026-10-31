@@ -52,18 +52,31 @@ DBFlux uses local sockets via `interprocess`:
 
 A managed host receives the directory DBFlux uses in `DBFLUX_IPC_DIR` and must
 bind `$DBFLUX_IPC_DIR/<name>`. A host you start yourself must resolve the same
-directory. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (or
+directory; `$DBFLUX_IPC_DIR` is used exactly as given and must be an absolute
+path. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (or
 `auth_provider_socket` / `secret_provider_socket`) does both.
 
-Both ends check who is on the other side. DBFlux refuses a server that runs as
-another user before it sends `Hello`, which carries the auth token, and
-`dbflux-driver-host` drops clients of other users before reading a frame. A
-host should do the same: `SO_PEERCRED` on Linux, `getpeereid` on macOS, or
-`dbflux_ipc::verify_peer` in Rust.
+The socket file name depends on the service kind:
+
+| Kind | File name |
+|---|---|
+| Driver | `<socket_id>` as-is |
+| Auth provider | `dbflux-auth-provider-<socket_id>.sock` |
+| Secret provider | `dbflux-secret-provider-<socket_id>.sock` |
+
+A debug build of DBFlux puts `-debug` before `.sock` in the provider names.
+The whole path must fit the platform limit: 107 bytes on Linux, 103 on macOS.
+
+On Linux and macOS both ends check who is on the other side. DBFlux refuses a
+server that runs as another user before it sends `Hello`, which carries the
+auth token, and `dbflux-driver-host` drops clients of other users before
+reading a frame. A host should do the same: `SO_PEERCRED` on Linux,
+`getpeereid` on macOS, or `dbflux_ipc::verify_peer` in Rust. On Windows no peer
+check is made yet.
 
 A host built for an older DBFlux binds the Linux abstract name or `/tmp/<name>`,
-which this version no longer connects to. When DBFlux sees such a host on
-Linux, the error says that a host is listening on the old socket name.
+which this version no longer connects to. When a socket is not available, the
+error says that such a host must be updated to listen on the new path.
 
 Messages are framed as:
 

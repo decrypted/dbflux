@@ -63,12 +63,35 @@ DBFlux usa sockets locales vía `interprocess`:
   pertenezca a otro usuario o que otros puedan escribir.
 - **Windows**: named pipes (`\\.\pipe\<name>`)
 
-Un host gestionado recibe el directorio en `DBFLUX_IPC_DIR` y debe enlazar
-`$DBFLUX_IPC_DIR/<name>`. Ambos extremos comprueban al otro: DBFlux rechaza un
-servidor que corre como otro usuario antes de enviar `Hello` (que lleva el token
-de autenticación), y `dbflux-driver-host` descarta clientes de otros usuarios.
-Un host de una versión anterior escucha en el nombre abstracto de Linux o en
-`/tmp/<name>`, donde esta versión ya no se conecta; en Linux el error lo indica.
+Un host gestionado recibe el directorio que usa DBFlux en `DBFLUX_IPC_DIR` y
+debe hacer bind de `$DBFLUX_IPC_DIR/<name>`. Un host que arrancas tú mismo debe
+resolver el mismo directorio; `$DBFLUX_IPC_DIR` se usa tal cual y debe ser una
+ruta absoluta. En Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
+(o `auth_provider_socket` / `secret_provider_socket`) hace ambas cosas.
+
+El nombre del archivo de socket depende del tipo de service:
+
+| Tipo | Nombre de archivo |
+|---|---|
+| Driver | `<socket_id>` tal cual |
+| Auth provider | `dbflux-auth-provider-<socket_id>.sock` |
+| Secret provider | `dbflux-secret-provider-<socket_id>.sock` |
+
+Una build de debug de DBFlux pone `-debug` antes de `.sock` en los nombres de
+los providers. La ruta completa debe caber en el límite de la plataforma: 107
+bytes en Linux, 103 en macOS.
+
+En Linux y macOS ambos extremos comprueban quién está al otro lado. DBFlux
+rechaza un servidor que corre como otro usuario antes de enviar `Hello`, que
+lleva el token de autenticación, y `dbflux-driver-host` descarta clientes de
+otros usuarios antes de leer un frame. Un host debería hacer lo mismo:
+`SO_PEERCRED` en Linux, `getpeereid` en macOS, o `dbflux_ipc::verify_peer` en
+Rust. En Windows todavía no se hace ninguna comprobación del peer.
+
+Un host compilado para una versión anterior de DBFlux hace bind del nombre
+abstracto de Linux o de `/tmp/<name>`, donde esta versión ya no se conecta.
+Cuando un socket no está disponible, el error indica que ese host debe
+actualizarse para escuchar en la nueva ruta.
 
 Los mensajes se enmarcan como:
 
@@ -600,7 +623,7 @@ del stdout/stderr reciente para ayudar en el diagnóstico.
 
 Tu servicio debería:
 
-1. hacer bind del socket vía `interprocess`
+1. hacer bind del socket en el directorio IPC privado (ver [Transporte](#transporte)) y rechazar peers de otros usuarios
 2. manejar `Hello` y devolver metadata/kind
 3. devolver una definición de formulario en `Hello`
 4. manejar `OpenSession`/`CloseSession`

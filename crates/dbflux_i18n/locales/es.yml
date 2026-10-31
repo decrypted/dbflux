@@ -3997,6 +3997,15 @@ modals:
       materialized_view: Vista mat.
       foreign_key: FK
       trigger: Trigger
+  host_key_confirm:
+    title: "Clave de host SSH desconocida"
+    lead: "Ni DBFlux ni tu archivo known_hosts han visto antes la clave de host de este servidor. Confía en ella solo si la huella coincide con la que te dio el administrador del servidor. Si no coincide, alguien podría estar interceptando la conexión."
+    host: "Servidor"
+    fingerprint: "Huella de la clave de host"
+    other_types_warning: "Tu archivo known_hosts ya tiene una clave %{types} para este servidor, pero el servidor ofreció otro tipo de clave. Puede deberse a una actualización del servidor, pero también a un atacante."
+    hint: "Para ver la huella en el servidor, ejecuta ssh-keygen -lf sobre su clave de host, por ejemplo /etc/ssh/ssh_host_ed25519_key.pub. DBFlux guarda una clave de confianza en su propia lista y nunca escribe en ~/.ssh/known_hosts."
+    cancel: "Cancelar"
+    trust: "Confiar y recordar"
   import_dashboard:
     title: Importar dashboard desde JSON
     name_label: Nombre del dashboard
@@ -4346,6 +4355,9 @@ settings:
     grid_copy_protect_formulas:
       label: "Proteger las celdas copiadas contra fórmulas de hojas de cálculo"
       hint: "Copiar (Ctrl+C, Cmd+C en macOS) y Copiar como CSV ponen un ' delante de una celda que empieza por =, +, -, @, un tabulador o un retorno de carro, para que la hoja de cálculo donde pegas la muestre como texto en lugar de ejecutarla como fórmula. Los números no cambian. Desactivado: las celdas se copian tal cual."
+    ssh_accept_new_host_keys:
+      label: "Confiar en claves de host SSH nuevas sin preguntar"
+      hint: "No recomendado. Un túnel SSH a un servidor cuya clave de host no conocen ni ~/.ssh/known_hosts ni DBFlux se conecta y recuerda la clave, en lugar de pedirte que compares antes su huella. También se aplica a las conexiones que no pueden preguntar, como Conectar al iniciar y el servidor MCP. Una clave cambiada siempre se rechaza. StrictHostKeyChecking en tu configuración SSH tiene prioridad para los hosts a los que se aplica."
     grid_header_click_sorts:
       label: "Hacer clic en la cabecera de una columna la ordena"
       hint: "Desactivado: un clic en la cabecera de una columna selecciona la columna entera y la flecha de su borde derecho ordena. Activado: el clic ordena la columna; Shift+clic y Ctrl+clic siguen seleccionando columnas."

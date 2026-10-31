@@ -3,6 +3,7 @@ pub mod cell_editor;
 pub mod delete_connection;
 pub mod document_preview;
 pub mod drop_table;
+pub mod host_key_confirm;
 pub mod import_dashboard;
 pub mod modal;
 pub mod mutation_confirm;
@@ -25,6 +26,7 @@ pub use document_preview::{
     DOC_INDEX_NEW, DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
 pub use drop_table::{DropTableOutcome, DropTableRequest, ModalDropTable};
+pub use host_key_confirm::{HostKeyConfirmOutcome, HostKeyConfirmRequest, ModalHostKeyConfirm};
 pub use import_dashboard::{
     ImportDashboardCancelled, ImportDashboardConfirmed, ModalImportDashboard,
 };

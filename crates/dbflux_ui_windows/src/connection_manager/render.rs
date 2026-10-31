@@ -1479,6 +1479,9 @@ impl Render for ConnectionManagerWindow {
                             .into_any_element(),
                     }),
             )
+            .when(self.host_key_modal.read(cx).is_visible(), |el| {
+                el.child(self.host_key_modal.clone())
+            })
     }
 }
 

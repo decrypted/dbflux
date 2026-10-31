@@ -194,6 +194,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
         ("refresh-visible", KeyboardPath::Command(Command::Execute)),
         ("reopen-conns", KeyboardPath::Command(Command::Execute)),
         ("requires-preview", KeyboardPath::Command(Command::Execute)),
+        (
+            "ssh-accept-new-host-keys",
+            KeyboardPath::Command(Command::Execute),
+        ),
         ("requires-where", KeyboardPath::Command(Command::Execute)),
         ("restore-session", KeyboardPath::Command(Command::Execute)),
         ("vim-mode", KeyboardPath::Command(Command::Execute)),

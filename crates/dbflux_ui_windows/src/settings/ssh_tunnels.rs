@@ -1,5 +1,6 @@
 use crate::ssh_shared::{self, SshAuthSelection};
 use dbflux_app::keymap::Modifiers;
+use dbflux_components::modals::HostKeyConfirmOutcome;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{SshAuthMethod, SshTunnelProfile};
 use dbflux_ui_base::AppStateChanged;
@@ -438,6 +439,7 @@ impl SshTunnelsSection {
                             this.ssh_test_error = None;
                         }
                         Err(error) => {
+                            this.offer_host_key_trust(&error, cx);
                             this.ssh_test_status = SshTestStatus::Failed;
                             this.ssh_test_error = Some(error);
                         }
@@ -447,6 +449,38 @@ impl SshTunnelsSection {
             });
         })
         .detach();
+    }
+
+    /// Asks to trust the SSH host key `error` refused, if it is such a
+    /// refusal; trusting runs the test again.
+    fn offer_host_key_trust(&mut self, error: &str, cx: &mut Context<Self>) {
+        let Some(key) = dbflux_ssh::unknown_host_key_in_error(error) else {
+            return;
+        };
+        let request = crate::ssh_shared::host_key_confirm_request(&key);
+        self.pending_host_key = Some(key);
+        self.host_key_modal
+            .update(cx, |modal, cx| modal.open(request, cx));
+    }
+
+    pub(super) fn resolve_host_key(
+        &mut self,
+        outcome: &HostKeyConfirmOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = self.pending_host_key.take() else {
+            return;
+        };
+        if *outcome != HostKeyConfirmOutcome::Trusted {
+            return;
+        }
+        match key.trust() {
+            Ok(()) => self.test_ssh_tunnel(cx),
+            Err(error) => {
+                self.ssh_test_error = Some(error.to_string());
+                cx.notify();
+            }
+        }
     }
 
     pub(super) fn request_delete_tunnel(&mut self, tunnel_id: Uuid, cx: &mut Context<Self>) {

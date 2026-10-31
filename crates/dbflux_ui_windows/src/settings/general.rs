@@ -47,6 +47,7 @@ impl GeneralSection {
             current.confirm_dangerous_queries != saved.confirm_dangerous_queries,
             current.dangerous_requires_where != saved.dangerous_requires_where,
             current.dangerous_requires_preview != saved.dangerous_requires_preview,
+            current.ssh_accept_new_host_keys != saved.ssh_accept_new_host_keys,
             current.vim_mode != saved.vim_mode,
             current.vim_leader != saved.vim_leader,
             current.table_alias_completion != saved.table_alias_completion,
@@ -161,6 +162,7 @@ impl GeneralSection {
             GeneralFormRow::ConfirmDangerous,
             GeneralFormRow::RequiresWhere,
             GeneralFormRow::RequiresPreview,
+            GeneralFormRow::SshAcceptNewHostKeys,
             GeneralFormRow::EditorRowLimit,
             GeneralFormRow::ObjectPreviewLimit,
             GeneralFormRow::KeyValueSizeLimit,
@@ -379,6 +381,11 @@ impl GeneralSection {
             Some(GeneralFormRow::RequiresPreview) => {
                 self.gen_settings.dangerous_requires_preview =
                     !self.gen_settings.dangerous_requires_preview;
+                cx.notify();
+            }
+            Some(GeneralFormRow::SshAcceptNewHostKeys) => {
+                self.gen_settings.ssh_accept_new_host_keys =
+                    !self.gen_settings.ssh_accept_new_host_keys;
                 cx.notify();
             }
             Some(GeneralFormRow::ShareStableDb) => {
@@ -1343,6 +1350,17 @@ impl GeneralSection {
                 self.gen_settings.dangerous_requires_preview,
                 GeneralFormRow::RequiresPreview,
                 |this, value, _cx| this.gen_settings.dangerous_requires_preview = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "ssh-accept-new-host-keys",
+                dbflux_i18n::t!("settings.general.ssh_accept_new_host_keys.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.ssh_accept_new_host_keys.hint"
+                )),
+                self.gen_settings.ssh_accept_new_host_keys,
+                GeneralFormRow::SshAcceptNewHostKeys,
+                |this, value, _cx| this.gen_settings.ssh_accept_new_host_keys = value,
                 cx,
             ))
             .child(self.render_gen_input_field(

@@ -24,6 +24,7 @@ impl SettingsWindow {
             || self.gen_settings.confirm_dangerous_queries != saved.confirm_dangerous_queries
             || self.gen_settings.dangerous_requires_where != saved.dangerous_requires_where
             || self.gen_settings.dangerous_requires_preview != saved.dangerous_requires_preview
+            || self.gen_settings.ssh_accept_new_host_keys != saved.ssh_accept_new_host_keys
             || self.gen_settings.vim_mode != saved.vim_mode
             || self.gen_settings.vim_leader != saved.vim_leader
             || self.gen_settings.table_alias_completion != saved.table_alias_completion

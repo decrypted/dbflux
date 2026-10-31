@@ -228,9 +228,11 @@ impl Sidebar {
         &mut self,
         profile_id: Uuid,
         password: Option<dbflux_core::secrecy::SecretString>,
+        from_startup: bool,
         cx: &mut Context<Self>,
     ) {
         let session_password = password.clone();
+        let host_key_retry_password = password.clone();
         let (
             input,
             profile_name,
@@ -610,10 +612,20 @@ impl Sidebar {
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_toast = Some(PendingToast {
-                                message: error_msg,
-                                is_error: true,
-                            });
+                            // The SSH tunnel opens in the access stage, so an
+                            // unknown host key surfaces here.
+                            if !sidebar.offer_host_key_trust(
+                                profile_id,
+                                &error_msg,
+                                from_startup,
+                                host_key_retry_password,
+                                cx,
+                            ) {
+                                sidebar.pending_toast = Some(PendingToast {
+                                    message: error_msg,
+                                    is_error: true,
+                                });
+                            }
                             sidebar.refresh_tree(cx);
                         });
                     });

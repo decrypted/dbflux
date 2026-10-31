@@ -294,6 +294,7 @@ impl ServerState {
             .into_iter()
             .map(|tunnel| (tunnel.id, tunnel))
             .collect();
+        dbflux_ssh::set_accept_new_host_keys(accept_new_ssh_host_keys(&storage_runtime));
 
         let state = ServerState {
             client_id,
@@ -539,6 +540,21 @@ fn open_config_db(_config_dir: Option<&std::path::Path>) -> Result<rusqlite::Con
 
     storage_sqlite::open_database(&path)
         .map_err(|e| error_messages::config_error("open unified database", Some(&path), e))
+}
+
+/// This process cannot ask the user about an SSH host key it has not seen,
+/// so an unknown key is refused unless the GUI's setting to trust new keys
+/// without asking is on. A settings row that cannot be read counts as off.
+fn accept_new_ssh_host_keys(storage_runtime: &StorageRuntime) -> bool {
+    match storage_runtime.general_settings().get() {
+        Ok(settings) => settings.is_some_and(|settings| settings.ssh_accept_new_host_keys != 0),
+        Err(error) => {
+            log::warn!(
+                "Failed to read general settings, SSH tunnels refuse unknown host keys: {error}"
+            );
+            false
+        }
+    }
 }
 
 fn open_storage_runtime() -> Result<StorageRuntime, String> {

@@ -3997,6 +3997,15 @@ modals:
       materialized_view: 物化视图
       foreign_key: FK
       trigger: 触发器
+  host_key_confirm:
+    title: "未知的 SSH 主机密钥"
+    lead: "DBFlux 和你的 known_hosts 文件都没有见过此服务器的主机密钥。只有当指纹与服务器管理员提供的一致时才信任它。如果不一致，可能有人正在拦截此连接。"
+    host: "服务器"
+    fingerprint: "主机密钥指纹"
+    other_types_warning: "你的 known_hosts 文件中已有此服务器的 %{types} 密钥，但服务器提供了另一种类型的密钥。服务器升级可能导致这种情况，攻击者也可能。"
+    hint: "要在服务器上查看指纹，请对其主机密钥运行 ssh-keygen -lf，例如 /etc/ssh/ssh_host_ed25519_key.pub。DBFlux 将信任的密钥保存在自己的列表中，从不写入 ~/.ssh/known_hosts。"
+    cancel: "取消"
+    trust: "信任并记住"
   import_dashboard:
     title: 从 JSON 导入仪表盘
     name_label: 仪表盘名称
@@ -4346,6 +4355,9 @@ settings:
     grid_copy_protect_formulas:
       label: "防止复制的单元格作为电子表格公式执行"
       hint: "复制（Ctrl+C，macOS 上为 Cmd+C）和复制为 CSV 会在以 =、+、-、@、制表符或回车开头的单元格前加上 '，使粘贴到的电子表格将其显示为文本，而不是作为公式执行。数字不变。关闭时按原样复制单元格。"
+    ssh_accept_new_host_keys:
+      label: "不询问直接信任新的 SSH 主机密钥"
+      hint: "不推荐。连接到主机密钥既不在 ~/.ssh/known_hosts 中、DBFlux 也不认识的服务器时，SSH 隧道会直接连接并记住该密钥，而不是先请你核对指纹。这也适用于无法询问的连接，例如启动时连接和 MCP 服务器。已更改的密钥始终会被拒绝。对于 SSH 配置中设置了 StrictHostKeyChecking 的主机，以该设置为准。"
     grid_header_click_sorts:
       label: "点击列标题时对该列排序"
       hint: "关：点击列标题选择整列，标题右侧的箭头用于排序。开：点击即对该列排序；Shift+单击和 Ctrl+单击仍然选择列。"

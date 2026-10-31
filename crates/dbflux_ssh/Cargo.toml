@@ -18,8 +18,13 @@ dbflux_tunnel_core = { path = "../dbflux_tunnel_core" }
 dbflux_storage = { path = "../dbflux_storage" }
 base64 = { workspace = true }
 dirs = { workspace = true }
+# HMAC-SHA1 is what OpenSSH uses for hashed known_hosts entries (`|1|`).
+hmac = "0.13"
 log = "0.4"
+sha1 = "0.11"
 sha2 = { workspace = true }
+# Atomic, 0600 rewrites of the host key pin file.
+tempfile = "3"
 uuid = { workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
@@ -30,9 +35,6 @@ ssh2 = "0.9"
 # Curve25519/ECDH methods needed for a modern SSH handshake.
 [target.'cfg(windows)'.dependencies]
 ssh2 = { version = "0.9", features = ["openssl-on-win32", "vendored-openssl"] }
-
-[dev-dependencies]
-tempfile = "3"
 
 [features]
 vendored-openssl = ["ssh2/vendored-openssl"]

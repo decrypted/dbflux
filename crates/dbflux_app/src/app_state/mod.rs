@@ -2638,6 +2638,7 @@ impl AppState {
         self.history_manager
             .set_max_entries(settings.max_history_entries);
         self.work_gate.set_limits(work_limits(&settings));
+        dbflux_ssh::set_accept_new_host_keys(settings.ssh_accept_new_host_keys);
 
         self.general_settings = settings;
     }

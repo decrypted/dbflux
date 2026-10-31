@@ -198,10 +198,25 @@ registra en el nivel debug.
 
 Un host cuya configuración necesite `ProxyJump`, o `ProxyCommand` en Windows,
 aparece en la lista con una marca: DBFlux no puede alcanzarlo, y la conexión falla con ese
-motivo en lugar de conectar directamente al bastión. Las claves de host se
-siguen verificando contra el almacén propio de DBFlux en su directorio de
-datos, no contra tu `~/.ssh/known_hosts`, así que un host al que llevas años
-llegando desde una terminal igual te pide confirmar su clave la primera vez.
+motivo en lugar de conectar directamente al bastión.
+
+### Claves de host
+
+Antes de iniciar sesión en un servidor SSH, directamente o a través de un
+`ProxyCommand`, DBFlux comprueba su clave de host primero en tus archivos
+known_hosts de OpenSSH (`~/.ssh/known_hosts`, `/etc/ssh/ssh_known_hosts`, o los
+que indiquen `UserKnownHostsFile` y `GlobalKnownHostsFile`, con `HostKeyAlias`,
+`[host]:puerto`, entradas cifradas y `@revoked` como en OpenSSH) y después en su
+propia lista, `ssh_known_hosts` en su directorio de datos. Una clave conocida
+conecta. Una clave distinta o marcada `@revoked` falla con un aviso que muestra
+la huella SHA256 nueva y no se puede aceptar desde el aviso. Una clave que nadie
+conoce abre **Clave de host SSH desconocida** con el servidor, el tipo y la
+huella: **Confiar y recordar** la guarda en la lista de DBFlux (nunca en
+`~/.ssh/known_hosts`) y vuelve a conectar. Las conexiones sin nadie delante,
+como Conectar al iniciar y el servidor MCP, la rechazan. `StrictHostKeyChecking`
+de tu configuración SSH se respeta, y **Ajustes → General → Confiar en claves de
+host SSH nuevas sin preguntar** (desactivado, no recomendado) equivale a
+`accept-new`. Detalles en la versión en inglés de esta página.
 
 ### Dónde viven los secretos SSH
 

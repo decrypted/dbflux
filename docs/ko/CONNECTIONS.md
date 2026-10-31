@@ -170,9 +170,24 @@ Linux와 macOS에서는 `ProxyCommand`가 있는 호스트가 터미널에서와
 
 설정에 `ProxyJump`가 필요한 호스트, 또는 Windows에서 `ProxyCommand`가 필요한
 호스트는 목록에 표시되며 표시가 붙습니다. DBFlux는 그 호스트에 연결할 수 없으며, 배스천 호스트로 직접
-연결하는 대신 그 이유와 함께 실패합니다. 호스트 키는 `~/.ssh/known_hosts`가
-아니라 DBFlux 데이터 디렉터리의 자체 저장소로 계속 검증되므로, 오랫동안
-터미널에서 접속해 온 호스트라도 처음에는 키 확인을 요청합니다.
+연결하는 대신 그 이유와 함께 실패합니다.
+
+### 호스트 키
+
+DBFlux는 SSH 서버에 로그인하기 전에(직접 연결이든 `ProxyCommand`를 거치든)
+서버의 호스트 키를 먼저 OpenSSH known_hosts 파일(`~/.ssh/known_hosts`,
+`/etc/ssh/ssh_known_hosts`, 또는 `UserKnownHostsFile`/`GlobalKnownHostsFile`이
+가리키는 파일. `HostKeyAlias`, `[host]:port`, 해시된 항목, `@revoked`는
+OpenSSH와 같게 처리)에서, 그다음 데이터 디렉터리의 자체 목록
+`ssh_known_hosts`에서 확인합니다. 알려진 키면 연결합니다. 다른 키나
+`@revoked` 키는 새 SHA256 지문을 보여 주는 경고와 함께 실패하며, 경고에서
+수락할 수 없습니다. 아무도 모르는 키는 서버, 키 종류, 지문을 보여 주는
+**알 수 없는 SSH 호스트 키** 대화 상자를 엽니다. **신뢰하고 기억**을 누르면
+키를 DBFlux 목록에만 저장하고(`~/.ssh/known_hosts`에는 쓰지 않음) 다시
+연결합니다. 시작 시 연결이나 MCP 서버처럼 지켜보는 사람이 없는 연결은 이런
+키를 거부합니다. SSH 설정의 `StrictHostKeyChecking`을 따르며,
+**설정 → 일반 → 새 SSH 호스트 키를 묻지 않고 신뢰**(기본값 꺼짐, 권장하지
+않음)는 `accept-new`와 같습니다. 자세한 내용은 이 페이지의 영어판을 참고하세요.
 
 ### SSH 비밀이 저장되는 위치
 

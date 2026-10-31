@@ -320,6 +320,14 @@ pub enum SidebarEvent {
         last_attempt_failed: bool,
     },
 
+    /// A connect was refused because its SSH host key is not known yet; the
+    /// host asks whether to trust the key and connects `profile_id` again.
+    /// Never emitted for connects that run unattended (Connect on startup).
+    RequestHostKeyTrust {
+        profile_id: Uuid,
+        key: dbflux_ssh::UnknownHostKey,
+    },
+
     /// Request to open the Settings window.
     ///
     /// The integrator (`dbflux_ui` Workspace) owns window creation; the sidebar
@@ -1169,6 +1177,10 @@ pub struct Sidebar {
     /// Connection password of the attempt waiting for the SSH passphrase, so
     /// the retry does not ask for it again.
     pub(crate) pending_tunnel_auth_password: Option<dbflux_core::secrecy::SecretString>,
+    /// Profile and connection password of the attempt waiting for an SSH
+    /// host key to be confirmed, so the retry after "Trust and remember"
+    /// does not ask for the password again.
+    pending_host_key_retry: Option<(Uuid, Option<dbflux_core::secrecy::SecretString>)>,
     /// Profiles whose next connect was started by "Connect on startup".
     /// Nobody asked for those connects, so a tunnel passphrase they turn out
     /// to need is reported instead of opening the single-profile modal.
@@ -1507,6 +1519,7 @@ impl Sidebar {
             hovered_item_id: None,
             pending_tunnel_auth_profile_id: None,
             pending_tunnel_auth_password: None,
+            pending_host_key_retry: None,
             startup_connects: HashSet::new(),
             pending_metric_namespace_fetches: HashMap::new(),
             pending_metric_fetches: HashMap::new(),
@@ -1533,6 +1546,11 @@ impl Sidebar {
     pub fn clear_pending_tunnel_auth(&mut self) {
         self.pending_tunnel_auth_profile_id = None;
         self.pending_tunnel_auth_password = None;
+    }
+
+    /// Drops the connect attempt that was waiting for an SSH host key.
+    pub fn clear_pending_host_key_trust(&mut self) {
+        self.pending_host_key_retry = None;
     }
 
     /// Records whether the sidebar holds keyboard focus. Gaining it, including

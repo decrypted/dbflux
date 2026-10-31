@@ -11,6 +11,7 @@ use crate::ssh_shared::SshAuthSelection;
 use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_components::controls::{Button, Checkbox, DropdownSelectionChanged, Input, InputState};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::{HostKeyConfirmOutcome, ModalHostKeyConfirm};
 use dbflux_components::primitives::{
     BannerBlock, BannerVariant, SegmentedControl, SegmentedItem, Text,
 };
@@ -95,6 +96,9 @@ pub(super) struct SshTunnelsSection {
     /// Dropdown selection drained in `render`, where a `Window` is
     /// available (the selection subscription has none).
     pub(super) pending_ssh_config_host_index: Option<usize>,
+    /// Asks whether to trust an SSH host key the Test button was refused for.
+    pub(super) host_key_modal: Entity<ModalHostKeyConfirm>,
+    pub(super) pending_host_key: Option<dbflux_ssh::UnknownHostKey>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -330,6 +334,14 @@ impl SshTunnelsSection {
             },
         );
 
+        let host_key_modal = cx.new(ModalHostKeyConfirm::new);
+        let host_key_subscription = cx.subscribe(
+            &host_key_modal,
+            |this, _, outcome: &HostKeyConfirmOutcome, cx| {
+                this.resolve_host_key(outcome, cx);
+            },
+        );
+
         Self {
             app_state,
             editing_tunnel_id: None,
@@ -358,7 +370,10 @@ impl SshTunnelsSection {
             ssh_host_picker,
             ssh_manual_backup: None,
             pending_ssh_config_host_index: None,
+            host_key_modal,
+            pending_host_key: None,
             _subscriptions: vec![
+                host_key_subscription,
                 subscription,
                 blur_tunnel_name,
                 blur_ssh_host,
@@ -1061,6 +1076,9 @@ impl Render for SshTunnelsSection {
             self.render_ssh_list(&tunnels, editing_id, cx),
             self.render_ssh_form(keyring_available, cx),
         )
+        .when(self.host_key_modal.read(cx).is_visible(), |element| {
+            element.child(self.host_key_modal.clone())
+        })
         .when(show_delete_confirm, |element| {
             let entity = cx.entity().clone();
             let entity_cancel = entity.clone();

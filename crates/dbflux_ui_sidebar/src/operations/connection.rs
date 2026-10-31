@@ -244,6 +244,41 @@ impl Sidebar {
         None
     }
 
+    /// Turns a connect refused for an unknown SSH host key into a request to
+    /// confirm the key. Returns `false` (the caller shows the error) for any
+    /// other error, and for a connect on startup: nobody is watching that
+    /// one, so it keeps the refusal, whose text says how to connect once by
+    /// hand to review the key.
+    pub(crate) fn offer_host_key_trust(
+        &mut self,
+        profile_id: Uuid,
+        error: &str,
+        from_startup: bool,
+        password: Option<SecretString>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if from_startup {
+            return false;
+        }
+        let Some(key) = dbflux_ssh::unknown_host_key_in_error(error) else {
+            return false;
+        };
+        self.pending_host_key_retry = Some((profile_id, password));
+        cx.emit(SidebarEvent::RequestHostKeyTrust { profile_id, key });
+        true
+    }
+
+    /// Connects `profile_id` again after its SSH host key was trusted, with
+    /// the password the refused attempt had.
+    pub fn connect_after_host_key_trust(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        match self.pending_host_key_retry.take() {
+            Some((pending, password)) if pending == profile_id => {
+                self.connect_to_profile_inner(profile_id, None, false, password, cx);
+            }
+            _ => self.connect_to_profile(profile_id, cx),
+        }
+    }
+
     /// Shows a startup notice without replacing one that has not been shown
     /// yet, so several profiles failing in the same frame are all named.
     pub(crate) fn push_startup_toast(&mut self, message: String) {
@@ -371,7 +406,7 @@ impl Sidebar {
         };
 
         if uses_pipeline {
-            self.connect_via_pipeline(profile_id, password, cx);
+            self.connect_via_pipeline(profile_id, password, from_startup, cx);
             return;
         }
 
@@ -616,6 +651,9 @@ impl Sidebar {
                     let profile_name_for_audit = profile_name.clone();
                     let profile_id_for_audit = profile_id;
                     let is_passphrase_error = is_passphrase_required_error_str(&error);
+                    // A refused host key says nothing about the password.
+                    let keeps_password = is_passphrase_error
+                        || dbflux_ssh::unknown_host_key_in_error(&error).is_some();
                     let password_for_retry = session_password.clone();
 
                     cx.update(|cx| {
@@ -654,7 +692,7 @@ impl Sidebar {
                             }
 
                             state.cancel_detached_hook_tasks(profile_id);
-                            if !is_passphrase_error {
+                            if !keeps_password {
                                 // A remembered password may be the reason the
                                 // connect failed; ask again next time.
                                 state.forget_connection_password(profile_id);
@@ -738,10 +776,18 @@ impl Sidebar {
                             }
                         } else {
                             sidebar.update(cx, |sidebar, cx| {
-                                sidebar.pending_toast = Some(PendingToast {
-                                    message: error,
-                                    is_error: true,
-                                });
+                                if !sidebar.offer_host_key_trust(
+                                    profile_id,
+                                    &error,
+                                    from_startup,
+                                    password_for_retry,
+                                    cx,
+                                ) {
+                                    sidebar.pending_toast = Some(PendingToast {
+                                        message: error,
+                                        is_error: true,
+                                    });
+                                }
                                 sidebar.refresh_tree(cx);
                             });
                         }
@@ -1533,6 +1579,40 @@ mod tests {
     /// private key needs an unsaved passphrase does.
     const LOCKED_KEY_PREFIX: &str = "locked-key-";
 
+    /// Profiles named with this prefix fail the way a tunnel to a server
+    /// with a host key nobody knows yet does.
+    const UNKNOWN_HOST_KEY_PREFIX: &str = "unknown-host-key-";
+
+    /// The refusal the real host key check returns for `host`. Nothing is
+    /// read from or written to `~/.ssh` or the data directory.
+    fn refused_host_key(host: &str) -> dbflux_core::DbError {
+        let paths = dbflux_ssh::HostKeyPaths {
+            default_user_files: Vec::new(),
+            default_global_files: Vec::new(),
+            store: dbflux_ssh::host_keys::StoreLocation::At(
+                std::env::temp_dir().join(format!("dbflux-sidebar-test-{}/pins", Uuid::new_v4())),
+            ),
+        };
+        let verifier = dbflux_ssh::HostKeyVerifier::new(
+            host,
+            22,
+            &dbflux_ssh::HostKeyOptions::default(),
+            &paths,
+            false,
+        );
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&11u32.to_be_bytes());
+        blob.extend_from_slice(b"ssh-ed25519");
+        blob.extend_from_slice(&32u32.to_be_bytes());
+        blob.extend_from_slice(Uuid::new_v4().as_bytes());
+        blob.extend_from_slice(Uuid::new_v4().as_bytes());
+        let key = dbflux_ssh::host_keys::PresentedKey::from_blob(&blob).expect("valid key blob");
+        match verifier.verify_presented(&key) {
+            Err(error) => error,
+            Ok(()) => dbflux_core::DbError::NotSupported("the key was accepted".into()),
+        }
+    }
+
     /// A driver that authenticates with a password and records the password
     /// every connect receives.
     struct PasswordRecordingDriver {
@@ -1578,6 +1658,9 @@ mod tests {
                 return Err(dbflux_core::DbError::connection_failed(
                     "SSH tunnel: Unable to extract public key from private key file",
                 ));
+            }
+            if profile.name.starts_with(UNKNOWN_HOST_KEY_PREFIX) {
+                return Err(refused_host_key(&profile.name));
             }
 
             self.passwords
@@ -2046,5 +2129,107 @@ mod tests {
                 "a later click is not treated as a startup connect"
             );
         });
+    }
+
+    fn host_key_requests(
+        fixture: &PasswordFixture,
+        cx: &mut VisualTestContext,
+    ) -> Arc<Mutex<Vec<(Uuid, String)>>> {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        cx.update(|_, cx| {
+            let requests = requests.clone();
+            cx.subscribe(
+                &fixture.sidebar,
+                move |_, event: &crate::SidebarEvent, _| {
+                    if let crate::SidebarEvent::RequestHostKeyTrust { profile_id, key } = event {
+                        requests
+                            .lock()
+                            .expect("host key requests")
+                            .push((*profile_id, key.host.clone()));
+                    }
+                },
+            )
+            .detach();
+        });
+        requests
+    }
+
+    #[gpui::test]
+    fn an_unknown_ssh_host_key_asks_to_trust_it_instead_of_failing(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = add_saved_profile(&fixture, "unknown-host-key-a", false, cx);
+        let requests = host_key_requests(&fixture, cx);
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        assert_eq!(
+            *requests.lock().expect("host key requests"),
+            vec![(profile_id, "unknown-host-key-a:22".to_string())]
+        );
+        assert!(
+            !shown_toasts(&fixture, cx)
+                .iter()
+                .any(|toast| toast.contains("Unknown SSH host key")),
+            "the prompt replaces the error toast"
+        );
+        fixture.sidebar.read_with(cx, |sidebar, _| {
+            assert!(matches!(
+                sidebar.pending_host_key_retry,
+                Some((pending, _)) if pending == profile_id
+            ));
+        });
+        fixture.state.read_with(cx, |state, _| {
+            assert!(!state.connections().contains_key(&profile_id));
+            assert!(!state.is_operation_pending(profile_id, None));
+        });
+
+        // Cancel drops the retry; the profile stays disconnected.
+        fixture
+            .sidebar
+            .update(cx, |sidebar, _| sidebar.clear_pending_host_key_trust());
+        fixture.sidebar.read_with(cx, |sidebar, _| {
+            assert!(sidebar.pending_host_key_retry.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn startup_reports_an_unknown_ssh_host_key_instead_of_asking(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = add_saved_profile(&fixture, "unknown-host-key-b", true, cx);
+        let requests = host_key_requests(&fixture, cx);
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_profiles_on_startup(cx));
+        cx.run_until_parked();
+
+        assert!(
+            requests.lock().expect("host key requests").is_empty(),
+            "nobody is there to answer a prompt at startup"
+        );
+        let toasts = shown_toasts(&fixture, cx).join("\n");
+        assert!(
+            toasts.contains("Unknown SSH host key for unknown-host-key-b:22")
+                && toasts.contains("from the DBFlux window"),
+            "the refusal says how to review the key: {toasts}"
+        );
+        fixture.state.read_with(cx, |state, _| {
+            assert!(!state.connections().contains_key(&profile_id));
+            assert!(
+                state
+                    .connect_failure(profile_id)
+                    .is_some_and(|failure| failure.contains("Unknown SSH host key"))
+            );
+        });
+
+        // A connect by hand afterwards asks.
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+        assert_eq!(requests.lock().expect("host key requests").len(), 1);
     }
 }

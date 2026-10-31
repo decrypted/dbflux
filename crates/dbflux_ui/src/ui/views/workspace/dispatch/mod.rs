@@ -85,6 +85,17 @@ impl Workspace {
             return Some(true);
         }
 
+        // Escape cancels the host key prompt; Enter does nothing, so a key is
+        // only ever trusted by clicking the button after reading it.
+        if matches!(cmd, Command::Execute | Command::Cancel)
+            && self.modal_host_key.read(cx).is_visible()
+        {
+            if cmd == Command::Cancel {
+                self.modal_host_key.update(cx, |modal, cx| modal.cancel(cx));
+            }
+            return Some(true);
+        }
+
         // The sidebar's inline delete confirmation, drawn by the workspace,
         // resolves the same way when focus is outside it.
         if matches!(cmd, Command::Execute | Command::Cancel)

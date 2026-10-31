@@ -3997,6 +3997,15 @@ modals:
       materialized_view: MatView
       foreign_key: FK
       trigger: Trigger
+  host_key_confirm:
+    title: "Chave de host SSH desconhecida"
+    lead: "Nem o DBFlux nem o seu arquivo known_hosts viram antes a chave de host deste servidor. Confie nela somente se a impressão digital corresponder à que o administrador do servidor lhe passou. Se não corresponder, alguém pode estar interceptando a conexão."
+    host: "Servidor"
+    fingerprint: "Impressão digital da chave de host"
+    other_types_warning: "Seu arquivo known_hosts já tem uma chave %{types} para este servidor, mas o servidor ofereceu outro tipo de chave. Uma atualização do servidor pode causar isso, mas um atacante também."
+    hint: "Para ver a impressão digital no servidor, execute ssh-keygen -lf na chave de host dele, por exemplo /etc/ssh/ssh_host_ed25519_key.pub. O DBFlux guarda uma chave confiável na própria lista e nunca escreve em ~/.ssh/known_hosts."
+    cancel: "Cancelar"
+    trust: "Confiar e lembrar"
   import_dashboard:
     title: Importar dashboard de JSON
     name_label: Nome do dashboard
@@ -4346,6 +4355,9 @@ settings:
     grid_copy_protect_formulas:
       label: "Proteger as células copiadas contra fórmulas de planilha"
       hint: "Copiar (Ctrl+C, Cmd+C no macOS) e Copiar como CSV colocam um ' antes de uma célula que começa com =, +, -, @, uma tabulação ou um retorno de carro, para que a planilha onde você cola a mostre como texto em vez de executá-la como fórmula. Números não mudam. Desligado: as células são copiadas exatamente."
+    ssh_accept_new_host_keys:
+      label: "Confiar em novas chaves de host SSH sem perguntar"
+      hint: "Não recomendado. Um túnel SSH para um servidor cuja chave de host nem ~/.ssh/known_hosts nem o DBFlux conhecem passa a conectar e lembrar a chave, em vez de pedir que você compare a impressão digital antes. Isso vale também para conexões que não podem perguntar, como Conectar ao iniciar e o servidor MCP. Uma chave alterada é sempre recusada. StrictHostKeyChecking na sua configuração SSH tem precedência para os hosts aos quais se aplica."
     grid_header_click_sorts:
       label: "Clicar no cabeçalho de uma coluna a ordena"
       hint: "Desligado: um clique no cabeçalho de uma coluna seleciona a coluna inteira e a seta na borda direita ordena. Ligado: o clique ordena a coluna; Shift+clique e Ctrl+clique continuam selecionando colunas."

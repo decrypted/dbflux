@@ -89,6 +89,18 @@ pub fn get_ssh_secret(
     }
 }
 
+/// What the host key prompt shows for a key a connect was refused for.
+pub fn host_key_confirm_request(
+    key: &dbflux_ssh::UnknownHostKey,
+) -> dbflux_components::modals::HostKeyConfirmRequest {
+    dbflux_components::modals::HostKeyConfirmRequest {
+        host: key.host.clone(),
+        key_type: key.key_type.clone(),
+        fingerprint: key.fingerprint.clone(),
+        other_key_types: key.other_key_types.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

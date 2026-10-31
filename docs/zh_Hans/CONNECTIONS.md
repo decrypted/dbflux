@@ -102,7 +102,11 @@ SSH 隧道有两种用法：
 
 在 Linux 和 macOS 上，带有 `ProxyCommand` 的主机与在终端中的行为一致：DBFlux 通过你的 `$SHELL` 运行该命令，并经由它的标准输入和标准输出进行 SSH 通信，因此 `cloudflared access ssh --hostname %h` 这类访问代理可以正常使用。`%h`、`%p`、`%r`、`%n` 和 `%%` 标记会被展开；出现其他任何标记时，连接会在命令运行之前失败。如果要代入 `%h`、`%n` 或 `%r` 的值包含空白字符或会被 shell 解释的字符（引号、`$`、反引号、`;`、`|` 等），或以 `-` 开头，连接同样会在命令运行之前失败，因此主机别名无法注入 shell 命令。命令的错误输出会写入日志，访问代理也正是在这里打印登录 URL。日志中只记录该命令运行的程序名；可能包含访问令牌的完整命令行只在 debug 级别记录。
 
-配置中需要 `ProxyJump` 的主机，或在 Windows 上需要 `ProxyCommand` 的主机，会被列出并标记：DBFlux 无法连接它，连接会带着该原因失败，而不会直接连接跳板机。主机密钥仍按 DBFlux 数据目录中的自有存储校验，而不是你的 `~/.ssh/known_hosts`，因此即使你多年来一直从终端访问某台主机，首次连接时仍会要求确认其密钥。
+配置中需要 `ProxyJump` 的主机，或在 Windows 上需要 `ProxyCommand` 的主机，会被列出并标记：DBFlux 无法连接它，连接会带着该原因失败，而不会直接连接跳板机。
+
+### 主机密钥
+
+DBFlux 在登录 SSH 服务器之前（无论直接连接还是通过 `ProxyCommand`），先在你的 OpenSSH known_hosts 文件中查找服务器的主机密钥（`~/.ssh/known_hosts`、`/etc/ssh/ssh_known_hosts`，或 `UserKnownHostsFile`/`GlobalKnownHostsFile` 指定的文件；`HostKeyAlias`、`[host]:port`、哈希条目和 `@revoked` 的处理与 OpenSSH 相同），然后在数据目录中自己的列表 `ssh_known_hosts` 中查找。已知的密钥直接连接。不同的密钥或标记为 `@revoked` 的密钥会失败，并显示新的 SHA256 指纹，警告中无法接受该密钥。无人认识的密钥会打开 **未知的 SSH 主机密钥** 对话框，显示服务器、密钥类型和指纹；选择 **信任并记住** 会把密钥保存到 DBFlux 自己的列表（从不写入 `~/.ssh/known_hosts`）并重新连接。无人值守的连接（例如启动时连接和 MCP 服务器）会拒绝这样的密钥。DBFlux 遵循 SSH 配置中的 `StrictHostKeyChecking`；**设置 → 通用 → 不询问直接信任新的 SSH 主机密钥**（默认关闭，不推荐）等同于 `accept-new`。详情请参阅本页英文版。
 
 ### SSH 密钥保存在哪里
 

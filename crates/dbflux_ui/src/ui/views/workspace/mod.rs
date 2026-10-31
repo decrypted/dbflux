@@ -356,6 +356,10 @@ pub struct Workspace {
     pending_drop_table_item_id: Option<String>,
     /// SSH tunnel passphrase modal.
     modal_tunnel_auth: Entity<crate::ui::overlays::modals::ModalTunnelAuth>,
+    /// Asks whether to trust an SSH host key seen for the first time.
+    modal_host_key: Entity<crate::ui::overlays::modals::ModalHostKeyConfirm>,
+    /// The refused connect the host key modal is about.
+    pending_host_key: Option<(uuid::Uuid, dbflux_ssh::UnknownHostKey)>,
     /// Import Dashboard from JSON modal.
     modal_import_dashboard: Entity<crate::ui::overlays::modals::ModalImportDashboard>,
 
@@ -523,6 +527,7 @@ impl Workspace {
             cx.new(|cx| crate::ui::overlays::modals::ModalDropTable::new(window, cx));
         let modal_tunnel_auth =
             cx.new(|cx| crate::ui::overlays::modals::ModalTunnelAuth::new(window, cx));
+        let modal_host_key = cx.new(crate::ui::overlays::modals::ModalHostKeyConfirm::new);
         let modal_import_dashboard =
             cx.new(|cx| crate::ui::overlays::modals::ModalImportDashboard::new(window, cx));
 
@@ -650,6 +655,37 @@ impl Workspace {
                         this.app_state.update(cx, |_state, cx| {
                             cx.emit(AppStateChanged);
                         });
+                    }
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalHostKeyConfirm. Pin the key and connect again, or
+        // leave the profile disconnected.
+        cx.subscribe_in(
+            &modal_host_key,
+            window,
+            |this, _, outcome: &crate::ui::overlays::modals::HostKeyConfirmOutcome, _window, cx| {
+                use crate::ui::overlays::modals::HostKeyConfirmOutcome;
+
+                let Some((profile_id, key)) = this.pending_host_key.take() else {
+                    return;
+                };
+                match outcome {
+                    HostKeyConfirmOutcome::Trusted => match key.trust() {
+                        Ok(()) => this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.connect_after_host_key_trust(profile_id, cx);
+                        }),
+                        Err(error) => {
+                            this.sidebar
+                                .update(cx, |sidebar, _| sidebar.clear_pending_host_key_trust());
+                            Toast::error(error.to_string()).push(cx);
+                        }
+                    },
+                    HostKeyConfirmOutcome::Cancelled => {
+                        this.sidebar
+                            .update(cx, |sidebar, _| sidebar.clear_pending_host_key_trust());
                     }
                 }
             },
@@ -1357,6 +1393,12 @@ impl Workspace {
                         modal.open(req, window, cx);
                     });
                 }
+                SidebarEvent::RequestHostKeyTrust { profile_id, key } => {
+                    let request = dbflux_ui_windows::ssh_shared::host_key_confirm_request(key);
+                    this.pending_host_key = Some((*profile_id, key.clone()));
+                    this.modal_host_key
+                        .update(cx, |modal, cx| modal.open(request, cx));
+                }
                 SidebarEvent::RequestConnectionPassword { prompt } => {
                     use crate::ui::overlays::modals::ConnectionPasswordRequest;
                     let request = ConnectionPasswordRequest {
@@ -1715,6 +1757,8 @@ impl Workspace {
             modal_drop_table,
             pending_drop_table_item_id: None,
             modal_tunnel_auth,
+            modal_host_key,
+            pending_host_key: None,
             modal_import_dashboard,
             modal_create_dashboard,
             modal_rename_item,
@@ -2243,6 +2287,7 @@ impl Workspace {
         // global shortcuts do not run while the user is reading a confirmation
         // dialog.
         if self.modal_delete_connection.read(cx).is_visible()
+            || self.modal_host_key.read(cx).is_visible()
             || self.modal_unsaved_changes.read(cx).is_visible()
             || self.modal_delete_dashboard.read(cx).is_visible()
             || self.modal_delete_saved_chart.read(cx).is_visible()

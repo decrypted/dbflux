@@ -71,7 +71,7 @@ DBFlux는 플랫폼의 표준 디렉터리를 사용합니다.
 - **`sessions/`** — 열려 있는 편집기 탭의 스크래치/섀도 파일: 제목 없는 콘텐츠와
   저장하지 않은 편집 내역의 복구 사본.
 - **`ipc_auth_token`** — IPC/MCP 인증 토큰([아래](#ipcmcp-인증-토큰) 참조).
-- **`ssh_known_hosts`** — 수락한 SSH 호스트 키(TOFU).
+- **`ssh_known_hosts`**: 신뢰하기로 선택한 SSH 호스트 키.
 
 DBFlux는 더 이상 설정 디렉터리를 사용하지 않습니다. 이전 버전은 IPC 인증 토큰과
 SSH known-hosts를 이곳에 저장했으므로, 업그레이드 후에도 남아 있는 파일이 있으면

@@ -62,6 +62,7 @@ pub(super) enum GeneralFormRow {
     ConfirmDangerous,
     RequiresWhere,
     RequiresPreview,
+    SshAcceptNewHostKeys,
     EditorRowLimit,
     ObjectPreviewLimit,
     KeyValueSizeLimit,
@@ -2043,6 +2044,10 @@ mod tests {
             (
                 "requires-preview",
                 "settings.general.requires_preview.label",
+            ),
+            (
+                "ssh-accept-new-host-keys",
+                "settings.general.ssh_accept_new_host_keys.label",
             ),
         ];
 

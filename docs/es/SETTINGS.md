@@ -13,6 +13,7 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
 | [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
 | [Actualizaciones](#actualizaciones)                 | Búsqueda de actualizaciones al iniciar y las novedades tras actualizar.      |
+| [Restablecer](#restablecer) | Borra tamaños recordados, disposiciones, historiales, las pestañas restauradas, los ajustes generales o el audit log. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | Perfiles AWS SSO / shared-credentials.                                       |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels)       | Perfiles de proxy SOCKS5 / HTTP.                                             |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels)   | Perfiles reutilizables de túnel SSH.                                         |
@@ -311,6 +312,45 @@ el diálogo de bienvenida, diga lo que diga el ajuste guardado. Las novedades
 siguen funcionando. El feature está pensado para forks y compilaciones locales,
 cuyas versiones no coinciden con las releases publicadas y que de otro modo
 avisarían de actualizaciones que no lo son.
+
+---
+
+## Restablecer
+
+La sección Restablecer borra un tipo de estado guardado en `dbflux.db` cada
+vez, para que un tamaño de ventana, una disposición o un historial recordado
+que estorba pueda irse sin editar la base de datos a mano. Cada fila muestra lo
+que guarda ahora y tiene un botón **Restablecer…**, desactivado mientras no hay
+nada que borrar.
+
+Ninguna fila toca las conexiones, los auth profiles, los proxies, los túneles
+SSH, los parámetros de driver, los secretos del llavero, los hooks, los
+servicios RPC, los ajustes de MCP, las queries guardadas ni los filtros de
+audit guardados.
+
+| Fila | Qué se borra | Cuándo aplica |
+|------|--------------|---------------|
+| **Tamaños de ventanas y diálogos** | Tamaño y posición de la ventana principal, tamaño del editor de celdas y si estaba maximizado, dónde se abren los resultados. | El editor de celdas y las nuevas pestañas de query al momento; la ventana principal abre con su tamaño predeterminado en el próximo inicio. |
+| **Disposición de columnas** | Columnas ocultas, movidas, fijadas y redimensionadas, por tabla. | Tablas abiertas después. |
+| **Historial de filtros WHERE** | Filtros WHERE anteriores de las tablas y queries anteriores de las colecciones de documentos. | Grids abiertos después. |
+| **Opciones del menú de exportación** | Filas, columnas y encabezado CSV del menú de exportación. | El próximo menú de exportación. |
+| **Pestañas restauradas** | Las pestañas que se reabren al iniciar y las conexiones que se reconectan con ellas. Las queries borrador sin guardar en ellas se pierden. | El próximo inicio abre sin las pestañas actuales; las abiertas antes de reiniciar tampoco se recuerdan. |
+| **Historial de consultas** | El historial del editor SQL. Se conservan las entradas con estrella y las queries guardadas. | Al momento. |
+| **Archivos recientes** | La lista de archivos recientes (no los archivos). | Al momento. |
+| **Instantáneas de esquema** | Las instantáneas tomadas al conectar para la diferencia de esquemas. | Al momento. |
+| **Ajustes generales** | Todos los ajustes de [General](#general) a su valor predeterminado. | Al momento; un cambio de idioma tras reiniciar. |
+| **Todo lo anterior** | Todas las filas anteriores de una vez. | Como cada fila. |
+| **Registro de auditoría** | Todos los eventos de audit. No forma parte de **Todo lo anterior**. | Al momento. |
+
+**Restablecer…** abre una confirmación que dice qué se borra, cuánto hay
+guardado y que no se puede deshacer; el botón rojo restablece y Cancelar (o
+Escape) lo conserva todo. **Todo lo anterior** y **Registro de auditoría**
+preguntan una segunda vez antes de borrar. Un toast indica cuántas entradas se
+eliminaron. Con el audit activado, cada restablecimiento queda en el audit log, así que
+tras borrarlo su primera entrada es ese restablecimiento.
+
+`j` y `k` (o las flechas) recorren las filas y `Enter` abre la confirmación de
+la fila bajo el cursor.
 
 ---
 

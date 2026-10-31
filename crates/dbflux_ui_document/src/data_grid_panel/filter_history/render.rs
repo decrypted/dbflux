@@ -1,12 +1,14 @@
 use super::super::DataGridPanel;
+use super::{search_words, word_ranges};
 use crate::data_grid_panel::utils::single_line;
 use dbflux_components::composites::{MenuItem, menu_frame, menu_row, render_separator};
+use dbflux_components::controls::GpuiInput;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Icon;
 use dbflux_components::tokens::{Fields, Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, Sizable};
 
 impl DataGridPanel {
     /// The history toggle drawn where the WHERE field shows its filter icon.
@@ -62,8 +64,50 @@ impl DataGridPanel {
             .into_any_element()
     }
 
-    /// The popup under the WHERE field: the table's filters, newest first,
-    /// narrowed to what was typed, then "Clear history".
+    /// The search field at the top of the popup. Up / Down / Enter / Escape /
+    /// Shift+Delete act on the list while it keeps the keyboard; they are
+    /// caught before the input, which would otherwise move its caret or
+    /// delete a character.
+    fn render_filter_history_search(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex_none()
+            .px(Spacing::SM)
+            .pb(Spacing::XS)
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::MoveUp, _, cx| {
+                    this.step_filter_history(false, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::MoveDown, _, cx| {
+                    this.step_filter_history(true, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Escape, window, cx| {
+                    this.filter_history_escape(window, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Delete, window, cx| {
+                    if window.modifiers().shift && this.delete_selected_filter_history(cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .child(
+                GpuiInput::new(&self.filter_bar.history_search)
+                    .small()
+                    .aria_label(dbflux_i18n::t!("document.data.grid.filter.history.search")),
+            )
+            .into_any_element()
+    }
+
+    /// The popup under the WHERE field: its search field, then the table's
+    /// filters, newest first, narrowed to the search, then "Clear history".
     pub(in crate::data_grid_panel) fn render_filter_history_menu(
         &self,
         cx: &mut Context<Self>,
@@ -76,6 +120,7 @@ impl DataGridPanel {
         let theme = cx.theme().clone();
         let shown = popup.shown();
         let selected = popup.selected;
+        let words = search_words(&popup.query);
 
         let mut rows: Vec<AnyElement> = shown
             .iter()
@@ -83,7 +128,10 @@ impl DataGridPanel {
             .filter_map(|(row, &index)| Some((row, index, popup.entries.get(index)?)))
             .map(|(row, index, entry)| {
                 let label = single_line(entry);
-                let item = MenuItem::new(label).icon(AppIcon::History);
+                let highlights = word_ranges(&label, &words);
+                let item = MenuItem::new(label)
+                    .icon(AppIcon::History)
+                    .label_highlights(highlights);
                 let muted = theme.muted_foreground;
                 let hover_bg = theme.secondary;
 
@@ -179,14 +227,22 @@ impl DataGridPanel {
                     .left_0()
                     .mt(Spacing::XS)
                     .w(px(520.0)) // guardrail-allow: history popup width, fits a long filter
-                    .max_h(px(360.0)) // guardrail-allow: history popup height, about 12 rows
-                    .overflow_y_scroll()
                     .occlude()
                     .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
                         this.filter_bar.history.dismiss_press = Some(event.position);
                         this.close_filter_history(cx);
                     }))
-                    .children(rows),
+                    .child(self.render_filter_history_search(cx))
+                    .child(
+                        div()
+                            .id("filter-history-list")
+                            .flex()
+                            .flex_col()
+                            .max_h(px(320.0)) // guardrail-allow: history list height, about 11 rows
+                            .overflow_y_scroll()
+                            .track_scroll(&popup.scroll)
+                            .children(rows),
+                    ),
             )
             .with_priority(2)
             .into_any_element(),

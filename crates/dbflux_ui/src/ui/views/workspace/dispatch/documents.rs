@@ -154,6 +154,7 @@ impl Workspace {
             | Command::TriggerCompletion
             // The filter a table shows belongs to its document.
             | Command::ClearFilter
+            | Command::SearchFilterHistory
             // So do the result tabs of a query.
             | Command::NextResultTab
             | Command::PrevResultTab
@@ -210,7 +211,8 @@ impl Workspace {
             | Command::CopyEditorTextCompact
             | Command::FormatEditorText
             | Command::CompactEditorText
-            | Command::ToggleDialogMaximized => Some(false),
+            | Command::ToggleDialogMaximized
+            | Command::ResetDialogSize => Some(false),
 
             _ => None,
         }

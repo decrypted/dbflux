@@ -5,12 +5,14 @@
 use dbflux_components::modals::{
     CellEditorCopiedEvent, EditorGeometry, install_editor_geometry_store,
 };
+use dbflux_storage::UiStateRepository;
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{Toast, now_hms};
 use gpui::{App, Entity};
 
 /// Key under which the cell editor's size is stored in `st_ui_state`.
-pub(crate) const CELL_EDITOR_GEOMETRY_KEY: &str = "cell_editor_geometry";
+pub(crate) const CELL_EDITOR_GEOMETRY_KEY: &str =
+    dbflux_storage::ui_state_keys::CELL_EDITOR_GEOMETRY;
 
 /// Persists the cell editor's size in `st_ui_state`. Only the first call of
 /// the app installs the store; it reads the stored size once.
@@ -28,16 +30,28 @@ pub(crate) fn install_geometry_store(app_state: &Entity<AppStateEntity>, cx: &mu
                 None
             }
         },
-        move |geometry| match serde_json::to_string(&geometry) {
-            Ok(json) => {
-                if let Err(error) = writer.set(CELL_EDITOR_GEOMETRY_KEY, &json) {
-                    log::error!("Could not save the cell editor size: {error}");
-                }
-            }
-            Err(error) => log::error!("Could not encode the cell editor size: {error}"),
-        },
+        move |geometry| store_geometry(&writer, geometry),
         cx,
     );
+}
+
+/// Saves `geometry`, or deletes the saved one after a Reset size.
+fn store_geometry(writer: &UiStateRepository, geometry: Option<EditorGeometry>) {
+    let Some(geometry) = geometry else {
+        if let Err(error) = writer.delete(CELL_EDITOR_GEOMETRY_KEY) {
+            log::error!("Could not forget the saved cell editor size: {error}");
+        }
+        return;
+    };
+
+    match serde_json::to_string(&geometry) {
+        Ok(json) => {
+            if let Err(error) = writer.set(CELL_EDITOR_GEOMETRY_KEY, &json) {
+                log::error!("Could not save the cell editor size: {error}");
+            }
+        }
+        Err(error) => log::error!("Could not encode the cell editor size: {error}"),
+    }
 }
 
 /// The stored size, or `None` for a value another version wrote.

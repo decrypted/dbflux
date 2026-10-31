@@ -274,6 +274,9 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Execute),
         ),
         ("about-link-*", KeyboardPath::Command(Command::Execute)),
+        // Settings › Reset: J and K move over the rows, Enter opens the
+        // confirmation of the row under the cursor.
+        ("reset-*", KeyboardPath::Command(Command::Execute)),
         ("mcp-client-active", KeyboardPath::Command(Command::Execute)),
         ("mcp-role-*.*", KeyboardPath::Command(Command::Execute)),
         ("mcp-policy-*", KeyboardPath::Command(Command::Execute)),

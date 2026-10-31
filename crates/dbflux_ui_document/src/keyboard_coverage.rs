@@ -839,8 +839,9 @@ pub(crate) const OBJECT_EDITOR: SurfaceRegistry = SurfaceRegistry {
 /// the column, which no key does. The column prompt and the offer to load the
 /// rest confirm with Enter and close with Escape, and the modal cell editor
 /// saves with its save key, closes with Escape, and copies, formats,
-/// compacts and maximizes with chords of its own (see the cell editor layer
-/// of the keymap). `t` switches between the
+/// compacts, maximizes (also a double click on its title bar) and resets its
+/// size with chords of its own (see the cell editor layer of the keymap).
+/// `t` switches between the
 /// table and the text view and `Shift+T` between raw and aligned text, in
 /// the tab's context: in the text view, Escape first takes the keyboard out
 /// of the text editor, whose context is `TextInput`.
@@ -964,6 +965,14 @@ pub(crate) const DELIMITED: SurfaceRegistry = SurfaceRegistry {
         (
             "cell-editor-maximize",
             KeyboardPath::Command(Command::ToggleDialogMaximized),
+        ),
+        (
+            "modal-title-bar",
+            KeyboardPath::Command(Command::ToggleDialogMaximized),
+        ),
+        (
+            "cell-editor-reset-size",
+            KeyboardPath::Command(Command::ResetDialogSize),
         ),
         ("modal-close", KeyboardPath::Command(Command::Cancel)),
     ],

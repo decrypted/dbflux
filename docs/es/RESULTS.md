@@ -284,13 +284,19 @@ sube al principio en lugar de listarlo dos veces, y un filtro que la base de
 datos rechazó no se guarda. Solo se guarda el texto del filtro, nunca filas.
 
 Abre la lista con el icono de historial a la izquierda del campo `WHERE`, con
-**Filter history** en la entrada Toolbar del menú de la tabla (`m`), o con
-`Up` / `Down` en el campo mientras está vacío o el cursor está al principio.
-Escribir con la lista abierta la reduce a los filtros que contienen el texto.
-`Up` / `Down` mueven el resaltado y `Enter` aplica el filtro resaltado; sin nada
-resaltado, `Enter` aplica lo que escribiste. `Shift+Delete` o la × de una fila
-quita ese filtro, la última fila, **Clear history**, olvida todos los filtros de
-la tabla, y `Escape` cierra la lista.
+**Filter history** en la entrada Toolbar del menú de la tabla (`m`), con
+`Ctrl+r` (`Cmd+r` en macOS) en el campo, o con `Up` / `Down` en el campo
+mientras está vacío o el cursor está al principio. La lista se abre con el
+teclado en su campo de búsqueda, que empieza vacío. Escribir ahí reduce la lista
+a los filtros que contienen todas las palabras escritas, en cualquier orden y
+sin distinguir mayúsculas: `status 500` encuentra `status = 500 AND method =
+'x'`. Las palabras encontradas se resaltan en las filas, y la coincidencia más
+reciente queda resaltada para `Enter`. `Up` / `Down` mueven el resaltado,
+`Ctrl+r` de nuevo pasa a la siguiente coincidencia más antigua y `Enter` aplica
+el filtro resaltado. `Shift+Delete` o la × de una fila quita ese filtro, y la
+última fila, **Clear history**, olvida todos los filtros de la tabla. `Escape`
+primero vacía la búsqueda; un segundo `Escape` cierra la lista y vuelve al campo
+`WHERE`.
 
 El historial de queries de una colección de documentos (el botón de historial de
 su barra de query) también se conserva al reiniciar.
@@ -389,8 +395,12 @@ escribió; una columna JSON lo rechaza.
 **Copy** copia al portapapeles el texto del editor tal como se ve, con las
 ediciones sin guardar, y **Copy compact** lo copia compactado. Arrastra el borde
 derecho o inferior del editor, o su esquina inferior derecha, para cambiar su
-tamaño, o maximízalo con el botón junto al botón de cerrar. El tamaño se recuerda
-para el siguiente valor.
+tamaño, o maximízalo con el botón junto al botón de cerrar o con un doble clic en
+su barra de título. El editor queda dentro del panel sobre el que se abre, así
+que su barra de título y sus botones siguen a la vista con cualquier tamaño, por
+largo que sea el valor. El tamaño se recuerda para el siguiente valor; **Reset
+size**, el botón anterior al de maximizar, devuelve al editor su tamaño
+predeterminado y olvida el recordado.
 
 | Teclas | Acción |
 |--------|--------|
@@ -398,6 +408,7 @@ para el siguiente valor.
 | `Ctrl+Shift+k` / `Ctrl+Shift+h` | Copiar / Copiar compacto (`Cmd` en macOS) |
 | `Ctrl+Shift+u` / `Ctrl+Shift+j` | Formatear / Compactar |
 | `Ctrl+Shift+Enter` | Maximizar o restaurar el editor |
+| `Ctrl+Shift+Backspace` | Restablecer el tamaño predeterminado del editor |
 
 `Ctrl+c` (`Cmd+c`) sigue copiando el texto seleccionado.
 ### Expresiones SQL en celdas

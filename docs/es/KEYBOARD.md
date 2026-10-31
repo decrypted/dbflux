@@ -442,13 +442,15 @@ consultas abre el menú del historial con el teclado dentro: las teclas del men�
 contextual se mueven, `Enter` vuelve a ejecutar la consulta resaltada y `Escape`
 lo cierra.
 
-En el campo `WHERE` de una tabla, `Up` o `Down` abre el historial de filtros de
-la tabla mientras el campo está vacío o el cursor está al principio; **Filter
-history** en el submenú Barra de herramientas también lo abre. Con la lista
-abierta, escribir la reduce, `Up` / `Down` mueven el resaltado, `Enter` aplica el
-filtro resaltado, `Shift+Delete` lo quita y `Escape` cierra la lista; su última
-fila borra el historial de la tabla. Ver [Historial de
-filtros](RESULTS.md#historial-de-filtros).
+En el campo `WHERE` de una tabla, `Ctrl+r` / `Cmd+r` abre el historial de
+filtros de la tabla, igual que `Up` o `Down` mientras el campo está vacío o el
+cursor está al principio, y **Filter history** en el submenú Barra de
+herramientas. La lista se abre con el teclado en su campo de búsqueda: escribir
+la reduce a los filtros que contienen todas las palabras escritas, `Up` / `Down`
+(o `Ctrl+r` / `Cmd+r` otra vez) mueven el resaltado, `Enter` aplica el filtro
+resaltado, `Shift+Delete` lo quita y `Escape` vacía la búsqueda y, después,
+cierra la lista; su última fila borra el historial de la tabla. Ver [Historial
+de filtros](RESULTS.md#historial-de-filtros).
 
 `=` y las entradas Añadir al filtro y Filtro del menú contextual son los
 equivalentes de teclado de un clic central en una celda (`Shift`+clic central
@@ -883,6 +885,7 @@ Las teclas aparecen en el contexto Migrate Wizard de Settings > Keybindings.
 | `Ctrl+Enter` / `Cmd+Enter` | Ejecutar la consulta |
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Ejecutar la consulta en una pestaña nueva |
 | `Ctrl+Shift+z` | Rehacer (Linux y Windows; macOS usa `Cmd+Shift+z`) |
+| `Ctrl+r` / `Cmd+r` | En el campo `WHERE` de una tabla, abrir su historial de filtros con el teclado en la búsqueda del historial; ver [Historial de filtros](RESULTS.md#historial-de-filtros) |
 
 Mientras escribes en un campo de texto fuera de un diálogo, como la búsqueda de
 la sidebar o la barra de contexto de ejecución, los atajos globales que llevan
@@ -903,7 +906,8 @@ menú, un desplegable o un selector, los atajos globales esperan a que se cierre
 | `Escape` / `Ctrl+s` / `Cmd+s` | Cerrar / guardar el editor de celda y la vista previa de documento |
 | `Ctrl+Shift+k` / `Ctrl+Shift+h` (`Cmd` en macOS) | Copiar el texto del editor de celda tal como se ve / compactado |
 | `Ctrl+Shift+u` / `Ctrl+Shift+j` (`Cmd` en macOS) | Formatear / compactar el JSON o XML del editor de celda |
-| `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) | Maximizar o restaurar el editor de celda |
+| `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) | Maximizar o restaurar el editor de celda (o doble clic en su barra de título) |
+| `Ctrl+Shift+Backspace` (`Cmd+Shift+Backspace`) | Restablecer el tamaño predeterminado del editor de celda |
 | `Tab` / `Shift+Tab` | Pasar al control siguiente / anterior dentro del diálogo |
 
 `Tab` y `Shift+Tab` dan la vuelta dentro de un diálogo abierto: desde el último

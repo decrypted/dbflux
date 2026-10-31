@@ -26,7 +26,7 @@ use dbflux_storage::{StorageRuntime, UiStateRepository};
 use crate::platform::{fit_window_size, inset_by_screen_margin};
 
 /// Key under which the main window geometry is stored in `st_ui_state`.
-pub const MAIN_WINDOW_GEOMETRY_KEY: &str = "main_window_geometry";
+pub const MAIN_WINDOW_GEOMETRY_KEY: &str = dbflux_storage::ui_state_keys::MAIN_WINDOW_GEOMETRY;
 
 /// Preferred size of the main window when nothing has been saved yet.
 ///

@@ -990,6 +990,7 @@ impl DataGridPanel {
                 true
             }
             Command::ClearFilter => self.clear_filter(window, cx),
+            Command::SearchFilterHistory => self.search_filter_history(window, cx),
             Command::OpenContextMenu => {
                 use crate::DataViewMode;
                 if self.view_config.mode == DataViewMode::Document {

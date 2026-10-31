@@ -264,6 +264,7 @@ impl AppState {
             auth_provider_registry,
             secret_provider_registry,
             history_manager,
+            persistence_hold: Default::default(),
             scripts_directory,
             storage_runtime,
             audit_service,

@@ -48,6 +48,9 @@ pub struct MenuItem {
     /// A second, muted line under the label: what the item acts on, or why
     /// it is disabled.
     pub detail: Option<SharedString>,
+    /// Byte ranges of the label drawn in the accent, bold: the parts a
+    /// search matched. Sorted and not overlapping.
+    pub label_highlights: Vec<std::ops::Range<usize>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,6 +171,7 @@ impl MenuItem {
             disabled: false,
             shortcut: None,
             detail: None,
+            label_highlights: Vec::new(),
         }
     }
 
@@ -215,6 +219,13 @@ impl MenuItem {
     /// Adds a muted second line under the label.
     pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    /// Emphasizes the given byte ranges of the label, for example the words
+    /// a search matched.
+    pub fn label_highlights(mut self, ranges: Vec<std::ops::Range<usize>>) -> Self {
+        self.label_highlights = ranges;
         self
     }
 
@@ -309,13 +320,13 @@ pub fn menu_row(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .child(item.label.clone()),
+                .child(menu_label(item, theme)),
             Some(detail) => div()
                 .flex()
                 .flex_col()
                 .flex_1()
                 .min_w_0()
-                .child(div().truncate().child(item.label.clone()))
+                .child(div().truncate().child(menu_label(item, theme)))
                 .child(
                     div()
                         .truncate()
@@ -341,6 +352,32 @@ pub fn menu_row(
                     .color(submenu_color),
             )
         })
+}
+
+/// The label of a row, with its highlighted ranges when it has any.
+fn menu_label(item: &MenuItem, theme: &gpui_component::Theme) -> AnyElement {
+    if item.label_highlights.is_empty() {
+        return item.label.clone().into_any_element();
+    }
+
+    let style = HighlightStyle {
+        color: Some(ChromeColors::tint(theme)),
+        font_weight: Some(FontWeight::BOLD),
+        ..Default::default()
+    };
+    let len = item.label.len();
+    let highlights = item
+        .label_highlights
+        .iter()
+        .filter(|range| range.start < range.end && range.end <= len)
+        .filter(|range| {
+            item.label.is_char_boundary(range.start) && item.label.is_char_boundary(range.end)
+        })
+        .map(|range| (range.clone(), style));
+
+    StyledText::new(item.label.clone())
+        .with_highlights(highlights)
+        .into_any_element()
 }
 
 /// Render a single menu item at a given index.

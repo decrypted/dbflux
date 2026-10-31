@@ -86,6 +86,9 @@ pub enum Command {
     ExportResults,
     /// Clears the WHERE filter of a table and reloads its rows.
     ClearFilter,
+    /// Opens the filter history of a table's WHERE field with the keyboard
+    /// in its search, or moves to the next older match while it is open.
+    SearchFilterHistory,
     /// Shows the next result tab of a query document, wrapping at the end.
     NextResultTab,
     /// Shows the previous result tab of a query document, wrapping at the start.
@@ -289,6 +292,9 @@ pub enum Command {
     CompactEditorText,
     /// Maximizes the modal value editor, or restores its size.
     ToggleDialogMaximized,
+    /// Gives the modal value editor its default size back and forgets the
+    /// remembered one.
+    ResetDialogSize,
     /// Imports entries from a file into the list that has the keyboard (the
     /// profile lists of the settings window).
     ImportItems,
@@ -431,6 +437,7 @@ impl Command {
 
             Command::ExportResults => "Export results",
             Command::ClearFilter => "Clear filter",
+            Command::SearchFilterHistory => "Search filter history",
             Command::NextResultTab => "Next result tab",
             Command::PrevResultTab => "Previous result tab",
             Command::CloseResultTab => "Close result tab",
@@ -565,6 +572,7 @@ impl Command {
             Command::FormatEditorText => "Format editor text",
             Command::CompactEditorText => "Compact editor text",
             Command::ToggleDialogMaximized => "Maximize or restore dialog",
+            Command::ResetDialogSize => "Reset dialog size",
             Command::ImportItems => "Import…",
             Command::ImportFromClient => "Import from another client…",
             Command::ResetBinding => "Reset binding",
@@ -644,6 +652,7 @@ impl Command {
 
             Command::ExportResults => "export_results",
             Command::ClearFilter => "clear_filter",
+            Command::SearchFilterHistory => "search_filter_history",
             Command::NextResultTab => "next_result_tab",
             Command::PrevResultTab => "prev_result_tab",
             Command::CloseResultTab => "close_result_tab",
@@ -779,6 +788,7 @@ impl Command {
             Command::FormatEditorText => "format_editor_text",
             Command::CompactEditorText => "compact_editor_text",
             Command::ToggleDialogMaximized => "toggle_dialog_maximized",
+            Command::ResetDialogSize => "reset_dialog_size",
             Command::ImportItems => "import_items",
             Command::ImportFromClient => "import_from_client",
             Command::ResetBinding => "reset_binding",
@@ -874,6 +884,7 @@ impl Command {
             Command::ToggleComment,
             Command::ExportResults,
             Command::ClearFilter,
+            Command::SearchFilterHistory,
             Command::NextResultTab,
             Command::PrevResultTab,
             Command::CloseResultTab,
@@ -997,6 +1008,7 @@ impl Command {
             Command::FormatEditorText,
             Command::CompactEditorText,
             Command::ToggleDialogMaximized,
+            Command::ResetDialogSize,
             Command::ImportItems,
             Command::ImportFromClient,
             Command::ResetBinding,
@@ -1082,6 +1094,7 @@ impl Command {
 
             Command::ExportResults
             | Command::ClearFilter
+            | Command::SearchFilterHistory
             | Command::NextResultTab
             | Command::PrevResultTab
             | Command::CloseResultTab
@@ -1215,7 +1228,8 @@ impl Command {
             | Command::CopyEditorTextCompact
             | Command::FormatEditorText
             | Command::CompactEditorText
-            | Command::ToggleDialogMaximized => "Actions",
+            | Command::ToggleDialogMaximized
+            | Command::ResetDialogSize => "Actions",
             Command::ImportItems
             | Command::ImportFromClient
             | Command::ResetBinding

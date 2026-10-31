@@ -642,6 +642,8 @@ struct FilterBarState {
     browse_query_label: Option<String>,
     /// The history popup of the WHERE field.
     history: filter_history::FilterHistoryPopup,
+    /// The search field at the top of the history popup.
+    history_search: Entity<InputState>,
     /// A relational filter whose visual query is in flight: the history
     /// keeps it once that query succeeds.
     pending_history: Option<String>,
@@ -1224,6 +1226,8 @@ impl DataGridPanel {
             None
         };
 
+        let history_search = filter_history::new_history_search(window, cx);
+
         let limit_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder("100");
             state.set_value("100", window, cx);
@@ -1242,6 +1246,9 @@ impl DataGridPanel {
                 } => {
                     this.submit_filter_input(window, cx);
                 }
+                // Opening the history moves the keyboard into its search
+                // field; the popup and the edit mode stay.
+                InputEvent::Blur if this.filter_history_search_focused(window, cx) => {}
                 InputEvent::Blur => {
                     this.close_filter_history(cx);
                     this.exit_edit_mode(window, cx);
@@ -1256,7 +1263,6 @@ impl DataGridPanel {
                 InputEvent::Change => {
                     this.filter_autoquote_changed(window, cx);
                     let text = input.read(cx).value().to_string();
-                    this.filter_history_text_changed(&text, cx);
                     if filter_bar::classify_filter_input(&text)
                         == filter_bar::FilterMode::Relational
                     {
@@ -1480,6 +1486,7 @@ impl DataGridPanel {
                 refresh_dropdown,
                 browse_query_label: None,
                 history: Default::default(),
+                history_search,
                 pending_history: None,
                 autoquote: Default::default(),
                 undo: Default::default(),

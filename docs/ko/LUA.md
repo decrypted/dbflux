@@ -109,11 +109,11 @@ mlua는 기본 라이브러리를 항상 열기 때문에, VM을 만든 뒤 그�
 
 훅 스크립트 자체는 항상 소스 텍스트로 컴파일됩니다. Lua 바이트코드 시그니처로 시작하는 스크립트 파일이나 인라인 스크립트는 실행되지 않고 `attempt to load a binary chunk`로 실패합니다.
 
-샌드박스는 "차단 목록이 아니라 허용 목록" 방식입니다. 명시적으로 로드한 네 가지 라이브러리, 위에 나열한 기본 내장 함수, 등록된 API 함수만 존재합니다. 위 목록에 없는 것은 Lua VM에 존재하지 않습니다. `engine.rs`의 테스트(`sandbox_globals_match_the_allowlist`)는 모든 기능을 켠 상태에서 모든 전역과 `string`, `table`, `math`, `utf8`, `dbflux`의 모든 멤버를 나열하고, 명시적 목록에 없는 것이 나타나면(예: mlua 업그레이드 후) 실패합니다.
+샌드박스는 "차단 목록이 아니라 허용 목록" 방식입니다. 명시적으로 로드한 네 가지 라이브러리, 위에 나열한 기본 내장 함수, 등록된 API 함수만 존재합니다. 위 목록에 없는 것은 Lua VM에 존재하지 않습니다. `engine/tests.rs`의 테스트(`sandbox_globals_match_the_allowlist`)는 모든 기능을 켠 상태에서 모든 전역과 `string`, `table`, `math`, `utf8`, `dbflux`의 모든 멤버를 나열하고, 명시적 목록에 없는 것이 나타나면(예: mlua 업그레이드 후) 실패합니다.
 
 ### 메모리 제한
 
-각 VM은 16 MiB의 강제 메모리 상한(`engine.rs`의 `lua.set_memory_limit(16 * 1024 * 1024)`)과 함께 만들어집니다. 이 한도를 넘어 할당하는 스크립트는 호스트의 메모리를 소진하는 대신 메모리 오류로 실패합니다.
+각 VM은 16 MiB의 강제 메모리 상한(`engine/mod.rs`의 `lua.set_memory_limit(16 * 1024 * 1024)`)과 함께 만들어집니다. 이 한도를 넘어 할당하는 스크립트는 호스트의 메모리를 소진하는 대신 메모리 오류로 실패합니다.
 
 ---
 
@@ -261,7 +261,7 @@ hook.ok()
 - Linux와 macOS: `USER`, `LOGNAME`, `TMPDIR`, 그리고 CLI가 SSO 로그인용 브라우저를 계속 열 수 있도록 `XDG_RUNTIME_DIR`, `XDG_CURRENT_DESKTOP`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `BROWSER`
 - Windows: `SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `COMSPEC`, `PATHEXT`, `OS`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `ALLUSERSPROFILE`, `PROGRAMFILES`, `PROGRAMFILES(X86)`, `PROGRAMW6432`, `COMMONPROGRAMFILES`, `COMMONPROGRAMFILES(X86)`, `COMMONPROGRAMW6432`, `PROCESSOR_ARCHITECTURE`, `NUMBER_OF_PROCESSORS`
 
-Windows에서는 Windows 자체와 마찬가지로 이름을 대소문자 구분 없이 비교하고, Linux와 macOS에서는 정확히 일치해야 하므로 `Home`이나 `LC_DEPLOY_TOKEN` 같은 사용자 정의 `LC_*` 변수는 제외됩니다. 그 밖의 모든 것, 예를 들어 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, 다른 토큰, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, 프록시 설정과 DBFlux IPC 토큰은 스크립트가 `env`로 넘기지 않는 한 전달되지 않습니다. `env`의 변수는 상속된 변수 다음에 추가되며 충돌하면 우선합니다. 덮어쓴 `PATH`는 자식 프로세스에 전달되지만, `program`은 여전히 DBFlux 자신의 `PATH`에서 먼저 찾고, 거기서 찾지 못할 때만 덮어쓴 `PATH`를 검색합니다. DBFlux가 가진 변수를 넘기려면 `dbflux.env.get`으로 읽습니다(**Environment read** 기능 필요):
+Windows에서는 Windows 자체와 마찬가지로 이름을 대소문자 구분 없이 비교하고, Linux와 macOS에서는 정확히 일치해야 하므로 `Home`이나 `LC_DEPLOY_TOKEN` 같은 사용자 정의 `LC_*` 변수는 제외됩니다. 그 밖의 모든 것, 예를 들어 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, 다른 토큰, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, 프록시 설정과 DBFlux IPC 토큰은 스크립트가 `env`로 넘기지 않는 한 전달되지 않습니다. `env`의 변수는 상속된 변수 다음에 추가되며 충돌하면 우선합니다. 덮어쓴 `PATH`는 자식 프로세스에 전달되며, `program`을 어디에서 찾는지는 플랫폼에 따라 다릅니다. Linux와 macOS에서는 DBFlux 자신의 `PATH`에서 먼저 찾고, 거기서 찾지 못할 때만 덮어쓴 `PATH`를 검색합니다. Windows에서는 DBFlux 자체 검색이 `PATHEXT` 확장자를 시도하지 않으므로, `aws`처럼 확장자가 없는 이름은 Windows에 맡겨집니다. Windows는 `.exe`를 붙여 덮어쓴 값을 포함한 자식 프로세스의 `PATH`를 DBFlux 폴더, 시스템 폴더, DBFlux 자신의 `PATH`보다 먼저 검색합니다. `aws.exe`나 `az.cmd`처럼 확장자가 붙은 이름은 Linux, macOS와 마찬가지로 DBFlux 자신의 `PATH`에서 먼저 찾습니다. DBFlux가 가진 변수를 넘기려면 `dbflux.env.get`으로 읽습니다(**Environment read** 기능 필요):
 
 ```lua
 local result = dbflux.process.run({
@@ -607,8 +607,8 @@ pub struct CompositeExecutor {
 모든 테스트는 크레이트 자체에 있습니다(별도의 `tests/` 디렉터리가 아닙니다). 현재 커버리지는 다음을 포함합니다:
 
 - `executor.rs`: 정상 결과, 런타임 오류, 파일 기반 스크립트, 취소, 시간 초과, 기능 게이팅, 허용 목록 강제, 스트리밍되는 프로세스 출력 동작
-- `engine.rs`: 훅 단계, 연결 메타데이터, 숨겨진 안전하지 않은 라이브러리와 제거된 로더, 거부되는 바이트코드, 전역 허용 목록 가드, 선택적 API 가시성, VM 생성 동작
-- `api/dbflux.rs`: 프로세스 옵션 검증, 자식 프로세스 환경 허용 목록과 호출별 `env`, spawn 전 만료된 훅 시간 초과 처리, 실시간 로그 이벤트 포맷팅, 취소 중 스트리밍되는 부분 stdout/stderr
+- `engine/tests.rs`: 훅 단계, 연결 메타데이터, 숨겨진 안전하지 않은 라이브러리와 제거된 로더, 거부되는 바이트코드, 전역 허용 목록 가드, 선택적 API 가시성, VM 생성 동작
+- `api/dbflux/tests.rs`: 프로세스 옵션 검증, 자식 프로세스 환경 허용 목록과 호출별 `env`, spawn 전 만료된 훅 시간 초과 처리, 실시간 로그 이벤트 포맷팅, 취소 중 스트리밍되는 부분 stdout/stderr
 
 ### 테스트 실행
 

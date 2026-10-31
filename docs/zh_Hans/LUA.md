@@ -109,11 +109,11 @@ mlua 总会打开基础库，因此创建 VM 之后会移除其中的这些函�
 
 Hook 脚本本身始终按源码文本编译：以 Lua 字节码签名开头的脚本文件或内联脚本不会运行，而是以 `attempt to load a binary chunk` 失败。
 
-沙箱是「允许列表，而非黑名单」。只有显式加载的四个库、上面列出的基础内置函数，以及注册进来的 API 函数。不在上表中的东西，在 Lua VM 里就不存在。`engine.rs` 中的测试（`sandbox_globals_match_the_allowlist`）会在启用全部能力的情况下列出所有全局变量以及 `string`、`table`、`math`、`utf8`、`dbflux` 的全部成员，一旦出现显式清单之外的条目（例如升级 mlua 之后）就会失败。
+沙箱是「允许列表，而非黑名单」。只有显式加载的四个库、上面列出的基础内置函数，以及注册进来的 API 函数。不在上表中的东西，在 Lua VM 里就不存在。`engine/tests.rs` 中的测试（`sandbox_globals_match_the_allowlist`）会在启用全部能力的情况下列出所有全局变量以及 `string`、`table`、`math`、`utf8`、`dbflux` 的全部成员，一旦出现显式清单之外的条目（例如升级 mlua 之后）就会失败。
 
 ### 内存限制
 
-每个 VM 在创建时都会被强制设置 16 MiB 的内存上限（`engine.rs` 中的 `lua.set_memory_limit(16 * 1024 * 1024)`）。分配超过该上限的脚本会以内存错误失败，而不会被允许耗尽宿主的内存。
+每个 VM 在创建时都会被强制设置 16 MiB 的内存上限（`engine/mod.rs` 中的 `lua.set_memory_limit(16 * 1024 * 1024)`）。分配超过该上限的脚本会以内存错误失败，而不会被允许耗尽宿主的内存。
 
 ---
 
@@ -261,7 +261,7 @@ hook.ok()
 - Linux 和 macOS：`USER`、`LOGNAME`、`TMPDIR`，以及 `XDG_RUNTIME_DIR`、`XDG_CURRENT_DESKTOP`、`DISPLAY`、`WAYLAND_DISPLAY`、`XAUTHORITY`、`BROWSER`，这样 CLI 仍能为 SSO 登录打开浏览器
 - Windows：`SYSTEMROOT`、`SYSTEMDRIVE`、`WINDIR`、`COMSPEC`、`PATHEXT`、`OS`、`TEMP`、`TMP`、`USERNAME`、`USERPROFILE`、`HOMEDRIVE`、`HOMEPATH`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`、`ALLUSERSPROFILE`、`PROGRAMFILES`、`PROGRAMFILES(X86)`、`PROGRAMW6432`、`COMMONPROGRAMFILES`、`COMMONPROGRAMFILES(X86)`、`COMMONPROGRAMW6432`、`PROCESSOR_ARCHITECTURE`、`NUMBER_OF_PROCESSORS`
 
-在 Windows 上变量名不区分大小写，与 Windows 自身一致；在 Linux 和 macOS 上必须完全匹配，因此 `Home` 或 `LC_DEPLOY_TOKEN` 这类自定义 `LC_*` 变量不会传入。其他所有变量，例如 `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`、`AWS_SESSION_TOKEN`、`AWS_PROFILE`、其他令牌、`SSH_AUTH_SOCK`、`DBUS_SESSION_BUS_ADDRESS`、代理设置以及 DBFlux 的 IPC 令牌，除非脚本通过 `env` 传入，否则都不会传给子进程。`env` 中的变量在继承变量之后加入，冲突时以它为准。被覆盖的 `PATH` 会传给子进程，但 `program` 仍然先在 DBFlux 自己的 `PATH` 中查找，只有在那里找不到时才会搜索被覆盖的 `PATH`。要转发 DBFlux 自身拥有的变量，请用 `dbflux.env.get` 读取（需要 **Environment read** 能力）：
+在 Windows 上变量名不区分大小写，与 Windows 自身一致；在 Linux 和 macOS 上必须完全匹配，因此 `Home` 或 `LC_DEPLOY_TOKEN` 这类自定义 `LC_*` 变量不会传入。其他所有变量，例如 `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`、`AWS_SESSION_TOKEN`、`AWS_PROFILE`、其他令牌、`SSH_AUTH_SOCK`、`DBUS_SESSION_BUS_ADDRESS`、代理设置以及 DBFlux 的 IPC 令牌，除非脚本通过 `env` 传入，否则都不会传给子进程。`env` 中的变量在继承变量之后加入，冲突时以它为准。被覆盖的 `PATH` 会传给子进程，而 `program` 在哪里被找到取决于平台。在 Linux 和 macOS 上，它先在 DBFlux 自己的 `PATH` 中查找，只有在那里找不到时才会搜索被覆盖的 `PATH`。在 Windows 上，DBFlux 自身的查找不会尝试 `PATHEXT` 扩展名，因此像 `aws` 这样不带扩展名的名称会交给 Windows：它会补上 `.exe`，并先搜索子进程的 `PATH`（包括被覆盖的值），然后才是 DBFlux 所在目录、系统目录和 DBFlux 自己的 `PATH`。像 `aws.exe` 或 `az.cmd` 这样带扩展名的名称，则与 Linux 和 macOS 一样，先在 DBFlux 自己的 `PATH` 中查找。要转发 DBFlux 自身拥有的变量，请用 `dbflux.env.get` 读取（需要 **Environment read** 能力）：
 
 ```lua
 local result = dbflux.process.run({
@@ -607,8 +607,8 @@ pub struct CompositeExecutor {
 所有测试都在 crate 内部（而非单独的 `tests/` 目录）。目前的覆盖范围包括：
 
 - `executor.rs`：正常结果、运行时错误、基于文件的脚本、取消、超时、能力门控、允许列表强制，以及流式进程输出行为
-- `engine.rs`：Hook 阶段、连接元数据、隐藏不安全库与已移除的加载器、拒绝字节码、全局允许列表守卫、可选 API 的可见性，以及 VM 构造行为
-- `api/dbflux.rs`：进程选项校验、子进程环境允许列表与每次调用的 `env`、spawn 之前已过期 Hook 超时的处理、实时日志事件格式化，以及取消期间的流式部分 stdout/stderr
+- `engine/tests.rs`：Hook 阶段、连接元数据、隐藏不安全库与已移除的加载器、拒绝字节码、全局允许列表守卫、可选 API 的可见性，以及 VM 构造行为
+- `api/dbflux/tests.rs`：进程选项校验、子进程环境允许列表与每次调用的 `env`、spawn 之前已过期 Hook 超时的处理、实时日志事件格式化，以及取消期间的流式部分 stdout/stderr
 
 ### 运行测试
 

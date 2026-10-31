@@ -109,11 +109,11 @@ The base library is always opened by mlua, so these of its functions are removed
 
 The hook script itself is always compiled as source text: a script file or inline script that starts with the Lua bytecode signature fails with `attempt to load a binary chunk` instead of running.
 
-The sandbox is "allowlist, not blocklist." Only the four explicitly loaded libraries, the base built-ins listed above and the registered API functions exist. If it's not in the list above, it doesn't exist in the Lua VM. A test in `engine.rs` (`sandbox_globals_match_the_allowlist`) enumerates every global and every member of `string`, `table`, `math`, `utf8` and `dbflux` with all capabilities enabled and fails when anything outside its explicit list appears, for example after an mlua upgrade.
+The sandbox is "allowlist, not blocklist." Only the four explicitly loaded libraries, the base built-ins listed above and the registered API functions exist. If it's not in the list above, it doesn't exist in the Lua VM. A test in `engine/tests.rs` (`sandbox_globals_match_the_allowlist`) enumerates every global and every member of `string`, `table`, `math`, `utf8` and `dbflux` with all capabilities enabled and fails when anything outside its explicit list appears, for example after an mlua upgrade.
 
 ### Memory Limit
 
-Each VM is created with an enforced memory cap of 16 MiB (`lua.set_memory_limit(16 * 1024 * 1024)` in `engine.rs`). A script that allocates past this limit fails with a memory error rather than being allowed to exhaust the host's memory.
+Each VM is created with an enforced memory cap of 16 MiB (`lua.set_memory_limit(16 * 1024 * 1024)` in `engine/mod.rs`). A script that allocates past this limit fails with a memory error rather than being allowed to exhaust the host's memory.
 
 ---
 
@@ -261,7 +261,7 @@ The child does **not** inherit DBFlux's environment. It gets only these variable
 - on Linux and macOS: `USER`, `LOGNAME`, `TMPDIR`, and `XDG_RUNTIME_DIR`, `XDG_CURRENT_DESKTOP`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `BROWSER`, so a CLI can still open a browser for an SSO login
 - on Windows: `SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `COMSPEC`, `PATHEXT`, `OS`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `ALLUSERSPROFILE`, `PROGRAMFILES`, `PROGRAMFILES(X86)`, `PROGRAMW6432`, `COMMONPROGRAMFILES`, `COMMONPROGRAMFILES(X86)`, `COMMONPROGRAMW6432`, `PROCESSOR_ARCHITECTURE`, `NUMBER_OF_PROCESSORS`
 
-On Windows names match case-insensitively, as Windows itself treats them; on Linux and macOS they must match exactly, so `Home` or a custom `LC_*` variable such as `LC_DEPLOY_TOKEN` stays out. Everything else, such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, other tokens, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, proxy settings and the DBFlux IPC tokens, stays out unless the script passes it in `env`. Variables in `env` are added after the inherited ones and win on a clash. An overridden `PATH` reaches the child, but `program` is still looked up in DBFlux's own `PATH` first; the overridden one is searched only when that finds nothing. To forward a variable DBFlux itself has, read it with `dbflux.env.get` (needs the **Environment read** capability):
+On Windows names match case-insensitively, as Windows itself treats them; on Linux and macOS they must match exactly, so `Home` or a custom `LC_*` variable such as `LC_DEPLOY_TOKEN` stays out. Everything else, such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, other tokens, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, proxy settings and the DBFlux IPC tokens, stays out unless the script passes it in `env`. Variables in `env` are added after the inherited ones and win on a clash. An overridden `PATH` reaches the child, and where `program` is found depends on the platform. On Linux and macOS it is looked up in DBFlux's own `PATH` first, and the overridden one is searched only when that finds nothing. On Windows, DBFlux's own lookup does not try `PATHEXT` extensions, so a name without one, such as `aws`, is left to Windows: it appends `.exe` and searches the child's `PATH`, override included, before DBFlux's folder, the system folders and DBFlux's own `PATH`. A name with its extension, such as `aws.exe` or `az.cmd`, is looked up in DBFlux's own `PATH` first, as on Linux and macOS. To forward a variable DBFlux itself has, read it with `dbflux.env.get` (needs the **Environment read** capability):
 
 ```lua
 local result = dbflux.process.run({
@@ -607,8 +607,8 @@ The code editor's Run button (`execution.rs`) uses `CompositeExecutor` to execut
 All tests are in the crate itself (not in a separate `tests/` directory). Coverage currently spans:
 
 - `executor.rs`: normal outcomes, runtime errors, file-backed scripts, cancellation, timeouts, capability gating, allowlist enforcement, and streamed process output behavior
-- `engine.rs`: hook phase, connection metadata, hidden unsafe libraries and removed loaders, refused bytecode, the global allowlist guard, optional API visibility, and VM construction behavior
-- `api/dbflux.rs`: process option validation, the child environment allowlist and per-call `env`, expired hook timeout handling before spawn, live log event formatting, and streamed partial stdout/stderr during cancellation
+- `engine/tests.rs`: hook phase, connection metadata, hidden unsafe libraries and removed loaders, refused bytecode, the global allowlist guard, optional API visibility, and VM construction behavior
+- `api/dbflux/tests.rs`: process option validation, the child environment allowlist and per-call `env`, expired hook timeout handling before spawn, live log event formatting, and streamed partial stdout/stderr during cancellation
 
 ### Running the tests
 

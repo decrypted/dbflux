@@ -130,12 +130,12 @@ mlua siempre abre la librería base, así que estas funciones suyas se eliminan 
 
 El script del hook siempre se compila como texto fuente: un archivo de script o un script inline que empiece con la firma de bytecode de Lua falla con `attempt to load a binary chunk` en lugar de ejecutarse.
 
-El sandbox es "allowlist, no blocklist". Solo existen las cuatro librerías cargadas explícitamente, los built-ins base listados arriba y las funciones de API registradas. Si no está en la lista de arriba, no existe en la VM de Lua. Un test de `engine.rs` (`sandbox_globals_match_the_allowlist`) enumera todos los globales y todos los miembros de `string`, `table`, `math`, `utf8` y `dbflux` con todas las capabilities activadas, y falla si aparece algo fuera de su lista explícita, por ejemplo tras actualizar mlua.
+El sandbox es "allowlist, no blocklist". Solo existen las cuatro librerías cargadas explícitamente, los built-ins base listados arriba y las funciones de API registradas. Si no está en la lista de arriba, no existe en la VM de Lua. Un test de `engine/tests.rs` (`sandbox_globals_match_the_allowlist`) enumera todos los globales y todos los miembros de `string`, `table`, `math`, `utf8` y `dbflux` con todas las capabilities activadas, y falla si aparece algo fuera de su lista explícita, por ejemplo tras actualizar mlua.
 
 ### Límite de memoria
 
 Cada VM se crea con un cap de memoria forzado de 16 MiB
-(`lua.set_memory_limit(16 * 1024 * 1024)` en `engine.rs`). Un script que asigna
+(`lua.set_memory_limit(16 * 1024 * 1024)` en `engine/mod.rs`). Un script que asigna
 más allá de este límite falla con un error de memoria en lugar de que se le
 permita agotar la memoria del host.
 
@@ -311,7 +311,7 @@ El proceso hijo **no** hereda el entorno de DBFlux. Solo recibe estas variables,
 - en Linux y macOS: `USER`, `LOGNAME`, `TMPDIR`, y `XDG_RUNTIME_DIR`, `XDG_CURRENT_DESKTOP`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `BROWSER`, para que un CLI todavía pueda abrir un navegador para un login SSO
 - en Windows: `SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `COMSPEC`, `PATHEXT`, `OS`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `ALLUSERSPROFILE`, `PROGRAMFILES`, `PROGRAMFILES(X86)`, `PROGRAMW6432`, `COMMONPROGRAMFILES`, `COMMONPROGRAMFILES(X86)`, `COMMONPROGRAMW6432`, `PROCESSOR_ARCHITECTURE`, `NUMBER_OF_PROCESSORS`
 
-En Windows los nombres se comparan sin distinguir mayúsculas y minúsculas, como hace el propio Windows; en Linux y macOS deben coincidir exactamente, así que `Home` o una variable `LC_*` propia como `LC_DEPLOY_TOKEN` queda fuera. Todo lo demás, como `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, otros tokens, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, la configuración de proxy y los tokens IPC de DBFlux, queda fuera salvo que el script lo pase en `env`. Las variables de `env` se añaden después de las heredadas y ganan en caso de conflicto. Un `PATH` sobrescrito llega al proceso hijo, pero `program` se sigue buscando primero en el `PATH` del propio DBFlux; el sobrescrito solo se usa cuando ahí no se encuentra nada. Para reenviar una variable que tiene el propio DBFlux, léela con `dbflux.env.get` (necesita la capability **Environment read**):
+En Windows los nombres se comparan sin distinguir mayúsculas y minúsculas, como hace el propio Windows; en Linux y macOS deben coincidir exactamente, así que `Home` o una variable `LC_*` propia como `LC_DEPLOY_TOKEN` queda fuera. Todo lo demás, como `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, otros tokens, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, la configuración de proxy y los tokens IPC de DBFlux, queda fuera salvo que el script lo pase en `env`. Las variables de `env` se añaden después de las heredadas y ganan en caso de conflicto. Un `PATH` sobrescrito llega al proceso hijo, y dónde se encuentra `program` depende de la plataforma. En Linux y macOS se busca primero en el `PATH` del propio DBFlux, y el sobrescrito solo se usa cuando ahí no se encuentra nada. En Windows, la búsqueda propia de DBFlux no prueba las extensiones de `PATHEXT`, así que un nombre sin extensión, como `aws`, queda en manos de Windows: añade `.exe` y busca en el `PATH` del proceso hijo, incluido el sobrescrito, antes que en la carpeta de DBFlux, las carpetas del sistema y el `PATH` del propio DBFlux. Un nombre con su extensión, como `aws.exe` o `az.cmd`, se busca primero en el `PATH` del propio DBFlux, como en Linux y macOS. Para reenviar una variable que tiene el propio DBFlux, léela con `dbflux.env.get` (necesita la capability **Environment read**):
 
 ```lua
 local result = dbflux.process.run({
@@ -755,8 +755,8 @@ La cobertura actualmente abarca:
 - `executor.rs`: outcomes normales, errores de runtime, scripts respaldados por
   archivo, cancelación, timeouts, gating de capabilities, enforcement de
   allowlist, y comportamiento de output de procesos transmitidos
-- `engine.rs`: fase del hook, metadata de conexión, librerías inseguras ocultas y loaders eliminados, bytecode rechazado, la guardia de la allowlist de globales, visibilidad opcional de API, y comportamiento de construcción de VM
-- `api/dbflux.rs`: validación de opciones de proceso, la allowlist del entorno del proceso hijo y el `env` por llamada, manejo de timeout de hook expirado antes de spawnear, formateo de eventos de log en vivo, y stdout/stderr parcial transmitido durante cancelación
+- `engine/tests.rs`: fase del hook, metadata de conexión, librerías inseguras ocultas y loaders eliminados, bytecode rechazado, la guardia de la allowlist de globales, visibilidad opcional de API, y comportamiento de construcción de VM
+- `api/dbflux/tests.rs`: validación de opciones de proceso, la allowlist del entorno del proceso hijo y el `env` por llamada, manejo de timeout de hook expirado antes de spawnear, formateo de eventos de log en vivo, y stdout/stderr parcial transmitido durante cancelación
 
 ### Ejecutar los tests
 

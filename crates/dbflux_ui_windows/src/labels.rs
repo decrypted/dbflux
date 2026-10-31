@@ -699,6 +699,185 @@ pub(crate) fn import_action_use_profile(name: &str) -> String {
     dbflux_i18n::t!("connection_manager.import.action.use_profile", name = name)
 }
 
+/// Heading of one connection in the import review: its name and, when the
+/// bundle sets one, the host value sources would send their values to.
+pub(crate) fn import_review_connection(review: &dbflux_portability::ConnectionReview) -> String {
+    match (&review.host, &review.port) {
+        (Some(host), Some(port)) => dbflux_i18n::t!(
+            "connection_manager.import.review.connection",
+            name = review.name.as_str(),
+            host = format!("{host}:{port}")
+        ),
+        (Some(host), None) => dbflux_i18n::t!(
+            "connection_manager.import.review.connection",
+            name = review.name.as_str(),
+            host = host.as_str()
+        ),
+        _ => review.name.clone(),
+    }
+}
+
+/// "Pre-connect hook · Command" line of one hook in the import review.
+pub(crate) fn import_review_hook_title(hook: &dbflux_portability::HookReview) -> String {
+    use dbflux_core::HookPhase;
+    use dbflux_portability::HookReviewKind;
+
+    let phase = match hook.phase {
+        HookPhase::PreConnect => dbflux_i18n::t!("hooks.phase.pre_connect_hook"),
+        HookPhase::PostConnect => dbflux_i18n::t!("hooks.phase.post_connect_hook"),
+        HookPhase::PreDisconnect => dbflux_i18n::t!("hooks.phase.pre_disconnect_hook"),
+        HookPhase::PostDisconnect => dbflux_i18n::t!("hooks.phase.post_disconnect_hook"),
+    };
+
+    let kind = match hook.kind {
+        HookReviewKind::Command => {
+            dbflux_i18n::t!("connection_manager.import.review.hook_kind.command")
+        }
+        HookReviewKind::Script(language) => dbflux_i18n::t!(
+            "connection_manager.import.review.hook_kind.script",
+            language = language.label()
+        ),
+        HookReviewKind::Lua => dbflux_i18n::t!("connection_manager.import.review.hook_kind.lua"),
+    };
+
+    let mut title = format!("{phase} · {kind}");
+    if !hook.enabled {
+        title.push_str(" · ");
+        title.push_str(&dbflux_i18n::t!(
+            "connection_manager.import.review.hook_disabled"
+        ));
+    }
+    title
+}
+
+/// The secondary lines of one hook in the import review: working directory,
+/// environment variable names and the Lua capabilities that reach outside
+/// the script.
+pub(crate) fn import_review_hook_notes(hook: &dbflux_portability::HookReview) -> Vec<String> {
+    let mut notes = Vec::new();
+
+    if let Some(cwd) = &hook.cwd {
+        notes.push(dbflux_i18n::t!(
+            "connection_manager.import.review.hook_cwd",
+            path = cwd.as_str()
+        ));
+    }
+    if !hook.env_keys.is_empty() {
+        notes.push(dbflux_i18n::t!(
+            "connection_manager.import.review.hook_env",
+            names = hook.env_keys.join(", ")
+        ));
+    }
+    if hook.lua_process_run {
+        notes.push(dbflux_i18n::t!(
+            "connection_manager.import.review.lua_process_run"
+        ));
+    }
+    if hook.lua_env_read {
+        notes.push(dbflux_i18n::t!(
+            "connection_manager.import.review.lua_env_read"
+        ));
+    }
+
+    notes
+}
+
+/// "password: Environment Variable GITHUB_TOKEN" line of one value source in
+/// the import review. A literal's value is never shown.
+pub(crate) fn import_review_value_ref(value_ref: &dbflux_portability::ValueRefReview) -> String {
+    use dbflux_portability::ValueSourceKind;
+
+    let source = match value_ref.source {
+        ValueSourceKind::Literal => {
+            return dbflux_i18n::t!(
+                "connection_manager.import.review.value_literal",
+                field = value_ref.field.as_str()
+            );
+        }
+        ValueSourceKind::Env => dbflux_i18n::t!("components.value_source.env"),
+        ValueSourceKind::Dotenv => dbflux_i18n::t!("components.value_source.dotenv"),
+        ValueSourceKind::Secret => dbflux_i18n::t!("components.value_source.secret"),
+        ValueSourceKind::Parameter => dbflux_i18n::t!("components.value_source.parameter"),
+        ValueSourceKind::Auth => dbflux_i18n::t!("components.value_source.auth"),
+    };
+
+    dbflux_i18n::t!(
+        "connection_manager.import.review.value_source",
+        field = value_ref.field.as_str(),
+        source = source,
+        detail = value_ref.detail.as_str()
+    )
+}
+
+/// "key = value" line of one driver parameter in the import review, marked
+/// when it needs the user's confirmation.
+pub(crate) fn import_review_driver_param(param: &dbflux_portability::DriverParamReview) -> String {
+    let message = if param.needs_consent {
+        "connection_manager.import.review.param_flagged"
+    } else {
+        "connection_manager.import.review.param"
+    };
+    dbflux_i18n::t!(
+        message,
+        key = param.key.as_str(),
+        value = param.value.as_str()
+    )
+}
+
+/// Pluralized "N connection(s) imported without entries you did not confirm"
+/// outcome banner title.
+pub(crate) fn import_outcome_withheld(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.withheld.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.withheld.many",
+            count = count
+        )
+    }
+}
+
+/// `"name": 1 hook, 2 value sources` line of the withheld outcome banner.
+pub(crate) fn import_outcome_withheld_line(
+    entries: &dbflux_portability::WithheldEntries,
+) -> String {
+    let plural = |count: usize, one: &str, many: &str| {
+        if count == 1 {
+            dbflux_i18n::t!(one, count = count)
+        } else {
+            dbflux_i18n::t!(many, count = count)
+        }
+    };
+
+    let mut parts = Vec::new();
+    if entries.hooks > 0 {
+        parts.push(plural(
+            entries.hooks,
+            "connection_manager.import.outcome.withheld_hooks.one",
+            "connection_manager.import.outcome.withheld_hooks.many",
+        ));
+    }
+    if entries.value_refs > 0 {
+        parts.push(plural(
+            entries.value_refs,
+            "connection_manager.import.outcome.withheld_value_refs.one",
+            "connection_manager.import.outcome.withheld_value_refs.many",
+        ));
+    }
+    if entries.driver_params > 0 {
+        parts.push(plural(
+            entries.driver_params,
+            "connection_manager.import.outcome.withheld_driver_params.one",
+            "connection_manager.import.outcome.withheld_driver_params.many",
+        ));
+    }
+
+    format!("\"{}\": {}", entries.connection_name, parts.join(", "))
+}
+
 /// Formats the pluralized "N entry/entries could not be imported" review-step
 /// intro for the external-client import flow's skip list.
 pub(crate) fn import_external_review_skips_intro(count: usize) -> String {
@@ -998,12 +1177,13 @@ mod tests {
         import_external_host_summary, import_external_review_skips_intro,
         import_outcome_config_failures, import_outcome_needs_driver,
         import_outcome_secret_failures, import_outcome_succeeded, import_outcome_unresolved_refs,
-        import_preview_conflicts_banner, import_preview_count_auth_profiles,
-        import_preview_count_connections, import_preview_count_proxies,
-        import_preview_count_ssh_tunnels, import_preview_required_banner,
-        import_required_auth_profile_ref_label, import_required_aws_reference_label,
-        import_required_secret_label, import_status_imported_toast, proxies_delete_body,
-        rpc_services_delete_body, ssh_private_key_with_path, ssh_tunnels_delete_body,
+        import_outcome_withheld_line, import_preview_conflicts_banner,
+        import_preview_count_auth_profiles, import_preview_count_connections,
+        import_preview_count_proxies, import_preview_count_ssh_tunnels,
+        import_preview_required_banner, import_required_auth_profile_ref_label,
+        import_required_aws_reference_label, import_required_secret_label, import_review_value_ref,
+        import_status_imported_toast, proxies_delete_body, rpc_services_delete_body,
+        ssh_private_key_with_path, ssh_tunnels_delete_body,
     };
     use super::{
         connection_manager_window_title_edit, connection_manager_window_title_new,
@@ -1558,6 +1738,39 @@ mod tests {
         assert!(message.contains("SSH tunnel"));
         assert!(message.contains("bastion-a"));
         assert!(message.contains("bastion-b"));
+    }
+
+    #[test]
+    fn import_review_value_ref_line_names_the_field_source_and_where_it_reads() {
+        use dbflux_portability::{ValueRefReview, ValueSourceKind};
+
+        let line = import_review_value_ref(&ValueRefReview {
+            field: "password".to_string(),
+            source: ValueSourceKind::Env,
+            detail: "GITHUB_TOKEN".to_string(),
+        });
+
+        assert!(line.contains("password"), "{line}");
+        assert!(
+            line.contains(&dbflux_i18n::t!("components.value_source.env")),
+            "{line}"
+        );
+        assert!(line.contains("GITHUB_TOKEN"), "{line}");
+    }
+
+    #[test]
+    fn import_outcome_withheld_line_lists_only_what_was_left_out() {
+        let line = import_outcome_withheld_line(&dbflux_portability::WithheldEntries {
+            connection_id: uuid::Uuid::nil(),
+            connection_name: "Team prod".to_string(),
+            hooks: 2,
+            value_refs: 0,
+            driver_params: 1,
+        });
+
+        assert!(line.starts_with("\"Team prod\": "));
+        assert!(line.contains('2') && line.contains('1'));
+        assert_eq!(line.matches(", ").count(), 1, "two parts: {line}");
     }
 
     #[test]

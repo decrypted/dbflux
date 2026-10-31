@@ -310,6 +310,10 @@ pub fn plan(parsed: &ParsedBundle, dest: &DestSnapshot<'_>) -> ImportPlan {
 ///
 /// When `choices` specifies `Reuse` or `MapTo` for a conflict, the destination UUID
 /// is used instead of minting a new one, and no new entity is emitted for that entry.
+///
+/// Connection hooks, non-literal value sources and driver parameters that can
+/// weaken authentication are dropped unless `choices.consent` keeps them, and
+/// `ImportActions::withheld` says what was dropped (see [`crate::consent`]).
 pub fn apply(
     parsed: &ParsedBundle,
     plan: &ImportPlan,
@@ -387,6 +391,7 @@ pub fn apply(
     let mut secret_writes: Vec<(String, SecretString)> = Vec::new();
     let mut kind_failures: Vec<(String, String)> = Vec::new();
     let mut unresolved_ref_connections: Vec<String> = Vec::new();
+    let mut withheld: Vec<crate::consent::WithheldEntries> = Vec::new();
 
     // Auth profiles.
     for auth_entry in &parsed.bundle.auth_profiles {
@@ -651,15 +656,7 @@ pub fn apply(
         // block the entire import; the user can add missing refs manually after import.
         profile.value_refs = restore_value_refs(conn_entry);
 
-        // Restore hooks when the bundle included them.
-        // Pass decrypted_secrets so hook env entries can be reconstructed from
-        // the encrypted section where they were staged during export.
-        if conn_entry.include_hooks {
-            profile.hooks = conn_entry
-                .hooks_payload
-                .as_ref()
-                .and_then(|p| restore_hooks(p, &conn_entry.local_id, secrets));
-        }
+        profile.hooks = bundle_hooks(conn_entry, secrets);
 
         // Restore settings_overrides when the bundle included them.
         if conn_entry.include_settings_overrides {
@@ -667,6 +664,12 @@ pub fn apply(
                 .settings_overrides_payload
                 .as_ref()
                 .and_then(restore_settings_overrides);
+        }
+
+        // Hooks, value sources and risky driver parameters come from a file
+        // anyone can write; they stay only with the user's consent.
+        if let Some(entries) = crate::consent::gate_connection(&mut profile, choices.consent) {
+            withheld.push(entries);
         }
 
         out_connections.push(profile);
@@ -680,6 +683,7 @@ pub fn apply(
         secret_writes,
         kind_failures,
         unresolved_ref_connections,
+        withheld,
     })
 }
 
@@ -708,7 +712,7 @@ fn db_kind_from_bundle(conn: &crate::bundle::ConnectionEntry) -> Option<dbflux_c
 /// Conversion is best-effort: entries that cannot be round-tripped through
 /// serde_json are silently skipped so a single unresolvable ref does not
 /// abort the import.
-fn restore_value_refs(
+pub(crate) fn restore_value_refs(
     conn: &crate::bundle::ConnectionEntry,
 ) -> std::collections::HashMap<String, dbflux_core::values::ValueRef> {
     conn.value_refs
@@ -719,6 +723,23 @@ fn restore_value_refs(
             Some((field.clone(), vref))
         })
         .collect()
+}
+
+/// The hooks a bundle connection carries: its `hooks_payload` when the entry
+/// says it includes hooks, with hook env restored from the decrypted secrets
+/// (the exporter stages env values there). Whether they are kept is decided
+/// afterwards by the consent gate.
+pub(crate) fn bundle_hooks(
+    conn: &crate::bundle::ConnectionEntry,
+    decrypted_secrets: Option<&HashMap<String, String>>,
+) -> Option<dbflux_core::ConnectionHooks> {
+    if !conn.include_hooks {
+        return None;
+    }
+
+    conn.hooks_payload
+        .as_ref()
+        .and_then(|payload| restore_hooks(payload, &conn.local_id, decrypted_secrets))
 }
 
 /// Deserialize the `hooks_payload` toml::Value into `ConnectionHooks` and
@@ -2254,7 +2275,12 @@ encryption = "none"
         };
 
         let import_plan = plan(&parsed, &empty_dest());
-        let choices = ResolutionChoices::default();
+        // These entries are kept only with consent; the gate itself is
+        // covered in `consent::tests`.
+        let choices = ResolutionChoices {
+            consent: crate::ImportConsent::all(),
+            ..ResolutionChoices::default()
+        };
         let actions = apply(&parsed, &import_plan, &choices).expect("apply");
 
         let conn = actions.connections.first().expect("one connection");
@@ -2352,7 +2378,12 @@ encryption = "none"
         };
 
         let import_plan = plan(&parsed, &empty_dest());
-        let choices = ResolutionChoices::default();
+        // These entries are kept only with consent; the gate itself is
+        // covered in `consent::tests`.
+        let choices = ResolutionChoices {
+            consent: crate::ImportConsent::all(),
+            ..ResolutionChoices::default()
+        };
         let actions = apply(&parsed, &import_plan, &choices).expect("apply");
 
         let conn = actions.connections.first().expect("one connection");
@@ -2421,7 +2452,12 @@ encryption = "none"
         };
 
         let import_plan = plan(&parsed, &empty_dest());
-        let choices = ResolutionChoices::default();
+        // These entries are kept only with consent; the gate itself is
+        // covered in `consent::tests`.
+        let choices = ResolutionChoices {
+            consent: crate::ImportConsent::all(),
+            ..ResolutionChoices::default()
+        };
         let actions = apply(&parsed, &import_plan, &choices).expect("apply");
 
         let conn = actions.connections.first().expect("connection");
@@ -2478,7 +2514,12 @@ encryption = "none"
         };
 
         let import_plan = plan(&parsed, &empty_dest());
-        let choices = ResolutionChoices::default();
+        // These entries are kept only with consent; the gate itself is
+        // covered in `consent::tests`.
+        let choices = ResolutionChoices {
+            consent: crate::ImportConsent::all(),
+            ..ResolutionChoices::default()
+        };
         let actions = apply(&parsed, &import_plan, &choices).expect("apply");
 
         let conn = actions.connections.first().expect("connection");

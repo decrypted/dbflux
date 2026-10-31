@@ -619,8 +619,6 @@ connection_manager:
       hide_passphrase: Hide passphrase
     hint:
       no_native_picker: No native file picker on this system — type or paste the bundle path above.
-      external_refs: External value references travel as-is
-      external_refs_body: SSM, Secrets Manager, and environment references are imported unchanged and resolved against this machine at connect time.
       leave_empty_skip: Leave empty to skip.
       select_profile_or_skip: "Select a profile or skip:"
     modal_title: Import
@@ -646,6 +644,32 @@ connection_manager:
         one: "%{count} value may be required after import — secrets omitted from the bundle can be entered or skipped."
         many: "%{count} values may be required after import — secrets omitted from the bundle can be entered or skipped."
       driver_not_installed_banner: One or more connections reference a driver not installed on this machine and will be skipped.
+    review:
+      intro: "Check what each connection would run and read on this computer:"
+      connection: "%{name} (%{host})"
+      hooks: "Hooks"
+      value_sources: "Value sources"
+      driver_params: "Driver parameters"
+      hook_kind:
+        command: "Command"
+        script: "%{language} script"
+        lua: "Lua script"
+      hook_disabled: "disabled in the bundle"
+      hook_cwd: "Working directory: %{path}"
+      hook_env: "Sets environment variables: %{names}"
+      lua_process_run: "Can run other programs (process.run)"
+      lua_env_read: "Can read environment variables"
+      value_literal: "%{field}: fixed value"
+      value_source: "%{field}: %{source} %{detail}"
+      param: "%{key} = %{value}"
+      param_flagged: "%{key} = %{value} (needs confirmation)"
+    consent:
+      hooks_title: "Hooks run programs on this computer"
+      hooks_body: "The hooks listed above run with your permissions whenever their connection connects or disconnects. They are only imported if you tick the box below. Tick it only if you trust whoever made this bundle."
+      hooks_checkbox: "Import the hooks listed above"
+      values_title: "Some value sources and driver parameters need your confirmation"
+      values_body: "The highlighted value sources read environment variables, files or cloud secrets on this computer and send the value to the connection's host. The highlighted driver parameters can weaken how the password is sent. Without the box ticked, the connections are imported without them and you enter those values yourself."
+      values_checkbox: "Keep the highlighted value sources and driver parameters"
     conflict_kind:
       auth_profile: Auth profile
       ssh_tunnel: SSH tunnel
@@ -685,6 +709,18 @@ connection_manager:
       secret_failures:
         one: "%{count} secret could not be written to the keyring. Enter it manually for the affected connection."
         many: "%{count} secrets could not be written to the keyring. Enter them manually for each affected connection."
+      withheld:
+        one: "%{count} connection was imported without entries you did not confirm. Add them in the connection editor if you need them."
+        many: "%{count} connections were imported without entries you did not confirm. Add them in the connection editor if you need them."
+      withheld_hooks:
+        one: "%{count} hook"
+        many: "%{count} hooks"
+      withheld_value_refs:
+        one: "%{count} value source"
+        many: "%{count} value sources"
+      withheld_driver_params:
+        one: "%{count} driver parameter"
+        many: "%{count} driver parameters"
     action:
       reuse_existing: Reuse existing
       create_new: Create new

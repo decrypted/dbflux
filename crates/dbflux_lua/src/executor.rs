@@ -91,7 +91,9 @@ impl HookExecutor for LuaExecutor {
             )
             .map_err(|e| format!("Failed to install Lua hook: {e}"))?;
 
-        let exec_result = vm.lua.load(&script_content).exec();
+        let exec_result = vm
+            .load_script(script_content.as_bytes())
+            .and_then(|script| script.call::<()>(()));
         vm.lua.remove_hook();
 
         let stdout = {

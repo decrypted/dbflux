@@ -116,8 +116,10 @@ _Lua_ funciona sin problema.
 | `io`        | Lectura/escritura de archivos. No se puede permitir que los hooks lean archivos arbitrarios o escriban en disco.                                                               |
 | `os`        | Llamadas al sistema: `os.execute()` sería un escape completo a shell, `os.remove()` puede borrar archivos. Incluso `os.getenv()` se reemplaza con el `dbflux.env.get()` gated. |
 | `debug`     | `debug.sethook()` podría interferir con el interrupt basado en conteo de instrucciones. `debug.getlocal()` y `debug.getinfo()` podrían inspeccionar estado interno.            |
-| `package`   | `require()`, `dofile()`, `loadfile()` permitirían cargar código arbitrario desde disco.                                                                                        |
+| `package`   | `require()` permitiría cargar código arbitrario desde disco, incluidos módulos nativos.                                                                                       |
 | `coroutine` | No es peligrosa en sí misma, pero agrega complejidad al modelo de timeout/cancelación (las coroutines pueden hacer yield más allá del instruction hook).                       |
+
+mlua siempre abre la librería base, así que tras crear la VM se eliminan `load()` (acepta bytecode precompilado, que Lua 5.4 no verifica), `loadfile()` y `dofile()` (leen cualquier archivo que DBFlux pueda leer), `collectgarbage()` y `string.dump()` (también de la metatabla de los strings). El script del hook siempre se compila como texto: uno que empiece con la firma de bytecode de Lua falla con `attempt to load a binary chunk`. Un test de `engine.rs` compara todos los globales y los miembros de `string`, `table`, `math`, `utf8` y `dbflux` con una lista explícita.
 
 El sandbox es "allowlist, no blocklist". Solo existen las cuatro librerías
 cargadas explícitamente más las funciones de API registradas. Si no está en la
@@ -253,6 +255,7 @@ hook.ok()
 | `args`       | string[] | no        | Argumentos del comando                                                                                       |
 | `timeout_ms` | integer  | no\*      | Timeout por proceso (ms). El timeout a nivel de hook igual aplica por encima.                                |
 | `cwd`        | string   | no        | Directorio de trabajo                                                                                        |
+| `env`        | table    | no        | Variables de entorno extra para el proceso, `{ NOMBRE = "valor" }`; nombres y valores deben ser strings      |
 | `stream`     | boolean  | no        | Transmite stdout/stderr al caller mientras el proceso sigue en ejecución                                     |
 | `detached`   | boolean  | no        | Entrega el proceso spawneado de vuelta al caller y retorna inmediatamente, en lugar de esperar a que termine |
 
@@ -283,6 +286,8 @@ restricción.
 | `cloudflared` | `cloudflared`, `cloudflared.exe`                 |
 | `gcloud_cli`  | `gcloud`, `gcloud.cmd`, `gcloud.exe`             |
 | `az_cli`      | `az`, `az.cmd`, `az.exe`                         |
+
+El proceso **no** hereda el entorno de DBFlux. Recibe solo `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `XDG_RUNTIME_DIR`, `DISPLAY`, `WAYLAND_DISPLAY` y, en Windows, `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA` y `PROGRAMDATA`. Todo lo demás (credenciales de AWS, `AWS_PROFILE`, tokens, `SSH_AUTH_SOCK`, proxies) se pasa en `env`, por ejemplo `env = { SSH_AUTH_SOCK = dbflux.env.get("SSH_AUTH_SOCK") }`; `env` se aplica después y gana en caso de conflicto.
 
 `program` debe ser un **nombre de comando plano**. Los nombres calificados con
 ruta se rechazan antes de verificar la allowlist: cualquier programa que

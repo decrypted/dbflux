@@ -90,8 +90,10 @@ let lua = Lua::new_with(stdlib, LuaOptions::default())?;
 | `io` | 文件读写。不能让 Hook 读取任意文件或往磁盘写入。 |
 | `os` | 系统调用：`os.execute()` 等于一个完整的 shell 逃逸口子，`os.remove()` 可以删除文件。连 `os.getenv()` 也被受控的 `dbflux.env.get()` 取代。 |
 | `debug` | `debug.sethook()` 可能干扰指令计数中断；`debug.getlocal()` 与 `debug.getinfo()` 可以窥探内部状态。 |
-| `package` | `require()`、`dofile()`、`loadfile()` 会允许从磁盘加载任意代码。 |
+| `package` | `require()` 会允许从磁盘加载任意代码，包括原生模块。 |
 | `coroutine` | 本身并不危险，但会让超时/取消模型复杂化（协程可以让出执行权，从而越过指令 Hook）。 |
+
+mlua 总会打开基础库，因此创建 VM 后会移除 `load()`（接受预编译字节码，而 Lua 5.4 不校验字节码）、`loadfile()` 和 `dofile()`（可读取 DBFlux 能读取的任何文件）、`collectgarbage()` 以及 `string.dump()`（字符串元表中也一并移除）。Hook 脚本始终按源码文本编译：以 Lua 字节码签名开头的脚本会以 `attempt to load a binary chunk` 失败。`engine.rs` 中的测试会把所有全局变量以及 `string`、`table`、`math`、`utf8`、`dbflux` 的成员与一份显式清单进行比对。
 
 沙箱是「允许列表，而非黑名单」。只有显式加载的四个库，加上注册进来的 API 函数。不在上表中的东西，在 Lua VM 里就不存在。
 
@@ -207,6 +209,7 @@ hook.ok()
 | `args` | string[] | 否 | 命令参数 |
 | `timeout_ms` | integer | 否\* | 单个进程的超时（毫秒）。在此之上，Hook 级超时仍然生效。 |
 | `cwd` | string | 否 | 工作目录 |
+| `env` | table | 否 | 传给子进程的额外环境变量，`{ NAME = "value" }`；名称和值都必须是字符串 |
 | `stream` | boolean | 否 | 在进程仍在运行时，把 stdout/stderr 流式推送给调用方 |
 | `detached` | boolean | 否 | 把启动的进程交还给调用方并立即返回，而不是等待它退出 |
 
@@ -233,6 +236,8 @@ hook.ok()
 | `cloudflared` | `cloudflared`、`cloudflared.exe` |
 | `gcloud_cli` | `gcloud`、`gcloud.cmd`、`gcloud.exe` |
 | `az_cli` | `az`、`az.cmd`、`az.exe` |
+
+子进程**不会**继承 DBFlux 的环境。它只会得到 `PATH`、`HOME`、`USER`、`LOGNAME`、`TMPDIR`、`LANG`、`LC_*`、`TERM`、`XDG_RUNTIME_DIR`、`DISPLAY`、`WAYLAND_DISPLAY`，以及 Windows 上的 `SYSTEMROOT`、`WINDIR`、`COMSPEC`、`PATHEXT`、`TEMP`、`TMP`、`USERNAME`、`USERPROFILE`、`HOMEDRIVE`、`HOMEPATH`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`。其他变量（AWS 凭据、`AWS_PROFILE`、令牌、`SSH_AUTH_SOCK`、代理设置）需要通过 `env` 传入，例如 `env = { SSH_AUTH_SOCK = dbflux.env.get("SSH_AUTH_SOCK") }`；`env` 在继承变量之后应用，冲突时以它为准。
 
 `program` 必须是**裸命令名**。带路径的写法会在检查允许列表之前就被拒绝：任何包含 `/` 或 `\`、由多个路径片段组成、或以 `~` 开头的程序名，都会以运行时错误 `"Program '...' must be a bare command name (no path separators)"` 失败。因此 `program = "/usr/local/bin/aws"` 会被直接拒绝 —— 应改为传入 `program = "aws"`，让它通过 `PATH` 解析。裸命令名与允许列表的匹配不区分大小写。
 

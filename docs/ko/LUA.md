@@ -90,8 +90,10 @@ let lua = Lua::new_with(stdlib, LuaOptions::default())?;
 | `io`        | 파일 읽기/쓰기. 훅이 임의의 파일을 읽거나 디스크에 쓰게 할 수 없습니다.                                                                                      |
 | `os`        | 시스템 호출: `os.execute()`는 완전한 셸 탈출이 되고, `os.remove()`는 파일을 삭제할 수 있습니다. `os.getenv()`조차 게이트가 있는 `dbflux.env.get()`으로 대체됩니다. |
 | `debug`     | `debug.sethook()`은 명령어 수 카운트 인터럽트를 방해할 수 있습니다. `debug.getlocal()`과 `debug.getinfo()`는 내부 상태를 들여다볼 수 있습니다.               |
-| `package`   | `require()`, `dofile()`, `loadfile()`은 디스크에서 임의의 코드를 로드할 수 있게 합니다.                                                                          |
+| `package`   | `require()`는 네이티브 모듈을 포함해 디스크에서 임의의 코드를 로드할 수 있게 합니다.                                                                           |
 | `coroutine` | 그 자체로 위험하지는 않지만 시간 초과/취소 모델에 복잡성을 더합니다 (코루틴이 명령어 훅을 넘어 yield할 수 있습니다).                                |
+
+mlua는 기본 라이브러리를 항상 열기 때문에, VM을 만든 뒤 `load()`(Lua 5.4가 검증하지 않는 사전 컴파일된 바이트코드를 받음), `loadfile()`과 `dofile()`(DBFlux가 읽을 수 있는 모든 파일을 읽음), `collectgarbage()`, `string.dump()`(문자열 메타테이블에서도)를 제거합니다. 훅 스크립트는 항상 소스 텍스트로 컴파일되며, Lua 바이트코드 시그니처로 시작하는 스크립트는 `attempt to load a binary chunk`로 실패합니다. `engine.rs`의 테스트가 모든 전역과 `string`, `table`, `math`, `utf8`, `dbflux`의 멤버를 명시적 목록과 비교합니다.
 
 샌드박스는 "차단 목록이 아니라 허용 목록" 방식입니다. 명시적으로 로드한 네 가지 라이브러리와 등록된 API 함수만 존재합니다. 위 목록에 없는 것은 Lua VM에 존재하지 않습니다.
 
@@ -207,6 +209,7 @@ hook.ok()
 | `args`       | string[] | 아니요       | 명령 인수                                                      |
 | `timeout_ms` | integer  | 아니요\*     | 프로세스별 시간 초과 (ms). 그 위에 훅 수준 시간 초과도 여전히 적용됩니다. |
 | `cwd`        | string   | 아니요       | 작업 디렉터리                                                      |
+| `env`        | table    | 아니요       | 자식 프로세스에 추가할 환경 변수 `{ NAME = "value" }`; 이름과 값은 문자열이어야 합니다 |
 | `stream`     | boolean  | 아니요       | 프로세스가 아직 실행 중인 동안 호출자에게 stdout/stderr를 스트리밍합니다  |
 | `detached`   | boolean  | 아니요       | 프로세스가 끝나기를 기다리는 대신 생성된 프로세스를 호출자에게 넘기고 즉시 반환합니다 |
 
@@ -233,6 +236,8 @@ hook.ok()
 | `cloudflared` | `cloudflared`, `cloudflared.exe`                 |
 | `gcloud_cli`  | `gcloud`, `gcloud.cmd`, `gcloud.exe`             |
 | `az_cli`      | `az`, `az.cmd`, `az.exe`                         |
+
+자식 프로세스는 DBFlux의 환경을 **상속하지 않습니다**. `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `XDG_RUNTIME_DIR`, `DISPLAY`, `WAYLAND_DISPLAY`와 Windows에서는 `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`만 받습니다. 그 외(AWS 자격 증명, `AWS_PROFILE`, 토큰, `SSH_AUTH_SOCK`, 프록시)는 `env`로 넘깁니다. 예: `env = { SSH_AUTH_SOCK = dbflux.env.get("SSH_AUTH_SOCK") }`. `env`는 나중에 적용되며 충돌 시 우선합니다.
 
 `program`은 **단순 명령 이름**이어야 합니다. 경로가 붙은 이름은 허용 목록을 확인하기 전에 거부됩니다: `/` 또는 `\`를 포함하거나, 여러 경로 구성 요소로 이루어졌거나, `~`로 시작하는 프로그램은 런타임 오류 `"Program '...' must be a bare command name (no path separators)"`으로 실패합니다. 따라서 `program = "/usr/local/bin/aws"`는 무조건 거부됩니다 — 대신 `program = "aws"`를 전달해 `PATH`를 통해 해석되도록 합니다. 단순 이름과 허용 목록의 대조는 대소문자를 구분하지 않습니다.
 

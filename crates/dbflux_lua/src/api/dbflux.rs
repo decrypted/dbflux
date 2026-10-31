@@ -4,6 +4,7 @@ use dbflux_core::{
     execute_streaming_process,
 };
 use mlua::{Lua, Result as LuaResult, Table, Value};
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -107,7 +108,79 @@ where
     })
 }
 
+/// Parent variables a `dbflux.process.run` child keeps: enough to find programs,
+/// the home directory, the locale, a terminal and a desktop session (browser-based
+/// SSO logins), and on Windows the variables its runtime needs to start a process.
+/// Everything else, such as cloud credentials, tokens or `SSH_AUTH_SOCK`, has to be
+/// passed per call through `env`, so a hook hands over only what it names.
+const INHERITED_ENV_VARS: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "TERM",
+    "TMPDIR",
+    "XDG_RUNTIME_DIR",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERNAME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+];
+
+// Case-insensitive because Windows variable names are (`Path`, `SystemRoot`); on
+// Unix a differently cased copy of a listed name is no more sensitive.
+fn is_inherited_env_var(key: &str) -> bool {
+    key.get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("LC_"))
+        || INHERITED_ENV_VARS
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(key))
+}
+
+/// Builds a child's whole environment: the allowlisted part of `parent`, then the
+/// script's explicit `env`, which wins on a clash.
+fn child_environment(
+    parent: impl IntoIterator<Item = (OsString, OsString)>,
+    explicit: &[(String, String)],
+) -> Vec<(OsString, OsString)> {
+    let mut environment: Vec<(OsString, OsString)> = parent
+        .into_iter()
+        .filter(|(key, _)| key.to_str().is_some_and(is_inherited_env_var))
+        .collect();
+
+    environment.extend(
+        explicit
+            .iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+    );
+
+    environment
+}
+
 fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<Table> {
+    run_process_with_parent_env(lua, state, options, std::env::vars_os())
+}
+
+// Takes the parent environment as an argument so tests can plant variables without
+// mutating the process-global environment other test threads read.
+fn run_process_with_parent_env(
+    lua: &Lua,
+    state: &LuaRuntimeState,
+    options: Table,
+    parent_env: impl IntoIterator<Item = (OsString, OsString)>,
+) -> LuaResult<Table> {
     let program = read_required_string(&options, "program")?;
     let allowlist = read_required_string(&options, "allowlist")?;
     let args = read_string_list(&options, "args")?;
@@ -115,6 +188,7 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
     let cwd = read_optional_string(&options, "cwd")?;
     let stream_output = read_optional_bool(&options, "stream")?.unwrap_or(false);
     let detached = read_optional_bool(&options, "detached")?.unwrap_or(false);
+    let explicit_env = read_env_table(&options, "env")?;
 
     if state.cancel_token.is_cancelled()
         || state
@@ -151,10 +225,8 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
     command.args(&args);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-
-    for var in BLOCKED_ENV_VARS {
-        command.env_remove(var);
-    }
+    command.env_clear();
+    command.envs(child_environment(parent_env, &explicit_env));
 
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
@@ -401,6 +473,43 @@ fn read_optional_bool(options: &Table, key: &str) -> LuaResult<Option<bool>> {
             "dbflux.process.run field '{key}' must be a boolean"
         ))),
     }
+}
+
+fn read_env_table(options: &Table, key: &str) -> LuaResult<Vec<(String, String)>> {
+    let invalid = || {
+        mlua::Error::RuntimeError(format!(
+            "dbflux.process.run field '{key}' must be a table of variable names to string values"
+        ))
+    };
+
+    let table = match options.get::<Value>(key)? {
+        Value::Table(table) => table,
+        Value::Nil => return Ok(Vec::new()),
+        _ => return Err(invalid()),
+    };
+
+    let mut variables = Vec::new();
+    for pair in table.pairs::<Value, Value>() {
+        let (Value::String(name), Value::String(value)) = pair? else {
+            return Err(invalid());
+        };
+        let name = name.to_str()?.to_string();
+        let value = value.to_str()?.to_string();
+
+        // `Command` fails at spawn on a NUL with a vaguer message, and a name with `=`
+        // would reach the child as a different variable.
+        if name.is_empty() || name.contains('=') || name.contains('\0') || value.contains('\0') {
+            return Err(mlua::Error::RuntimeError(format!(
+                "dbflux.process.run env variable '{name}' has an invalid name or value"
+            )));
+        }
+
+        variables.push((name, value));
+    }
+
+    // Lua table order is unspecified; sort so the child's environment is reproducible.
+    variables.sort();
+    Ok(variables)
 }
 
 fn read_string_list(options: &Table, key: &str) -> LuaResult<Vec<String>> {
@@ -733,6 +842,217 @@ mod tests {
         assert_eq!(value.as_deref(), Some("visible"));
     }
 
+    // =========================================================================
+    // Child environment of dbflux.process.run
+    // =========================================================================
+
+    /// Held by tests that spawn a child and by the test that swaps `PATH`: under a
+    /// threaded `cargo test` a spawn during the swap cannot find the interpreter.
+    static PATH_LOCK: Mutex<()> = Mutex::new(());
+
+    fn path_lock() -> std::sync::MutexGuard<'static, ()> {
+        PATH_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    const PRINT_ENV_SCRIPT: &str = "import os, sys\nfor name in sys.argv[1:]:\n    print(name + '=' + os.environ.get(name, '<unset>'))";
+
+    /// Options for a child that prints `NAME=value` (or `NAME=<unset>`) per name.
+    fn print_env_options(lua: &Lua, names: &[&str]) -> Table {
+        let options = process_options(lua, python_program()).unwrap();
+        let args = lua.create_table().unwrap();
+        args.push("-c").unwrap();
+        args.push(PRINT_ENV_SCRIPT).unwrap();
+        for name in names {
+            args.push(*name).unwrap();
+        }
+        options.set("args", args).unwrap();
+        options.set("timeout_ms", 30_000_i64).unwrap();
+        options
+    }
+
+    fn child_env_report(result: &Table) -> std::collections::HashMap<String, String> {
+        let stdout: String = result.get("stdout").unwrap();
+        let stderr: String = result.get("stderr").unwrap();
+        assert!(
+            result.get::<bool>("ok").unwrap(),
+            "env probe child failed: stdout={stdout:?} stderr={stderr:?}"
+        );
+        stdout
+            .lines()
+            .filter_map(|line| line.trim_end().split_once('='))
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn planted_parent_env(extra: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        std::env::vars_os()
+            .chain(
+                extra
+                    .iter()
+                    .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+            )
+            .collect()
+    }
+
+    #[test]
+    fn process_run_child_does_not_inherit_unlisted_parent_variables() {
+        let _path = path_lock();
+        // Cargo and nextest both export CARGO_MANIFEST_DIR to the test process, so it
+        // is a real parent variable that is not on the allowlist, read without
+        // mutating the process environment.
+        assert!(
+            std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+            "test precondition: the runner exports CARGO_MANIFEST_DIR"
+        );
+        let lua = Lua::new();
+        let state = test_state(None, Instant::now(), None);
+        let options = print_env_options(&lua, &["CARGO_MANIFEST_DIR"]);
+
+        let result = run_process(&lua, &state, options).unwrap();
+        let report = child_env_report(&result);
+
+        assert_eq!(
+            report.get("CARGO_MANIFEST_DIR").map(String::as_str),
+            Some("<unset>")
+        );
+    }
+
+    #[test]
+    fn process_run_child_does_not_see_parent_secrets() {
+        let _path = path_lock();
+        let lua = Lua::new();
+        let state = test_state(None, Instant::now(), None);
+        let options = print_env_options(
+            &lua,
+            &[
+                "AWS_SECRET_ACCESS_KEY",
+                "SSH_AUTH_SOCK",
+                "DBFLUX_IPC_TOKEN",
+                "DBFLUX_LUA_CANARY",
+                "LC_DBFLUX_CANARY",
+            ],
+        );
+        let parent = planted_parent_env(&[
+            ("AWS_SECRET_ACCESS_KEY", "lua-canary-aws"),
+            ("SSH_AUTH_SOCK", "/tmp/lua-canary.sock"),
+            ("DBFLUX_IPC_TOKEN", "lua-canary-ipc"),
+            ("DBFLUX_LUA_CANARY", "lua-canary"),
+            ("LC_DBFLUX_CANARY", "kept"),
+        ]);
+
+        let result = run_process_with_parent_env(&lua, &state, options, parent).unwrap();
+        let report = child_env_report(&result);
+
+        for name in [
+            "AWS_SECRET_ACCESS_KEY",
+            "SSH_AUTH_SOCK",
+            "DBFLUX_IPC_TOKEN",
+            "DBFLUX_LUA_CANARY",
+        ] {
+            assert_eq!(
+                report.get(name).map(String::as_str),
+                Some("<unset>"),
+                "{name} must not reach the child"
+            );
+        }
+        assert_eq!(
+            report.get("LC_DBFLUX_CANARY").map(String::as_str),
+            Some("kept"),
+            "LC_* variables stay"
+        );
+    }
+
+    #[test]
+    fn process_run_passes_explicit_env_to_child() {
+        let _path = path_lock();
+        let lua = Lua::new();
+        let state = test_state(None, Instant::now(), None);
+        let options = print_env_options(&lua, &["DBFLUX_LUA_EXPLICIT", "LC_DBFLUX_CANARY"]);
+        let env = lua.create_table().unwrap();
+        env.set("DBFLUX_LUA_EXPLICIT", "from-script").unwrap();
+        env.set("LC_DBFLUX_CANARY", "explicit-wins").unwrap();
+        options.set("env", env).unwrap();
+        let parent = planted_parent_env(&[("LC_DBFLUX_CANARY", "from-parent")]);
+
+        let result = run_process_with_parent_env(&lua, &state, options, parent).unwrap();
+        let report = child_env_report(&result);
+
+        assert_eq!(
+            report.get("DBFLUX_LUA_EXPLICIT").map(String::as_str),
+            Some("from-script")
+        );
+        assert_eq!(
+            report.get("LC_DBFLUX_CANARY").map(String::as_str),
+            Some("explicit-wins")
+        );
+    }
+
+    #[test]
+    fn child_environment_keeps_only_allowlisted_parent_variables() {
+        let parent = [
+            ("PATH", "/usr/bin"),
+            ("Path", "C:\\Windows"),
+            ("HOME", "/home/u"),
+            ("LANG", "C.UTF-8"),
+            ("LC_ALL", "C"),
+            ("TMPDIR", "/tmp"),
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+            ("AWS_ACCESS_KEY_ID", "x"),
+            ("AWS_SESSION_TOKEN", "x"),
+            ("GITHUB_TOKEN", "x"),
+            ("SSH_AUTH_SOCK", "x"),
+            ("DATABASE_URL", "x"),
+            ("DBFLUX_DRIVER_IPC_TOKEN", "x"),
+            ("PATHOLOGICAL", "x"),
+            ("LC", "x"),
+        ]
+        .map(|(key, value)| (OsString::from(key), OsString::from(value)));
+
+        let names: Vec<String> = child_environment(parent, &[])
+            .into_iter()
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(
+            names,
+            [
+                "PATH",
+                "Path",
+                "HOME",
+                "LANG",
+                "LC_ALL",
+                "TMPDIR",
+                "XDG_RUNTIME_DIR"
+            ]
+        );
+    }
+
+    #[test]
+    fn env_option_rejects_non_string_values_and_bad_names() {
+        let lua = Lua::new();
+
+        let options = lua.create_table().unwrap();
+        options.set("env", "PATH=/bin").unwrap();
+        assert!(read_env_table(&options, "env").is_err());
+
+        let env = lua.create_table().unwrap();
+        env.set("PORT", 5432_i64).unwrap();
+        options.set("env", env).unwrap();
+        assert!(read_env_table(&options, "env").is_err());
+
+        let env = lua.create_table().unwrap();
+        env.set("A=B", "x").unwrap();
+        options.set("env", env).unwrap();
+        assert!(read_env_table(&options, "env").is_err());
+
+        let env = lua.create_table().unwrap();
+        env.set("", "x").unwrap();
+        options.set("env", env).unwrap();
+        assert!(read_env_table(&options, "env").is_err());
+    }
+
     // --- SEC2-3: PATH resolution helper ---
     // All PATH-mutating sub-cases are in one test fn to avoid cross-test races.
 
@@ -755,6 +1075,7 @@ mod tests {
             ))
         }
 
+        let _path = path_lock();
         let saved_path = std::env::var_os("PATH");
 
         // Sub-case: returns None when program is absent

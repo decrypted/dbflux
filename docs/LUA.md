@@ -72,6 +72,8 @@ Only four Lua standard libraries:
 ```rust
 let stdlib = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8;
 let lua = Lua::new_with(stdlib, LuaOptions::default())?;
+lua.set_memory_limit(16 * 1024 * 1024)?;
+remove_unsafe_builtins(&lua)?; // load, loadfile, dofile, collectgarbage, string.dump
 ```
 
 This gives scripts access to:
@@ -81,7 +83,9 @@ This gives scripts access to:
 - **math**: `math.floor`, `math.ceil`, `math.random`, `math.sqrt`, `math.abs`, `math.max`, `math.min`, `math.pi`
 - **utf8**: `utf8.char`, `utf8.codepoint`, `utf8.len`
 
-Plus the Lua built-ins that don't require library loading: `type()`, `tostring()`, `tonumber()`, `pairs()`, `ipairs()`, `next()`, `select()`, `pcall()`, `xpcall()`, `error()`, `setmetatable()`, `getmetatable()`, `rawget()`, `rawset()`, `rawequal()`, `rawlen()`. Closures, local variables, metatables, all the control flow — everything that makes Lua _Lua_ works fine.
+Plus these base built-ins: `assert()`, `error()`, `type()`, `tostring()`, `tonumber()`, `pairs()`, `ipairs()`, `next()`, `select()`, `pcall()`, `xpcall()`, `setmetatable()`, `getmetatable()`, `rawget()`, `rawset()`, `rawequal()`, `rawlen()`, `print()`, `warn()`, `_G` and `_VERSION`. Closures, local variables, metatables and all the control flow work as usual.
+
+`string` has every Lua 5.4 function except `string.dump`, and `math` also keeps the Lua 5.3 compatibility functions (`math.pow`, `math.atan2`, `math.log10`, ...).
 
 ### What's Blocked
 
@@ -90,10 +94,22 @@ Plus the Lua built-ins that don't require library loading: `type()`, `tostring()
 | `io`        | File read/write. Can't let hooks read arbitrary files or write to disk.                                                                                      |
 | `os`        | System calls: `os.execute()` would be a full shell escape, `os.remove()` can delete files. Even `os.getenv()` is replaced with the gated `dbflux.env.get()`. |
 | `debug`     | `debug.sethook()` could interfere with the instruction-count interrupt. `debug.getlocal()` and `debug.getinfo()` could inspect internal state.               |
-| `package`   | `require()`, `dofile()`, `loadfile()` would allow loading arbitrary code from disk.                                                                          |
+| `package`   | `require()` would allow loading arbitrary code, including native modules, from disk.                                                                         |
 | `coroutine` | Not dangerous per se, but adds complexity to the timeout/cancellation model (coroutines can yield past the instruction hook).                                |
 
-The sandbox is "allowlist, not blocklist." Only the four explicitly loaded libraries plus the registered API functions exist. If it's not in the list above, it doesn't exist in the Lua VM.
+The base library is always opened by mlua, so these of its functions are removed after the VM is created:
+
+| Function           | Why it's removed                                                                                                                                         |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `load()`           | Accepts precompiled bytecode. Lua 5.4 does not verify bytecode, so a crafted chunk can corrupt the interpreter's memory and escape the sandbox.           |
+| `loadfile()`       | Reads any file DBFlux can read, as Lua; a syntax error echoes fragments of the file into the hook output.                                                 |
+| `dofile()`         | Same as `loadfile()`, and runs it.                                                                                                                       |
+| `collectgarbage()` | Lets a script stop or retune the garbage collector of the VM it shares with DBFlux's callbacks.                                                          |
+| `string.dump()`    | Turns a function into bytecode. With no loader left it has no use. It is also gone from the string metatable, so `("").dump` is `nil` too.               |
+
+The hook script itself is always compiled as source text: a script file or inline script that starts with the Lua bytecode signature fails with `attempt to load a binary chunk` instead of running.
+
+The sandbox is "allowlist, not blocklist." Only the four explicitly loaded libraries, the base built-ins listed above and the registered API functions exist. If it's not in the list above, it doesn't exist in the Lua VM. A test in `engine.rs` (`sandbox_globals_match_the_allowlist`) enumerates every global and every member of `string`, `table`, `math`, `utf8` and `dbflux` with all capabilities enabled and fails when anything outside its explicit list appears, for example after an mlua upgrade.
 
 ### Memory Limit
 
@@ -207,6 +223,7 @@ hook.ok()
 | `args`       | string[] | no       | Command arguments                                                      |
 | `timeout_ms` | integer  | no\*     | Per-process timeout (ms). Hook-level timeout still applies above this. |
 | `cwd`        | string   | no       | Working directory                                                      |
+| `env`        | table    | no       | Extra environment variables for the child, `{ NAME = "value" }`. Names and values must be strings; see [Child environment](#child-environment) |
 | `stream`     | boolean  | no       | Stream stdout/stderr to the caller while the process is still running  |
 | `detached`   | boolean  | no       | Hand the spawned process back to the caller and return immediately, instead of waiting for it to exit |
 
@@ -235,6 +252,31 @@ hook.ok()
 | `az_cli`      | `az`, `az.cmd`, `az.exe`                         |
 
 `program` must be a **bare command name**. Path-qualified names are rejected before the allowlist is checked: any program containing a `/` or `\`, made up of multiple path components, or starting with `~` fails with the runtime error `"Program '...' must be a bare command name (no path separators)"`. So `program = "/usr/local/bin/aws"` is rejected outright — pass `program = "aws"` instead and let it resolve via `PATH`. Matching of the bare name against the allowlist is case-insensitive.
+
+#### Child environment
+
+The child does **not** inherit DBFlux's environment. It gets only these variables from it, when they are set:
+
+- `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`
+- `LANG` and every `LC_*` variable, `TERM`
+- `XDG_RUNTIME_DIR`, `DISPLAY`, `WAYLAND_DISPLAY`, so a CLI can still open a browser for an SSO login
+- on Windows: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`
+
+Names match case-insensitively. Everything else, such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, other tokens, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, proxy settings and the DBFlux IPC tokens, stays out unless the script passes it in `env`. Variables in `env` are added after the inherited ones and win on a clash, so `env` can also override `PATH`. To forward a variable DBFlux itself has, read it with `dbflux.env.get` (needs the **Environment read** capability):
+
+```lua
+local result = dbflux.process.run({
+    program = "ssh",
+    allowlist = "ssh_cli",
+    args = { "-O", "check", "bastion" },
+    timeout_ms = 10000,
+    env = {
+        SSH_AUTH_SOCK = dbflux.env.get("SSH_AUTH_SOCK"),
+    },
+})
+```
+
+A `nil` value just leaves the variable out. A value that is not a string, a name that is empty or contains `=`, or a `NUL` byte in either fails the call before anything is started.
 
 This design serves a specific use case: hooks that need to trigger cloud CLI tools (SSO login, tunnel setup, secrets retrieval) without opening a full shell escape. The allowlist is an ergonomics and footgun guard — it prevents typos and accidental execution of unexpected programs. It is **not** a security isolation boundary: a user who controls `PATH` can still substitute a different binary under the same name. The hardcoded allowlists can be extended later as new use cases emerge.
 
@@ -495,9 +537,9 @@ No `io.open`, no `os.rename`, no direct file reading or writing from Lua itself.
 
 Each hook execution creates a fresh VM. There's no way to store state between invocations. If you need persistent state, write it to a file via an external process and read it back in the next invocation.
 
-### No `require()`
+### No `require()`, `load()` or `dofile()`
 
-The `package` library is not loaded, so `require()` doesn't exist. You can't split Lua code across multiple files or use third-party Lua libraries. All hook logic must be self-contained in a single script.
+The `package` library is not loaded, so `require()` doesn't exist, and `load()`, `loadfile()` and `dofile()` are removed from the base library. You can't split Lua code across multiple files, build code from strings, or use third-party Lua libraries. All hook logic must be self-contained in a single script.
 
 ### No `os.time()` or `os.clock()`
 
@@ -566,8 +608,8 @@ The code editor's Run button (`execution.rs`) uses `CompositeExecutor` to execut
 All tests are in the crate itself (not in a separate `tests/` directory). Coverage currently spans:
 
 - `executor.rs`: normal outcomes, runtime errors, file-backed scripts, cancellation, timeouts, capability gating, allowlist enforcement, and streamed process output behavior
-- `engine.rs`: hook phase, connection metadata, hidden unsafe libraries, optional API visibility, and VM construction behavior
-- `api/dbflux.rs`: process option validation, expired hook timeout handling before spawn, live log event formatting, and streamed partial stdout/stderr during cancellation
+- `engine.rs`: hook phase, connection metadata, hidden unsafe libraries and removed loaders, refused bytecode, the global allowlist guard, optional API visibility, and VM construction behavior
+- `api/dbflux.rs`: process option validation, the child environment allowlist and per-call `env`, expired hook timeout handling before spawn, live log event formatting, and streamed partial stdout/stderr during cancellation
 
 ### Running the tests
 

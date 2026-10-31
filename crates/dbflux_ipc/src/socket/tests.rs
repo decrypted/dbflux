@@ -29,7 +29,10 @@ impl Drop for Scratch {
 }
 
 fn scratch_dir() -> Scratch {
-    let dir = std::env::temp_dir().join(format!("dbx-ipc-t-{}", uuid::Uuid::new_v4().simple()));
+    // Canonical so that comparisons hold where the temp dir sits below a link
+    // (`/var` -> `/private/var` on macOS).
+    let base = std::env::temp_dir().canonicalize().expect("temp dir");
+    let dir = base.join(format!("dbx-ipc-t-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir(&dir).expect("scratch dir");
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
         .expect("scratch dir mode");
@@ -349,20 +352,59 @@ fn an_explicit_dir_below_a_dir_others_can_write_is_refused() {
 }
 
 #[test]
-fn a_symlink_above_the_explicit_dir_is_resolved_and_checked() {
+fn a_symlink_above_the_explicit_dir_is_checked_but_the_path_kept() {
     let base = scratch_dir();
     std::fs::create_dir(base.join("real")).expect("real dir");
+    // Independent of the umask and of whether this user has a private group.
+    std::fs::set_permissions(base.join("real"), std::fs::Permissions::from_mode(0o755))
+        .expect("chmod 0755");
     std::os::unix::fs::symlink(base.join("real"), base.join("alias")).expect("symlink");
 
-    let dir = resolve_ipc_dir(&explicit(base.join("alias").join("ipc")), own_uid())
+    let configured = base.join("alias").join("ipc");
+    let dir = resolve_ipc_dir(&explicit(configured.clone()), own_uid())
         .expect("a linked ancestor of ours is fine");
-    assert_eq!(
-        dir,
-        base.join("real")
-            .canonicalize()
-            .expect("canonical")
-            .join("ipc")
-    );
+    assert_eq!(dir, configured, "the configured path must not be rewritten");
+    assert!(base.join("real").join("ipc").is_dir());
+
+    // The link's target is checked as well as the link.
+    std::fs::set_permissions(base.join("real"), std::fs::Permissions::from_mode(0o777))
+        .expect("chmod 0777");
+    let error = resolve_ipc_dir(&explicit(base.join("alias").join("ipc2")), own_uid())
+        .expect_err("a world-writable link target is refused");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+}
+
+#[test]
+fn a_missing_parent_of_the_explicit_dir_names_the_variable() {
+    let base = scratch_dir();
+    let error = resolve_ipc_dir(&explicit(base.join("missing").join("ipc")), own_uid())
+        .expect_err("the parent must exist");
+    assert_eq!(error.kind(), io::ErrorKind::NotFound, "{error}");
+    assert!(error.to_string().contains(IPC_DIR_ENV), "{error}");
+    assert!(error.to_string().contains("missing"), "{error}");
+}
+
+#[test]
+fn group_write_above_the_dir_is_trusted_only_for_a_private_group() {
+    let me = 1000;
+    let other = 1001;
+
+    // umask 002 with a per-user group: the user's own folders.
+    assert!(ancestor_is_trusted(me, me, 0o40775, false, me));
+    // A shared group of the user, a root-owned group-writable dir
+    // (`root:staff /usr/local`), another user's dir.
+    assert!(!ancestor_is_trusted(me, 50, 0o42775, false, me));
+    assert!(!ancestor_is_trusted(0, 50, 0o40775, false, me));
+    assert!(!ancestor_is_trusted(other, other, 0o40755, false, me));
+    // World write is refused unless sticky, like /tmp.
+    assert!(!ancestor_is_trusted(me, me, 0o40777, false, me));
+    assert!(ancestor_is_trusted(0, 0, 0o41777, false, me));
+    // Plain dirs of the user or root.
+    assert!(ancestor_is_trusted(me, 50, 0o40755, false, me));
+    assert!(ancestor_is_trusted(0, 0, 0o40755, false, me));
+    // A link: only its owner matters, its mode is always 0777.
+    assert!(ancestor_is_trusted(0, 0, 0o120777, true, me));
+    assert!(!ancestor_is_trusted(other, other, 0o120777, true, me));
 }
 #[test]
 fn a_listener_of_another_uid_at_the_path_receives_nothing() {

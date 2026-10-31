@@ -53,9 +53,14 @@ DBFlux uses local sockets via `interprocess`:
 A managed host receives the directory DBFlux uses in `DBFLUX_IPC_DIR` and must
 bind `$DBFLUX_IPC_DIR/<name>`. A host you start yourself must resolve the same
 directory; `$DBFLUX_IPC_DIR` is used exactly as given and must be a plain
-absolute path (no trailing `/`, no `.` or `..`) whose parent exists, with no
-directory above it that another user can change. An empty value counts as
-unset. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (or
+absolute path (no trailing `/`, no `.` or `..`) whose parent exists. An empty
+value counts as unset. Links above it are allowed and the path is not
+rewritten. Every directory above it, every link on the way and every link
+target must belong to you or root. None may be writable by others unless it is
+sticky like `/tmp`, and group write is accepted only on your own directories
+whose group id equals your user id: the per-user group of most Linux
+distributions, where umask 002 makes your folders group-writable for you
+alone. A shared group is refused. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (or
 `auth_provider_socket` / `secret_provider_socket`) does both.
 
 The socket file name depends on the service kind:

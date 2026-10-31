@@ -50,7 +50,7 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
 
 受管主机通过 `DBFLUX_IPC_DIR` 获得 DBFlux 使用的目录，必须绑定
 `$DBFLUX_IPC_DIR/<name>`。手动启动的主机也必须解析出同一目录；`$DBFLUX_IPC_DIR`
-按原样使用，必须是不带末尾 `/`、不含 `.` 或 `..` 的绝对路径，其父目录必须存在，且其上的任何目录都不能被其他用户修改。空值视为未设置。在 Rust 中，`dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
+按原样使用，必须是不带末尾 `/`、不含 `.` 或 `..` 的绝对路径，其父目录必须存在。空值视为未设置。允许其上方存在链接，且路径不会被改写。其上方的每个目录、路径上的每个链接及链接目标都必须属于你或 root。除非像 `/tmp` 一样设置了 sticky 位，否则都不能被其他用户写入；组写权限仅在组 ID 等于你的用户 ID 的自有目录上被接受，即大多数 Linux 发行版为每个用户创建的私有组，umask 002 会让你的文件夹仅对你自己具有组写权限。共享组会被拒绝。在 Rust 中，`dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
 （或 `auth_provider_socket` / `secret_provider_socket`）会同时处理这两点。
 
 Socket 文件名取决于服务类型：

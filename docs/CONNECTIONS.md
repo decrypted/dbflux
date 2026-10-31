@@ -213,11 +213,17 @@ Every source has to agree. What happens next:
   key is marked `@revoked`**: the connection fails, even if another source
   matches, with a warning that the host key has changed, the new key's SHA256
   fingerprint and every entry that disagrees. A stale line next to the
-  current one in known_hosts, or a DBFlux pin that differs from known_hosts,
-  therefore fails too. The warning cannot accept the key. If the key
-  was changed on purpose, check the new fingerprint with the server's
-  administrator, remove each entry the warning names (`ssh-keygen -R <host>` for
-  known_hosts, or the pin line it gives in DBFlux's file) and connect again.
+  current one in known_hosts, or a DBFlux pin of the same type that differs
+  from known_hosts, therefore fails too. Keys of other types never conflict.
+  Pins saved by DBFlux before this version record no key type: such a pin
+  that differs counts as a conflict only when nothing else vouches for the
+  presented key, and it gets its type the next time it matches. The warning
+  cannot accept the key. If the key was changed on purpose, check the new
+  fingerprint with the server's administrator, remove each entry the warning
+  names and connect again. The warning gives the command for each file
+  (`ssh-keygen -f <file> -R <host>`, as root for a system-wide file), says
+  which lines with patterns or several hosts to edit by hand, and names the
+  pin line to delete from DBFlux's file.
 - **A key nobody knows yet**: **Unknown SSH host key** shows the server, the key
   type and the SHA256 fingerprint. Compare it with the server's own, for
   example `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the
@@ -227,9 +233,13 @@ Every source has to agree. What happens next:
   Enter cancels. **Trust and remember** stays disabled for a second after the
   dialog opens, so keys typed for something else cannot reach it; then reach
   it with `Tab` and press Enter or Space, or press `Alt+T` (`Option+T` on
-  macOS). `Escape` cancels at any time. Connects refused while the dialog is
-  open wait and are asked about one after another. The dialog opens when you connect from the
-  sidebar and for **Test SSH** and **Test connection**. Connects nobody is
+  macOS). `Escape` cancels at any time. The delay starts once the dialog is
+  shown in the active window and starts again after you switch away. The
+  dialog opens when you connect from the sidebar and for **Test SSH** and
+  **Test connection**. Sidebar connects refused while the dialog is open wait
+  and are asked about one after another. A **Test SSH** or **Test connection**
+  refused while its window already shows the dialog keeps the error in its
+  banner; run the test again after answering. Connects nobody is
   watching, such as **Connect on startup** and the MCP server, refuse an
   unknown key instead, with a message to connect once by hand.
 

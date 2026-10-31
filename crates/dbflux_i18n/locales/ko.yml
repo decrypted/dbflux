@@ -4002,7 +4002,7 @@ modals:
     lead: "DBFlux와 known_hosts 파일 모두 이 서버의 호스트 키를 본 적이 없습니다. 지문이 서버 관리자에게서 받은 지문과 일치할 때만 신뢰하세요. 일치하지 않으면 누군가 연결을 가로채고 있을 수 있습니다."
     host: "서버"
     fingerprint: "호스트 키 지문"
-    other_types_warning: "known_hosts 파일에 이 서버의 %{types} 키가 이미 있지만 서버가 다른 종류의 키를 제시했습니다. 서버 업그레이드 때문일 수도 있지만 공격자 때문일 수도 있습니다."
+    other_types_warning: "known_hosts 또는 DBFlux에 이 서버의 %{types} 키가 이미 있지만 서버가 다른 종류의 키를 제시했습니다. 서버 업그레이드 때문일 수도 있지만 공격자 때문일 수도 있습니다."
     hint: "서버에서 지문을 확인하려면 호스트 키에 ssh-keygen -lf를 실행하세요(예: /etc/ssh/ssh_host_ed25519_key.pub). DBFlux는 신뢰한 키를 자체 목록에 저장하며 ~/.ssh/known_hosts에는 절대 쓰지 않습니다."
     cancel: "취소"
     trust: "신뢰하고 기억"

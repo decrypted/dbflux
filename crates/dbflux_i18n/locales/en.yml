@@ -4002,7 +4002,7 @@ modals:
     lead: "Neither DBFlux nor your known_hosts file has seen this server's host key before. Trust it only if the fingerprint matches the one you got from the server's administrator. If it does not, someone may be intercepting the connection."
     host: "Server"
     fingerprint: "Host key fingerprint"
-    other_types_warning: "Your known_hosts file already has a %{types} key for this server, but the server offered a different key type. A server upgrade can cause this, but so can an attacker."
+    other_types_warning: "known_hosts or DBFlux already holds a %{types} key for this server, but the server offered a different key type. A server upgrade can cause this, but so can an attacker."
     hint: "To see the fingerprint on the server, run ssh-keygen -lf on its host key, for example /etc/ssh/ssh_host_ed25519_key.pub. DBFlux keeps a trusted key in its own list and never writes ~/.ssh/known_hosts."
     cancel: "Cancel"
     trust: "Trust and remember"

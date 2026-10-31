@@ -26,8 +26,7 @@ use ssh2::{MethodType, Session};
 
 use crate::ssh_config::{HostKeyOptions, StrictHostKeyChecking, glob_matches};
 use crate::{
-    HostKeyMatch, host_key_matches_stored, load_tofu_known_hosts, save_tofu_known_hosts,
-    sha256_base64_fingerprint, tofu_known_hosts_path,
+    load_tofu_known_hosts, save_tofu_known_hosts, sha256_base64_fingerprint, tofu_known_hosts_path,
 };
 
 /// known_hosts writers pad their base64; hand-edited files sometimes do not.
@@ -352,23 +351,41 @@ pub enum HostKeyStatus {
         expected_in: Vec<String>,
     },
     /// No source knows a key of this type for the host. `other_key_types`
-    /// are types known_hosts does hold for it, which the server did not use.
+    /// are types known_hosts or DBFlux's pins hold for it, which the server
+    /// did not use.
     Unknown {
         other_key_types: Vec<String>,
     },
+}
+
+/// An entry that records a different key of the presented type, and how
+/// to remove it.
+struct Conflict {
+    location: String,
+    removal: String,
 }
 
 #[derive(Default)]
 struct Findings {
     revoked: Option<String>,
     matched: bool,
-    mismatched: Vec<String>,
+    mismatched: Vec<Conflict>,
     other_types: BTreeSet<String>,
     known_types: BTreeSet<String>,
+    /// Fingerprint and type of every key known_hosts records for the host,
+    /// to tell what type an untyped DBFlux pin has.
+    recorded: Vec<(String, String)>,
 }
 
 impl Findings {
-    fn scan(&mut self, entries: &[KnownHostEntry], path: &Path, name: &str, key: &PresentedKey) {
+    fn scan(
+        &mut self,
+        entries: &[KnownHostEntry],
+        path: &Path,
+        global: bool,
+        name: &str,
+        key: &PresentedKey,
+    ) {
         for entry in entries.iter().filter(|entry| entry.matches_host(name)) {
             let location = format!("{}:{}", path.display(), entry.line);
             match entry.marker {
@@ -380,12 +397,17 @@ impl Findings {
                 KnownHostMarker::CertAuthority => {}
                 KnownHostMarker::None => {
                     self.known_types.insert(entry.key_type.clone());
+                    self.recorded.push((
+                        sha256_base64_fingerprint(&entry.key),
+                        entry.key_type.clone(),
+                    ));
                     if entry.key_type != key.key_type {
                         self.other_types.insert(entry.key_type.clone());
                     } else if entry.key == key.blob {
                         self.matched = true;
                     } else {
-                        self.mismatched.push(location);
+                        let removal = known_hosts_removal(entry, path, &location, global, name);
+                        self.mismatched.push(Conflict { location, removal });
                     }
                 }
             }
@@ -468,13 +490,13 @@ impl HostKeyVerifier {
             .map(PathBuf::as_path)
     }
 
-    fn read_entries(&self) -> Vec<(PathBuf, Vec<KnownHostEntry>)> {
+    fn read_entries(&self) -> Vec<(PathBuf, bool, Vec<KnownHostEntry>)> {
         let user = self.user_files.iter().map(|path| (path, false));
         let global = self.global_files.iter().map(|path| (path, true));
         user.chain(global)
             .filter_map(
                 |(path, global)| match read_trusted_known_hosts(path, global) {
-                    Ok(Some(text)) => Some((path.clone(), parse_known_hosts(&text))),
+                    Ok(Some(text)) => Some((path.clone(), global, parse_known_hosts(&text))),
                     Ok(None) => None,
                     Err(reason) => {
                         log::warn!(
@@ -497,51 +519,126 @@ impl HostKeyVerifier {
     /// store, is a change, even when another source matches it. A stale or
     /// planted entry is then noticed instead of being outvoted, and the
     /// message names every entry that disagrees. With no disagreement, one
-    /// matching source is enough. DBFlux's pins carry no key type, so a pin
-    /// for the host that differs always disagrees.
+    /// matching source is enough. Keys of other types never conflict.
     pub fn check(&self, key: &PresentedKey) -> Result<HostKeyStatus, DbError> {
+        Ok(self.evaluate(key)?.0)
+    }
+
+    /// [`Self::check`] plus how to remove each disagreeing entry.
+    fn evaluate(&self, key: &PresentedKey) -> Result<(HostKeyStatus, Vec<String>), DbError> {
         let mut findings = Findings::default();
-        for (path, entries) in self.read_entries() {
-            findings.scan(&entries, &path, &self.lookup_name, key);
+        for (path, global, entries) in self.read_entries() {
+            findings.scan(&entries, &path, global, &self.lookup_name, key);
         }
 
         if let Some(location) = findings.revoked {
-            return Ok(HostKeyStatus::Revoked { location });
+            return Ok((HostKeyStatus::Revoked { location }, Vec::new()));
         }
 
-        let mut matched = findings.matched;
-        let mut conflicts = findings.mismatched;
         let store_path = self.store.resolve()?;
-        let mut pins = load_tofu_known_hosts(&store_path)?;
+        let mut all_pins = load_tofu_known_hosts(&store_path)?;
         let entry_key = self.store_entry_key();
-        if let Some(pinned) = pins.get(&entry_key) {
-            match host_key_matches_stored(pinned, &key.blob) {
-                HostKeyMatch::NewFormat => matched = true,
-                HostKeyMatch::LegacyHex => {
-                    matched = true;
-                    pins.insert(entry_key, key.fingerprint());
-                    save_tofu_known_hosts(&store_path, &pins)?;
+        let mut pins = all_pins
+            .get(&entry_key)
+            .map(|value| parse_pins(value))
+            .unwrap_or_default();
+        let mut store_matched = false;
+        let mut store_conflict = None;
+        let mut rewrite_pins = false;
+        for pin in &mut pins {
+            if pin.fingerprint == key.fingerprint() {
+                store_matched = true;
+                // A legacy pin (hex, or no type) is rewritten with its type.
+                if pin.legacy_hex || pin.key_type.is_none() {
+                    pin.legacy_hex = false;
+                    pin.key_type = Some(key.key_type.clone());
+                    rewrite_pins = true;
                 }
-                HostKeyMatch::Mismatch => conflicts.push(store_path.display().to_string()),
+                continue;
+            }
+            let pin_type = pin.key_type.clone().or_else(|| {
+                findings
+                    .recorded
+                    .iter()
+                    .find(|(fingerprint, _)| fingerprint == &pin.fingerprint)
+                    .map(|(_, key_type)| key_type.clone())
+            });
+            match pin_type {
+                Some(pin_type) if pin_type == key.key_type => {
+                    store_conflict = Some(false);
+                }
+                Some(pin_type) => {
+                    findings.other_types.insert(pin_type);
+                }
+                // An older pin records no key type. When known_hosts vouches
+                // for the presented key it is taken as a key of another type
+                // (libssh2 used to pick ECDSA first); otherwise it is the
+                // only record and may be this type, so it still fails.
+                None if findings.matched => {
+                    log::warn!(
+                        "[SSH] Ignoring a DBFlux pin of unknown key type for {}: known_hosts \
+                         vouches for the presented {} key",
+                        self.display,
+                        key.key_type
+                    );
+                }
+                None => store_conflict = Some(true),
             }
         }
 
-        if !conflicts.is_empty() {
-            return Ok(HostKeyStatus::Changed {
-                expected_in: conflicts,
+        let mut conflicts = findings.mismatched;
+        if let Some(untyped) = store_conflict {
+            conflicts.push(Conflict {
+                location: store_path.display().to_string(),
+                removal: self.store_removal(&store_path, untyped),
             });
         }
-        if matched {
-            return Ok(HostKeyStatus::Trusted);
+        if !conflicts.is_empty() {
+            let (locations, removals) = conflicts
+                .into_iter()
+                .map(|conflict| (conflict.location, conflict.removal))
+                .unzip();
+            return Ok((
+                HostKeyStatus::Changed {
+                    expected_in: locations,
+                },
+                removals,
+            ));
         }
-        Ok(HostKeyStatus::Unknown {
-            other_key_types: findings.other_types.into_iter().collect(),
-        })
+
+        if store_matched && rewrite_pins {
+            all_pins.insert(entry_key, format_pins(&pins));
+            save_tofu_known_hosts(&store_path, &all_pins)?;
+        }
+        if findings.matched || store_matched {
+            return Ok((HostKeyStatus::Trusted, Vec::new()));
+        }
+        Ok((
+            HostKeyStatus::Unknown {
+                other_key_types: findings.other_types.into_iter().collect(),
+            },
+            Vec::new(),
+        ))
+    }
+
+    fn store_removal(&self, store_path: &Path, untyped: bool) -> String {
+        let note = if untyped {
+            " (an older pin whose key type DBFlux did not record)"
+        } else {
+            ""
+        };
+        format!(
+            "delete DBFlux's pin{note}, the line starting with `{}` (a tab between name \
+             and port), from {}",
+            self.store_entry_key(),
+            store_path.display()
+        )
     }
 
     /// Applies [`Self::check`] and the unknown-key policy.
     pub fn verify_presented(&self, key: &PresentedKey) -> Result<(), DbError> {
-        match self.check(key)? {
+        let (status, removals) = self.evaluate(key)?;
+        match status {
             HostKeyStatus::Trusted => Ok(()),
             HostKeyStatus::Revoked { location } => Err(DbError::connection_failed(format!(
                 "The SSH host key of {} ({} key {}) is marked @revoked in {location}. DBFlux \
@@ -551,7 +648,7 @@ impl HostKeyVerifier {
                 key.fingerprint()
             ))),
             HostKeyStatus::Changed { expected_in } => Err(DbError::connection_failed(
-                self.changed_message(key, &expected_in),
+                self.changed_message(key, &expected_in, &removals),
             )),
             HostKeyStatus::Unknown { other_key_types } => match self.policy {
                 // known_hosts vouches for this host with another key type, so
@@ -596,38 +693,24 @@ impl HostKeyVerifier {
         }
     }
 
-    fn changed_message(&self, key: &PresentedKey, expected_in: &[String]) -> String {
-        let store_path = self
-            .store
-            .resolve()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|_| "DBFlux's ssh_known_hosts file".to_string());
-        let mut removals = Vec::new();
-        if expected_in.iter().any(|location| location != &store_path) {
-            removals.push(format!(
-                "{} for the known_hosts file named above",
-                keygen_remove_hint(&self.lookup_name, cfg!(unix))
-            ));
-        }
-        if expected_in.iter().any(|location| location == &store_path) {
-            removals.push(format!(
-                "delete DBFlux's pin, the line `{}` (a tab between name and port), from {}",
-                self.store_entry_key(),
-                store_path
-            ));
-        }
+    fn changed_message(
+        &self,
+        key: &PresentedKey,
+        expected_in: &[String],
+        removals: &[String],
+    ) -> String {
         format!(
             "WARNING: THE SSH HOST KEY OF {} HAS CHANGED. Someone may be intercepting this \
              connection (a man-in-the-middle attack), or the server's key was replaced. The \
              server presented a {} key with fingerprint {}, which does not match the key \
              recorded in {}. DBFlux did not connect. If the key was changed on purpose, \
-             confirm the new fingerprint with the server's administrator, then remove the old \
-             key: {}.",
+             confirm the new fingerprint with the server's administrator, then remove each old \
+             entry: {}.",
             self.display,
             key.key_type,
             key.fingerprint(),
             expected_in.join(", "),
-            removals.join(", and "),
+            removals.join("; "),
         )
     }
 
@@ -637,6 +720,7 @@ impl HostKeyVerifier {
             &self.store_host,
             self.store_port,
             &key.fingerprint(),
+            &key.key_type,
         )
     }
 
@@ -646,7 +730,7 @@ impl HostKeyVerifier {
     /// and the user would be asked about a host ssh already trusts.
     pub(crate) fn prefer_known_key_types(&self, session: &Session) {
         let mut known = BTreeSet::new();
-        for (_, entries) in self.read_entries() {
+        for (_, _, entries) in self.read_entries() {
             for entry in entries.iter().filter(|entry| {
                 entry.marker == KnownHostMarker::None && entry.matches_host(&self.lookup_name)
             }) {
@@ -754,23 +838,141 @@ fn shell_quote(name: &str) -> String {
     format!("'{}'", name.replace('\'', "'\\''"))
 }
 
-/// The `ssh-keygen -R` command to suggest. A POSIX shell gets the name
-/// quoted. Windows shells quote differently (cmd.exe passes `'` through), so
-/// there the command is spelled out only for a name that needs no quoting,
-/// and otherwise named without a ready-to-paste line.
-fn keygen_remove_hint(name: &str, posix: bool) -> String {
-    if posix {
-        return format!("`ssh-keygen -R {}`", shell_quote(name));
+/// How to remove a known_hosts entry that disagrees. `ssh-keygen -R`
+/// without `-f` only edits `~/.ssh/known_hosts`, so the command names the
+/// file; a line with patterns or several names cannot be removed by name
+/// without touching other hosts, so it is named for editing by hand.
+fn known_hosts_removal(
+    entry: &KnownHostEntry,
+    path: &Path,
+    location: &str,
+    global: bool,
+    name: &str,
+) -> String {
+    let by_name = match &entry.hosts {
+        HostField::Hashed { .. } => true,
+        HostField::Patterns(patterns) => {
+            patterns.len() == 1
+                && patterns
+                    .iter()
+                    .all(|pattern| !pattern.contains(['*', '?', '!']))
+        }
+    };
+    if !by_name {
+        return format!("edit {location} by hand (a pattern or several hosts on one line)");
     }
-    let plain = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']'));
-    if plain {
-        format!("`ssh-keygen -R {name}`")
+    let command = keygen_remove_command(path, name, cfg!(unix));
+    if global {
+        format!("{command} as root")
     } else {
-        "`ssh-keygen -R` with the entry's name".to_string()
+        command
     }
+}
+
+/// The `ssh-keygen -f FILE -R NAME` command to suggest. A POSIX shell gets
+/// both quoted. Windows shells quote differently (cmd.exe passes `'`
+/// through), so there the command is spelled out only when neither needs
+/// quoting, and otherwise described.
+fn keygen_remove_command(path: &Path, name: &str, posix: bool) -> String {
+    let file = path.display().to_string();
+    if posix {
+        return format!(
+            "run `ssh-keygen -f {} -R {}`",
+            shell_quote(&file),
+            shell_quote(name)
+        );
+    }
+    let plain = |text: &str, extra: &[char]| {
+        !text.is_empty()
+            && text.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '.' | '-' | '_' | ':' | '[' | ']')
+                    || extra.contains(&c)
+            })
+    };
+    if plain(name, &[]) && plain(&file, &['\\']) {
+        format!("run `ssh-keygen -f {file} -R {name}`")
+    } else {
+        format!("run `ssh-keygen -f` with {file} and `-R` with the entry's name")
+    }
+}
+
+/// One key DBFlux pinned for a host. Pins written by this version carry the
+/// key type; older ones are a bare `SHA256:` fingerprint (type unknown) or
+/// the hex of the whole key blob (type read from the blob).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Pin {
+    fingerprint: String,
+    key_type: Option<String>,
+    legacy_hex: bool,
+}
+
+/// Placeholder written for a pin whose key type is not known.
+const UNKNOWN_PIN_TYPE: &str = "-";
+
+/// Parses the value of a pin line: `fingerprint\ttype` pairs, or a single
+/// legacy fingerprint or hex blob.
+fn parse_pins(value: &str) -> Vec<Pin> {
+    let fields: Vec<&str> = value.split('\t').collect();
+    if let [single] = fields.as_slice() {
+        if single.starts_with("SHA256:") {
+            return vec![Pin {
+                fingerprint: (*single).to_string(),
+                key_type: None,
+                legacy_hex: false,
+            }];
+        }
+        return match hex_decode(single) {
+            Some(blob) => vec![Pin {
+                fingerprint: sha256_base64_fingerprint(&blob),
+                key_type: key_blob_type(&blob),
+                legacy_hex: true,
+            }],
+            // Unreadable: kept, never matches, type unknown.
+            None => vec![Pin {
+                fingerprint: (*single).to_string(),
+                key_type: None,
+                legacy_hex: false,
+            }],
+        };
+    }
+    fields
+        .chunks(2)
+        .filter_map(|pair| match pair {
+            [fingerprint, key_type] => Some(Pin {
+                fingerprint: (*fingerprint).to_string(),
+                key_type: (*key_type != UNKNOWN_PIN_TYPE).then(|| (*key_type).to_string()),
+                legacy_hex: false,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn format_pins(pins: &[Pin]) -> String {
+    pins.iter()
+        .map(|pin| {
+            format!(
+                "{}\t{}",
+                pin.fingerprint,
+                pin.key_type.as_deref().unwrap_or(UNKNOWN_PIN_TYPE)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\t")
+}
+
+fn hex_decode(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || text.is_empty() {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|index| {
+            text.get(index..index + 2)
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        })
+        .collect()
 }
 
 /// The algorithms for `known_types` first, in libssh2's own order, then the
@@ -871,6 +1073,7 @@ impl UnknownHostKey {
             &self.store_host,
             self.store_port,
             &self.fingerprint,
+            &self.key_type,
         )?;
         forget_pending(self);
         Ok(())
@@ -931,23 +1134,37 @@ fn pin_fingerprint(
     host: &str,
     port: u16,
     fingerprint: &str,
+    key_type: &str,
 ) -> Result<(), DbError> {
     let path = store.resolve()?;
-    let mut pins = load_tofu_known_hosts(&path)?;
+    let mut all_pins = load_tofu_known_hosts(&path)?;
     let entry_key = format!("{host}\t{port}");
-    if let Some(existing) = pins.get(&entry_key)
-        && existing != fingerprint
+    let mut pins = all_pins
+        .get(&entry_key)
+        .map(|value| parse_pins(value))
+        .unwrap_or_default();
+    if pins.iter().any(|pin| pin.fingerprint == fingerprint) {
+        return Ok(());
+    }
+    if pins
+        .iter()
+        .any(|pin| pin.key_type.as_deref() == Some(key_type))
     {
-        // Trusting never replaces a pin: a changed key goes through the
-        // mismatch error and a deliberate removal.
+        // Trusting never replaces a pin of the same type: a changed key goes
+        // through the mismatch error and a deliberate removal.
         return Err(DbError::connection_failed(format!(
-            "DBFlux already has a different SSH host key recorded for {host}:{port} in {}; \
-             remove that line first if the key was changed on purpose.",
+            "DBFlux already has a different {key_type} host key recorded for {host}:{port} in \
+             {}; remove that pin first if the key was changed on purpose.",
             path.display()
         )));
     }
-    pins.insert(entry_key, fingerprint.to_string());
-    save_tofu_known_hosts(&path, &pins)
+    pins.push(Pin {
+        fingerprint: fingerprint.to_string(),
+        key_type: Some(key_type.to_string()),
+        legacy_hex: false,
+    });
+    all_pins.insert(entry_key, format_pins(&pins));
+    save_tofu_known_hosts(&path, &all_pins)
 }
 
 #[cfg(test)]

@@ -4002,7 +4002,7 @@ modals:
     lead: "Nem o DBFlux nem o seu arquivo known_hosts viram antes a chave de host deste servidor. Confie nela somente se a impressão digital corresponder à que o administrador do servidor lhe passou. Se não corresponder, alguém pode estar interceptando a conexão."
     host: "Servidor"
     fingerprint: "Impressão digital da chave de host"
-    other_types_warning: "Seu arquivo known_hosts já tem uma chave %{types} para este servidor, mas o servidor ofereceu outro tipo de chave. Uma atualização do servidor pode causar isso, mas um atacante também."
+    other_types_warning: "O known_hosts ou o DBFlux já tem uma chave %{types} para este servidor, mas o servidor ofereceu outro tipo de chave. Uma atualização do servidor pode causar isso, mas um atacante também."
     hint: "Para ver a impressão digital no servidor, execute ssh-keygen -lf na chave de host dele, por exemplo /etc/ssh/ssh_host_ed25519_key.pub. O DBFlux guarda uma chave confiável na própria lista e nunca escreve em ~/.ssh/known_hosts."
     cancel: "Cancelar"
     trust: "Confiar e lembrar"

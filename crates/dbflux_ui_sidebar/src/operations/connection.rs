@@ -270,7 +270,12 @@ impl Sidebar {
         };
         let prompts = &mut self.host_key_prompts;
         match &mut prompts.current {
-            Some(current) if current.profile_id == profile_id => *current = prompt,
+            // The same refusal again: only the password of the latest attempt
+            // changes. A different key for that profile waits like any other,
+            // so the shown prompt and its key never come apart.
+            Some(current) if current.profile_id == profile_id && current.key == prompt.key => {
+                current.password = prompt.password;
+            }
             Some(_) => {
                 // One prompt at a time: this one waits its turn instead of
                 // being dropped, and keeps its own password for the retry.
@@ -305,6 +310,9 @@ impl Sidebar {
             retries.push((answered.profile_id, answered.password));
         }
         while let Some(next) = self.host_key_prompts.queued.pop_front() {
+            if !self.waits_for_host_key(next.profile_id, cx) {
+                continue;
+            }
             if next.key == answered.key {
                 // Declined: the profile keeps its recorded connect failure.
                 if trusted {
@@ -312,12 +320,33 @@ impl Sidebar {
                 }
                 continue;
             }
+            if !next.key.is_pending() {
+                // Settled elsewhere (trusted from the connection manager, or
+                // dismissed): connecting again either connects or asks anew.
+                retries.push((next.profile_id, next.password));
+                continue;
+            }
             self.show_host_key_prompt(next, cx);
             break;
         }
+        let mut retried = std::collections::HashSet::new();
         for (profile_id, password) in retries {
-            self.connect_to_profile_inner(profile_id, None, false, password, cx);
+            if retried.insert(profile_id) {
+                self.connect_to_profile_inner(profile_id, None, false, password, cx);
+            }
         }
+    }
+
+    /// A queued refusal is moot once its profile was deleted or is connected
+    /// or connecting again.
+    fn waits_for_host_key(&self, profile_id: Uuid, cx: &Context<Self>) -> bool {
+        let state = self.app_state.read(cx);
+        state
+            .profiles()
+            .iter()
+            .any(|profile| profile.id == profile_id)
+            && !state.connections().contains_key(&profile_id)
+            && !state.is_operation_pending(profile_id, None)
     }
 
     /// Shows a startup notice without replacing one that has not been shown
@@ -2412,5 +2441,95 @@ mod tests {
                 .any(|toast| toast.contains("Unknown SSH host key")),
             "the prompt replaces the error toast"
         );
+    }
+
+    fn offer(
+        fixture: &PasswordFixture,
+        profile_id: Uuid,
+        error: &str,
+        password: Option<&str>,
+        cx: &mut VisualTestContext,
+    ) {
+        let password = password.map(|password| SecretString::from(password.to_string()));
+        fixture.sidebar.update(cx, |sidebar, cx| {
+            assert!(sidebar.offer_host_key_trust(profile_id, error, false, password, cx));
+        });
+        cx.run_until_parked();
+    }
+
+    /// The same refusal for the shown profile only refreshes the password; a
+    /// different key for it waits, so the prompt never shows one key while
+    /// the sidebar holds another.
+    #[gpui::test]
+    fn a_repeated_refusal_never_swaps_the_shown_key(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = add_saved_profile(&fixture, "host-key-repeat", false, cx);
+        let requests = host_key_requests(&fixture, cx);
+        let first = refused_host_key("repeat.example").to_string();
+
+        offer(&fixture, profile_id, &first, Some("a"), cx);
+        offer(&fixture, profile_id, &first, Some("b"), cx);
+
+        assert_eq!(requests.lock().expect("host key requests").len(), 1);
+        fixture.sidebar.read_with(cx, |sidebar, _| {
+            let current = sidebar.host_key_prompts.current.as_ref().expect("shown");
+            assert_eq!(
+                current
+                    .password
+                    .as_ref()
+                    .map(|p| p.expose_secret().to_string()),
+                Some("b".to_string())
+            );
+            assert!(sidebar.host_key_prompts.queued.is_empty());
+        });
+
+        let second = refused_host_key("repeat-other.example").to_string();
+        offer(&fixture, profile_id, &second, None, cx);
+
+        assert_eq!(requests.lock().expect("host key requests").len(), 1);
+        fixture.sidebar.read_with(cx, |sidebar, _| {
+            let prompts = &sidebar.host_key_prompts;
+            assert_eq!(
+                prompts.current.as_ref().map(|p| p.key.host.clone()),
+                Some("repeat.example:22".to_string())
+            );
+            assert_eq!(prompts.queued.len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn a_queued_refusal_of_a_deleted_profile_is_skipped(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let shown = add_saved_profile(&fixture, "host-key-shown", false, cx);
+        let deleted = add_saved_profile(&fixture, "host-key-deleted", false, cx);
+        let requests = host_key_requests(&fixture, cx);
+        offer(
+            &fixture,
+            shown,
+            &refused_host_key("shown.example").to_string(),
+            None,
+            cx,
+        );
+        offer(
+            &fixture,
+            deleted,
+            &refused_host_key("deleted.example").to_string(),
+            None,
+            cx,
+        );
+        fixture.state.update(cx, |state, _| {
+            state.profiles_mut().retain(|profile| profile.id != deleted);
+        });
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.resolve_host_key_prompt(false, cx));
+        cx.run_until_parked();
+
+        assert_eq!(requests.lock().expect("host key requests").len(), 1);
+        fixture.sidebar.read_with(cx, |sidebar, _| {
+            assert!(sidebar.host_key_prompts.current.is_none());
+            assert!(sidebar.host_key_prompts.queued.is_empty());
+        });
     }
 }

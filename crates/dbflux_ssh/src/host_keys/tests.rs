@@ -265,7 +265,7 @@ fn host_key_alias_is_the_lookup_name_and_the_pin_name() {
         .unwrap();
     assert_eq!(
         fixture.pins(),
-        format!("backend-b\t22\t{ECDSA_FINGERPRINT}\n")
+        format!("backend-b\t22\t{ECDSA_FINGERPRINT}\tecdsa-sha2-nistp256\n")
     );
 }
 
@@ -346,7 +346,7 @@ fn a_different_key_of_the_same_type_is_a_change_with_the_fingerprint() {
     assert!(message.contains("HAS CHANGED"), "{message}");
     assert!(message.contains(&attacker.fingerprint()), "{message}");
     assert!(
-        message.contains("ssh-keygen -R 'host.example'"),
+        message.contains("ssh-keygen -f '") && message.contains("-R 'host.example'"),
         "{message}"
     );
     assert!(unknown_host_key_in_error(&message).is_none());
@@ -436,20 +436,208 @@ fn the_store_decides_when_known_hosts_is_silent() {
     let fixture = Fixture::new();
     fs::write(
         fixture.store(),
-        format!("host.example\t2222\t{ED25519_FINGERPRINT}\n"),
+        format!("host.example\t2222\t{ED25519_FINGERPRINT}\tssh-ed25519\n"),
     )
     .unwrap();
     let verifier = fixture.verifier("host.example", 2222);
 
     assert_eq!(verifier.check(&ed25519()).unwrap(), HostKeyStatus::Trusted);
+    let (other, _) = other_ed25519();
     assert_eq!(
-        verifier.check(&ecdsa()).unwrap(),
+        verifier.check(&other).unwrap(),
         HostKeyStatus::Changed {
             expected_in: vec![fixture.store().display().to_string()]
         }
     );
-    let message = verifier.verify_presented(&ecdsa()).unwrap_err().to_string();
+    let message = verifier.verify_presented(&other).unwrap_err().to_string();
     assert!(message.contains("host.example\t2222"), "{message}");
+    assert!(message.contains("delete DBFlux's pin"), "{message}");
+}
+
+/// Only keys of the same type can disagree: a pin of another type is just
+/// another key the host has (Daniel's rule for every source).
+#[test]
+fn a_pin_of_another_key_type_is_not_a_conflict() {
+    let fixture = Fixture::new();
+    fixture.write_known_hosts(&format!("host.example {ED25519_LINE}\n"));
+    fs::write(
+        fixture.store(),
+        format!("host.example\t22\t{ECDSA_FINGERPRINT}\tecdsa-sha2-nistp256\n"),
+    )
+    .unwrap();
+    let verifier = fixture.verifier("host.example", 22);
+
+    assert_eq!(verifier.check(&ed25519()).unwrap(), HostKeyStatus::Trusted);
+}
+
+/// The reported case: an older DBFlux pinned the ECDSA key without a type,
+/// known_hosts holds the ed25519 key, and ed25519 is negotiated.
+#[test]
+fn an_untyped_old_pin_does_not_fail_a_host_known_hosts_vouches_for() {
+    let fixture = Fixture::new();
+    fixture.write_known_hosts(&format!("host.example {ED25519_LINE}\n"));
+    let (unrecorded, _) = synthetic_ed25519(20);
+    fs::write(
+        fixture.store(),
+        format!("host.example\t22\t{}\n", unrecorded.fingerprint()),
+    )
+    .unwrap();
+
+    assert_eq!(
+        fixture
+            .verifier("host.example", 22)
+            .check(&ed25519())
+            .unwrap(),
+        HostKeyStatus::Trusted
+    );
+}
+
+/// With nothing else vouching, an untyped pin is the only record and may be
+/// of the presented type, so a difference still fails, as before this PR,
+/// and the message says the pin's type was not recorded.
+#[test]
+fn an_untyped_old_pin_still_fails_a_key_nothing_else_vouches_for() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.store(),
+        format!("host.example\t22\t{ECDSA_FINGERPRINT}\n"),
+    )
+    .unwrap();
+    let verifier = fixture.verifier("host.example", 22);
+
+    let message = verifier
+        .verify_presented(&ed25519())
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("HAS CHANGED"), "{message}");
+    assert!(
+        message.contains("key type DBFlux did not record"),
+        "{message}"
+    );
+
+    // A matching untyped pin connects and is given its type.
+    assert_eq!(verifier.check(&ecdsa()).unwrap(), HostKeyStatus::Trusted);
+    assert_eq!(
+        fixture.pins(),
+        format!("host.example\t22\t{ECDSA_FINGERPRINT}\tecdsa-sha2-nistp256\n")
+    );
+}
+
+/// An untyped pin whose key known_hosts also records takes that type.
+#[test]
+fn an_untyped_pin_takes_the_type_known_hosts_records_for_it() {
+    let fixture = Fixture::new();
+    fixture.write_known_hosts(&format!("host.example {ECDSA_LINE}\n"));
+    fs::write(
+        fixture.store(),
+        format!("host.example\t22\t{ECDSA_FINGERPRINT}\n"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        fixture
+            .verifier("host.example", 22)
+            .check(&ed25519())
+            .unwrap(),
+        HostKeyStatus::Unknown {
+            other_key_types: vec!["ecdsa-sha2-nistp256".to_string()]
+        }
+    );
+}
+
+/// A legacy hex pin holds the whole key blob, so its type is known.
+#[test]
+fn a_legacy_hex_pin_of_another_type_is_not_a_conflict() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.store(),
+        format!("host.example\t22\t{}\n", crate::hex_encode(&ecdsa().blob)),
+    )
+    .unwrap();
+
+    assert_eq!(
+        fixture
+            .verifier("host.example", 22)
+            .check(&ed25519())
+            .unwrap(),
+        HostKeyStatus::Unknown {
+            other_key_types: vec!["ecdsa-sha2-nistp256".to_string()]
+        }
+    );
+}
+
+#[test]
+fn a_refused_connect_does_not_rewrite_the_store() {
+    // A matching legacy pin is upgraded only when the connect goes ahead.
+    let fixture = Fixture::new();
+    let (other, other_line) = other_ed25519();
+    fixture.write_known_hosts(&format!("host.example {other_line}\n"));
+    let legacy = format!("host.example\t22\t{}\n", crate::hex_encode(&ed25519().blob));
+    fs::write(fixture.store(), &legacy).unwrap();
+
+    assert!(matches!(
+        fixture
+            .verifier("host.example", 22)
+            .check(&ed25519())
+            .unwrap(),
+        HostKeyStatus::Changed { .. }
+    ));
+    assert_eq!(fixture.pins(), legacy);
+    let _ = other;
+}
+
+#[test]
+fn pins_round_trip_with_their_types() {
+    let pins = parse_pins("SHA256:a\tssh-ed25519\tSHA256:b\t-");
+    assert_eq!(pins.len(), 2);
+    assert_eq!(pins[0].key_type.as_deref(), Some("ssh-ed25519"));
+    assert_eq!(pins[1].key_type, None);
+    assert_eq!(format_pins(&pins), "SHA256:a\tssh-ed25519\tSHA256:b\t-");
+}
+
+#[test]
+fn removal_hints_name_the_file_and_never_guess_a_pattern_line() {
+    let fixture = Fixture::new();
+    let (other, other_line) = other_ed25519();
+    let user = fixture.dir.path().join("known_hosts2");
+    fs::write(&user, format!("host.example {ED25519_LINE}\n")).unwrap();
+    fs::write(
+        fixture.global(),
+        format!("*.example,host.example {ED25519_LINE}\n"),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    set_mode(&fixture.global(), 0o644);
+    let paths = HostKeyPaths {
+        default_user_files: vec![user.clone()],
+        default_global_files: vec![fixture.global()],
+        store: StoreLocation::At(fixture.store()),
+    };
+    let _ = other_line;
+
+    let message = HostKeyVerifier::new(
+        "host.example",
+        22,
+        &HostKeyOptions::default(),
+        &paths,
+        false,
+    )
+    .verify_presented(&other)
+    .unwrap_err()
+    .to_string();
+
+    #[cfg(unix)]
+    assert!(
+        message.contains(&format!(
+            "ssh-keygen -f '{}' -R 'host.example'",
+            user.display()
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("edit {}:1 by hand", fixture.global().display())),
+        "{message}"
+    );
 }
 
 #[test]
@@ -460,7 +648,7 @@ fn known_hosts_and_the_store_must_agree() {
     let pin = |fingerprint: &str| {
         fs::write(
             fixture.store(),
-            format!("host.example\t22\t{fingerprint}\n"),
+            format!("host.example\t22\t{fingerprint}\tssh-ed25519\n"),
         )
         .unwrap();
     };
@@ -480,7 +668,7 @@ fn known_hosts_and_the_store_must_agree() {
         .unwrap_err()
         .to_string();
     assert!(message.contains("delete DBFlux's pin"), "{message}");
-    assert!(!message.contains("ssh-keygen -R"), "{message}");
+    assert!(!message.contains("ssh-keygen -f"), "{message}");
 
     // The store matches, known_hosts differs: refused, naming the file.
     pin(&other.fingerprint());
@@ -489,7 +677,7 @@ fn known_hosts_and_the_store_must_agree() {
         message.contains(&format!("{}:1", fixture.known_hosts().display())),
         "{message}"
     );
-    assert!(message.contains("ssh-keygen -R"), "{message}");
+    assert!(message.contains("ssh-keygen -f"), "{message}");
     assert!(!message.contains("delete DBFlux's pin"), "{message}");
 
     // Both match: connect.
@@ -513,7 +701,7 @@ fn a_legacy_hex_pin_still_matches_and_is_upgraded() {
     );
     assert_eq!(
         fixture.pins(),
-        format!("host.example\t22\t{ED25519_FINGERPRINT}\n")
+        format!("host.example\t22\t{ED25519_FINGERPRINT}\tssh-ed25519\n")
     );
 }
 
@@ -593,7 +781,7 @@ fn the_prompt_path_trusts_on_confirm_and_keeps_refusing_on_cancel() {
     pending.trust().unwrap();
     assert_eq!(
         fixture.pins(),
-        format!("prompted.example\t2022\t{ECDSA_FINGERPRINT}\n")
+        format!("prompted.example\t2022\t{ECDSA_FINGERPRINT}\tecdsa-sha2-nistp256\n")
     );
     assert!(
         !fixture.known_hosts().exists(),
@@ -605,12 +793,24 @@ fn the_prompt_path_trusts_on_confirm_and_keeps_refusing_on_cancel() {
         "no longer pending"
     );
 
-    // Trusting pinned the presented key only; another key is a change.
-    let (other, _) = other_ed25519();
+    // Trusting pinned the presented key with its type: a different ECDSA
+    // key is a change, a key of another type is not.
+    let mut changed = key.blob.clone();
+    if let Some(last) = changed.last_mut() {
+        *last ^= 1;
+    }
+    let changed = PresentedKey::from_blob(&changed).unwrap();
     assert!(matches!(
-        verifier.check(&other).unwrap(),
+        verifier.check(&changed).unwrap(),
         HostKeyStatus::Changed { .. }
     ));
+    let (other, _) = other_ed25519();
+    assert_eq!(
+        verifier.check(&other).unwrap(),
+        HostKeyStatus::Unknown {
+            other_key_types: vec!["ecdsa-sha2-nistp256".to_string()]
+        }
+    );
 }
 
 #[test]
@@ -620,17 +820,12 @@ fn trusting_never_replaces_an_existing_pin() {
     let (key, _) = synthetic_ed25519(11);
     let message = verifier.verify_presented(&key).unwrap_err().to_string();
     let pending = unknown_host_key_in_error(&message).unwrap();
-    fs::write(
-        fixture.store(),
-        format!("raced.example\t22\t{ECDSA_FINGERPRINT}\n"),
-    )
-    .unwrap();
+    let (raced, _) = synthetic_ed25519(19);
+    let pinned = format!("raced.example\t22\t{}\tssh-ed25519\n", raced.fingerprint());
+    fs::write(fixture.store(), &pinned).unwrap();
 
     assert!(pending.trust().is_err());
-    assert_eq!(
-        fixture.pins(),
-        format!("raced.example\t22\t{ECDSA_FINGERPRINT}\n")
-    );
+    assert_eq!(fixture.pins(), pinned);
 }
 
 #[test]
@@ -682,13 +877,14 @@ fn accept_new_pins_and_connects_strict_yes_refuses_without_an_offer() {
         .unwrap();
     assert_eq!(
         fixture.pins(),
-        format!("new.example\t22\t{ED25519_FINGERPRINT}\n")
+        format!("new.example\t22\t{ED25519_FINGERPRINT}\tssh-ed25519\n")
     );
 
-    // accept-new still refuses a changed key.
+    // accept-new still refuses a changed key of the same type.
+    let (changed, _) = other_ed25519();
     let message = fixture
         .verifier_with("new.example", 22, &accept)
-        .verify_presented(&ecdsa())
+        .verify_presented(&changed)
         .unwrap_err()
         .to_string();
     assert!(message.contains("HAS CHANGED"), "{message}");
@@ -719,7 +915,7 @@ fn the_global_setting_accepts_new_keys_only_when_on() {
     on.verify_presented(&ed25519()).unwrap();
     assert_eq!(
         fixture.pins(),
-        format!("g.example\t22\t{ED25519_FINGERPRINT}\n")
+        format!("g.example\t22\t{ED25519_FINGERPRINT}\tssh-ed25519\n")
     );
 }
 
@@ -795,7 +991,7 @@ fn hosts_sharing_a_key_are_each_offered_their_own_refusal() {
     offered.trust().unwrap();
     assert_eq!(
         fixture.pins(),
-        format!("shared-a.example\t22\t{}\n", key.fingerprint())
+        format!("shared-a.example\t22\t{}\tssh-ed25519\n", key.fingerprint())
     );
     assert_eq!(
         unknown_host_key_in_error(&second).unwrap().host,
@@ -941,7 +1137,7 @@ fn the_suggested_ssh_keygen_command_quotes_the_name_for_the_shell() {
         .to_string();
 
     assert!(
-        message.contains(r#"ssh-keygen -R 'evil'\'';touch_pwned;'\'''"#),
+        message.contains(r#"-R 'evil'\'';touch_pwned;'\'''"#),
         "{message}"
     );
     assert_eq!(shell_quote("a'b"), r#"'a'\''b'"#);
@@ -951,13 +1147,15 @@ fn the_suggested_ssh_keygen_command_quotes_the_name_for_the_shell() {
 #[test]
 fn the_windows_hint_never_suggests_a_command_it_cannot_quote() {
     assert_eq!(
-        keygen_remove_hint("[h.example]:2222", false),
-        "`ssh-keygen -R [h.example]:2222`"
+        keygen_remove_command(Path::new("C:\\ssh\\known_hosts"), "[h.example]:2222", false),
+        "run `ssh-keygen -f C:\\ssh\\known_hosts -R [h.example]:2222`"
     );
-    let hint = keygen_remove_hint("evil';touch pwned;'", false);
+    let hint = keygen_remove_command(Path::new("kh"), "evil';touch pwned;'", false);
     assert!(!hint.contains("pwned"), "{hint}");
+    let hint = keygen_remove_command(Path::new("C:\\Users\\Jane Doe\\kh"), "h", false);
+    assert!(!hint.contains("Jane Doe\\kh -R"), "{hint}");
     assert_eq!(
-        keygen_remove_hint("a'b", true),
-        r#"`ssh-keygen -R 'a'\''b'`"#
+        keygen_remove_command(Path::new("/k h"), "a'b", true),
+        r#"run `ssh-keygen -f '/k h' -R 'a'\''b'`"#
     );
 }

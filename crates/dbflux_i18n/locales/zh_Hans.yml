@@ -4002,7 +4002,7 @@ modals:
     lead: "DBFlux 和你的 known_hosts 文件都没有见过此服务器的主机密钥。只有当指纹与服务器管理员提供的一致时才信任它。如果不一致，可能有人正在拦截此连接。"
     host: "服务器"
     fingerprint: "主机密钥指纹"
-    other_types_warning: "你的 known_hosts 文件中已有此服务器的 %{types} 密钥，但服务器提供了另一种类型的密钥。服务器升级可能导致这种情况，攻击者也可能。"
+    other_types_warning: "known_hosts 或 DBFlux 中已有此服务器的 %{types} 密钥，但服务器提供了另一种类型的密钥。服务器升级可能导致这种情况，攻击者也可能。"
     hint: "要在服务器上查看指纹，请对其主机密钥运行 ssh-keygen -lf，例如 /etc/ssh/ssh_host_ed25519_key.pub。DBFlux 将信任的密钥保存在自己的列表中，从不写入 ~/.ssh/known_hosts。"
     cancel: "取消"
     trust: "信任并记住"

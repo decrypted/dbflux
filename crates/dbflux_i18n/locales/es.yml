@@ -4002,7 +4002,7 @@ modals:
     lead: "Ni DBFlux ni tu archivo known_hosts han visto antes la clave de host de este servidor. Confía en ella solo si la huella coincide con la que te dio el administrador del servidor. Si no coincide, alguien podría estar interceptando la conexión."
     host: "Servidor"
     fingerprint: "Huella de la clave de host"
-    other_types_warning: "Tu archivo known_hosts ya tiene una clave %{types} para este servidor, pero el servidor ofreció otro tipo de clave. Puede deberse a una actualización del servidor, pero también a un atacante."
+    other_types_warning: "known_hosts o DBFlux ya tiene una clave %{types} para este servidor, pero el servidor ofreció otro tipo de clave. Puede deberse a una actualización del servidor, pero también a un atacante."
     hint: "Para ver la huella en el servidor, ejecuta ssh-keygen -lf sobre su clave de host, por ejemplo /etc/ssh/ssh_host_ed25519_key.pub. DBFlux guarda una clave de confianza en su propia lista y nunca escribe en ~/.ssh/known_hosts."
     cancel: "Cancelar"
     trust: "Confiar y recordar"

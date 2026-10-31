@@ -6,7 +6,7 @@ use crate::primitives::{BannerBlock, BannerVariant, SurfaceRole, surface};
 use crate::tokens::{FontSizes, Spacing};
 use dbflux_core::LogErr;
 use gpui::prelude::*;
-use gpui::{Context, EventEmitter, FocusHandle, KeyDownEvent, Task, Window, div, px};
+use gpui::{Context, EventEmitter, FocusHandle, KeyDownEvent, Subscription, Task, Window, div, px};
 use gpui_component::ActiveTheme;
 use std::time::Duration;
 
@@ -46,9 +46,10 @@ pub const HOST_KEY_TRUST_ARM_DELAY: Duration = Duration::from_millis(1000);
 /// The prompt opens when a connect is refused, often while the user is still
 /// pressing keys meant for something else, so Enter must never trust: focus
 /// starts on Cancel, and Enter or Space activate the focused button. Trust is
-/// reached with Tab, or with Alt+T, and only once it is armed
-/// ([`HOST_KEY_TRUST_ARM_DELAY`] after the prompt opened, again for each new
-/// request). Escape and Cancel work at once.
+/// reached with Tab, or with Alt+T, and only once it is armed:
+/// [`HOST_KEY_TRUST_ARM_DELAY`] after the prompt is first drawn in the active
+/// window, again for each new request and after the window was inactive.
+/// Escape and Cancel work at once.
 pub struct ModalHostKeyConfirm {
     request: Option<HostKeyConfirmRequest>,
     visible: bool,
@@ -57,7 +58,10 @@ pub struct ModalHostKeyConfirm {
     trust_focus: FocusHandle,
     focus_cancel_on_render: bool,
     trust_armed: bool,
+    /// Start the arming delay at the next render in an active window.
+    arm_on_render: bool,
     _arm_task: Option<Task<()>>,
+    _activation: Option<Subscription>,
 }
 
 impl ModalHostKeyConfirm {
@@ -70,7 +74,9 @@ impl ModalHostKeyConfirm {
             trust_focus: cx.focus_handle(),
             focus_cancel_on_render: false,
             trust_armed: false,
+            arm_on_render: false,
             _arm_task: None,
+            _activation: None,
         }
     }
 
@@ -86,12 +92,19 @@ impl ModalHostKeyConfirm {
         self.request = Some(request);
         self.visible = true;
         self.focus_cancel_on_render = true;
-        self.arm_trust_later(cx);
+        self.disarm_until_seen();
         cx.notify();
     }
 
-    /// Disarms Trust and arms it after the delay; replacing the task drops
-    /// (cancels) the timer of an earlier request.
+    /// Disarms Trust until the prompt is drawn in the active window again;
+    /// dropping the task cancels a running timer.
+    fn disarm_until_seen(&mut self) {
+        self.trust_armed = false;
+        self._arm_task = None;
+        self.arm_on_render = true;
+    }
+
+    /// Arms Trust after the delay.
     fn arm_trust_later(&mut self, cx: &mut Context<Self>) {
         self.trust_armed = false;
         let entity = cx.entity().downgrade();
@@ -116,6 +129,7 @@ impl ModalHostKeyConfirm {
         self.visible = false;
         self.request = None;
         self.trust_armed = false;
+        self.arm_on_render = false;
         self._arm_task = None;
         self.focus.restore(cx);
         cx.notify();
@@ -166,6 +180,20 @@ impl Render for ModalHostKeyConfirm {
 
         if std::mem::take(&mut self.focus_cancel_on_render) {
             self.focus.focus(Some(&self.cancel_focus), window, cx);
+        }
+        if self._activation.is_none() {
+            // A prompt that opened while the user was in another app, or that
+            // they left, is armed only once seen again.
+            self._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+                if this.visible && !window.is_window_active() {
+                    this.disarm_until_seen();
+                }
+                cx.notify();
+            }));
+        }
+        if self.arm_on_render && window.is_window_active() {
+            self.arm_on_render = false;
+            self.arm_trust_later(cx);
         }
 
         let Some(request) = self.request.clone() else {
@@ -396,7 +424,10 @@ mod tests {
                 );
             });
         });
-        window.update(|window, _| window.refresh());
+        window.update(|window, _| {
+            window.activate_window();
+            window.refresh();
+        });
         window.run_until_parked();
         (modal, outcomes, window)
     }
@@ -449,6 +480,33 @@ mod tests {
             "{:?}",
             outcomes.borrow()
         );
+    }
+
+    /// The delay runs only while the prompt can be seen: leaving the window
+    /// disarms Trust, and it arms again a delay after coming back.
+    #[gpui::test]
+    fn trust_arms_only_while_the_window_is_active(cx: &mut TestAppContext) {
+        let (modal, _, window) = open(cx);
+        wait_until_armed(window);
+        assert!(window.update(|_, cx| modal.read(cx).is_trust_armed()));
+
+        window.deactivate_window();
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| modal.read(cx).is_trust_armed()));
+
+        wait_until_armed(window);
+        assert!(
+            !window.update(|_, cx| modal.read(cx).is_trust_armed()),
+            "no arming while the window is inactive"
+        );
+
+        window.update(|window, _| {
+            window.activate_window();
+            window.refresh();
+        });
+        window.run_until_parked();
+        wait_until_armed(window);
+        assert!(window.update(|_, cx| modal.read(cx).is_trust_armed()));
     }
 
     #[gpui::test]

@@ -628,8 +628,16 @@ impl AuditService {
         }
     }
 
-    /// Applies redaction for sensitive values in details_json and error_message.
+    /// Applies redaction for sensitive values in summary, details_json and
+    /// error_message.
     fn apply_redaction(&self, mut event: EventRecord) -> EventRecord {
+        // Captured log lines become events with the log message as summary,
+        // so a URL with credentials in a log line lands here too.
+        let result = redact_error_message(&event.summary, true);
+        if result.redaction_count > 0 {
+            event.summary = result.redacted;
+        }
+
         // Redact sensitive values in details_json
         if let Some(ref details) = event.details_json {
             let result = redact_json(details, true);

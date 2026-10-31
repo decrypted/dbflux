@@ -177,10 +177,13 @@ and `%%` are expanded; any other token fails the connection before the command
 runs. So does a value for `%h`, `%n` or `%r` that contains whitespace or a
 character the shell would interpret (quotes, `$`, backticks, `;`, `|` and the
 like) or that starts with `-`, so a host alias cannot inject shell commands.
-The command's error output appears in the log, which is where an access proxy
-prints its login URL. The log names only the program the command runs; the
-full command line, which can carry an access token, is logged at debug level
-only.
+The command's error output, where an access proxy prints its login URL, is
+logged at debug level only, so one-time URLs and tokens stay out of the audit
+log; run DBFlux with `RUST_LOG=debug` to see it. When the SSH handshake
+through the command fails, the error shows its last three lines, shortened and
+with credentials in URLs replaced by `***`. The log names only the program the
+command runs; the full command line, which can carry an access token, is
+logged at debug level only.
 
 A host whose config needs `ProxyJump`, or `ProxyCommand` on Windows, is listed
 and marked: DBFlux cannot reach it, and connecting fails with that reason

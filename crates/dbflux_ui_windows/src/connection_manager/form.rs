@@ -531,11 +531,11 @@ impl ConnectionManagerWindow {
             dbflux_i18n::t!("form.action.saving")
         };
         info!(
-            "{} profile: {}, save_password={}, password_len={}, ssh_enabled={}, ssh_auth={:?}",
+            "{} profile: {}, save_password={}, has_password={}, ssh_enabled={}, ssh_auth={:?}",
             save_action,
             profile.name,
             profile.save_password,
-            password.len(),
+            !password.is_empty(),
             self.access.ssh_enabled,
             self.access.ssh_auth_method
         );

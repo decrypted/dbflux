@@ -4681,10 +4681,16 @@ sso_region = us-east-1
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn refresh_keeps_the_cache_file_permissions() {
+    async fn refresh_leaves_the_cache_file_private() {
         use std::os::unix::fs::PermissionsExt;
 
-        for mode in [0o600, 0o640] {
+        // Owner bits survive; group and other access never does.
+        for (mode, expected) in [
+            (0o600, 0o600),
+            (0o640, 0o600),
+            (0o644, 0o600),
+            (0o400, 0o400),
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let now = Utc::now();
             let path = write_session_cache(
@@ -4702,7 +4708,7 @@ sso_region = us-east-1
             assert!(matches!(state, AuthSessionState::Valid { .. }), "{state:?}");
             assert_eq!(read_cache_json(&path)["accessToken"], "new-access");
             let actual = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(actual, mode, "permissions changed to {actual:o}");
+            assert_eq!(actual, expected, "{mode:o} became {actual:o}");
         }
     }
 

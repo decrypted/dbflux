@@ -306,8 +306,110 @@ impl ConnectionErrorFormatter for DefaultErrorFormatter {
 /// Returns a safe-to-display version of the URI with the userinfo password and
 /// credential-bearing parameters replaced by `***`. See
 /// [`redact_uri_credentials`] for the exact rules.
+///
+/// Credential keys of `key=value` connection strings are redacted too: an
+/// ADO string such as `Server=h;User Id=u;Password=p` or a libpq
+/// `host=h password=p` string is accepted wherever drivers take a URI.
 pub fn sanitize_uri(uri: &str) -> String {
-    redact_uri_credentials(uri, "***").0
+    let (redacted, _) = redact_uri_credentials(uri, "***");
+    redact_key_value_credentials(&redacted, "***").0
+}
+
+fn is_sensitive_connection_key(key: &str) -> bool {
+    SENSITIVE_URI_PARAMETERS
+        .iter()
+        .any(|name| key.eq_ignore_ascii_case(name))
+        // `sslpassword`, `User Password`, ...
+        || key.to_ascii_lowercase().ends_with("password")
+}
+
+/// Replaces the values of credential keys in a `key=value` connection string.
+///
+/// With a `;` anywhere the string is read as ADO (pairs end at `;`, keys may
+/// contain spaces), otherwise as libpq (pairs end at whitespace). A quoted
+/// value (`"..."`, `'...'`, `{...}`) runs to its closing quote, so a `;` or a
+/// space inside a password does not cut the redaction short; an unterminated
+/// quote redacts to the end.
+fn redact_key_value_credentials(text: &str, replacement: &str) -> (String, usize) {
+    let ado = text.contains(';');
+    let is_pair_separator = |c: char| if ado { c == ';' } else { c.is_whitespace() };
+
+    let mut output = String::with_capacity(text.len());
+    let mut redaction_count = 0;
+    let mut cursor = 0;
+
+    while cursor < text.len() {
+        let rest = &text[cursor..];
+        let pair_start = rest
+            .find(|c: char| !is_pair_separator(c))
+            .unwrap_or(rest.len());
+        output.push_str(&rest[..pair_start]);
+        cursor += pair_start;
+
+        let rest = &text[cursor..];
+        if rest.is_empty() {
+            break;
+        }
+
+        let key_end = rest
+            .find(|c: char| c == '=' || is_pair_separator(c))
+            .unwrap_or(rest.len());
+        if !rest[key_end..].starts_with('=') {
+            output.push_str(&rest[..key_end]);
+            cursor += key_end;
+            continue;
+        }
+
+        let key = &rest[..key_end];
+        let value_start = key_end + 1;
+        let value_end =
+            value_start + connection_value_length(&rest[value_start..], is_pair_separator);
+        let value = &rest[value_start..value_end];
+
+        if is_sensitive_connection_key(key.trim()) && !value.trim().is_empty() {
+            output.push_str(key);
+            output.push('=');
+            output.push_str(replacement);
+            redaction_count += 1;
+        } else {
+            output.push_str(&rest[..value_end]);
+        }
+        cursor += value_end;
+    }
+
+    (output, redaction_count)
+}
+
+/// Length in bytes of the value at the start of `value` (after its `=`).
+fn connection_value_length(value: &str, is_pair_separator: impl Fn(char) -> bool) -> usize {
+    let leading = value.len() - value.trim_start_matches(' ').len();
+    let body = &value[leading..];
+
+    let closing = match body.chars().next() {
+        Some('"') => '"',
+        Some('\'') => '\'',
+        Some('{') => '}',
+        _ => {
+            return leading + body.find(&is_pair_separator).unwrap_or(body.len());
+        }
+    };
+
+    let mut chars = body.char_indices().skip(1).peekable();
+    while let Some((index, c)) = chars.next() {
+        if c == '\\' {
+            // libpq escapes with a backslash.
+            chars.next();
+        } else if c == closing {
+            // ADO escapes a quote by doubling it.
+            if chars.peek().is_some_and(|&(_, next)| next == closing) {
+                chars.next();
+            } else {
+                return leading + index + c.len_utf8();
+            }
+        }
+    }
+
+    value.len()
 }
 
 /// Parameter names whose values are credentials when they appear in the query
@@ -707,6 +809,48 @@ mod tests {
             redact("jdbc:sqlserver://h:1433;user=sa;password=pw;databaseName=app"),
             "jdbc:sqlserver://h:1433;user=sa;password=***;databaseName=app"
         );
+    }
+
+    #[test]
+    fn sanitize_uri_redacts_ado_connection_strings() {
+        assert_eq!(
+            sanitize_uri("Server=tcp:h,1433;User Id=sa;Password=hunter2;Encrypt=true"),
+            "Server=tcp:h,1433;User Id=sa;Password=***;Encrypt=true"
+        );
+        assert_eq!(
+            sanitize_uri("server=h;pwd = hunter2 ;database=app"),
+            "server=h;pwd =***;database=app"
+        );
+        // Quoted values may hold the separator; doubled quotes are escapes.
+        assert_eq!(
+            sanitize_uri("Server=h;Password=\"hun;ter\"\"2\";Database=app"),
+            "Server=h;Password=***;Database=app"
+        );
+        assert_eq!(
+            sanitize_uri("Server=h;Password={hun;ter2};Database=app"),
+            "Server=h;Password=***;Database=app"
+        );
+        assert_eq!(
+            sanitize_uri("Server=h;Password='unterminated;Database=app"),
+            "Server=h;Password=***"
+        );
+        assert_eq!(
+            sanitize_uri("Server=h;User Id=sa;Database=app"),
+            "Server=h;User Id=sa;Database=app"
+        );
+    }
+
+    #[test]
+    fn sanitize_uri_redacts_libpq_connection_strings() {
+        assert_eq!(
+            sanitize_uri("host=db user=app password=hunter2 dbname=app"),
+            "host=db user=app password=*** dbname=app"
+        );
+        assert_eq!(
+            sanitize_uri("host=db password='hun ter\\'2' sslpassword=k sslmode=require"),
+            "host=db password=*** sslpassword=*** sslmode=require"
+        );
+        assert_eq!(sanitize_uri("host=db dbname=app"), "host=db dbname=app");
     }
 
     #[test]

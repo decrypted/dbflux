@@ -528,23 +528,128 @@ pub(crate) fn update_aws_config_atomic(
     write_atomic_with_backup_perms(path, &updated)
 }
 
-fn create_backup_for_path(path: &std::path::Path) -> Result<PathBuf, io::Error> {
-    let base = path.with_extension("dbflux-backup");
-    let backup_path = if base.exists() {
-        let timestamp = chrono::Utc::now().timestamp();
-        let file_name = format!("config.dbflux-backup.{}", timestamp);
-        path.with_file_name(file_name)
-    } else {
-        base
+/// Timestamped backups kept next to a file on top of its first backup.
+///
+/// The first backup (`<file>.dbflux-backup`) is the file as it was before
+/// DBFlux first edited it, and it is what a restore uses. A few recent ones
+/// let the user undo the last edits by hand; anything older only keeps
+/// rotated access keys on disk, and in whatever backs up `~/.aws`.
+const ROLLING_BACKUPS_KEPT: usize = 3;
+
+fn backup_base_path(path: &Path) -> PathBuf {
+    path.with_extension("dbflux-backup")
+}
+
+/// The `<base>.` prefix of the timestamped backups of `path`.
+fn rolling_backup_prefix(path: &Path) -> Option<String> {
+    let base = backup_base_path(path);
+    let name = base.file_name()?.to_str()?;
+    Some(format!("{name}."))
+}
+
+fn is_rolling_backup_name(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .is_some_and(|stamp| !stamp.is_empty() && stamp.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Copies `path` into a new backup file created with `mode`.
+///
+/// A missing `path` yields an empty backup, so a restore brings back "no
+/// content" rather than failing.
+fn create_backup_for_path(path: &Path, mode: u32) -> Result<(), io::Error> {
+    let base = backup_base_path(path);
+    let (backup_path, mut backup) = match create_private_file(&base, mode) {
+        Ok(file) => (base, file),
+        // A symlink planted under the backup name also lands here: `create_new`
+        // never follows it, so the copy goes to a fresh timestamped name.
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            create_rolling_backup(path, mode)?
+        }
+        Err(err) => return Err(err),
     };
 
-    match fs::copy(path, &backup_path) {
-        Ok(_) => Ok(backup_path),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            fs::write(&backup_path, "")?;
-            Ok(backup_path)
-        }
+    let copied = match open_no_follow(path) {
+        Ok(mut original) => io::copy(&mut original, &mut backup).map(|_| ()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
+    };
+
+    if let Err(err) = copied {
+        drop(backup);
+        let _ = fs::remove_file(&backup_path);
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+fn create_rolling_backup(path: &Path, mode: u32) -> Result<(PathBuf, fs::File), io::Error> {
+    let prefix = rolling_backup_prefix(path).ok_or_else(|| invalid_target(path))?;
+    let stamp = chrono::Utc::now().timestamp_micros();
+
+    // Two writes in the same microsecond pick the next free name instead of
+    // sharing one.
+    for offset in 0..16 {
+        let candidate = path.with_file_name(format!("{prefix}{}", stamp + offset));
+        match create_private_file(&candidate, mode) {
+            Ok(file) => return Ok((candidate, file)),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("no free backup name next to {}", path.display()),
+    ))
+}
+
+/// Deletes all but the newest [`ROLLING_BACKUPS_KEPT`] timestamped backups of
+/// `path`. The first backup is never touched.
+fn prune_rolling_backups(path: &Path) {
+    let (Some(dir), Some(prefix)) = (path.parent(), rolling_backup_prefix(path)) else {
+        return;
+    };
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            log::warn!("Could not list old AWS backups in {}: {err}", dir.display());
+            return;
+        }
+    };
+
+    let mut rolling: Vec<(SystemTime, u128, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            if !is_rolling_backup_name(name, &prefix) {
+                return None;
+            }
+            // `DirEntry::metadata` does not follow symlinks, so only regular
+            // files DBFlux could have written are candidates.
+            let metadata = entry.metadata().ok().filter(|m| m.is_file())?;
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            let stamp = name
+                .strip_prefix(prefix.as_str())
+                .and_then(|stamp| stamp.parse().ok())
+                .unwrap_or(0);
+            Some((modified, stamp, entry.path()))
+        })
+        .collect();
+
+    rolling.sort();
+    let excess = rolling.len().saturating_sub(ROLLING_BACKUPS_KEPT);
+    for (_, _, old) in rolling.into_iter().take(excess) {
+        if let Err(err) = fs::remove_file(&old) {
+            log::warn!("Could not remove old AWS backup {}: {err}", old.display());
+        }
     }
 }
 
@@ -563,12 +668,13 @@ fn restore_backup_for_path(path: &std::path::Path) -> Result<(), io::Error> {
         )
     })?;
 
+    let prefix = rolling_backup_prefix(path).ok_or_else(|| invalid_target(path))?;
     let mut latest: Option<(PathBuf, SystemTime)> = None;
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
-        if !name.starts_with("config.dbflux-backup.") {
+        if !is_rolling_backup_name(&name, &prefix) {
             continue;
         }
 
@@ -919,10 +1025,9 @@ pub(crate) fn hash_credentials_section(contents: &str, name: &str) -> Option<Aws
 /// a thin sibling of `update_aws_config_atomic`; the locking and atomic-rename
 /// logic is NOT forked.
 ///
-/// Credentials files typically have mode 0600. The writer preserves the
-/// original file's permissions on the temp file and backup file (security
-/// requirement). If the original file does not yet exist the temp file is
-/// written with the same permissions as the new file (0600 on Unix).
+/// Credentials files typically have mode 0600. The temp file, the backup and
+/// the result get the original mode without group and other bits, or 0600
+/// for a new file.
 pub(crate) fn update_aws_credentials_atomic(
     path: &Path,
     transform: impl FnOnce(&str) -> String,
@@ -941,53 +1046,141 @@ pub(crate) fn update_aws_credentials_atomic(
     write_atomic_with_backup_perms(path, &updated)
 }
 
-/// Atomically writes `content` to `path` via a temp-file-then-rename sequence,
-/// creating a backup first so a rename failure can restore the original.
+/// Atomically writes `content` to `path` through a temp file in the same
+/// directory, after backing up the current content.
 ///
-/// On Unix the temp file and backup file are restricted to at most the mode of
-/// the original file (or 0600 when the file is new), ensuring that neither
-/// `~/.aws/config` nor `~/.aws/credentials` is ever world-readable during the
-/// write window.
+/// The temp file and the backup are created with at most the original mode
+/// (0600 for a new file), so neither `~/.aws/config` nor `~/.aws/credentials`
+/// content is ever readable by others, not even between create and chmod.
+/// The temp name is random, so a file or symlink planted under a predictable
+/// name is never written through, and concurrent writers never share one.
 ///
 /// Used by both `update_aws_config_atomic` and `update_aws_credentials_atomic`.
 fn write_atomic_with_backup_perms(path: &Path, content: &str) -> Result<(), io::Error> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let dir = path.parent().ok_or_else(|| invalid_target(path))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid_target(path))?;
 
-    let backup_path = create_backup_for_path(path)?;
-    let temp_path = path.with_extension("tmp");
+    create_private_dir_all(dir)?;
 
-    // Write the temp file first, then restrict its permissions to match the
-    // original (or enforce 0600 for credentials on first create).
-    fs::write(&temp_path, content)?;
+    let mode = target_mode(path)?;
+    create_backup_for_path(path, mode)?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
+    let temp_path = dir.join(format!(
+        ".{file_name}.{}.tmp",
+        uuid::Uuid::new_v4().simple()
+    ));
 
-        // Try to read the original file's permissions; fall back to 0600.
-        let mode = fs::metadata(path)
-            .map(|m| m.permissions().mode())
-            .unwrap_or(0o600);
-
-        // Restrict to at most the original mode — never widen.
-        let effective_mode = mode & 0o600;
-        fs::set_permissions(&temp_path, fs::Permissions::from_mode(effective_mode))?;
-
-        // Also restrict the backup file to the same mode.
-        if backup_path.exists() {
-            fs::set_permissions(&backup_path, fs::Permissions::from_mode(effective_mode))?;
-        }
-    }
-
-    if let Err(error) = fs::rename(&temp_path, path) {
+    // A failed rename leaves the original untouched, so only the temp file
+    // needs cleaning up.
+    if let Err(error) = write_private_then_rename(&temp_path, path, content.as_bytes(), mode) {
         let _ = fs::remove_file(&temp_path);
-        let _ = fs::copy(&backup_path, path);
         return Err(error);
     }
 
+    prune_rolling_backups(path);
     Ok(())
+}
+
+/// The mode for the replacement file: the current mode without group and
+/// other bits, or 0600 for a new file.
+///
+/// A symlink is refused: renaming over it would silently detach a file the
+/// user manages elsewhere, and writing through it would put credentials
+/// wherever it points.
+fn target_mode(path: &Path) -> Result<u32, io::Error> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a symbolic link; DBFlux does not write through or replace it. \
+                 Edit the file it points to instead.",
+                path.display()
+            ),
+        )),
+        #[cfg(unix)]
+        Ok(metadata) => {
+            use std::os::unix::fs::PermissionsExt;
+            Ok(metadata.permissions().mode() & 0o600)
+        }
+        #[cfg(not(unix))]
+        Ok(_) => Ok(0o600),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(0o600),
+        Err(err) => Err(err),
+    }
+}
+
+fn write_private_then_rename(
+    temp_path: &Path,
+    target: &Path,
+    content: &[u8],
+    mode: u32,
+) -> Result<(), io::Error> {
+    use std::io::Write as _;
+
+    let mut file = create_private_file(temp_path, mode)?;
+    file.write_all(content)?;
+    file.sync_all()?;
+    drop(file);
+
+    #[cfg(test)]
+    tests::run_before_rename_hook(temp_path);
+
+    fs::rename(temp_path, target)
+}
+
+/// Creates a new file that never exists with a wider mode than `mode`.
+/// `create_new` also refuses an existing symlink instead of following it.
+fn create_private_file(path: &Path, mode: u32) -> Result<fs::File, io::Error> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+
+    options.open(path)
+}
+
+fn open_no_follow(path: &Path) -> Result<fs::File, io::Error> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+
+    options.open(path)
+}
+
+/// `~/.aws` holds credentials, so a directory DBFlux creates for it is 0700.
+/// Existing directories keep their mode.
+fn create_private_dir_all(dir: &Path) -> Result<(), io::Error> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+
+    builder.create(dir)
+}
+
+fn invalid_target(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("invalid AWS file path '{}'", path.display()),
+    )
 }
 
 /// Replaces or appends a `[NAME]` section block in a credentials-file string.
@@ -2813,44 +3006,345 @@ output=json
         );
     }
 
-    // ── Fix 2 — rename-failure restore test ────────────────────────────────────
+    // ── Atomic writer: temp file, backups, symlinks ──────────────────────────
 
-    /// Verifies that when the atomic rename fails, `write_atomic_with_backup_perms`
-    /// restores the original file content from the backup.
-    ///
-    /// Rename failure is injected by creating a *directory* at the temp-file path
-    /// before the write is attempted. On Linux (and macOS) `fs::rename` fails with
-    /// `EISDIR` when the destination is a directory, triggering the restore branch.
-    ///
-    /// The test verifies:
-    /// 1. The function returns an `Err`.
-    /// 2. The original file still contains the original content after the error.
+    type BeforeRenameHook = Box<dyn Fn(&Path)>;
+
+    thread_local! {
+        static BEFORE_RENAME: std::cell::RefCell<Option<BeforeRenameHook>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Called by the writer once the temp file is complete, right before it
+    /// replaces the target.
+    pub(super) fn run_before_rename_hook(temp_path: &Path) {
+        BEFORE_RENAME.with(|slot| {
+            if let Some(hook) = slot.borrow().as_ref() {
+                hook(temp_path);
+            }
+        });
+    }
+
+    fn with_before_rename<R>(hook: impl Fn(&Path) + 'static, run: impl FnOnce() -> R) -> R {
+        BEFORE_RENAME.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        let result = run();
+        BEFORE_RENAME.with(|slot| *slot.borrow_mut() = None);
+        result
+    }
+
+    /// Pins the umask to the common 022, so a file created without an explicit
+    /// mode comes out group/other readable no matter how the test runner was
+    /// started.
+    #[cfg(unix)]
+    struct UmaskGuard(libc::mode_t);
+
+    #[cfg(unix)]
+    impl UmaskGuard {
+        #[allow(unsafe_code)]
+        fn common() -> Self {
+            // SAFETY: umask only swaps the process file-mode mask.
+            Self(unsafe { libc::umask(0o022) })
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for UmaskGuard {
+        #[allow(unsafe_code)]
+        fn drop(&mut self) {
+            // SAFETY: as above, restoring the previous mask.
+            unsafe {
+                libc::umask(self.0);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::symlink_metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    fn rolling_backups(dir: &Path, file_name: &str) -> Vec<PathBuf> {
+        let prefix = format!("{file_name}.dbflux-backup.");
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .expect("read_dir")
+            .map(|entry| entry.expect("entry"))
+            .filter(|entry| is_rolling_backup_name(&entry.file_name().to_string_lossy(), &prefix))
+            .map(|entry| entry.path())
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// The temp file and the backup must be private while they exist, not
+    /// only after a later chmod: another local user who opens them in that
+    /// window keeps the descriptor.
+    #[cfg(unix)]
+    #[test]
+    fn temp_and_backup_files_are_private_from_creation() {
+        use std::cell::RefCell;
+        use std::os::unix::fs::PermissionsExt;
+        use std::rc::Rc;
+
+        let _umask = UmaskGuard::common();
+
+        for (name, seed_mode) in [("credentials", 0o600), ("config", 0o644)] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join(name);
+            std::fs::write(&path, "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n")
+                .expect("seed");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(seed_mode))
+                .expect("chmod seed");
+
+            let observed: Rc<RefCell<Vec<(String, u32)>>> = Rc::default();
+            let sink = Rc::clone(&observed);
+            let dir_path = dir.path().to_path_buf();
+            let target_name = name.to_string();
+
+            with_before_rename(
+                move |temp_path| {
+                    let mut sink = sink.borrow_mut();
+                    sink.push(("temp".to_string(), mode_of(temp_path)));
+                    for entry in std::fs::read_dir(&dir_path).expect("read_dir") {
+                        let entry = entry.expect("entry");
+                        let entry_name = entry.file_name().to_string_lossy().into_owned();
+                        if entry_name.starts_with(&format!("{target_name}.dbflux-backup")) {
+                            sink.push((entry_name, mode_of(&entry.path())));
+                        }
+                    }
+                },
+                || {
+                    write_atomic_with_backup_perms(
+                        &path,
+                        "[ci]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n",
+                    )
+                    .expect("write");
+                },
+            );
+
+            let observed = observed.borrow();
+            assert!(
+                observed.iter().any(|(kind, _)| kind == "temp"),
+                "{name}: the writer never reached the rename"
+            );
+            assert!(
+                observed.iter().any(|(kind, _)| kind != "temp"),
+                "{name}: no backup existed before the rename: {observed:?}"
+            );
+            for (kind, mode) in observed.iter() {
+                assert_eq!(
+                    mode & 0o077,
+                    0,
+                    "{name}: {kind} was {mode:o} before the rename"
+                );
+            }
+            assert_eq!(mode_of(&path) & 0o077, 0, "{name}: final file");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_aws_directory_is_private() {
+        let _umask = UmaskGuard::common();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let aws_dir = dir.path().join("home").join(".aws");
+        let path = aws_dir.join("credentials");
+
+        update_aws_credentials_atomic(&path, |_| "[ci]\nregion = eu-west-1\n".to_string())
+            .expect("write");
+
+        assert_eq!(mode_of(&aws_dir), 0o700);
+        assert_eq!(mode_of(&path) & 0o077, 0);
+    }
+
+    /// A symlinked credentials file is neither written through nor replaced.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_target_is_refused_and_left_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let elsewhere = dir.path().join("dotfiles-credentials");
+        let original = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+        std::fs::write(&elsewhere, original).expect("seed");
+        let path = dir.path().join("credentials");
+        std::os::unix::fs::symlink(&elsewhere, &path).expect("symlink");
+
+        let result = update_aws_credentials_atomic(&path, |existing| {
+            existing.replace("AKIAIOSFODNN7EXAMPLE", "AKIAI44QH8DHBEXAMPLE")
+        });
+
+        let error = result.expect_err("a symlinked target must be refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("symbolic link"), "{error}");
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .expect("metadata")
+                .file_type()
+                .is_symlink(),
+            "the symlink must stay a symlink"
+        );
+        assert_eq!(std::fs::read_to_string(&elsewhere).expect("read"), original);
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .map(|entry| entry.expect("entry").file_name())
+            .filter(|name| name != "credentials" && name != "dotfiles-credentials")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "nothing else may be created: {leftovers:?}"
+        );
+    }
+
+    /// Symlinks planted under the names the writer used to pick (the fixed
+    /// temp name and the first backup name) must not redirect the write.
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_at_temp_and_backup_names_are_not_followed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("credentials");
+        std::fs::write(&path, "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n").expect("seed");
+
+        let loot = dir.path().join("loot");
+        std::fs::create_dir(&loot).expect("loot dir");
+        let via_temp = loot.join("via-temp");
+        let via_backup = loot.join("via-backup");
+        std::os::unix::fs::symlink(&via_temp, path.with_extension("tmp")).expect("temp link");
+        std::os::unix::fs::symlink(&via_backup, path.with_extension("dbflux-backup"))
+            .expect("backup link");
+
+        update_aws_credentials_atomic(&path, |existing| {
+            existing.replace("AKIAIOSFODNN7EXAMPLE", "AKIAI44QH8DHBEXAMPLE")
+        })
+        .expect("write");
+
+        assert!(
+            !via_temp.exists(),
+            "the write followed the temp-name symlink"
+        );
+        assert!(
+            !via_backup.exists(),
+            "the backup followed the backup-name symlink"
+        );
+        assert!(
+            !std::fs::symlink_metadata(&path)
+                .expect("metadata")
+                .file_type()
+                .is_symlink(),
+            "the target must be a regular file"
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("read")
+                .contains("AKIAI44QH8DHBEXAMPLE")
+        );
+    }
+
+    /// Timestamped backups are capped and named after the file they back up;
+    /// the first backup (the pre-DBFlux original) is kept.
+    #[test]
+    fn rolling_backups_are_capped_and_named_after_their_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("credentials");
+        std::fs::write(&path, "key = v0\n").expect("seed");
+
+        for version in 1..=6 {
+            update_aws_credentials_atomic(&path, |_| format!("key = v{version}\n")).expect("write");
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("dbflux-backup")).expect("first backup"),
+            "key = v0\n"
+        );
+
+        let rolling = rolling_backups(dir.path(), "credentials");
+        assert_eq!(rolling.len(), ROLLING_BACKUPS_KEPT, "{rolling:?}");
+        let mut kept: Vec<String> = rolling
+            .iter()
+            .map(|backup| std::fs::read_to_string(backup).expect("backup"))
+            .collect();
+        kept.sort();
+        assert_eq!(kept, ["key = v3\n", "key = v4\n", "key = v5\n"]);
+
+        assert!(
+            rolling_backups(dir.path(), "config").is_empty(),
+            "credentials backups must not be filed as config backups"
+        );
+    }
+
+    /// Backups left by earlier versions (second timestamps) count towards the
+    /// cap, so the old pile shrinks on the next write.
+    #[test]
+    fn legacy_rolling_backups_are_pruned_too() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config");
+        std::fs::write(&path, "[profile a]\nregion = us-east-1\n").expect("seed");
+        std::fs::write(path.with_extension("dbflux-backup"), "original").expect("base");
+        for offset in 0..5_i64 {
+            let legacy = dir
+                .path()
+                .join(format!("config.dbflux-backup.{}", 1_700_000_000 + offset));
+            std::fs::write(&legacy, "old").expect("legacy");
+            filetime::set_file_mtime(
+                &legacy,
+                filetime::FileTime::from_unix_time(1_700_000_000 + offset, 0),
+            )
+            .expect("mtime");
+        }
+
+        update_aws_config_atomic(&path, |existing| existing.replace("us-east-1", "us-west-2"))
+            .expect("write");
+
+        let rolling = rolling_backups(dir.path(), "config");
+        assert_eq!(rolling.len(), ROLLING_BACKUPS_KEPT, "{rolling:?}");
+        let newest: Vec<String> = rolling
+            .iter()
+            .map(|backup| std::fs::read_to_string(backup).expect("backup"))
+            .collect();
+        assert!(
+            newest.iter().any(|content| content.contains("us-east-1")),
+            "the backup of this write must be kept: {newest:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("dbflux-backup")).expect("base"),
+            "original"
+        );
+    }
+
+    /// A failed rename leaves the original content and no temp file behind.
     #[cfg(unix)]
     #[test]
     fn atomic_write_rename_failure_preserves_original_content() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config");
-        let temp_path = path.with_extension("tmp");
 
         let original = "[profile dev]\nregion = us-east-1\n";
         std::fs::write(&path, original).expect("seed");
 
-        // Block the rename by occupying the temp path with a directory.
-        std::fs::create_dir_all(&temp_path).expect("create blocking dir");
-
-        let result = write_atomic_with_backup_perms(&path, "[profile dev]\nregion = us-west-2\n");
-
-        // The call must fail (rename is impossible with a directory in the way).
-        assert!(
-            result.is_err(),
-            "expected Err when rename destination is a directory"
+        // Removing the finished temp file makes the rename fail.
+        let result = with_before_rename(
+            |temp_path| std::fs::remove_file(temp_path).expect("remove temp"),
+            || write_atomic_with_backup_perms(&path, "[profile dev]\nregion = us-west-2\n"),
         );
 
-        // The original file must still contain the original content.
-        let actual = std::fs::read_to_string(&path).expect("read after failure");
+        assert!(result.is_err(), "expected Err when the rename fails");
         assert_eq!(
-            actual, original,
-            "original content must be intact after rename failure"
+            std::fs::read_to_string(&path).expect("read after failure"),
+            original
         );
+        let temps: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(temps.is_empty(), "temp files left behind: {temps:?}");
     }
 }

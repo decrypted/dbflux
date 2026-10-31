@@ -88,7 +88,7 @@ Validation is enforced by `AuditService::validate_event()` before storage:
 
 By default, `AuditService` runs with these settings:
 
-- **`redact_sensitive = true`**: Sensitive values (passwords, tokens, connection strings) in `details_json` and `error_message` are replaced with `[REDACTED]` before storage.
+- **`redact_sensitive = true`**: Sensitive values (passwords, tokens, connection strings) in `summary`, `details_json` and `error_message` are replaced with `[REDACTED]` before storage. Captured log lines are stored with the log message as `summary`.
 - **`capture_query_text = false`**: Full query text is never stored. Instead, a SHA256 fingerprint plus the original length are stored as `[FINGERPRINT:<16-char-hex>]` with `query_length`. This prevents sensitive data in queries from leaking into the audit log.
 - **`max_detail_bytes = 65536`**: Payloads larger than 64 KiB are rejected to prevent storage bloat.
 

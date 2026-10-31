@@ -191,8 +191,12 @@ ejecute el comando. Lo mismo ocurre con un valor para `%h`, `%n` o `%r` que
 contenga espacios o un carácter que la shell interpretaría (comillas, `$`,
 comillas invertidas, `;`, `|` y similares) o que empiece por `-`, de modo que
 un alias de host no puede inyectar comandos en la shell. La salida de error
-del comando aparece en el log, que es donde un proxy de acceso imprime su URL
-de inicio de sesión. El log solo nombra el programa que ejecuta el comando; la
+del comando, donde un proxy de acceso imprime su URL de inicio de sesión, solo
+se registra en el nivel debug, para que las URL de un solo uso y los tokens no
+acaben en el log de auditoría; ejecuta DBFlux con `RUST_LOG=debug` para verla.
+Si el handshake SSH a través del comando falla, el error muestra sus tres
+últimas líneas, acortadas y con las credenciales de las URL sustituidas por
+`***`. El log solo nombra el programa que ejecuta el comando; la
 línea de comando completa, que puede llevar un token de acceso, solo se
 registra en el nivel debug.
 

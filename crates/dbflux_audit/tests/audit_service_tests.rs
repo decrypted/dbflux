@@ -787,6 +787,32 @@ fn panic_report_redacts_secrets_in_the_message() {
     );
 }
 
+/// Captured log lines are stored with the log message as summary.
+#[test]
+fn summary_is_redacted_like_the_error_message() {
+    let service = service_for_test("dbflux-audit-summary-redaction.sqlite");
+    service.set_redact_sensitive(true);
+
+    let stored = service
+        .record(
+            EventRecord::new(
+                1000,
+                EventSeverity::Info,
+                EventCategory::System,
+                EventOutcome::Success,
+            )
+            .with_typed_action(SYSTEM_STARTUP)
+            .with_summary(
+                "Connecting via postgres://admin:hunter2@db.internal/app?sslmode=require&token=tok-s3cr3t",
+            ),
+        )
+        .expect("event should record");
+
+    assert!(!stored.summary.contains("hunter2"), "{}", stored.summary);
+    assert!(!stored.summary.contains("tok-s3cr3t"), "{}", stored.summary);
+    assert!(stored.summary.contains("db.internal"), "{}", stored.summary);
+}
+
 #[test]
 fn connection_lifecycle_events_record_correctly() {
     let service = service_for_test("dbflux-audit-conn-lifecycle.sqlite");

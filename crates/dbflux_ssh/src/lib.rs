@@ -403,10 +403,11 @@ fn establish_resolved_session(
         .map_err(|e| DbError::connection_failed(format!("Failed to create SSH session: {}", e)))?;
 
     let phase_start = std::time::Instant::now();
+    let mut proxy_stderr = None;
     match &config.proxy_command {
         Some(command) => {
             log::info!("[SSH] Phase 1/3: ProxyCommand transport");
-            attach_proxy_command(&mut session, command)?;
+            proxy_stderr = Some(attach_proxy_command(&mut session, command)?);
         }
         None => {
             log::info!(
@@ -427,9 +428,13 @@ fn establish_resolved_session(
 
     session.set_timeout(SSH_IO_TIMEOUT.as_millis() as u32);
 
-    session
-        .handshake()
-        .map_err(|e| DbError::connection_failed(format!("SSH handshake failed: {}", e)))?;
+    session.handshake().map_err(|e| {
+        let message = format!("SSH handshake failed: {}", e);
+        match proxy_stderr.as_ref().and_then(|tail| tail()) {
+            Some(tail) => DbError::connection_failed(format!("{message}. {tail}")),
+            None => DbError::connection_failed(message),
+        }
+    })?;
 
     verify_or_store_host_key(&session, &config.host, config.port)?;
 
@@ -490,16 +495,21 @@ fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, DbError> {
     Ok(tcp)
 }
 
+/// Reads the last stderr lines of a transport command for a failed connect.
+type ProxyStderr = Box<dyn Fn() -> Option<String>>;
+
 #[cfg(unix)]
-fn attach_proxy_command(session: &mut Session, command: &str) -> Result<(), DbError> {
-    session.set_tcp_stream(proxy_command::spawn(command, SSH_IO_TIMEOUT)?);
-    Ok(())
+fn attach_proxy_command(session: &mut Session, command: &str) -> Result<ProxyStderr, DbError> {
+    let stream = proxy_command::spawn(command, SSH_IO_TIMEOUT)?;
+    let tail = stream.stderr_tail();
+    session.set_tcp_stream(stream);
+    Ok(Box::new(move || tail.for_error()))
 }
 
 /// The SSH config resolver never returns a `ProxyCommand` off Unix; this
 /// guards a hand-built [`DialTarget`].
 #[cfg(not(unix))]
-fn attach_proxy_command(_session: &mut Session, _command: &str) -> Result<(), DbError> {
+fn attach_proxy_command(_session: &mut Session, _command: &str) -> Result<ProxyStderr, DbError> {
     Err(DbError::connection_failed(
         "ProxyCommand is not supported by DBFlux's SSH tunnel on this platform",
     ))
@@ -1221,6 +1231,31 @@ mod resolve_for_dial_tests {
         assert!(marker.exists(), "the ProxyCommand never ran");
         assert!(message.contains("SSH handshake failed"), "got: {message}");
         assert!(!message.contains("Failed to connect"), "got: {message}");
+    }
+
+    /// Stderr is logged at debug only, so a failing command's last words go
+    /// into the error instead.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_proxy_command_reports_its_last_stderr_lines() {
+        let fixture = Fixture::new();
+        fixture.write_ssh_config(
+            "Host viacmd\n  HostName unreachable.invalid\n  ProxyCommand sh -c 'echo early >&2; echo \"fatal: origin refused https://h.example/?token=s3cr3t\" >&2; exit 1'\n",
+        );
+        let target =
+            resolve_for_dial_in(&aliased_tunnel("viacmd", None), "alice", &fixture.home()).unwrap();
+
+        let message = match establish_resolved_session(&target, None) {
+            Ok(_) => panic!("a command that exits cannot carry an SSH session"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(message.contains("SSH handshake failed"), "got: {message}");
+        assert!(
+            message.contains("ProxyCommand stderr: early | fatal: origin refused"),
+            "got: {message}"
+        );
+        assert!(!message.contains("s3cr3t"), "got: {message}");
     }
 
     #[cfg(not(unix))]

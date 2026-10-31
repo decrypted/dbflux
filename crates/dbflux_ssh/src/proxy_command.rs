@@ -4,12 +4,15 @@
 //! The command gets one end of a Unix socket pair as both stdin and stdout;
 //! libssh2 gets the other end. The command is run as `$SHELL -c "exec ..."`
 //! (`/bin/sh` when `SHELL` is unset), matching OpenSSH's
-//! `ssh_proxy_connect`. Its stderr is forwarded to the log line by line,
-//! because access proxies print login prompts and URLs there.
+//! `ssh_proxy_connect`.
 //!
 //! The expanded command can carry credentials (an access token on the
 //! command line), so only its program name is logged at info level and put
-//! in errors; the full command is logged at debug level only.
+//! in errors; the full command is logged at debug level only. The same goes
+//! for its stderr: access proxies print one-time login URLs there and
+//! wrapper scripts echo tokens, while info lines are stored in the audit
+//! database. Stderr is therefore logged at debug, and only its last few
+//! lines, redacted, go into the error of a failed connect.
 
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
@@ -17,9 +20,88 @@ use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use dbflux_core::DbError;
+
+/// Stderr lines kept for the error message, and the length each is cut to.
+const STDERR_TAIL_LINES: usize = 3;
+const STDERR_TAIL_LINE_CHARS: usize = 200;
+
+/// How long a failed connect waits for the command's last stderr lines; a
+/// command that exits has usually written them already.
+const STDERR_TAIL_WAIT: Duration = Duration::from_millis(250);
+
+/// The last few stderr lines of a `ProxyCommand`, shared between the reader
+/// thread and whoever reports a failed connect.
+#[derive(Clone, Default)]
+pub(crate) struct StderrTail(Arc<(Mutex<TailState>, Condvar)>);
+
+#[derive(Default)]
+struct TailState {
+    lines: std::collections::VecDeque<String>,
+    closed: bool,
+}
+
+impl StderrTail {
+    fn push(&self, line: &str) {
+        let (state, _) = &*self.0;
+        let Ok(mut state) = state.lock() else {
+            return;
+        };
+        if state.lines.len() == STDERR_TAIL_LINES {
+            state.lines.pop_front();
+        }
+        state.lines.push_back(shorten(line.trim_end()));
+    }
+
+    fn close(&self) {
+        let (state, closed) = &*self.0;
+        if let Ok(mut state) = state.lock() {
+            state.closed = true;
+        }
+        closed.notify_all();
+    }
+
+    /// `ProxyCommand stderr: a | b | c`, redacted, or `None` when the command
+    /// printed nothing. Waits up to `wait` for stderr to close first.
+    pub(crate) fn summary(&self, wait: Duration) -> Option<String> {
+        let (state, closed) = &*self.0;
+        let state = state.lock().ok()?;
+        let state = closed
+            .wait_timeout_while(state, wait, |state| !state.closed)
+            .map(|(state, _)| state)
+            .ok()?;
+
+        let lines: Vec<&str> = state
+            .lines
+            .iter()
+            .map(String::as_str)
+            .filter(|line| !line.is_empty())
+            .collect();
+        if lines.is_empty() {
+            return None;
+        }
+
+        Some(format!(
+            "ProxyCommand stderr: {}",
+            dbflux_core::sanitize_uri(&lines.join(" | "))
+        ))
+    }
+
+    /// The summary for the error of a failed connect.
+    pub(crate) fn for_error(&self) -> Option<String> {
+        self.summary(STDERR_TAIL_WAIT)
+    }
+}
+
+fn shorten(line: &str) -> String {
+    match line.char_indices().nth(STDERR_TAIL_LINE_CHARS) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
+    }
+}
 
 /// The libssh2 side of a running `ProxyCommand`.
 ///
@@ -28,6 +110,13 @@ use dbflux_core::DbError;
 pub(crate) struct ProxyStream {
     socket: UnixStream,
     child: Child,
+    stderr_tail: StderrTail,
+}
+
+impl ProxyStream {
+    pub(crate) fn stderr_tail(&self) -> StderrTail {
+        self.stderr_tail.clone()
+    }
 }
 
 impl AsRawFd for ProxyStream {
@@ -82,21 +171,34 @@ fn spawn_with_shell(
             ))
         })?;
 
-    if let Some(stderr) = child.stderr.take() {
-        std::thread::Builder::new()
-            .name("ssh-proxy-command-stderr".to_string())
-            .spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                    log::info!("[SSH] ProxyCommand stderr: {line}");
-                }
-            })
-            .ok();
+    let stderr_tail = StderrTail::default();
+    match child.stderr.take() {
+        Some(stderr) => {
+            let tail = stderr_tail.clone();
+            let reader = std::thread::Builder::new()
+                .name("ssh-proxy-command-stderr".to_string())
+                .spawn(move || {
+                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                        log::debug!("[SSH] ProxyCommand stderr: {line}");
+                        tail.push(&line);
+                    }
+                    tail.close();
+                });
+            if reader.is_err() {
+                stderr_tail.close();
+            }
+        }
+        None => stderr_tail.close(),
     }
 
     socket.set_read_timeout(Some(io_timeout)).ok();
     socket.set_write_timeout(Some(io_timeout)).ok();
 
-    Ok(ProxyStream { socket, child })
+    Ok(ProxyStream {
+        socket,
+        child,
+        stderr_tail,
+    })
 }
 
 /// The program a `ProxyCommand` runs, without its directory, arguments or
@@ -154,6 +256,101 @@ mod tests {
         let read = stream.socket.read(&mut buf).unwrap();
 
         assert_eq!(read, 0);
+    }
+
+    struct CapturingLogger(Mutex<Vec<(log::Level, String)>>);
+
+    impl log::Log for CapturingLogger {
+        fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if let Ok(mut records) = self.0.lock() {
+                records.push((record.level(), record.args().to_string()));
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    static LOGGER: CapturingLogger = CapturingLogger(Mutex::new(Vec::new()));
+
+    /// Info lines are stored in the audit database, and proxies print login
+    /// URLs and tokens on stderr.
+    #[test]
+    fn stderr_is_logged_at_debug_only() {
+        // Another test in this binary may have installed the same logger.
+        let _ = log::set_logger(&LOGGER);
+        log::set_max_level(log::LevelFilter::Trace);
+
+        let marker = "dbflux-proxy-stderr-marker";
+        let stream = spawn(
+            &format!("sh -c 'echo {marker} token=s3cr3t >&2'"),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        stream.stderr_tail().summary(Duration::from_secs(5));
+        drop(stream);
+
+        let records: Vec<_> = LOGGER
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, message)| message.contains(marker))
+            .cloned()
+            .collect();
+        assert!(
+            records
+                .iter()
+                .any(|(_, message)| message.starts_with("[SSH] ProxyCommand stderr:")),
+            "the stderr line was never logged: {records:?}"
+        );
+        for (level, message) in &records {
+            assert_eq!(*level, log::Level::Debug, "{message}");
+        }
+    }
+
+    #[test]
+    fn the_error_tail_keeps_the_last_lines_short_and_redacted() {
+        let long = "x".repeat(500);
+        let stream = spawn(
+            &format!(
+                "sh -c 'for n in 1 2 3 4 5; do echo line$n >&2; done; \
+                 echo {long} >&2; echo \"login https://h.example/cb?token=s3cr3t\" >&2'"
+            ),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+
+        let summary = stream
+            .stderr_tail()
+            .summary(Duration::from_secs(5))
+            .expect("the command printed to stderr");
+
+        assert!(
+            summary.starts_with("ProxyCommand stderr: line5 | "),
+            "{summary}"
+        );
+        assert!(!summary.contains("line4"), "{summary}");
+        assert!(
+            summary.contains(&format!("{}…", "x".repeat(200))),
+            "{summary}"
+        );
+        assert!(!summary.contains(&"x".repeat(201)), "{summary}");
+        assert!(
+            summary.contains("https://h.example/cb?token=***"),
+            "{summary}"
+        );
+        assert!(!summary.contains("s3cr3t"), "{summary}");
+    }
+
+    #[test]
+    fn a_silent_command_has_no_error_tail() {
+        let stream = spawn("true", Duration::from_secs(5)).unwrap();
+
+        assert_eq!(stream.stderr_tail().summary(Duration::from_secs(5)), None);
     }
 
     #[test]

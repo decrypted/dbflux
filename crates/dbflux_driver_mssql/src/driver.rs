@@ -7845,8 +7845,16 @@ mod log_hygiene_tests {
             ("use_uri", "true"),
             ("uri", "sqlserver://sa@127.0.0.1:1/master?encrypt=false"),
         ]);
+        // An ADO string carries its password inline, not from the keyring.
+        let ado = values(&[
+            ("use_uri", "true"),
+            (
+                "uri",
+                "Server=tcp:127.0.0.1,1;User Id=sa;Password=correct-horse-battery-staple;Encrypt=false",
+            ),
+        ]);
 
-        for form in [direct, uri] {
+        for form in [direct, uri, ado] {
             let config = MssqlDriver.build_config(&form).expect("config");
             let profile = ConnectionProfile::new("log-hygiene", config);
             assert!(

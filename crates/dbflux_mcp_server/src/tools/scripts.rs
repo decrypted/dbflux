@@ -7,12 +7,15 @@
 
 use crate::{
     DbFluxServer,
+    governance::{AuditDetails, GovernanceMiddleware, current_tool_call_arguments},
     helper::{IntoErrorData, to_json_content},
     state::ServerState,
 };
 use dbflux_core::{
-    Connection, DbError, LanguageService, QueryLanguage, QueryRequest, ReadOnlyEnforcement,
+    Connection, DbError, HookKind, LanguageService, QueryLanguage, QueryRequest,
+    ReadOnlyEnforcement, ScriptSource, ScriptsDirectory, script_content_sha256,
 };
+use dbflux_mcp::server::authorization::AuthorizationOutcome;
 use dbflux_policy::ExecutionClassification;
 use rmcp::{
     ErrorData,
@@ -282,76 +285,84 @@ impl DbFluxServer {
         &self,
         Parameters(params): Parameters<ExecuteScriptParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        // Read script content to detect language and determine classification
         let state = self.state.clone();
-        let script_path = params.path.clone();
+        let connection_id = params.connection_id.as_str();
 
-        let (content, language) = Self::read_script_for_execution(&state, &script_path)
+        // Read once: the text that is classified, hashed into the approval
+        // and run is the same, whatever happens to the file meanwhile.
+        let (content, language) = Self::read_script_for_execution(&state, &params.path)
             .await
             .map_err(|e| e.into_error_data())?;
+        let authorizations = ScriptAuthorizations::new(&self.governance, connection_id, &content);
 
-        // Non-query script languages (Lua/Python/Bash) are always classified
-        // as Admin without needing a connection; only resolve one for
-        // languages that actually run a query.
-        let connection_for_classification = if matches!(
-            language,
-            QueryLanguage::Lua | QueryLanguage::Python | QueryLanguage::Bash
-        ) {
-            None
-        } else {
-            match Self::get_or_connect(state.clone(), &params.connection_id).await {
-                Ok(connection) => Some(connection),
-                Err(error) => {
-                    log::debug!(
-                        "Failed to resolve connection '{}' for script classification, \
-                         falling back to language-only classification: {}",
-                        params.connection_id,
-                        error
-                    );
-                    None
+        let mut connection = None;
+        if runs_database_query(&language) {
+            connection = Self::cached_connection(&state, connection_id).await;
+
+            // Connecting runs the profile's hooks, SSO login, SSH tunnel and
+            // ProxyCommand, so a connection that is not open yet is only
+            // opened for a call authorized by what its text alone shows.
+            if connection.is_none() {
+                let unconnected = Self::detect_execution_classification(&content, &language, None);
+                let outcome = authorizations.authorize(unconnected).await?;
+
+                match Self::get_or_connect(state.clone(), connection_id).await {
+                    Ok(opened) => connection = Some(opened),
+                    Err(error) => {
+                        return self
+                            .governance
+                            .run_authorized_audited(
+                                "execute_script",
+                                Some(connection_id),
+                                &outcome,
+                                || async move { Err(error.into_error_data()) },
+                            )
+                            .await;
+                    }
                 }
             }
-        };
+        }
 
-        // Detect classification based on content, consulting the connection's
-        // driver-owned language service when one was resolved.
+        // The driver's language service can see more than the generic
+        // heuristic, so the class is decided again with the connection.
         let classification = Self::detect_execution_classification(
             &content,
             &language,
-            connection_for_classification
+            connection
                 .as_deref()
                 .map(|connection| connection.language_service()),
         );
-
-        let enforces_read_only = connection_for_classification
+        let enforces_read_only = connection
             .as_deref()
             .is_some_and(|connection| connection.metadata().enforces_read_only());
         let (classification, read_only) = govern_read_only(classification, enforces_read_only);
 
         let governance = &self.governance;
-        let connection_id = params.connection_id.as_str();
+        let authorizations = &authorizations;
 
         govern_script_attempts(classification, read_only, |classification, read_only| {
-            let state = state.clone();
             let content = content.clone();
             let language = language.clone();
-            let connection_id = connection_id.to_string();
+            let connection = connection.clone();
 
             async move {
+                let outcome = match authorizations.authorize(classification).await {
+                    Ok(outcome) => outcome,
+                    Err(error) => return ScriptAttempt::Completed(Err(error)),
+                };
+
                 let refusal: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
                 let handler_refusal = refusal.clone();
-                let handler_connection_id = connection_id.clone();
 
                 let result = governance
-                    .authorize_and_execute(
+                    .run_authorized_audited(
                         "execute_script",
-                        Some(&connection_id),
-                        classification,
+                        Some(connection_id),
+                        &outcome,
                         move || async move {
                             let outcome = Self::execute_script_impl(
-                                state,
+                                connection,
                                 &content,
-                                &handler_connection_id,
                                 &language,
                                 classification,
                                 read_only,
@@ -360,9 +371,10 @@ impl DbFluxServer {
                             .map_err(|e| e.into_error_data())?;
 
                             match outcome {
-                                ScriptOutcome::Completed(value) => {
-                                    Ok(CallToolResult::success(vec![to_json_content(&value)?]))
-                                }
+                                ScriptOutcome::Completed(value) => Ok((
+                                    CallToolResult::success(vec![to_json_content(&value)?]),
+                                    AuditDetails::default(),
+                                )),
                                 ScriptOutcome::ReadOnlyRefused(reason) => {
                                     if let Ok(mut slot) = handler_refusal.lock() {
                                         *slot = Some(reason.clone());
@@ -382,6 +394,130 @@ impl DbFluxServer {
             }
         })
         .await
+    }
+}
+
+/// Whether `execute_script` runs a script in `language` as a database query,
+/// and so needs a connection. Other languages are refused after governance.
+fn runs_database_query(language: &QueryLanguage) -> bool {
+    matches!(
+        language,
+        QueryLanguage::Sql
+            | QueryLanguage::CloudWatchLogsInsightsQl
+            | QueryLanguage::OpenSearchPpl
+            | QueryLanguage::OpenSearchSql
+            | QueryLanguage::MongoQuery
+            | QueryLanguage::RedisCommands
+            | QueryLanguage::Cql
+            | QueryLanguage::Cypher
+            | QueryLanguage::InfluxQuery
+            | QueryLanguage::Flux
+    )
+}
+
+/// Longest script text an approval shows. The hash covers all of it.
+const APPROVAL_SCRIPT_TEXT_BYTES: usize = 16 * 1024;
+
+/// What an `execute_script` approval is queued with and matched against: the
+/// call's arguments plus the script's hash, its class and its text.
+///
+/// The arguments name only a path, and the file can change after a person
+/// approves it, so the hash makes changed content need a new approval. The
+/// class is part of it because the same text can be authorized under
+/// several classes in one call (before and after connecting), and an
+/// approval given for one must not authorize another.
+fn script_approval_payload(
+    arguments: serde_json::Value,
+    content: &str,
+    classification: ExecutionClassification,
+) -> serde_json::Value {
+    let mut payload = match arguments {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+
+    let mut text_end = APPROVAL_SCRIPT_TEXT_BYTES.min(content.len());
+    while !content.is_char_boundary(text_end) {
+        text_end -= 1;
+    }
+
+    payload.insert(
+        "script_sha256".to_string(),
+        serde_json::Value::String(script_content_sha256(content)),
+    );
+    payload.insert(
+        "script_classification".to_string(),
+        serde_json::to_value(classification).unwrap_or(serde_json::Value::Null),
+    );
+    payload.insert(
+        "script_text".to_string(),
+        serde_json::Value::String(content.get(..text_end).unwrap_or_default().to_string()),
+    );
+    if text_end < content.len() {
+        payload.insert(
+            "script_text_truncated".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+
+    serde_json::Value::Object(payload)
+}
+
+/// The authorizations one `execute_script` call has obtained, by class.
+///
+/// A call can be authorized before it connects (by the text alone) and
+/// again once the driver has classified it, and a read the driver refused to
+/// enforce is retried as a write. Each class is authorized once per call.
+/// Classes are compared for equality only: policies decide per class, so an
+/// authorization for one class never stands in for another.
+struct ScriptAuthorizations<'a> {
+    governance: &'a GovernanceMiddleware,
+    connection_id: &'a str,
+    content: &'a str,
+    granted: Mutex<Vec<(ExecutionClassification, AuthorizationOutcome)>>,
+}
+
+impl<'a> ScriptAuthorizations<'a> {
+    fn new(governance: &'a GovernanceMiddleware, connection_id: &'a str, content: &'a str) -> Self {
+        Self {
+            governance,
+            connection_id,
+            content,
+            granted: Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn authorize(
+        &self,
+        classification: ExecutionClassification,
+    ) -> Result<AuthorizationOutcome, ErrorData> {
+        let earlier = self.granted.lock().ok().and_then(|granted| {
+            granted
+                .iter()
+                .find(|(granted_class, _)| *granted_class == classification)
+                .map(|(_, outcome)| outcome.clone())
+        });
+        if let Some(outcome) = earlier {
+            return Ok(outcome);
+        }
+
+        let payload =
+            script_approval_payload(current_tool_call_arguments(), self.content, classification);
+        let outcome = self
+            .governance
+            .authorize_with_payload(
+                "execute_script",
+                Some(self.connection_id),
+                classification,
+                payload,
+            )
+            .await?;
+
+        if let Ok(mut granted) = self.granted.lock() {
+            granted.push((classification, outcome.clone()));
+        }
+
+        Ok(outcome)
     }
 }
 
@@ -580,19 +716,177 @@ fn validate_script_file_name(name: &str, extension: &str) -> Result<(), String> 
     Ok(())
 }
 
+fn open_scripts_directory(state: &ServerState) -> Result<ScriptsDirectory, String> {
+    match &state.scripts_root {
+        Some(root) => ScriptsDirectory::new_at(root.clone()),
+        None => ScriptsDirectory::new(),
+    }
+    .map_err(|e| format!("Failed to initialize scripts directory: {}", e))
+}
+
+/// The folder under the scripts root that holds file-backed connection hooks.
+const HOOKS_FOLDER: &str = "hooks";
+
+const HOOK_SCRIPT_REFUSED: &str =
+    "Connection hook scripts cannot be created, changed or deleted over MCP; edit hooks in DBFlux";
+
+/// What a script tool is about to do to a path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HookWrite {
+    Create,
+    Overwrite,
+    Delete,
+}
+
+/// Refuses a script tool write that would change what a connection hook runs.
+///
+/// Hooks run with the user's rights on the next connect, which an agent can
+/// trigger, so writing one is running code. Protected are the hooks folder
+/// and every file a loaded profile's hooks name, compared after symlinks are
+/// followed, plus (for an overwrite) any file with a second hard link, which
+/// may be a hook file under another name.
+async fn ensure_not_hook_script(
+    state: &ServerState,
+    root: &Path,
+    path: &Path,
+    write: HookWrite,
+) -> Result<(), String> {
+    let resolved = resolve_existing_prefix(path)?;
+
+    let in_hooks_folder = resolved
+        .strip_prefix(root)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .is_some_and(|first| {
+            first
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(HOOKS_FOLDER)
+        });
+    if in_hooks_folder {
+        return Err(HOOK_SCRIPT_REFUSED.to_string());
+    }
+
+    if referenced_hook_files(state)
+        .await
+        .iter()
+        .any(|hook_file| hook_file.starts_with(&resolved))
+    {
+        return Err(HOOK_SCRIPT_REFUSED.to_string());
+    }
+
+    #[cfg(unix)]
+    if write == HookWrite::Overwrite {
+        use std::os::unix::fs::MetadataExt;
+
+        if std::fs::metadata(&resolved).is_ok_and(|metadata| metadata.nlink() > 1) {
+            return Err(
+                "Script has other hard links, which may be a connection hook; it cannot be changed over MCP"
+                    .to_string(),
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    let _ = write;
+
+    Ok(())
+}
+
+/// `path` with symlinks in its existing part followed and the part that does
+/// not exist yet appended unchanged. Callers have already limited that part
+/// to plain components inside the scripts root.
+fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
+    let resolve_error = |error: std::io::Error| format!("Failed to resolve script path: {}", error);
+    let mut missing = Vec::new();
+    let mut candidate = path;
+
+    loop {
+        match std::fs::symlink_metadata(candidate) {
+            Ok(_) => {
+                let resolved = std::fs::canonicalize(candidate).map_err(resolve_error)?;
+                return Ok(missing
+                    .iter()
+                    .rev()
+                    .fold(resolved, |resolved, part| resolved.join(part)));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let (Some(parent), Some(name)) = (candidate.parent(), candidate.file_name()) else {
+                    return Err(OUTSIDE_SCRIPTS_ROOT.to_string());
+                };
+                missing.push(name.to_os_string());
+                candidate = parent;
+            }
+            Err(error) => return Err(resolve_error(error)),
+        }
+    }
+}
+
+/// Every existing file the loaded profiles' hooks run or pass to a program,
+/// canonicalized: file-backed script and Lua hooks, and command hooks'
+/// program and arguments that name a file.
+async fn referenced_hook_files(state: &ServerState) -> Vec<PathBuf> {
+    let mut named = Vec::new();
+
+    {
+        let profile_manager = state.profile_manager.read().await;
+        for hooks in profile_manager
+            .profiles
+            .iter()
+            .filter_map(|profile| profile.hooks.as_ref())
+        {
+            for hook in hooks
+                .pre_connect
+                .iter()
+                .chain(&hooks.post_connect)
+                .chain(&hooks.pre_disconnect)
+                .chain(&hooks.post_disconnect)
+            {
+                let base = hook.cwd.clone();
+                match &hook.kind {
+                    HookKind::Script {
+                        source: ScriptSource::File { path },
+                        ..
+                    }
+                    | HookKind::Lua {
+                        source: ScriptSource::File { path },
+                        ..
+                    } => named.push((base, path.clone())),
+                    HookKind::Command { command, args } => {
+                        for word in std::iter::once(command).chain(args) {
+                            if word.contains(std::path::MAIN_SEPARATOR) || word.contains('/') {
+                                named.push((base.clone(), PathBuf::from(word)));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    named
+        .into_iter()
+        .filter_map(|(base, path)| {
+            let path = match base {
+                Some(base) if path.is_relative() => base.join(path),
+                _ => path,
+            };
+            std::fs::canonicalize(path).ok()
+        })
+        .collect()
+}
+
 // Implementation methods
 // Note: These implementation methods are called by the #[tool] macro-generated code.
 // Clippy cannot detect this usage, so we suppress dead_code warnings.
 impl DbFluxServer {
     #[allow(dead_code)]
     async fn list_scripts_impl(
-        _state: ServerState,
+        state: ServerState,
         subfolder: Option<&str>,
     ) -> Result<Vec<ScriptEntryDto>, String> {
-        use dbflux_core::ScriptsDirectory;
-
-        let scripts_dir = ScriptsDirectory::new()
-            .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
+        let scripts_dir = open_scripts_directory(&state)?;
         let root = scripts_dir.root_path();
 
         // Determine the directory to list
@@ -638,13 +932,10 @@ impl DbFluxServer {
 
     #[allow(dead_code)]
     async fn get_script_impl(
-        _state: ServerState,
+        state: ServerState,
         script_path: &str,
     ) -> Result<ScriptContentDto, String> {
-        use dbflux_core::ScriptsDirectory;
-
-        let scripts_dir = ScriptsDirectory::new()
-            .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
+        let scripts_dir = open_scripts_directory(&state)?;
         let root = scripts_dir.root_path();
         let full_path = resolve_in_scripts_root(root, script_path)?;
 
@@ -682,16 +973,13 @@ impl DbFluxServer {
 
     #[allow(dead_code)]
     async fn create_script_impl(
-        _state: ServerState,
+        state: ServerState,
         name: &str,
         content: &str,
         extension: &str,
         folder: Option<&str>,
     ) -> Result<ScriptCreatedDto, String> {
-        use dbflux_core::ScriptsDirectory;
-
-        let mut scripts_dir = ScriptsDirectory::new()
-            .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
+        let mut scripts_dir = open_scripts_directory(&state)?;
         let root = scripts_dir.root_path().to_path_buf();
 
         // Determine parent directory
@@ -709,7 +997,9 @@ impl DbFluxServer {
             format!("{}.{}", name, extension)
         };
         let target_dir = parent.as_deref().unwrap_or(&root);
-        ensure_resolves_inside_root(&root, &target_dir.join(file_name))?;
+        let target = target_dir.join(file_name);
+        ensure_resolves_inside_root(&root, &target)?;
+        ensure_not_hook_script(&state, &root, &target, HookWrite::Create).await?;
 
         // Create the file
         let created_path = scripts_dir
@@ -741,14 +1031,11 @@ impl DbFluxServer {
 
     #[allow(dead_code)]
     async fn update_script_impl(
-        _state: ServerState,
+        state: ServerState,
         script_path: &str,
         content: &str,
     ) -> Result<ScriptUpdatedDto, String> {
-        use dbflux_core::ScriptsDirectory;
-
-        let scripts_dir = ScriptsDirectory::new()
-            .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
+        let scripts_dir = open_scripts_directory(&state)?;
         let root = scripts_dir.root_path();
         let full_path = resolve_in_scripts_root(root, script_path)?;
 
@@ -760,6 +1047,8 @@ impl DbFluxServer {
             return Err("Path is not a file".to_string());
         }
 
+        ensure_not_hook_script(&state, root, &full_path, HookWrite::Overwrite).await?;
+
         std::fs::write(&full_path, content)
             .map_err(|e| format!("Failed to write script: {}", e))?;
 
@@ -770,17 +1059,16 @@ impl DbFluxServer {
     }
 
     #[allow(dead_code)]
-    async fn delete_script_impl(_state: ServerState, script_path: &str) -> Result<(), String> {
-        use dbflux_core::ScriptsDirectory;
-
-        let mut scripts_dir = ScriptsDirectory::new()
-            .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
+    async fn delete_script_impl(state: ServerState, script_path: &str) -> Result<(), String> {
+        let mut scripts_dir = open_scripts_directory(&state)?;
         let root = scripts_dir.root_path();
         let full_path = resolve_in_scripts_root(root, script_path)?;
 
         if !full_path.exists() {
             return Err("Script not found".to_string());
         }
+
+        ensure_not_hook_script(&state, root, &full_path, HookWrite::Delete).await?;
 
         scripts_dir
             .delete(&full_path)
@@ -791,13 +1079,10 @@ impl DbFluxServer {
 
     #[allow(dead_code)]
     async fn read_script_for_execution(
-        _state: &ServerState,
+        state: &ServerState,
         script_path: &str,
     ) -> Result<(String, QueryLanguage), String> {
-        use dbflux_core::ScriptsDirectory;
-
-        let scripts_dir = ScriptsDirectory::new()
-            .map_err(|e| format!("Failed to initialize scripts directory: {}", e))?;
+        let scripts_dir = open_scripts_directory(state)?;
         let root = scripts_dir.root_path();
         let full_path = resolve_in_scripts_root(root, script_path)?;
 
@@ -837,55 +1122,25 @@ impl DbFluxServer {
 
     #[allow(dead_code)]
     async fn execute_script_impl(
-        state: ServerState,
+        connection: Option<Arc<dyn Connection>>,
         content: &str,
-        connection_id: &str,
         language: &QueryLanguage,
         classification: dbflux_policy::ExecutionClassification,
         read_only: ReadOnlyEnforcement,
     ) -> Result<ScriptOutcome, String> {
-        // Only SQL/MongoDB/Redis queries are supported for execution
         match language {
-            QueryLanguage::Sql
-            | QueryLanguage::CloudWatchLogsInsightsQl
-            | QueryLanguage::OpenSearchPpl
-            | QueryLanguage::OpenSearchSql
-            | QueryLanguage::MongoQuery
-            | QueryLanguage::RedisCommands
-            | QueryLanguage::Cql
-            | QueryLanguage::Cypher
-            | QueryLanguage::InfluxQuery
-            | QueryLanguage::Flux => {
-                // Execute as query
-                Self::execute_query_content(
-                    state,
-                    connection_id,
-                    content,
-                    classification,
-                    read_only,
-                )
-                .await
-            }
             QueryLanguage::Lua | QueryLanguage::Python | QueryLanguage::Bash => Err(
                 "Script language not supported for execution (only database queries)".to_string(),
             ),
             QueryLanguage::Custom(_) => {
                 Err("Custom language not supported for execution".to_string())
             }
+            _ => {
+                let connection =
+                    connection.ok_or_else(|| "No connection to run the script on".to_string())?;
+                run_script_query(connection, content, classification, read_only).await
+            }
         }
-    }
-
-    #[allow(dead_code)]
-    async fn execute_query_content(
-        state: ServerState,
-        connection_id: &str,
-        query: &str,
-        classification: dbflux_policy::ExecutionClassification,
-        read_only: ReadOnlyEnforcement,
-    ) -> Result<ScriptOutcome, String> {
-        let conn = Self::get_or_connect(state, connection_id).await?;
-
-        run_script_query(conn, query, classification, read_only).await
     }
 }
 

@@ -293,6 +293,16 @@ impl AuditService {
         self.store.query_extended(filter)
     }
 
+    /// One page of `filter`'s matches, newest first, for callers that filter
+    /// further and must page instead of loading every match at once.
+    pub fn query_extended_page(
+        &self,
+        filter: &AuditQueryFilter,
+        offset: usize,
+    ) -> Result<Vec<AuditEventDto>, AuditError> {
+        self.store.query_extended_page(filter, offset)
+    }
+
     pub fn export(
         &self,
         filter: &AuditQueryFilter,

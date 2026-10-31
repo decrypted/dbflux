@@ -148,6 +148,7 @@ fn build_state_with_role(connection_id: &str, role_id: &str) -> ServerState {
         secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
         mcp_enabled_by_default: true,
         profile_store_path: None,
+        scripts_root: None,
     }
 }
 

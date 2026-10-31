@@ -1031,24 +1031,6 @@ fn build_runtime() -> Result<Runtime, DbError> {
         })
 }
 
-/// Short, non-reversible fingerprint of a password for diagnostic logs.
-///
-/// Uses SHA-256 with a fixed seed string and returns the leading 16 hex chars
-/// of the digest. The point is to let users compare two values for equality
-/// (e.g. "did the password reaching tiberius differ from what I typed?")
-/// without ever exposing the password itself.
-fn password_fingerprint(password: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(b"dbflux-mssql-password-fingerprint:v1");
-    hasher.update(password.as_bytes());
-    let digest = hasher.finalize();
-    // SHA-256 always produces a 32-byte digest, so `get(..8)` is infallible —
-    // the `unwrap_or_default` is just to keep clippy's indexing_slicing lint
-    // happy without an `expect`.
-    hex::encode(digest.get(..8).unwrap_or_default())
-}
-
 /// Where a session connects. tiberius checks the server certificate against
 /// the config's host; `dial`, when set, is the TCP address to use instead,
 /// so a tunneled session dials the tunnel's local end while the certificate
@@ -1118,14 +1100,6 @@ impl MssqlDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = inject_password_into_mssql_uri(base_uri, password);
         log::info!("Connecting to SQL Server via URI {}", sanitize_uri(&uri));
-        if let Some(pw) = password {
-            log::debug!(
-                "URI auth payload — password_chars: {}, password_bytes: {}, password_fingerprint: {}",
-                pw.chars().count(),
-                pw.len(),
-                password_fingerprint(pw),
-            );
-        }
 
         // Prefer our own URL parser when the URI looks like one
         // (`sqlserver://` / `mssql://`). Tiberius's ADO parser is too
@@ -1200,13 +1174,6 @@ impl MssqlDriver {
         );
 
         let resolved_password = password.unwrap_or("");
-        log::debug!(
-            "Auth payload — user_len: {}, password_chars: {}, password_bytes: {}, password_fingerprint: {}",
-            config.user.chars().count(),
-            resolved_password.chars().count(),
-            resolved_password.len(),
-            password_fingerprint(resolved_password),
-        );
 
         let tiberius_config = build_tiberius_config(&MssqlConnectParams {
             host: &config.host,
@@ -7824,5 +7791,92 @@ mod cell_expression_tests {
             mssql_delete_row_sql(&delete).unwrap(),
             "DELETE FROM [events] OUTPUT DELETED.* WHERE [id] = 1"
         );
+    }
+}
+
+#[cfg(test)]
+mod log_hygiene_tests {
+    use super::*;
+    use dbflux_core::secrecy::SecretString;
+    use std::sync::Mutex;
+
+    struct CapturingLogger(Mutex<Vec<String>>);
+
+    impl log::Log for CapturingLogger {
+        fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if let Ok(mut lines) = self.0.lock() {
+                lines.push(record.args().to_string());
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    static LOGGER: CapturingLogger = CapturingLogger(Mutex::new(Vec::new()));
+
+    fn values(pairs: &[(&str, &str)]) -> FormValues {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    /// Debug logs end up in files people attach to bug reports, and a fast
+    /// hash plus the length of a password is enough to guess a weak one.
+    #[test]
+    fn connecting_logs_nothing_derived_from_the_password() {
+        log::set_logger(&LOGGER).expect("no other logger is installed in this test binary");
+        log::set_max_level(log::LevelFilter::Trace);
+
+        let password = "correct-horse-battery-staple";
+        let secret = SecretString::from(password.to_string());
+        // Port 1 on loopback refuses the connection, so nothing is reached.
+        let direct = values(&[
+            ("host", "127.0.0.1"),
+            ("port", "1"),
+            ("user", "sa"),
+            ("ssl_mode", "off"),
+        ]);
+        let uri = values(&[
+            ("use_uri", "true"),
+            ("uri", "sqlserver://sa@127.0.0.1:1/master?encrypt=false"),
+        ]);
+
+        for form in [direct, uri] {
+            let config = MssqlDriver.build_config(&form).expect("config");
+            let profile = ConnectionProfile::new("log-hygiene", config);
+            assert!(
+                MssqlDriver
+                    .connect_with_secrets(&profile, Some(&secret), None)
+                    .is_err(),
+                "nothing listens on port 1"
+            );
+        }
+
+        let lines = LOGGER.0.lock().expect("captured log lines").clone();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Connecting directly"))
+                && lines.iter().any(|line| line.contains("via URI")),
+            "both connect paths must have logged: {lines:?}"
+        );
+        for line in &lines {
+            for marker in [
+                password,
+                "password_fingerprint",
+                "password_chars",
+                "password_bytes",
+            ] {
+                assert!(
+                    !line.contains(marker),
+                    "log line carries `{marker}`: {line}"
+                );
+            }
+        }
     }
 }

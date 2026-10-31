@@ -145,6 +145,7 @@ fn create_test_server_state() -> dbflux_mcp_server::state::ServerState {
         ))),
         mcp_enabled_by_default: true,
         profile_store_path: None,
+        scripts_root: None,
     }
 }
 

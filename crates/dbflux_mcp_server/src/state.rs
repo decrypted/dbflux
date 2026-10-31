@@ -259,6 +259,9 @@ pub struct ServerState {
     /// profile switched to read-only in the GUI takes effect without restarting
     /// the server. `None` keeps the gate on the profiles loaded at startup.
     pub profile_store_path: Option<PathBuf>,
+    /// Managed scripts root for the script tools. `None` is the default root
+    /// under the user's data directory; tests point it at a temporary one.
+    pub scripts_root: Option<PathBuf>,
 }
 
 impl ServerState {
@@ -308,6 +311,7 @@ impl ServerState {
             ssh_tunnels: Arc::new(ssh_tunnels),
             mcp_enabled_by_default: governance_settings.mcp_enabled_by_default,
             profile_store_path: Some(storage_runtime.dbflux_db_path().to_path_buf()),
+            scripts_root: None,
         };
 
         // Load connection policy assignments
@@ -1666,9 +1670,11 @@ fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
 
     #[cfg(feature = "duckdb")]
     {
+        // An agent's SELECT could otherwise read local files and URLs, which
+        // no classification or read-only transaction stops.
         registry.insert(
             "duckdb".to_string(),
-            Arc::new(dbflux_driver_duckdb::DuckDbDriver::new()),
+            Arc::new(dbflux_driver_duckdb::DuckDbDriver::sandboxed()),
         );
     }
 
@@ -2843,5 +2849,44 @@ mod tests {
             default_db_config_for_kind(dbflux_core::DbKind::Turso),
             dbflux_core::DbConfig::Turso { ref url } if url.is_empty()
         ));
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn mcp_duckdb_driver_has_external_access_off() {
+        use dbflux_core::{ConnectionProfile, DbConfig, QueryRequest, Value};
+
+        let registry = build_driver_registry();
+        let driver = registry
+            .get("duckdb")
+            .expect("the duckdb feature registers DuckDB");
+        let connection = driver
+            .connect(&ConnectionProfile::new(
+                "mcp-duck",
+                DbConfig::DuckDB {
+                    path: PathBuf::new(),
+                    ducklake_catalog: None,
+                    ducklake_data_path: None,
+                    init_sql: None,
+                },
+            ))
+            .expect("in-memory DuckDB");
+
+        for setting in [
+            "enable_external_access",
+            "autoinstall_known_extensions",
+            "autoload_known_extensions",
+        ] {
+            let result = connection
+                .execute(&QueryRequest::new(format!(
+                    "SELECT current_setting('{setting}')::VARCHAR"
+                )))
+                .expect("read the setting");
+            assert_eq!(
+                result.rows[0][0],
+                Value::Text("false".to_string()),
+                "{setting} must be off for MCP"
+            );
+        }
     }
 }

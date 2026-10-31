@@ -1775,43 +1775,6 @@ impl DbFluxServer {
         }
     }
 
-    /// Classify a query based on its SQL content
-    #[allow(dead_code)] // May be used by future governance features
-    fn classify_query(&self, query: &str) -> dbflux_policy::ExecutionClassification {
-        use dbflux_policy::ExecutionClassification;
-
-        let query_upper = query.trim().to_uppercase();
-
-        if query_upper.starts_with("SELECT")
-            || query_upper.starts_with("SHOW")
-            || query_upper.starts_with("DESCRIBE")
-            || query_upper.starts_with("EXPLAIN")
-        {
-            ExecutionClassification::Read
-        } else if query_upper.starts_with("INSERT") || query_upper.starts_with("UPDATE") {
-            ExecutionClassification::Write
-        } else if query_upper.starts_with("DELETE") || query_upper.starts_with("TRUNCATE") {
-            ExecutionClassification::Destructive
-        } else if query_upper.starts_with("CREATE INDEX") || query_upper.starts_with("CREATE TABLE")
-        {
-            ExecutionClassification::AdminSafe
-        } else if query_upper.starts_with("DROP TABLE")
-            || query_upper.starts_with("DROP DATABASE")
-            || query_upper.contains(" DROP COLUMN")
-        {
-            ExecutionClassification::AdminDestructive
-        } else if query_upper.starts_with("CREATE")
-            || query_upper.starts_with("ALTER")
-            || query_upper.starts_with("GRANT")
-            || query_upper.starts_with("REVOKE")
-        {
-            ExecutionClassification::Admin
-        } else {
-            // Default to read for unknown queries
-            ExecutionClassification::Read
-        }
-    }
-
     /// Execute a blocking operation in a spawned thread
     #[allow(dead_code)]
     pub(crate) async fn execute_blocking<F, T, E>(f: F) -> Result<T, String>
@@ -1879,6 +1842,20 @@ impl DbFluxServer {
         connection_id: &str,
     ) -> Result<Arc<dyn Connection>, String> {
         Self::get_or_connect_cached(state, connection_id, None).await
+    }
+
+    /// The open connection for `connection_id`, if there is one. Unlike
+    /// `get_or_connect` it never connects, so it runs no hooks.
+    pub(crate) async fn cached_connection(
+        state: &ServerState,
+        connection_id: &str,
+    ) -> Option<Arc<dyn Connection>> {
+        state
+            .connection_cache
+            .read()
+            .await
+            .get(connection_id)
+            .map(|cached| cached.connection())
     }
 
     /// Resolve secrets from a profile using keyring
@@ -2576,6 +2553,7 @@ mod tests {
             secret_manager: Arc::new(dbflux_core::SecretManager::new(secret_store)),
             mcp_enabled_by_default: true,
             profile_store_path: None,
+            scripts_root: None,
         }
     }
 
@@ -4049,5 +4027,44 @@ mod tests {
         assert_eq!(response["success"], serde_json::json!(true));
         assert!(!fields.contains_key("current_database"), "got {response}");
         assert!(!fields.contains_key("databases"), "got {response}");
+    }
+
+    /// Governance needs a class for every tool, and a tool added without one
+    /// would fall back to whatever its handler passes. Each registered tool
+    /// must be in the classification table or be an approval-queue or
+    /// approval-decision tool, which governance handles on its own.
+    #[tokio::test]
+    async fn every_registered_tool_has_an_explicit_classification() {
+        let driver = Arc::new(FakeDriver::new(DbKind::Postgres)) as Arc<dyn DbDriver>;
+        let profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        let server = DbFluxServer::new(test_state_with_driver("postgres", driver, profile));
+
+        let unclassified: Vec<String> = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .filter(|name| {
+                DbFluxServer::classify_tool(name).is_none()
+                    && !dbflux_mcp::APPROVAL_QUEUE_TOOLS.contains(&name.as_str())
+                    && !matches!(name.as_str(), "approve_execution" | "reject_execution")
+            })
+            .collect();
+        assert!(
+            unclassified.is_empty(),
+            "tools without a class: {unclassified:?}"
+        );
+
+        let not_canonical: Vec<String> = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .filter(|name| !dbflux_mcp::is_canonical_v1_tool(name))
+            .collect();
+        assert!(
+            not_canonical.is_empty(),
+            "tools outside the catalog: {not_canonical:?}"
+        );
     }
 }

@@ -42,7 +42,7 @@ tokio::task_local! {
 
 /// The arguments of the tool call being served, or an empty object when the
 /// middleware runs outside `call_tool` (direct calls in tests).
-fn current_tool_call_arguments() -> serde_json::Value {
+pub(crate) fn current_tool_call_arguments() -> serde_json::Value {
     TOOL_CALL_ARGUMENTS
         .try_with(Clone::clone)
         .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
@@ -143,6 +143,31 @@ impl GovernanceMiddleware {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<(CallToolResult, AuditDetails), McpError>>,
     {
+        let outcome = self
+            .authorize_with_payload(
+                tool_id,
+                connection_id,
+                classification,
+                current_tool_call_arguments(),
+            )
+            .await?;
+
+        self.run_authorized_audited(tool_id, connection_id, &outcome, handler)
+            .await
+    }
+
+    /// Authorizes a call without running anything: trusted client,
+    /// MCP-enabled and read-only connection checks, policy, and approval.
+    /// `payload` is what an approval is queued with and matched against; it
+    /// is normally the call's arguments. A call that may not run comes back
+    /// as the error the client receives.
+    pub(crate) async fn authorize_with_payload(
+        &self,
+        tool_id: &str,
+        connection_id: Option<&str>,
+        classification: ExecutionClassification,
+        payload: serde_json::Value,
+    ) -> Result<AuthorizationOutcome, McpError> {
         let mcp_enabled_for_connection = if let Some(conn_id) = connection_id {
             self.state.is_mcp_enabled_for_connection(conn_id).await
         } else {
@@ -196,7 +221,7 @@ impl GovernanceMiddleware {
                 &trusted_clients,
                 &policy_engine,
                 &auth_request,
-                current_tool_call_arguments(),
+                payload,
                 now_epoch_ms(),
             )
             .map_err(|e| McpError::internal_error(format!("Authorization error: {}", e), None))?;
@@ -207,6 +232,22 @@ impl GovernanceMiddleware {
             return Err(authorization_error(&outcome, tool_id, classification));
         }
 
+        Ok(outcome)
+    }
+
+    /// Runs a handler for a call that `authorize_with_payload` allowed and
+    /// records its execution audit event under the same correlation id.
+    pub(crate) async fn run_authorized_audited<F, Fut>(
+        &self,
+        tool_id: &str,
+        connection_id: Option<&str>,
+        outcome: &AuthorizationOutcome,
+        handler: F,
+    ) -> Result<CallToolResult, McpError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<(CallToolResult, AuditDetails), McpError>>,
+    {
         let handler_result = handler().await;
 
         let (result, audit_details) = match handler_result {
@@ -214,14 +255,8 @@ impl GovernanceMiddleware {
             Err(e) => (Err(e), AuditDetails::default()),
         };
 
-        self.audit_execution_with_details(
-            tool_id,
-            connection_id,
-            &result,
-            &outcome,
-            &audit_details,
-        )
-        .await?;
+        self.audit_execution_with_details(tool_id, connection_id, &result, outcome, &audit_details)
+            .await?;
 
         result
     }
@@ -611,6 +646,7 @@ mod tests {
             ))),
             mcp_enabled_by_default: true,
             profile_store_path: None,
+            scripts_root: None,
         }
     }
 

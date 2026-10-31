@@ -103,8 +103,8 @@ All six layers run inside the server process on every `tools/call` request. None
 | Read | `select_data` | read | Execute a structured SELECT against a table or collection. `joins` to other tables run on drivers that declare join support; document, key-value and other drivers that do not declare it return an explicit error. The `on` condition accepts only column comparisons joined by `AND`. With joins, a schema-qualified table on connections that drop the schema (SQLite, Turso), `$ilike` on drivers that do not declare it and an `order_by` direction other than `asc` or `desc` are refused. SQL Server runs joins too, with its row limit rendered as `OFFSET … FETCH`; the join tests run on SQLite |
 | Read | `count_records` | read | Return a row/document count for a target |
 | Read | `aggregate_data` | read | Run a read-only aggregation pipeline |
-| Read | `explain_query` | read | Show the query execution plan without executing the target mutation |
-| Read | `preview_mutation` | read | Return a read-only preview/plan for a write query. Always read-only; the mutation is never executed |
+| Read | `explain_query` | read | Show the query execution plan without executing the target mutation. A query whose explain would execute a write (`ANALYZE DELETE ...`) or that holds more than one statement is refused (see below) |
+| Read | `preview_mutation` | read | Return a read-only preview/plan for a write query. Always read-only; the mutation is never executed, and the same refusals as `explain_query` apply |
 | Write | `insert_record` | write | Insert a single record |
 | Write | `update_records` | write | Update records matching a filter |
 | Write | `upsert_record` | write | Insert or update a single record by key |
@@ -119,18 +119,18 @@ All six layers run inside the server process on every `tools/call` request. None
 | DDL Destructive | `drop_database` | admin_destructive | Drop a database |
 | Scripts | `list_scripts` | metadata | List saved scripts in the scripts directory (external scripts folders are not exposed) |
 | Scripts | `get_script` | read | Retrieve the source of a specific saved script |
-| Scripts | `create_script` | write | Save a new script to the scripts directory |
-| Scripts | `update_script` | write | Overwrite an existing saved script |
-| Scripts | `delete_script` | admin | Permanently remove a script |
-| Scripts | `execute_script` | computed | Execute a saved database-query script against a connection. Classification is derived from the script body. Lua, Python and Bash scripts are rejected (see below) |
-| Approval | `request_execution` | admin | Queue a call for approval by a person. Once approved, call the tool itself with the same arguments to run it once |
+| Scripts | `create_script` | write | Save a new script to the scripts directory. Refused in the `hooks` folder (see below) |
+| Scripts | `update_script` | write | Overwrite an existing saved script. Refused for connection hook scripts (see below) |
+| Scripts | `delete_script` | admin | Permanently remove a script. Refused for connection hook scripts (see below) |
+| Scripts | `execute_script` | computed | Execute a saved database-query script against a connection. Classification is derived from the script body. An approval covers the script's content, not only its path. Lua, Python and Bash scripts are rejected (see below) |
+| Approval | `request_execution` | admin | Queue a call for approval by a person. Once approved, call the tool itself with the same arguments to run it once. Not available for `execute_script`, which queues its own approval |
 | Approval | `list_pending_executions` | read | View all executions awaiting approval |
 | Approval | `get_pending_execution` | read | Retrieve details of a specific pending execution. A rejected one returns `status: "rejected"` and the reason the person gave |
 | Approval | `approve_execution` | — | Always denied over MCP. A person approves in DBFlux |
 | Approval | `reject_execution` | — | Always denied over MCP. A person rejects in DBFlux |
-| Audit | `query_audit_logs` | read | Search and filter the audit trail |
-| Audit | `get_audit_entry` | read | Retrieve a single audit log entry by ID |
-| Audit | `export_audit_logs` | read | Download audit log entries as CSV or JSON |
+| Audit | `query_audit_logs` | read | Search and filter the audit trail, limited to what the client may see (see below) |
+| Audit | `get_audit_entry` | read | Retrieve a single audit log entry by ID, if the client may see it |
+| Audit | `export_audit_logs` | read | Download audit log entries as CSV or JSON, limited like `query_audit_logs` |
 
 When the driver fails a `select_data`, `count_records`, `aggregate_data` or `describe_object` call and the table or collection is not listed in the schema metadata of the database or schema that was queried, the error says where the name was looked up and lists the closest listed names. It reads "is not listed", because the table may not exist or the connection may not have access to it. If the call did not pass `database` and the server lists more than one database, the error adds that the table may be in another one. For tables, not collections, `count_records`, `aggregate_data`, and `select_data` where it is not checked before running (see below), do the same for a column named in `where` or `order_by`. A hint only includes names the client is allowed to list: table names need `list_tables`, column names need `describe_object`, and the database details need `list_databases`. The driver's own error text is kept at the end. The lookup runs only after the driver has failed the call, and drivers that do not expose this metadata return the original error.
 
@@ -177,6 +177,10 @@ An actor can hold several policies on a connection, directly and through roles. 
 
 One approval runs one call. Repeating the call again queues a new request, and so does changing any argument. A rejected call never runs. An approval expires 24 hours after the call was queued.
 
+An `execute_script` call names a file, which can change after you approve it. Its approval therefore also stores the script's SHA-256 (`script_sha256`), the class the call was authorized as (`script_classification`) and the script text (`script_text`, up to 16 KiB, with `script_text_truncated` when the script is longer; the hash still covers all of it). Pending Approvals shows them with the call's arguments. When the script differs in any byte, or is classified differently, the repeated call is queued as a new request and the earlier approval stays unused. A call whose connection is not open yet can be queued twice: once by what the script text shows, before DBFlux connects, and again when the driver classifies it differently once connected. `request_execution` refuses `execute_script`: call `execute_script` itself and approve the request it queues.
+
+Approvals bind an agent that can reach DBFlux only through MCP. An agent that can also run commands as you can edit `dbflux.db`, mark its own requests approved, register itself as a trusted client or start the server with another `--client-id`, so for such an agent the database credentials of the connection, not the approval queue, decide what it can do.
+
 After a rejection, `get_pending_execution` returns `status: "rejected"` and a `reason` field with the text the person typed when rejecting, trimmed and capped at 500 characters, or `null` when they gave none. The same reason is recorded in the `mcp_reject_execution` audit event.
 
 `request_execution` queues a call explicitly, with the same result as calling the tool under Ask. `request_execution`, `list_pending_executions` and `get_pending_execution` only create or read queue entries, so under Ask they run without being queued themselves.
@@ -198,9 +202,27 @@ MCP clients can never approve or reject: `approve_execution` and `reject_executi
 
 SQL Server, Turso, external IPC drivers, DynamoDB, CloudWatch and InfluxDB cannot enforce read-only, and neither can Redis Cluster connections or Redis servers that cannot answer `COMMAND INFO`. On those connections, and on any connection whose session already has an open transaction, the script is governed as `write`: the policy's decision for `write` applies (Allow, Ask or Deny), and the audit records `write`.
 
-The database stops data modification in the session, except on temporary tables, which a read-only transaction in PostgreSQL and MySQL may still change, and it does not stop functions with external effects, such as PostgreSQL `dblink_exec`, `COPY ... TO PROGRAM`, `lo_export`, `pg_terminate_backend` and advisory locks, or MySQL `GET_LOCK` and user-defined functions. For a read-only MCP client, least-privilege database credentials remain the real boundary.
+The database stops data modification in the session, except on temporary tables, which a read-only transaction in PostgreSQL and MySQL may still change, and it does not stop functions with external effects, such as PostgreSQL `dblink_exec`, `lo_export`, `pg_terminate_backend` and advisory locks, or MySQL `GET_LOCK`. The classifier therefore treats calls to those and similar built-in functions as writes or admin calls, even in a `SELECT` and when the name is schema-qualified or quoted: session and server control (`pg_terminate_backend`, `pg_cancel_backend`, `pg_reload_conf`, `set_config`, replication slot functions), server files (`pg_read_file`, `pg_ls_dir`, `lo_import`, `lo_export`, MySQL `LOAD_FILE`, SQLite `load_extension`, SQL Server `OPENROWSET`), sequences (`nextval`, `setval`), `dblink` and `dblink_exec`, advisory and named locks, `pg_notify`, `query_to_xml`, SQL Server `OPENQUERY`, and `EXEC` of `xp_*` and server configuration procedures. Functions you define yourself are not looked into. For a read-only MCP client, least-privilege database credentials remain the real boundary.
+
+Redis and MongoDB scripts are classified command by command: every line of a Redis script and every MongoDB statement (each `db.` that starts a line or follows a `;`) counts, and the strictest class wins. Redis `EVAL`, `EVALSHA`, `FCALL` and server commands such as `CONFIG`, `SHUTDOWN`, `CLIENT`, `DEBUG` and `REPLICAOF` are `admin`.
 
 The editor's auto-refresh uses the same enforcement. On a connection whose driver cannot enforce read-only, auto-refresh switches back to Manual.
+
+### `execute_script` connects only after authorization
+
+Opening a connection runs its hooks, SSO login, SSH tunnel and ProxyCommand. When the connection is not open yet, `execute_script` therefore authorizes the call by what the script text shows (the trusted-client, MCP-enabled, read-only connection and policy checks, and the approval queue) before it connects. Only then does the driver classify the script, and when its class differs, that class is authorized too before anything runs. A call from an untrusted client, on a connection that is not enabled for MCP, denied by the policy or waiting for approval opens no connection.
+
+### Script tools and connection hooks
+
+File-backed connection hooks run with your rights on the next connect, which any connection-scoped call can trigger, so the script tools do not change them. `update_script`, `create_script` and `delete_script` refuse the `hooks` folder of the scripts directory and everything in it, any file that a connection's hooks run or pass to their program, and a folder that holds such a file. For `update_script`, a file with more than one hard link is refused too, since it may be a hook under another name. Paths are compared after symlinks are followed, so a symlink inside the scripts directory does not lead around the check. Edit hooks in DBFlux (**Settings → Hooks** or the connection's Hooks tab).
+
+### Explaining a query
+
+`explain_query` and `preview_mutation` never run the statement they explain. When the driver plans the explain itself (PostgreSQL, MySQL, MariaDB, SQLite), the statement it builds must classify as a read. When the driver builds and runs its own `EXPLAIN` (DuckDB, Turso, SQL Server and external drivers), DBFlux first classifies `EXPLAIN <sql>` as that driver would run it, so `ANALYZE DELETE FROM t`, which DuckDB would execute as `EXPLAIN ANALYZE DELETE FROM t`, and SQL with more than one statement are refused with "would execute or change data". A plain `EXPLAIN` of an `UPDATE` or `DELETE` still shows its plan. An `EXPLAIN ANALYZE` of a read, which executes the read, runs in a read-only session the database enforces where the driver offers one (see the table above). On drivers whose query language is not SQL, only a query that is itself a read can be explained this way.
+
+### DuckDB under MCP
+
+The MCP server opens DuckDB databases with external access, extension autoinstall and extension autoloading turned off, after the profile's Init SQL and DuckLake attach have run. A statement, read or not, cannot read or write local files or URLs (`read_csv('https://...')`, `FROM 'data.parquet'`, `COPY ... TO`) or download or load an extension; the database file itself, and the DuckLake data path (from the profile, or the one the catalog stores), stay usable. Load the extensions a profile needs in its Init SQL. DuckDB keeps external access off until the database closes. The DuckDB app connection is not affected.
 
 ### Scripts that `execute_script` cannot run
 
@@ -422,6 +444,11 @@ To avoid polluting developer machines during tests:
 
 - Verify filters (`actor_id`, `tool_id`, time range, decision) are not over-restrictive.
 - `export_audit_logs` is classified as the `read` execution class.
+- The audit tools return the client's own events, and other events only on connections that are enabled for MCP and on which a policy assigned to the client, on that connection, allows the tool. The global assignment every trusted client gets does not count. Activity in the app, or of other clients, on any other connection is left out, and `get_audit_entry` answers "not found" for it. A `limit` counts the events returned, not the events filtered out.
+
+### Where the server logs
+
+- The server writes its log to `~/.local/share/dbflux/logs/dbflux_mcp.log` at info level. Debug lines carry SQL text, ProxyCommand command lines and connection details, so they are off unless `RUST_LOG` asks for them (`RUST_LOG=debug`). Treat a debug log as sensitive before you share it.
 
 ### Cannot delete policy or role
 

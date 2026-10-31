@@ -38,6 +38,7 @@ use tokio::sync::RwLock;
 mod core_flows;
 mod default_method_contracts;
 mod not_found_hints;
+mod script_and_audit_governance;
 mod select_data_column_check;
 mod select_data_joins;
 mod select_data_pseudo_columns;
@@ -175,16 +176,20 @@ fn expect_queued(result: Result<CallToolResult, rmcp::ServiceError>) -> String {
 
 /// Serves the server over an in-memory transport and completes the MCP
 /// handshake with a real client.
+async fn start_agent(
+    role: &str,
+    connection: Option<(Arc<dyn DbDriver>, ConnectionProfile)>,
+) -> Agent {
+    serve_agent(build_state(role, connection)).await
+}
+
+/// Serves `state` like `start_agent`, for tests that adjust the state first.
 #[expect(
     clippy::expect_used,
     reason = "handshake failure means the harness cannot run any test, so aborting is \
         the intended signal"
 )]
-async fn start_agent(
-    role: &str,
-    connection: Option<(Arc<dyn DbDriver>, ConnectionProfile)>,
-) -> Agent {
-    let state = build_state(role, connection);
+async fn serve_agent(state: ServerState) -> Agent {
     let runtime = state.runtime.clone();
     let (server_io, client_io) = tokio::io::duplex(64 * 1024);
 
@@ -280,6 +285,7 @@ fn build_state(
         secret_manager: Arc::new(SecretManager::new(Box::new(NoopSecretStore))),
         mcp_enabled_by_default: true,
         profile_store_path: None,
+        scripts_root: None,
     }
 }
 

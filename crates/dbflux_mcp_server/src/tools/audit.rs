@@ -19,7 +19,134 @@ use serde::Deserialize;
 use crate::{
     helper::{IntoErrorData, to_json_content},
     server::DbFluxServer,
+    state::ServerState,
 };
+use dbflux_audit::{AuditEvent, AuditEventDto, AuditService};
+use dbflux_core::LogErr;
+use std::collections::HashSet;
+
+/// Rows read per page while filtering audit events by visibility.
+const VISIBILITY_PAGE_SIZE: usize = 500;
+
+/// Which audit events the calling client may read through one audit tool.
+///
+/// The audit log also holds the GUI's activity and other clients' calls on
+/// every connection, so a client sees its own events, and other events only on
+/// connections it may use that tool on (MCP-enabled, and a policy assigned on
+/// that connection allows the tool). Global scope is not enough, because every
+/// trusted client gets the read-only role there.
+pub(crate) struct AuditVisibility {
+    client_id: String,
+    connections: HashSet<String>,
+}
+
+impl AuditVisibility {
+    pub(crate) async fn for_tool(state: &ServerState, tool_id: &str) -> Self {
+        let connection_ids: Vec<String> = state
+            .profile_manager
+            .read()
+            .await
+            .profiles
+            .iter()
+            .map(|profile| profile.id.to_string())
+            .collect();
+
+        let policy_engine = {
+            let runtime = state.runtime.read().await;
+            dbflux_policy::PolicyEngine::new(
+                runtime.policy_assignments_for_engine(),
+                runtime.roles_for_engine(),
+                runtime.policies_for_engine(),
+            )
+        };
+
+        let mut connections = HashSet::new();
+        for connection_id in connection_ids {
+            if !state.is_mcp_enabled_for_connection(&connection_id).await {
+                continue;
+            }
+
+            let decision = policy_engine
+                .evaluate(&dbflux_policy::PolicyEvaluationRequest {
+                    actor_id: state.client_id.clone(),
+                    connection_id: connection_id.clone(),
+                    tool_id: tool_id.to_string(),
+                    classification: dbflux_policy::ExecutionClassification::Read,
+                })
+                .log_err_with("Failed to evaluate audit visibility for a connection");
+
+            if matches!(decision, Some(dbflux_policy::PolicyDecision::Allow)) {
+                connections.insert(connection_id);
+            }
+        }
+
+        Self {
+            client_id: state.client_id.clone(),
+            connections,
+        }
+    }
+
+    pub(crate) fn allows(&self, event: &AuditEventDto) -> bool {
+        event.actor_id == self.client_id
+            || event
+                .connection_id
+                .as_deref()
+                .is_some_and(|connection_id| self.connections.contains(connection_id))
+    }
+
+    /// The newest `filter.limit` visible matches (all when `None`), oldest
+    /// first like `AuditService::query`. Pages through the matches so the
+    /// limit counts visible events, not rows before filtering.
+    fn query(
+        &self,
+        audit_service: &AuditService,
+        filter: &AuditQueryFilter,
+    ) -> Result<Vec<AuditEvent>, String> {
+        let wanted = filter.limit;
+        let page_filter = AuditQueryFilter {
+            limit: Some(VISIBILITY_PAGE_SIZE),
+            ..filter.clone()
+        };
+
+        let mut visible = Vec::new();
+        let mut offset = 0;
+
+        loop {
+            let page = audit_service
+                .query_extended_page(&page_filter, offset)
+                .map_err(|e| format!("Failed to query audit logs: {}", e))?;
+            let page_len = page.len();
+
+            for event in page.into_iter().filter(|event| self.allows(event)) {
+                visible.push(legacy_event(event));
+
+                if wanted.is_some_and(|wanted| visible.len() >= wanted) {
+                    visible.reverse();
+                    return Ok(visible);
+                }
+            }
+
+            if page_len < VISIBILITY_PAGE_SIZE {
+                break;
+            }
+            offset += page_len;
+        }
+
+        visible.reverse();
+        Ok(visible)
+    }
+}
+
+fn legacy_event(event: AuditEventDto) -> AuditEvent {
+    AuditEvent {
+        tool_id: event.legacy_tool_id(),
+        decision: event.legacy_decision(),
+        id: event.id,
+        actor_id: event.actor_id,
+        reason: event.reason,
+        created_at_epoch_ms: event.created_at_epoch_ms,
+    }
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryAuditLogsParams {
@@ -214,12 +341,11 @@ impl DbFluxServer {
                         .into_filter()
                         .map_err(|e| e.into_error_data())?;
 
+                    let visibility = AuditVisibility::for_tool(&state, "query_audit_logs").await;
                     let runtime = state.runtime.read().await;
-                    let audit_service = runtime.audit_service();
 
-                    let events = audit_service
-                        .query(&filter)
-                        .map_err(|e| format!("Failed to query audit logs: {}", e))
+                    let events = visibility
+                        .query(runtime.audit_service(), &filter)
                         .map_err(|e| e.into_error_data())?;
 
                     Ok(CallToolResult::success(vec![to_json_content(&events)?]))
@@ -245,16 +371,21 @@ impl DbFluxServer {
                 None,
                 ExecutionClassification::Read,
                 move || async move {
+                    let visibility = AuditVisibility::for_tool(&state, "get_audit_entry").await;
                     let runtime = state.runtime.read().await;
                     let audit_service = runtime.audit_service();
 
                     let event = audit_service
-                        .get(id)
+                        .get_extended(id)
                         .map_err(|e| format!("Failed to get audit entry: {}", e))
                         .map_err(|e| e.into_error_data())?;
 
-                    match event {
-                        Some(entry) => Ok(CallToolResult::success(vec![to_json_content(&entry)?])),
+                    // An entry the client may not see answers like a missing
+                    // one, so its existence does not leak either.
+                    match event.filter(|entry| visibility.allows(entry)) {
+                        Some(entry) => Ok(CallToolResult::success(vec![to_json_content(
+                            &legacy_event(entry),
+                        )?])),
                         None => {
                             Err(format!("Audit entry with ID {} not found", id).into_error_data())
                         }
@@ -298,11 +429,13 @@ impl DbFluxServer {
                         }
                     };
 
+                    let visibility = AuditVisibility::for_tool(&state, "export_audit_logs").await;
                     let runtime = state.runtime.read().await;
-                    let audit_service = runtime.audit_service();
 
-                    let output = audit_service
-                        .export(&filter, export_format)
+                    let events = visibility
+                        .query(runtime.audit_service(), &filter)
+                        .map_err(|e| e.into_error_data())?;
+                    let output = dbflux_audit::export::export_entries(&events, export_format)
                         .map_err(|e| format!("Failed to export audit logs: {}", e))
                         .map_err(|e| e.into_error_data())?;
 

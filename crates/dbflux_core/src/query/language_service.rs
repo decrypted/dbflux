@@ -348,7 +348,125 @@ pub fn classify_query_for_language_with_service(
     }
 }
 
+/// Classifies every statement of a Mongo shell script and keeps the most
+/// restrictive class, so a read in front cannot hide a write behind it.
 fn classify_mongo_query(query: &str) -> ExecutionClassification {
+    let statements = mongo_statements(query);
+
+    if statements.len() <= 1 {
+        return classify_mongo_statement(query);
+    }
+
+    statements.into_iter().map(classify_mongo_statement).fold(
+        ExecutionClassification::Metadata,
+        ExecutionClassification::max,
+    )
+}
+
+/// Splits a shell script before each `db.` that starts a line or follows a
+/// `;`. Text before the first such `db.` is a statement of its own.
+fn mongo_statements(query: &str) -> Vec<&str> {
+    let mut starts = Vec::new();
+
+    for (index, _) in query.match_indices("db.") {
+        let before = query.get(..index).unwrap_or_default();
+        let after_separator = before
+            .trim_end_matches([' ', '\t'])
+            .chars()
+            .next_back()
+            .is_none_or(|character| matches!(character, '\n' | '\r' | ';'));
+        let continues_identifier = before.chars().next_back().is_some_and(|character| {
+            character.is_alphanumeric() || character == '_' || character == '$'
+        });
+
+        if after_separator && !continues_identifier && index > 0 {
+            starts.push(index);
+        }
+    }
+
+    let mut statements = Vec::new();
+    let mut from = 0;
+    for start in starts {
+        statements.push(query.get(from..start).unwrap_or_default());
+        from = start;
+    }
+    statements.push(query.get(from..).unwrap_or_default());
+
+    statements
+        .into_iter()
+        .filter(|statement| {
+            !without_js_comments(statement)
+                .trim()
+                .trim_matches(';')
+                .trim()
+                .is_empty()
+        })
+        .collect()
+}
+
+/// `text` without `//` line comments and `/* */` block comments, so a
+/// comment above a statement does not count as a statement of its own.
+/// Only used to tell whether anything but comments is left.
+fn without_js_comments(text: &str) -> String {
+    let mut kept = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while !rest.is_empty() {
+        if let Some(after) = rest.strip_prefix("//") {
+            rest = after
+                .find('\n')
+                .map_or("", |end| after.get(end..).unwrap_or_default());
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = after
+                .find("*/")
+                .map_or("", |end| after.get(end + 2..).unwrap_or_default());
+        } else {
+            let mut characters = rest.chars();
+            if let Some(character) = characters.next() {
+                kept.push(character);
+            }
+            rest = characters.as_str();
+        }
+    }
+
+    kept
+}
+
+/// Whether `normalized` calls a method that writes, such as a `forEach`
+/// callback that inserts what a `find` returned.
+fn calls_mongo_write_method(normalized: &str) -> bool {
+    normalized.match_indices('.').any(|(index, _)| {
+        let rest = normalized.get(index + 1..).unwrap_or_default();
+        let name_len = rest
+            .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .unwrap_or(rest.len());
+        let name = rest.get(..name_len).unwrap_or_default();
+        let is_call = rest
+            .get(name_len..)
+            .unwrap_or_default()
+            .trim_start()
+            .starts_with('(');
+
+        is_call
+            && (name.starts_with("insert")
+                || name.starts_with("update")
+                || name.starts_with("delete")
+                || name.starts_with("replace")
+                || name.starts_with("findoneand")
+                || matches!(
+                    name,
+                    "bulkwrite"
+                        | "renamecollection"
+                        | "createcollection"
+                        | "createindex"
+                        | "createindexes"
+                        | "dropindex"
+                        | "dropindexes"
+                ))
+    })
+}
+
+fn classify_mongo_statement(query: &str) -> ExecutionClassification {
     let normalized = query.trim().to_ascii_lowercase();
 
     if normalized.is_empty() {
@@ -377,7 +495,7 @@ fn classify_mongo_query(query: &str) -> ExecutionClassification {
         }
     }
 
-    if aggregate_writes_output(&normalized) {
+    if aggregate_writes_output(&normalized) || calls_mongo_write_method(&normalized) {
         return ExecutionClassification::Write;
     }
 
@@ -408,7 +526,20 @@ fn classify_mongo_query(query: &str) -> ExecutionClassification {
     ExecutionClassification::Write
 }
 
+/// Classifies every command, one per line (or `;`-separated), and keeps the
+/// most restrictive class, so `GET a` cannot carry a `FLUSHALL` behind it.
 fn classify_redis_query(query: &str) -> ExecutionClassification {
+    query
+        .split(['\n', '\r', ';'])
+        .filter(|command| !command.trim_start().starts_with('#'))
+        .map(classify_redis_command)
+        .fold(
+            ExecutionClassification::Metadata,
+            ExecutionClassification::max,
+        )
+}
+
+fn classify_redis_command(query: &str) -> ExecutionClassification {
     let normalized = query.trim().to_ascii_lowercase();
     if normalized.is_empty() {
         return ExecutionClassification::Metadata;
@@ -433,7 +564,12 @@ fn classify_redis_query(query: &str) -> ExecutionClassification {
             ExecutionClassification::Read
         }
         "command" | "help" => ExecutionClassification::Metadata,
-        "config" | "acl" | "script" | "module" => ExecutionClassification::Admin,
+        // Server control, replication and scripts, which can run any command
+        // (`EVAL "redis.call('FLUSHALL')" 0`).
+        "config" | "acl" | "script" | "module" | "eval" | "evalsha" | "fcall" | "function"
+        | "shutdown" | "debug" | "save" | "bgsave" | "bgrewriteaof" | "replicaof" | "slaveof"
+        | "failover" | "cluster" | "client" | "monitor" | "sync" | "psync" | "migrate"
+        | "swapdb" => ExecutionClassification::Admin,
         _ => ExecutionClassification::Write,
     }
 }
@@ -3046,6 +3182,89 @@ END $$;"#;
                     .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'),
                 "`{keyword}` is not a display word"
             );
+        }
+    }
+
+    #[test]
+    fn redis_classification_checks_every_command() {
+        let classify =
+            |query: &str| classify_query_for_language(&QueryLanguage::RedisCommands, query);
+
+        assert_eq!(
+            classify("GET a\nFLUSHALL"),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            classify("GET a\r\nFLUSHDB"),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            classify("GET a; FLUSHALL"),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            classify("GET a\nCONFIG SET dir /tmp"),
+            ExecutionClassification::Admin
+        );
+        assert_eq!(classify("GET a\nSET a 1"), ExecutionClassification::Write);
+        assert_eq!(
+            classify("EVAL \"return redis.call('FLUSHALL')\" 0"),
+            ExecutionClassification::Admin
+        );
+        assert_eq!(
+            classify("GET a\nMGET a b\n# FLUSHALL\n"),
+            ExecutionClassification::Read
+        );
+        assert_eq!(classify("GET a"), ExecutionClassification::Read);
+    }
+
+    #[test]
+    fn mongo_classification_checks_every_statement() {
+        let classify = |query: &str| classify_query_for_language(&QueryLanguage::MongoQuery, query);
+
+        for (query, expected) in [
+            (
+                "db.users.find({}); db.users.deleteMany({ active: false })",
+                ExecutionClassification::Write,
+            ),
+            (
+                "db.users.find({})\ndb.users.drop()",
+                ExecutionClassification::Destructive,
+            ),
+            (
+                "db.users.countDocuments({})\ndb.users.insertOne({ a: 1 })",
+                ExecutionClassification::Write,
+            ),
+            (
+                "db.users.find({})\ndb.getSiblingDB('admin').dropDatabase()",
+                ExecutionClassification::Destructive,
+            ),
+            (
+                "db.users.find({}).forEach(d => db.archive.insertOne(d))",
+                ExecutionClassification::Write,
+            ),
+            (
+                "db.users.find({}); db.orders.find({ total: { $gt: 1 } })",
+                ExecutionClassification::Read,
+            ),
+            (
+                "db.users.find({\n  active: true\n})\n  .limit(5)",
+                ExecutionClassification::Read,
+            ),
+            (
+                r#"db.users.find({ note: "see db.users.drop docs" })"#,
+                ExecutionClassification::Read,
+            ),
+            (
+                "// active users\n/* newest first */\ndb.users.find({ active: true })",
+                ExecutionClassification::Read,
+            ),
+            (
+                "// cleanup\ndb.users.find({})\ndb.users.deleteOne({ id: 1 })",
+                ExecutionClassification::Write,
+            ),
+        ] {
+            assert_eq!(classify(query), expected, "unexpected class for: {query}");
         }
     }
 }

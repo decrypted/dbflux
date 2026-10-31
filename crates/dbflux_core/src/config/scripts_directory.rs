@@ -1267,6 +1267,20 @@ pub fn hook_script_path(hooks_dir: &Path, hook_id: &str, language: ScriptLanguag
     hooks_dir.join(format!("{}.{}", hook_id, language.extension()))
 }
 
+/// Lowercase hex SHA-256 of a script's text. An approval stores it, so the
+/// approval covers exactly the content a person reviewed.
+pub fn script_content_sha256(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+
+    Sha256::digest(content.as_bytes())
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
 /// Extensions openable in the code editor (recognized by `QueryLanguage::from_path`).
 const OPENABLE_EXTENSIONS: &[&str] = &[
     "sql", "js", "mongodb", "redis", "red", "cypher", "cyp", "influxql", "flux", "cql", "lua",

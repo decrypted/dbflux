@@ -322,6 +322,16 @@ impl DbFluxServer {
     }
 
     fn request_execution_classification(tool_id: &str) -> Result<ExecutionClassification, String> {
+        // Its approval must cover the script's content, which only the
+        // call itself reads and classifies.
+        if tool_id == "execute_script" {
+            return Err(
+                "execute_script cannot be queued with request_execution: call execute_script \
+                 itself, and it queues an approval that shows and covers the script's content"
+                    .to_string(),
+            );
+        }
+
         let target_classification = Self::classify_tool(tool_id)
             .ok_or_else(|| format!("Unsupported tool for approval request: {}", tool_id))?;
 
@@ -329,7 +339,7 @@ impl DbFluxServer {
     }
 
     /// Classify a tool by its ID to determine its execution classification.
-    fn classify_tool(tool_id: &str) -> Option<ExecutionClassification> {
+    pub(crate) fn classify_tool(tool_id: &str) -> Option<ExecutionClassification> {
         match tool_id {
             // Metadata operations
             "list_connections"

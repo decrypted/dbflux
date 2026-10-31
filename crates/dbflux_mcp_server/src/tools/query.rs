@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use dbflux_core::{
-    Connection, ExplainRequest, SemanticRequest, TableRef, classify_query_for_governance,
+    Connection, DbError, ExplainRequest, QueryLanguage, ReadOnlyEnforcement, SemanticRequest,
+    TableRef, classify_query_for_governance,
 };
+use dbflux_policy::ExecutionClassification;
 use rmcp::{
     ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
     tool, tool_router,
@@ -50,8 +52,6 @@ impl DbFluxServer {
         &self,
         Parameters(params): Parameters<ExplainQueryParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use dbflux_policy::ExecutionClassification;
-
         let state = self.state.clone();
         let sql = params.sql.clone();
         let table = params.table.clone();
@@ -91,8 +91,6 @@ impl DbFluxServer {
         &self,
         Parameters(params): Parameters<PreviewMutationParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        use dbflux_policy::ExecutionClassification;
-
         let state = self.state.clone();
         let sql = params.sql.clone();
         let database = params.database.clone();
@@ -216,24 +214,37 @@ impl DbFluxServer {
                         &planned_query.text,
                         Some(connection.language_service()),
                     );
-                    if !matches!(
-                        classification,
-                        dbflux_policy::ExecutionClassification::Metadata
-                            | dbflux_policy::ExecutionClassification::Read
-                    ) {
+                    if !is_read_only_class(classification) {
                         return Err(format!(
                             "{} planning error: driver generated a non-read-only preview query",
                             error_prefix
                         ));
                     }
 
+                    run_planned_explain(
+                        connection.as_ref(),
+                        planned_query.into_query_request(),
+                        classification,
+                    )
+                    .map_err(|e| format!("{} error: {}", error_prefix, e))
+                }
+                Err(DbError::NotSupported(_)) => {
+                    // Without a planner the driver builds and runs its own
+                    // statement, so what it would run is classified first.
+                    let classification =
+                        fallback_explain_classification(connection.as_ref(), &request);
+                    if !is_read_only_class(classification) {
+                        return Err(format!(
+                            "{} refused: the statement would execute or change data \
+                             (EXPLAIN ANALYZE of a write, or more than one statement)",
+                            error_prefix
+                        ));
+                    }
+
                     connection
-                        .execute(&planned_query.into_query_request())
+                        .explain(&request)
                         .map_err(|e| format!("{} error: {}", error_prefix, e))
                 }
-                Err(dbflux_core::DbError::NotSupported(_)) => connection
-                    .explain(&request)
-                    .map_err(|e| format!("{} error: {}", error_prefix, e)),
                 Err(e) => Err(format!("{} planning error: {}", error_prefix, e)),
             }
         })
@@ -254,6 +265,72 @@ impl DbFluxServer {
         } else {
             TableRef::from_qualified(table)
         }
+    }
+}
+
+fn is_read_only_class(classification: ExecutionClassification) -> bool {
+    matches!(
+        classification,
+        ExecutionClassification::Metadata | ExecutionClassification::Read
+    )
+}
+
+/// The class of what a driver without a planner runs to explain `request`.
+///
+/// SQL drivers run `EXPLAIN <query>` (DuckDB, Turso, external drivers) or a
+/// plan-only batch, so that prefixed text is classified: `ANALYZE DELETE ...`
+/// becomes `EXPLAIN ANALYZE DELETE ...`, which executes the delete. For other
+/// languages the driver's form is unknown, so the query itself must be a
+/// read.
+fn fallback_explain_classification(
+    connection: &dyn Connection,
+    request: &ExplainRequest,
+) -> ExecutionClassification {
+    let Some(query) = request.query.as_deref() else {
+        // A table-only request explains a SELECT the driver builds itself.
+        return ExecutionClassification::Metadata;
+    };
+
+    let language = &connection.metadata().query_language;
+    let text = if *language == QueryLanguage::Sql {
+        format!("EXPLAIN {query}")
+    } else {
+        query.to_string()
+    };
+
+    classify_query_for_governance(language, &text, Some(connection.language_service()))
+}
+
+/// Runs a planned explain. A plan classified `Read` executes its statement
+/// (`EXPLAIN ANALYZE` of a read), so it runs with database-enforced read-only
+/// where the driver offers it, which also stops writes hidden in functions.
+/// A driver that cannot enforce it for this statement refuses before running
+/// anything, and the plan then runs as before.
+#[expect(
+    clippy::result_large_err,
+    reason = "returns the driver's own error unchanged, like `Connection::execute`"
+)]
+fn run_planned_explain(
+    connection: &dyn Connection,
+    mut request: dbflux_core::QueryRequest,
+    classification: ExecutionClassification,
+) -> Result<dbflux_core::QueryResult, DbError> {
+    if classification != ExecutionClassification::Read
+        || !connection.metadata().enforces_read_only()
+    {
+        return connection.execute(&request);
+    }
+
+    request.read_only = ReadOnlyEnforcement::Required;
+    match connection.execute(&request) {
+        Err(DbError::NotSupported(reason)) => {
+            log::debug!(
+                "explain: read-only enforcement refused ({reason}); running the plan without it"
+            );
+            request.read_only = ReadOnlyEnforcement::None;
+            connection.execute(&request)
+        }
+        result => result,
     }
 }
 
@@ -323,14 +400,25 @@ mod tests {
         }
     }
 
+    /// `TEST_METADATA` for a driver that enforces read-only execution.
+    static ENFORCING_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| {
+        let mut metadata = TEST_METADATA.clone();
+        if let Some(transactions) = metadata.transactions.as_mut() {
+            transactions.supports_read_only = true;
+        }
+        metadata
+    });
+
     struct TestConnection {
         plan: Option<SemanticPlan>,
         planner_supported: bool,
         explain_result: QueryResult,
         execute_result: QueryResult,
         executed_queries: std::sync::Mutex<Vec<String>>,
+        executed_read_only: std::sync::Mutex<Vec<bool>>,
         explain_queries: std::sync::Mutex<Vec<Option<String>>>,
         language_service_override: bool,
+        enforces_read_only: bool,
     }
 
     impl TestConnection {
@@ -341,9 +429,16 @@ mod tests {
                 explain_result: QueryResult::empty(),
                 execute_result: QueryResult::empty(),
                 executed_queries: std::sync::Mutex::new(Vec::new()),
+                executed_read_only: std::sync::Mutex::new(Vec::new()),
                 explain_queries: std::sync::Mutex::new(Vec::new()),
                 language_service_override: false,
+                enforces_read_only: false,
             }
+        }
+
+        fn enforcing_read_only(mut self) -> Self {
+            self.enforces_read_only = true;
+            self
         }
 
         fn with_destructive_language_service(mut self) -> Self {
@@ -354,7 +449,11 @@ mod tests {
 
     impl Connection for TestConnection {
         fn metadata(&self) -> &DriverMetadata {
-            &TEST_METADATA
+            if self.enforces_read_only {
+                &ENFORCING_METADATA
+            } else {
+                &TEST_METADATA
+            }
         }
 
         fn ping(&self) -> Result<(), DbError> {
@@ -375,6 +474,10 @@ mod tests {
                 .lock()
                 .expect("executed queries mutex poisoned")
                 .push(req.sql.clone());
+            self.executed_read_only
+                .lock()
+                .expect("executed read-only mutex poisoned")
+                .push(req.read_only.is_required());
             Ok(self.execute_result.clone())
         }
 
@@ -568,5 +671,159 @@ mod tests {
         .expect_err("driver language service must be consulted and reject the preview");
 
         assert!(error.contains("non-read-only preview query"));
+    }
+
+    #[tokio::test]
+    async fn fallback_explain_refuses_statements_the_explain_would_execute() {
+        // Each is what a driver without a planner turns into `EXPLAIN <sql>`,
+        // in the forms the supported dialects accept.
+        for sql in [
+            "ANALYZE DELETE FROM users",
+            "ANALYZE UPDATE users SET active = false",
+            "(ANALYZE) DELETE FROM users",
+            "ANALYZE FORMAT=JSON DELETE FROM users",
+            "ANALYZE COPY (SELECT 'x') TO '/tmp/out.txt'",
+            "ANALYZE SELECT setval('users_id_seq', 1)",
+            "SELECT 1; DELETE FROM users",
+            "QUERY PLAN SELECT 1; DROP TABLE users",
+            "EXPLAIN ANALYZE DELETE FROM users",
+        ] {
+            let connection = Arc::new(TestConnection::new(None, false));
+            let error = DbFluxServer::run_explain_request(
+                connection.clone(),
+                ExplainRequest::new(TableRef::new("users")).with_query(sql),
+                "Preview",
+            )
+            .await
+            .expect_err("an explain that executes a write must be refused");
+
+            assert!(error.contains("refused"), "{sql}: {error}");
+            assert!(
+                connection
+                    .explain_queries
+                    .lock()
+                    .expect("explain queries mutex poisoned")
+                    .is_empty(),
+                "{sql} must not reach the driver"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fallback_explain_still_previews_a_mutation_without_running_it() {
+        for sql in [
+            "DELETE FROM users WHERE id = 1",
+            "ANALYZE SELECT * FROM users",
+        ] {
+            let connection = Arc::new(TestConnection::new(None, false));
+            DbFluxServer::run_explain_request(
+                connection.clone(),
+                ExplainRequest::new(TableRef::new("users")).with_query(sql),
+                "Preview",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{sql} must be explained: {error}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn planned_explain_that_executes_a_read_runs_read_only() {
+        let analyze = Some(SemanticPlan::single_query(
+            SemanticPlanKind::Query,
+            dbflux_core::PlannedQuery::new(
+                QueryLanguage::Sql,
+                "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM users",
+            ),
+        ));
+        let plan_only = Some(SemanticPlan::single_query(
+            SemanticPlanKind::Query,
+            dbflux_core::PlannedQuery::new(QueryLanguage::Sql, "EXPLAIN SELECT * FROM users"),
+        ));
+
+        for (plan, expected) in [(analyze, true), (plan_only, false)] {
+            let connection = Arc::new(TestConnection::new(plan, true).enforcing_read_only());
+            DbFluxServer::run_explain_request(
+                connection.clone(),
+                ExplainRequest::new(TableRef::new("users")),
+                "Explain",
+            )
+            .await
+            .expect("explain runs");
+
+            assert_eq!(
+                connection
+                    .executed_read_only
+                    .lock()
+                    .expect("executed read-only mutex poisoned")
+                    .as_slice(),
+                [expected]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn duckdb_explain_analyze_of_a_delete_deletes_nothing() {
+        use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, QueryRequest, Value};
+
+        let profile = ConnectionProfile::new(
+            "explain-duck",
+            DbConfig::DuckDB {
+                path: std::path::PathBuf::new(),
+                ducklake_catalog: None,
+                ducklake_data_path: None,
+                init_sql: None,
+            },
+        );
+        let connection: Arc<dyn Connection> = Arc::from(
+            dbflux_driver_duckdb::DuckDbDriver::sandboxed()
+                .connect(&profile)
+                .expect("in-memory DuckDB"),
+        );
+        connection
+            .execute(&QueryRequest::new(
+                "CREATE TABLE t AS SELECT * FROM range(3) r(id)",
+            ))
+            .expect("seed table");
+        let count = |connection: &Arc<dyn Connection>| {
+            connection
+                .execute(&QueryRequest::new("SELECT count(*) FROM t"))
+                .expect("count")
+                .rows
+                .remove(0)
+                .remove(0)
+        };
+
+        for (sql, prefix) in [
+            ("ANALYZE DELETE FROM t", "Explain"),
+            ("ANALYZE DELETE FROM t", "Preview"),
+            ("ANALYZE UPDATE t SET id = id + 10", "Preview"),
+        ] {
+            DbFluxServer::run_explain_request(
+                connection.clone(),
+                ExplainRequest::new(TableRef::new("t")).with_query(sql),
+                prefix,
+            )
+            .await
+            .expect_err("EXPLAIN ANALYZE of a write must be refused");
+        }
+        assert_eq!(count(&connection), Value::Int(3));
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT max(id) FROM t"))
+                .expect("max")
+                .rows
+                .remove(0)
+                .remove(0),
+            Value::Int(2)
+        );
+
+        DbFluxServer::run_explain_request(
+            connection.clone(),
+            ExplainRequest::new(TableRef::new("t")).with_query("DELETE FROM t"),
+            "Preview",
+        )
+        .await
+        .expect("a plain EXPLAIN previews the delete");
+        assert_eq!(count(&connection), Value::Int(3));
     }
 }

@@ -163,7 +163,11 @@ multi-statement scripts, row limits, cancellation, typed CRUD with `RETURNING`,
 and read-only enforcement through a `READ ONLY` transaction that also refuses
 file and network reads through table functions named in the statement; views
 and macros created earlier, and scalar functions added by extensions, are not
-checked. Statement timeouts are not supported. See
+checked. Under the MCP server, external access and extension autoloading and
+autoinstall are turned off for the whole database once Init SQL and the DuckLake
+attach have run, so no statement reads files or URLs outside the DuckLake data
+path; see [MCP and AI Integration](MCP_AI_INTEGRATION.md). Statement timeouts
+are not supported. See
 [`crates/dbflux_driver_duckdb/README.md`](../crates/dbflux_driver_duckdb/README.md).
 
 ### Amazon S3

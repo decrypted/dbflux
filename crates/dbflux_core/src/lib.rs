@@ -42,6 +42,7 @@ pub use config::{
     ScriptsDirectory, ScriptsScan, ScriptsScanRequest, ServiceConfig, ServiceRpcApiContract,
     StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, all_script_extensions,
     driver_maps_differ, filter_entries, hook_script_path, is_openable_script, migrate_app_config,
+    script_content_sha256,
 };
 
 #[allow(deprecated)]

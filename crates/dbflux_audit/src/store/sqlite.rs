@@ -203,6 +203,19 @@ impl SqliteAuditStore {
         Ok(dtos)
     }
 
+    /// One page of `filter`'s matches, newest first: `filter.limit` rows
+    /// (all when `None`) after skipping the newest `offset`.
+    pub fn query_extended_page(
+        &self,
+        filter: &AuditQueryFilter,
+        offset: usize,
+    ) -> Result<Vec<AuditEventDto>, AuditError> {
+        let mut storage_filter = Self::to_storage_filter(filter);
+        storage_filter.offset = Some(offset);
+
+        self.repo.query(&storage_filter).map_err(to_audit_error)
+    }
+
     /// Records an audit event using the extended schema.
     ///
     /// This is the primary method for recording events from service layers.

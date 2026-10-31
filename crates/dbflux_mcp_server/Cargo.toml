@@ -85,6 +85,10 @@ rmcp = { version = "2.0.0", features = ["client", "transport-async-rw"] }
 # end-to-end tests runnable under a plain `cargo test -p dbflux_mcp_server`.
 dbflux_driver_sqlite = { workspace = true }
 
+# In-memory DuckDB for the explain tests: it is the driver without a planner
+# whose `EXPLAIN ANALYZE` executes the explained statement.
+dbflux_driver_duckdb = { workspace = true }
+
 tempfile = "3.10"
 
 # Async test runtime

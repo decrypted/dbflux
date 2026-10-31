@@ -15,6 +15,12 @@ use rmcp::{ServiceExt, transport::stdio};
 use crate::server::DbFluxServer;
 use crate::state::ServerState;
 
+/// Default log filter of the MCP server's log file, used when `RUST_LOG` is
+/// unset. Debug lines carry SQL text, ProxyCommand command lines and driver
+/// connection details, and the file is the kind that gets attached to bug
+/// reports, so debug is opt-in (`RUST_LOG=debug`).
+const MCP_LOG_FILTER_DEFAULT: &str = "info,hyper=warn";
+
 #[derive(Debug, Clone)]
 pub struct McpServerArgs {
     pub client_id: String,
@@ -30,7 +36,7 @@ pub async fn run_mcp_server(args: McpServerArgs) -> anyhow::Result<()> {
     let bridge_config = BridgeConfig {
         include_audit_layer: true,
         fmt_writer,
-        env_filter_default: "debug,hyper=warn",
+        env_filter_default: MCP_LOG_FILTER_DEFAULT,
         ..BridgeConfig::default()
     };
 
@@ -102,4 +108,23 @@ fn resolve_mcp_log_path() -> PathBuf {
         return logs_dir.join("dbflux_mcp.log");
     }
     std::env::temp_dir().join("dbflux_mcp.log")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MCP_LOG_FILTER_DEFAULT;
+
+    #[test]
+    fn log_file_defaults_to_info_so_sql_and_command_lines_stay_out() {
+        let default_level = MCP_LOG_FILTER_DEFAULT
+            .split(',')
+            .find(|directive| !directive.contains('='))
+            .expect("a default level");
+
+        assert_eq!(default_level, "info");
+        assert!(
+            !MCP_LOG_FILTER_DEFAULT.contains("debug") && !MCP_LOG_FILTER_DEFAULT.contains("trace"),
+            "no target may default to debug or trace: {MCP_LOG_FILTER_DEFAULT}"
+        );
+    }
 }

@@ -18,11 +18,9 @@ dbflux_core = { path = "../dbflux_core" }
 dbflux_ssh = { path = "../dbflux_ssh" }
 chrono = { workspace = true }
 futures-util = "0.3"
-hex.workspace = true
 indexmap.workspace = true
 log = "0.4"
 serde_json = { workspace = true }
-sha2.workspace = true
 tiberius = { version = "0.12", default-features = false, features = ["chrono", "tds73", "rustls", "sql-browser-tokio"] }
 tokio = { workspace = true, features = ["net", "io-util", "time", "macros"] }
 tokio-util = { version = "0.7", features = ["compat"] }

@@ -30,6 +30,7 @@ crates/dbflux_driver_clickhouse/src/instance_catalog.rs:select_sql: constant (ra
 crates/dbflux_driver_duckdb/src/connection.rs:type_name: not SQL (type label from an Arrow list size)
 crates/dbflux_driver_duckdb/src/dialect.rs:quote_identifier: quoting helper
 crates/dbflux_driver_duckdb/src/dialect.rs:value_to_literal: generated ([...] of rendered literals)
+crates/dbflux_driver_duckdb/src/driver.rs:restrict_external_access: generated ([...] of one value_to_literal literal)
 
 crates/dbflux_driver_dynamodb/src/query_generator.rs:partiql_predicate: generated ([...] of partiql_literal values)
 crates/dbflux_driver_dynamodb/src/query_generator.rs:quote_partiql_identifier: quoting helper

@@ -115,10 +115,9 @@ impl Token {
 ///
 /// This is a lexical heuristic, not a security boundary on its own. It finds
 /// writes hidden in data-modifying CTEs, `EXPLAIN ANALYZE`, `INTO` clauses,
-/// locking reads and multi-statement batches, but it cannot see side effects
-/// of function calls such as `pg_terminate_backend`, `setval` or
-/// `dblink_exec`. Enforcing read-only execution at the database is tracked
-/// separately.
+/// locking reads, multi-statement batches and calls to the built-in functions
+/// in [`side_effecting_function`]. It cannot see what a user-defined function
+/// does, so a database role without write privileges stays the real boundary.
 pub fn classify_sql_execution(sql: &str) -> ExecutionClassification {
     DIALECT_RULES
         .iter()
@@ -286,8 +285,120 @@ fn classify_statement(tokens: &[Token]) -> ExecutionClassification {
         "EXPLAIN" | "DESC" | "DESCRIBE" => classify_explain(rest),
         "SHOW" => ExecutionClassification::Metadata,
         "SELECT" | "WITH" => classify_read_body(rest),
+        "EXEC" | "EXECUTE" => classify_procedure_call(rest),
         _ => classify_leading_keyword(keyword),
     }
+}
+
+/// SQL Server's extended procedures (`xp_cmdshell`, `xp_regwrite`, ...) and
+/// its server configuration procedures act on the host or the instance, not
+/// on data.
+fn classify_procedure_call(tokens: &[Token]) -> ExecutionClassification {
+    let procedure = tokens
+        .iter()
+        .take_while(|token| token.word().is_some() || token.is_symbol('.'))
+        .filter_map(Token::word)
+        .last();
+
+    match procedure {
+        Some(name)
+            if name.starts_with("XP_")
+                || matches!(
+                    name,
+                    "SP_CONFIGURE"
+                        | "SP_ADDLOGIN"
+                        | "SP_ADDSRVROLEMEMBER"
+                        | "SP_ADDROLEMEMBER"
+                        | "SP_PASSWORD"
+                        | "SP_ADDLINKEDSERVER"
+                        | "SP_ADDEXTENDEDPROC"
+                        | "SP_OACREATE"
+                ) =>
+        {
+            ExecutionClassification::Admin
+        }
+        _ => ExecutionClassification::Write,
+    }
+}
+
+/// The class of a call to a built-in function that changes state even though
+/// it appears in a `SELECT`: it ends other sessions, changes settings or
+/// sequences, writes through another connection, takes locks, or reads and
+/// writes files on the database server. `name` is uppercased.
+///
+/// Read-only transactions do not stop most of these (PostgreSQL still runs
+/// `pg_terminate_backend` and `dblink_exec` inside `BEGIN READ ONLY`), so the
+/// classifier has to.
+fn side_effecting_function(name: &str) -> Option<ExecutionClassification> {
+    use ExecutionClassification::{Admin, Write};
+
+    let class = match name {
+        // PostgreSQL: sessions, server and configuration control.
+        "PG_TERMINATE_BACKEND"
+        | "PG_CANCEL_BACKEND"
+        | "PG_RELOAD_CONF"
+        | "PG_ROTATE_LOGFILE"
+        | "PG_PROMOTE"
+        | "PG_SWITCH_WAL"
+        | "PG_SWITCH_XLOG"
+        | "PG_CREATE_RESTORE_POINT"
+        | "PG_BACKUP_START"
+        | "PG_BACKUP_STOP"
+        | "PG_START_BACKUP"
+        | "PG_STOP_BACKUP"
+        | "PG_LOG_BACKEND_MEMORY_CONTEXTS"
+        | "PG_IMPORT_SYSTEM_COLLATIONS"
+        | "SET_CONFIG" => Admin,
+        // PostgreSQL: server files, including large object import and export.
+        "PG_STAT_FILE" | "LO_IMPORT" | "LO_EXPORT" => Admin,
+        // PostgreSQL: sequences, notifications, large objects, logical
+        // decoding, and SQL text that another function executes.
+        "NEXTVAL"
+        | "SETVAL"
+        | "PG_NOTIFY"
+        | "LO_CREATE"
+        | "LO_CREAT"
+        | "LO_UNLINK"
+        | "LO_FROM_BYTEA"
+        | "LO_PUT"
+        | "LOWRITE"
+        | "LO_TRUNCATE"
+        | "LO_TRUNCATE64"
+        | "PG_LOGICAL_EMIT_MESSAGE"
+        | "PG_LOGICAL_SLOT_GET_CHANGES"
+        | "PG_LOGICAL_SLOT_GET_BINARY_CHANGES"
+        | "QUERY_TO_XML"
+        | "QUERY_TO_XMLSCHEMA"
+        | "QUERY_TO_XML_AND_XMLSCHEMA" => Write,
+        // MySQL / MariaDB: named locks, server files, command UDFs.
+        "GET_LOCK" | "RELEASE_LOCK" | "RELEASE_ALL_LOCKS" => Write,
+        "LOAD_FILE" | "SYS_EXEC" | "SYS_EVAL" => Admin,
+        // SQLite: extensions and the CLI's file functions.
+        "LOAD_EXTENSION" | "READFILE" | "WRITEFILE" => Admin,
+        // SQL Server: ad hoc remote and file access, pass-through queries.
+        "OPENROWSET" | "OPENDATASOURCE" => Admin,
+        "OPENQUERY" => Write,
+        _ if name.starts_with("PG_READ_")
+            || name.starts_with("PG_LS_")
+            || name.starts_with("PG_FILE_")
+            || name.starts_with("PG_STAT_RESET")
+            || name.starts_with("PG_WAL_REPLAY_")
+            || name.starts_with("PG_REPLICATION_ORIGIN_")
+            || name.contains("REPLICATION_SLOT")
+            || name.starts_with("XP_") =>
+        {
+            Admin
+        }
+        _ if name.starts_with("DBLINK")
+            || name.starts_with("PG_ADVISORY_")
+            || name.starts_with("PG_TRY_ADVISORY_") =>
+        {
+            Write
+        }
+        _ => return None,
+    };
+
+    Some(class)
 }
 
 /// Drops the symbols, such as opening parentheses, that precede a statement's
@@ -306,7 +417,9 @@ fn classify_leading_keyword(keyword: &str) -> ExecutionClassification {
         "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "REPLACE" => ExecutionClassification::Write,
         "TRUNCATE" | "DROP" | "ALTER" => ExecutionClassification::Destructive,
         "GRANT" | "REVOKE" | "CREATE" | "SET" | "SYSTEM" | "KILL" | "ATTACH" | "OPTIMIZE"
-        | "BACKUP" | "RESTORE" | "UNDROP" | "MOVE" => ExecutionClassification::Admin,
+        | "BACKUP" | "RESTORE" | "UNDROP" | "MOVE" | "INSTALL" | "LOAD" => {
+            ExecutionClassification::Admin
+        }
         "DETACH" | "RENAME" | "EXCHANGE" => ExecutionClassification::Destructive,
         _ => ExecutionClassification::Write,
     }
@@ -376,12 +489,10 @@ fn classify_explain(tokens: &[Token]) -> ExecutionClassification {
 
     let target = tokens.get(index..).unwrap_or_default();
 
-    if !analyze || target.is_empty() {
-        return ExecutionClassification::Metadata;
-    }
-
     // No dialect explains an EXPLAIN; refusing it also bounds the recursion to
-    // one level, even when the nested EXPLAIN sits inside parentheses.
+    // one level, even when the nested EXPLAIN sits inside parentheses. It is
+    // checked before ANALYZE, because the nested one may carry it
+    // (`EXPLAIN EXPLAIN ANALYZE DELETE ...`).
     let explains_an_explain = skip_leading_symbols(target)
         .first()
         .and_then(Token::word)
@@ -389,6 +500,10 @@ fn classify_explain(tokens: &[Token]) -> ExecutionClassification {
 
     if explains_an_explain {
         return ExecutionClassification::Write;
+    }
+
+    if !analyze || target.is_empty() {
+        return ExecutionClassification::Metadata;
     }
 
     classify_statement(target)
@@ -402,14 +517,29 @@ fn classify_read_body(tokens: &[Token]) -> ExecutionClassification {
     let mut classification = ExecutionClassification::Read;
 
     for (index, token) in tokens.iter().enumerate() {
-        let Some(word) = token.word() else {
-            continue;
-        };
-
         let previous = index
             .checked_sub(1)
             .and_then(|previous| tokens.get(previous));
         let next = tokens.get(index + 1);
+        let is_function_call = next.is_some_and(|next| next.is_symbol('('));
+
+        // A quoted name can call any function (`"pg_terminate_backend"(1)`)
+        // and its text is not kept, so the call counts as a write.
+        if token.kind == TokenKind::Quoted && is_function_call {
+            classification = classification.max(ExecutionClassification::Write);
+            continue;
+        }
+
+        let Some(word) = token.word() else {
+            continue;
+        };
+
+        // Checked before the qualified-name skip, so `pg_catalog.setval(...)`
+        // counts like `setval(...)`.
+        if is_function_call && let Some(found) = side_effecting_function(word) {
+            classification = classification.max(found);
+            continue;
+        }
 
         let qualifier = index
             .checked_sub(2)
@@ -430,8 +560,6 @@ fn classify_read_body(tokens: &[Token]) -> ExecutionClassification {
         if is_qualified_name || is_lone_bracketed_name {
             continue;
         }
-
-        let is_function_call = next.is_some_and(|next| next.is_symbol('('));
 
         let found = match word {
             "REPLACE" | "INSERT" | "TRUNCATE" if is_function_call => None,
@@ -1070,6 +1198,200 @@ mod tests {
                 classify_sql_execution(query),
                 ExecutionClassification::Destructive,
                 "query must require destructive governance: {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn side_effecting_functions_are_not_reads() {
+        let cases = [
+            // PostgreSQL
+            (
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT pg_cancel_backend(42)",
+                ExecutionClassification::Admin,
+            ),
+            ("SELECT pg_reload_conf()", ExecutionClassification::Admin),
+            (
+                "SELECT set_config('search_path', 'x', false)",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT pg_read_file('/etc/passwd')",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT pg_read_binary_file('pg_hba.conf')",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT * FROM pg_ls_dir('.')",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT pg_stat_file('postgresql.conf')",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT lo_import('/etc/passwd')",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT lo_export(16409, '/tmp/out')",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT pg_drop_replication_slot('s')",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT nextval('users_id_seq')",
+                ExecutionClassification::Write,
+            ),
+            (
+                "SELECT setval('users_id_seq', 1)",
+                ExecutionClassification::Write,
+            ),
+            (
+                "SELECT dblink_exec('dbname=x', 'DELETE FROM t')",
+                ExecutionClassification::Write,
+            ),
+            (
+                "SELECT * FROM dblink('dbname=x', 'DELETE FROM t RETURNING 1') AS t(x int)",
+                ExecutionClassification::Write,
+            ),
+            ("SELECT pg_advisory_lock(1)", ExecutionClassification::Write),
+            (
+                "SELECT pg_notify('channel', 'payload')",
+                ExecutionClassification::Write,
+            ),
+            ("SELECT lo_unlink(16409)", ExecutionClassification::Write),
+            (
+                "SELECT query_to_xml('DELETE FROM t RETURNING *', true, false, '')",
+                ExecutionClassification::Write,
+            ),
+            // Schema-qualified, mixed case and inside other expressions.
+            (
+                "SELECT pg_catalog.setval('s', 1)",
+                ExecutionClassification::Write,
+            ),
+            (
+                "select Pg_Catalog.PG_TERMINATE_BACKEND(1)",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT coalesce(nextval('s'), 0)",
+                ExecutionClassification::Write,
+            ),
+            (
+                "WITH x AS (SELECT setval('s', 1)) SELECT * FROM x",
+                ExecutionClassification::Write,
+            ),
+            (
+                "EXPLAIN ANALYZE SELECT nextval('s')",
+                ExecutionClassification::Write,
+            ),
+            // A quoted name can call anything.
+            (
+                "SELECT \"pg_terminate_backend\"(1)",
+                ExecutionClassification::Write,
+            ),
+            ("SELECT `get_lock`('a', 1)", ExecutionClassification::Write),
+            // MySQL / MariaDB
+            (
+                "SELECT GET_LOCK('deploy', 10)",
+                ExecutionClassification::Write,
+            ),
+            ("SELECT RELEASE_ALL_LOCKS()", ExecutionClassification::Write),
+            (
+                "SELECT LOAD_FILE('/etc/passwd')",
+                ExecutionClassification::Admin,
+            ),
+            ("SELECT sys_exec('id')", ExecutionClassification::Admin),
+            // SQLite / DuckDB
+            (
+                "SELECT load_extension('/tmp/evil.so')",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT writefile('/tmp/x', 'data')",
+                ExecutionClassification::Admin,
+            ),
+            ("INSTALL httpfs", ExecutionClassification::Admin),
+            ("LOAD httpfs", ExecutionClassification::Admin),
+            // SQL Server
+            ("EXEC xp_cmdshell 'whoami'", ExecutionClassification::Admin),
+            (
+                "EXECUTE master.dbo.xp_regwrite 'HKEY_LOCAL_MACHINE', 'k', 'v', 'REG_SZ', 'x'",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "EXEC sp_configure 'xp_cmdshell', 1",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT * FROM OPENROWSET(BULK 'C:\\secret.txt', SINGLE_CLOB) AS x",
+                ExecutionClassification::Admin,
+            ),
+            (
+                "SELECT * FROM OPENQUERY(linked, 'DELETE FROM t')",
+                ExecutionClassification::Write,
+            ),
+        ];
+
+        for (query, expected) in cases {
+            assert_eq!(
+                classify_sql_execution(query),
+                expected,
+                "unexpected class for: {query}"
+            );
+            assert!(
+                !is_safe_read_query(query),
+                "must not pass as a read: {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_functions_and_function_like_names_stay_reads() {
+        for query in [
+            "SELECT count(*), lower(name) FROM users",
+            "SELECT pg_sleep(0.1)",
+            "SELECT nextval FROM sequences_report",
+            "SELECT s.setval FROM s",
+            "WITH cte(a) AS (SELECT 1) SELECT * FROM cte",
+            "SELECT 'pg_terminate_backend(1)'",
+            "SELECT pg_size_pretty(pg_database_size(current_database()))",
+            "SELECT * FROM pg_stat_activity",
+        ] {
+            assert_eq!(
+                classify_sql_execution(query),
+                ExecutionClassification::Read,
+                "must stay a read: {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn explain_analyze_of_a_write_is_classified_by_the_explained_statement() {
+        for query in [
+            "EXPLAIN ANALYZE DELETE FROM t",
+            "EXPLAIN (ANALYZE) UPDATE t SET a = 1",
+            "EXPLAIN (FORMAT JSON) ANALYZE DELETE FROM t",
+            "EXPLAIN ANALYZE FORMAT=JSON DELETE FROM t",
+            "EXPLAIN ANALYZE COPY (SELECT 1) TO '/tmp/x'",
+            "EXPLAIN QUERY PLAN SELECT 1; DELETE FROM t",
+            "EXPLAIN EXPLAIN ANALYZE DELETE FROM t",
+        ] {
+            assert!(
+                !matches!(
+                    classify_sql_execution(query),
+                    ExecutionClassification::Read | ExecutionClassification::Metadata
+                ),
+                "must not pass as a read: {query}"
             );
         }
     }

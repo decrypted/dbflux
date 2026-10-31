@@ -218,17 +218,33 @@ pub(crate) struct InstanceSettings {
     ducklake_catalog: Option<String>,
     ducklake_data_path: Option<String>,
     init_sql: Option<String>,
+    sandboxed: bool,
 }
 
 #[derive(Default)]
-pub struct DuckDbDriver;
+pub struct DuckDbDriver {
+    sandboxed: bool,
+}
 
 impl DuckDbDriver {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
-    fn open(profile: &ConnectionProfile) -> Result<DuckDbConnection, DbError> {
+    /// A driver whose databases cannot reach files, URLs or extensions
+    /// beyond what the profile itself sets up.
+    ///
+    /// For callers driven by an agent (the MCP server): DuckDB lets a plain
+    /// `SELECT` read local files and URLs (`read_csv('https://...')`,
+    /// `FROM 'file.parquet'`) and downloads extensions on first use, and the
+    /// statement classifier cannot see either. Init SQL and the DuckLake
+    /// attach still run with full access, because the profile owner wrote
+    /// them; the DuckLake data path stays readable.
+    pub fn sandboxed() -> Self {
+        Self { sandboxed: true }
+    }
+
+    fn open(&self, profile: &ConnectionProfile) -> Result<DuckDbConnection, DbError> {
         let DbConfig::DuckDB {
             path,
             ducklake_catalog,
@@ -245,6 +261,7 @@ impl DuckDbDriver {
             ducklake_catalog: non_blank(ducklake_catalog),
             ducklake_data_path: non_blank(ducklake_data_path),
             init_sql: non_blank(init_sql),
+            sandboxed: self.sandboxed,
         };
 
         let key = if path.as_os_str().is_empty() {
@@ -380,7 +397,77 @@ fn open_instance(path: &Path, settings: &InstanceSettings) -> Result<duckdb::Con
             })?;
     }
 
+    if settings.sandboxed {
+        restrict_external_access(&connection, settings)?;
+    }
+
     Ok(connection)
+}
+
+/// Turns off everything that lets a statement reach outside the database:
+/// extension downloads and autoloading, and file and network access except
+/// for the DuckLake data path. DuckDB refuses to turn external access back on
+/// while the instance is open, so no later statement can undo this.
+fn restrict_external_access(
+    connection: &duckdb::Connection,
+    settings: &InstanceSettings,
+) -> Result<(), DbError> {
+    use dbflux_core::{SqlDialect, Value};
+
+    let mut statements = vec![
+        "SET autoinstall_known_extensions = false".to_string(),
+        "SET autoload_known_extensions = false".to_string(),
+    ];
+
+    if settings.ducklake_catalog.is_some() {
+        let data_path = match &settings.ducklake_data_path {
+            Some(path) => Some(path.clone()),
+            None => ducklake_catalog_data_path(connection),
+        };
+        if let Some(path) = data_path {
+            statements.push(format!(
+                "SET allowed_directories = [{}]",
+                DUCKDB_DIALECT.value_to_literal(&Value::Text(path))
+            ));
+        }
+    }
+
+    statements.push("SET enable_external_access = false".to_string());
+
+    for statement in statements {
+        connection.execute_batch(&statement).map_err(|error| {
+            DbError::connection_failed(format!(
+                "Restricting DuckDB file and network access failed ({statement}): {}",
+                format_duckdb_error(&error)
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+/// The data path the attached DuckLake catalog stores, for a profile that does
+/// not set one. `None` when the catalog cannot tell, which leaves DuckLake
+/// data files unreadable under the sandbox rather than opening every path.
+fn ducklake_catalog_data_path(connection: &duckdb::Connection) -> Option<String> {
+    use dbflux_core::SqlDialect;
+
+    let metadata =
+        DUCKDB_DIALECT.quote_identifier(&format!("__ducklake_metadata_{DUCKLAKE_ALIAS}"));
+    connection
+        .query_row(
+            &format!("SELECT value FROM {metadata}.ducklake_metadata WHERE key = 'data_path'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| {
+            log::debug!(
+                "DuckDB: could not read the DuckLake data path: {}",
+                format_duckdb_error(&error)
+            );
+        })
+        .ok()
+        .filter(|path| !path.trim().is_empty())
 }
 
 fn ducklake_attach_sql(catalog: &str, data_path: Option<&str>) -> String {
@@ -469,11 +556,11 @@ impl DbDriver for DuckDbDriver {
         _password: Option<&SecretString>,
         _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        Ok(Box::new(Self::open(profile)?))
+        Ok(Box::new(self.open(profile)?))
     }
 
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
-        Self::open(profile)?.ping()
+        self.open(profile)?.ping()
     }
 }
 
@@ -864,5 +951,136 @@ mod tests {
             scalar(second.as_ref(), "SELECT count(*) FROM t"),
             Value::Int(1)
         );
+    }
+
+    fn query_error(connection: &dyn Connection, sql: &str) -> String {
+        match connection.execute(&QueryRequest::new(sql)) {
+            Ok(_) => panic!("`{sql}` must be refused"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn sandboxed_driver_cannot_read_files_urls_or_install_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("secret.csv");
+        std::fs::write(&csv, "a\n1\n").unwrap();
+        let read_csv = format!("SELECT count(*) FROM read_csv('{}')", csv.display());
+        let in_memory = || DbConfig::DuckDB {
+            path: PathBuf::new(),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: None,
+        };
+
+        // The GUI driver keeps DuckDB's defaults, which is what makes the
+        // sandbox necessary for the MCP server.
+        let open = DuckDbDriver::new().connect(&profile(in_memory())).unwrap();
+        assert_eq!(scalar(open.as_ref(), &read_csv), Value::Int(1));
+
+        let sandboxed = DuckDbDriver::sandboxed()
+            .connect(&profile(in_memory()))
+            .unwrap();
+        for sql in [
+            read_csv.as_str(),
+            "SELECT * FROM 'http://127.0.0.1:9/data.csv'",
+            "INSTALL httpfs",
+            "SET enable_external_access = true",
+        ] {
+            let error = query_error(sandboxed.as_ref(), sql);
+            assert!(
+                error.contains("disabled by configuration")
+                    || error.contains("disabled through configuration")
+                    || error.contains("external access")
+                    || error.contains("enable_external_access"),
+                "`{sql}` failed for another reason: {error}"
+            );
+        }
+        assert_eq!(
+            scalar(
+                sandboxed.as_ref(),
+                "SELECT current_setting('autoinstall_known_extensions')::VARCHAR"
+            ),
+            Value::Text("false".to_string())
+        );
+
+        sandboxed
+            .execute(&QueryRequest::new(
+                "CREATE TABLE t AS SELECT * FROM range(3) r(id)",
+            ))
+            .unwrap();
+        assert_eq!(
+            scalar(sandboxed.as_ref(), "SELECT count(*) FROM t"),
+            Value::Int(3)
+        );
+    }
+
+    #[test]
+    fn sandboxed_driver_still_reads_and_writes_its_own_database_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = DbConfig::DuckDB {
+            path: dir.path().join("own.duckdb"),
+            ducklake_catalog: None,
+            ducklake_data_path: None,
+            init_sql: Some("CREATE TABLE IF NOT EXISTS seeded AS SELECT 7 AS n".to_string()),
+        };
+
+        let connection = DuckDbDriver::sandboxed()
+            .connect(&profile(config.clone()))
+            .unwrap();
+        connection
+            .execute(&QueryRequest::new("INSERT INTO seeded VALUES (8)"))
+            .unwrap();
+        connection
+            .execute(&QueryRequest::new("CHECKPOINT"))
+            .unwrap();
+        drop(connection);
+
+        let reopened = DuckDbDriver::sandboxed().connect(&profile(config)).unwrap();
+        assert_eq!(
+            scalar(reopened.as_ref(), "SELECT sum(n) FROM seeded"),
+            Value::Int(15)
+        );
+    }
+
+    /// Downloads the `ducklake` extension, so it needs network access.
+    #[test]
+    #[ignore = "installs the ducklake extension over the network"]
+    fn sandboxed_driver_keeps_the_ducklake_data_path_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = dir.path().join("meta.ducklake").display().to_string();
+        let data_path = format!("{}/", dir.path().join("data").display());
+        let config = |data_path: Option<String>| DbConfig::DuckDB {
+            path: PathBuf::new(),
+            ducklake_catalog: Some(catalog.clone()),
+            ducklake_data_path: data_path,
+            init_sql: None,
+        };
+
+        let writer = DuckDbDriver::new()
+            .connect(&profile(config(Some(data_path.clone()))))
+            .unwrap();
+        writer
+            .execute(&QueryRequest::new("CREATE TABLE t AS SELECT 1 AS id"))
+            .unwrap();
+        drop(writer);
+
+        let outside = dir.path().join("outside.csv");
+        std::fs::write(&outside, "a\n1\n").unwrap();
+
+        for profile_data_path in [Some(data_path), None] {
+            let reader = DuckDbDriver::sandboxed()
+                .connect(&profile(config(profile_data_path)))
+                .unwrap();
+            assert_eq!(
+                scalar(reader.as_ref(), "SELECT count(*) FROM t"),
+                Value::Int(1)
+            );
+            let error = query_error(
+                reader.as_ref(),
+                &format!("SELECT * FROM read_csv('{}')", outside.display()),
+            );
+            assert!(error.contains("disabled by configuration"), "{error}");
+        }
     }
 }

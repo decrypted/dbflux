@@ -72,6 +72,13 @@ Embedded analytical database, with optional DuckLake catalogs.
   MCP. Only the statement itself is checked: a view or macro created earlier
   can still read files when a read-only request selects from it, and scalar
   functions added by extensions are not checked.
+- `DuckDbDriver::sandboxed()`, which the standalone MCP server uses, closes
+  those gaps for the whole database: after Init SQL and the DuckLake attach it
+  turns off extension autoinstall and autoloading and sets
+  `enable_external_access = false`, with the DuckLake data path (from the
+  profile, or the one the catalog stores) as the only allowed directory. No
+  statement, read or write, can then reach files, URLs or new extensions, and
+  DuckDB refuses to turn external access back on while the database is open.
 - Statement timeouts are refused with `NotSupported`.
 - The drop-table confirmation lists foreign-key child tables only. DuckDB
   records no dependency between a view and the tables it reads, so dependent

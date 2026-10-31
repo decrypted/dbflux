@@ -2073,18 +2073,7 @@ pub trait OperationClassifier: Send + Sync {
     fn classify_tool(&self, tool_id: &str) -> ExecutionClassification;
 }
 
-/// A single SSL mode option that a driver declares in its metadata.
-///
-/// `id` is the native string the driver uses to identify the mode (e.g. `"require"`,
-/// `"VERIFY_CA"`); `label` is the human-readable text shown in the UI segmented control.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SslModeOption {
-    /// Driver-native identifier passed through to connection config (e.g. `"prefer"`, `"REQUIRED"`).
-    pub id: &'static str,
-
-    /// Human-readable label shown in the segmented control (e.g. `"prefer"`, `"verify-ca"`).
-    pub label: &'static str,
-}
+use super::tls::SslModeOption;
 
 /// Declares which SSL certificate path fields a driver accepts.
 ///
@@ -2172,9 +2161,8 @@ pub struct DriverMetadata {
     /// SSL modes offered by this driver in the connection form, in display order.
     ///
     /// `None` means the driver does not expose an SSL mode control (e.g. SQLite).
-    /// When `Some`, the UI renders a `SegmentedControl` whose items come from the
-    /// driver's own `SslModeOption` list.  Each option carries a native `id` (passed
-    /// through to connection config) and a `label` shown in the control.
+    /// When `Some`, exactly one option is `default_for_new` and exactly one is
+    /// `when_unset`; the display order never decides the default.
     ///
     /// Not serialized — re-established via `metadata()`.
     #[serde(skip, default)]
@@ -2285,6 +2273,16 @@ impl Clone for DriverMetadata {
 }
 
 impl DriverMetadata {
+    /// The SSL mode a new connection starts with.
+    pub fn default_ssl_mode(&self) -> Option<&'static SslModeOption> {
+        self.ssl_modes.and_then(super::tls::default_ssl_mode)
+    }
+
+    /// The SSL mode the driver applies to a stored profile without one.
+    pub fn unset_ssl_mode(&self) -> Option<&'static SslModeOption> {
+        self.ssl_modes.and_then(super::tls::unset_ssl_mode)
+    }
+
     /// Whether the driver honours
     /// [`ReadOnlyEnforcement::Required`](crate::ReadOnlyEnforcement::Required)
     /// (see [`TransactionCapabilities::supports_read_only`]).

@@ -113,6 +113,17 @@ pub static SQLSERVER_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverForm
     ],
 });
 
+/// `off` still encrypts the login packet (TDS), without checking the
+/// certificate; `on` encrypts the session without checking it; `required`
+/// checks the chain and the hostname.
+pub(crate) const SSL_MODES: &[dbflux_core::SslModeOption] = &[
+    dbflux_core::SslModeOption::new("off", dbflux_core::SslModeKind::OffLoginOnly),
+    dbflux_core::SslModeOption::new("on", dbflux_core::SslModeKind::RequiredUnverified)
+        .default_for_new()
+        .when_unset(),
+    dbflux_core::SslModeOption::new("required", dbflux_core::SslModeKind::VerifyFull),
+];
+
 /// SQL Server driver metadata.
 pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "mssql".into(),
@@ -257,20 +268,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         // T-SQL caps a single multi-row INSERT ... VALUES statement at 1000 rows.
         max_bulk_insert_rows: 1000,
     }),
-    ssl_modes: Some(&[
-        dbflux_core::SslModeOption {
-            id: "off",
-            label: "off",
-        },
-        dbflux_core::SslModeOption {
-            id: "on",
-            label: "on (accept self-signed)",
-        },
-        dbflux_core::SslModeOption {
-            id: "required",
-            label: "required (validate cert)",
-        },
-    ]),
+    ssl_modes: Some(SSL_MODES),
     ssl_cert_fields: Some(dbflux_core::SslCertFields {
         root_cert: true,
         client_cert: false,
@@ -950,16 +948,22 @@ fn extract_mssql_config(config: &DbConfig) -> Result<ExtractedMssqlConfig, DbErr
     }
 }
 
-fn encryption_for(ssl_mode: &str) -> EncryptionLevel {
+/// An unknown mode is an error: falling back to `on` would turn a mistyped
+/// `required` into a connection that accepts any certificate.
+fn encryption_for(ssl_mode: &str) -> Result<EncryptionLevel, DbError> {
     match ssl_mode {
-        "off" | "disabled" => EncryptionLevel::Off,
-        "required" => EncryptionLevel::Required,
-        // "on" or unknown
-        _ => EncryptionLevel::On,
+        "off" | "disabled" => Ok(EncryptionLevel::Off),
+        "on" => Ok(EncryptionLevel::On),
+        "required" => Ok(EncryptionLevel::Required),
+        _ => Err(dbflux_core::unknown_ssl_mode(
+            "SQL Server",
+            ssl_mode,
+            SSL_MODES,
+        )),
     }
 }
 
-fn build_tiberius_config(params: &MssqlConnectParams) -> Config {
+fn build_tiberius_config(params: &MssqlConnectParams) -> Result<Config, DbError> {
     let mut config = Config::new();
     config.host(params.host);
 
@@ -980,7 +984,7 @@ fn build_tiberius_config(params: &MssqlConnectParams) -> Config {
     }
 
     config.authentication(AuthMethod::sql_server(params.user, params.password));
-    config.encryption(encryption_for(params.ssl_mode));
+    config.encryption(encryption_for(params.ssl_mode)?);
 
     // tiberius panics when both trust_cert and trust_cert_ca are set, so the
     // CA only applies when the mode validates the chain.
@@ -995,7 +999,7 @@ fn build_tiberius_config(params: &MssqlConnectParams) -> Config {
     // is no user-supplied value that could ever win.
     config.application_name(manual_mode_application_name());
 
-    config
+    Ok(config)
 }
 
 /// The `Application Name` reported for connections built from discrete
@@ -1005,6 +1009,7 @@ fn manual_mode_application_name() -> &'static str {
     dbflux_core::client_identity()
 }
 
+#[derive(Clone, Copy)]
 struct MssqlConnectParams<'a> {
     host: &'a str,
     port: u16,
@@ -1044,13 +1049,38 @@ fn password_fingerprint(password: &str) -> String {
     hex::encode(digest.get(..8).unwrap_or_default())
 }
 
+/// Where a session connects. tiberius checks the server certificate against
+/// the config's host; `dial`, when set, is the TCP address to use instead,
+/// so a tunneled session dials the tunnel's local end while the certificate
+/// is still checked against the configured database host.
+#[derive(Debug, Clone)]
+struct MssqlEndpoint {
+    config: Config,
+    dial: Option<(String, u16)>,
+}
+
+impl MssqlEndpoint {
+    fn direct(config: Config) -> Self {
+        Self { config, dial: None }
+    }
+}
+
 async fn establish_tiberius(config: Config) -> Result<TiberiusClient, tiberius::error::Error> {
+    establish_endpoint(MssqlEndpoint::direct(config)).await
+}
+
+async fn establish_endpoint(
+    endpoint: MssqlEndpoint,
+) -> Result<TiberiusClient, tiberius::error::Error> {
     // `connect_named` falls back to a direct `host:port` connect when no
     // instance is set, and performs a SQL Browser (UDP 1434) lookup when
     // one is. Using it unconditionally keeps the two paths in one place.
-    let tcp = TcpStream::connect_named(&config).await?;
+    let tcp = match &endpoint.dial {
+        Some((host, port)) => TcpStream::connect((host.as_str(), *port)).await?,
+        None => TcpStream::connect_named(&endpoint.config).await?,
+    };
     tcp.set_nodelay(true)?;
-    Client::connect(config, tcp.compat_write()).await
+    Client::connect(endpoint.config, tcp.compat_write()).await
 }
 
 /// Fetch the server-side session id (`@@SPID`) and the actual session
@@ -1123,7 +1153,7 @@ impl MssqlDriver {
             config
         };
 
-        let reconnect_config = config.clone();
+        let reconnect_config = MssqlEndpoint::direct(config.clone());
         let runtime = build_runtime()?;
 
         let (client, spid, database) = runtime
@@ -1188,9 +1218,13 @@ impl MssqlDriver {
             ssl_mode: &config.ssl_mode,
             trust_server_certificate: config.trust_server_certificate,
             ssl_root_cert_path: config.ssl_root_cert_path.as_deref(),
-        });
+        })?;
 
-        let established = establish_mssql_session(tiberius_config, &config.host, config.port)?;
+        let established = establish_mssql_session(
+            MssqlEndpoint::direct(tiberius_config),
+            &config.host,
+            config.port,
+        )?;
 
         log::info!(
             "Successfully connected to {}:{} (spid: {}, database: {:?})",
@@ -1223,25 +1257,28 @@ impl MssqlDriver {
             dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, &config.host, config.port)?;
         let local_port = tunnel.local_port();
 
-        let tiberius_config = build_tiberius_config(&MssqlConnectParams {
-            host: "127.0.0.1",
-            port: local_port,
-            user: &config.user,
-            password: password.unwrap_or(""),
-            database: config.database.as_deref(),
-            // The SSH tunnel forwards to a TCP port, so we cannot use a named
-            // instance lookup via the SQL Browser service.
-            instance: None,
-            ssl_mode: &config.ssl_mode,
-            trust_server_certificate: config.trust_server_certificate,
-            ssl_root_cert_path: config.ssl_root_cert_path.as_deref(),
-        });
+        let endpoint = tunneled_endpoint(
+            &MssqlConnectParams {
+                host: &config.host,
+                port: config.port,
+                user: &config.user,
+                password: password.unwrap_or(""),
+                database: config.database.as_deref(),
+                // The SSH tunnel forwards to a TCP port, so we cannot use a
+                // named instance lookup via the SQL Browser service.
+                instance: None,
+                ssl_mode: &config.ssl_mode,
+                trust_server_certificate: config.trust_server_certificate,
+                ssl_root_cert_path: config.ssl_root_cert_path.as_deref(),
+            },
+            local_port,
+        )?;
 
-        // The reconnect config points at the same 127.0.0.1:<local_port> that
+        // The reconnect endpoint dials the same 127.0.0.1:<local_port> that
         // the SSH tunnel owns. As long as the `SshTunnel` value lives on
         // `MssqlConnection`, the tunnel stays open and a fresh connection
         // (for KILL or for reconnect) can reuse it.
-        let established = establish_mssql_session(tiberius_config, &config.host, config.port)?;
+        let established = establish_mssql_session(endpoint, &config.host, config.port)?;
 
         log::info!(
             "[CONNECT] Total connection time: {:.2}ms ({}:{} via SSH {}, spid: {})",
@@ -1263,13 +1300,31 @@ impl MssqlDriver {
     }
 }
 
+/// The endpoint of a session through an SSH tunnel's local port. The
+/// certificate names the configured host, not the tunnel's local end, so the
+/// config keeps that host and only the dial goes local.
+fn tunneled_endpoint(
+    params: &MssqlConnectParams,
+    local_port: u16,
+) -> Result<MssqlEndpoint, DbError> {
+    let config = build_tiberius_config(&MssqlConnectParams {
+        port: local_port,
+        ..*params
+    })?;
+
+    Ok(MssqlEndpoint {
+        config,
+        dial: Some(("127.0.0.1".to_string(), local_port)),
+    })
+}
+
 /// Bundle of pieces produced by `establish_mssql_session`.
 struct EstablishedMssqlSession {
     client: TiberiusClient,
     runtime: Runtime,
     spid: i32,
     database: Option<String>,
-    reconnect_config: tiberius::Config,
+    reconnect_config: MssqlEndpoint,
 }
 
 /// Resolve the connection's effective database: the session's actual
@@ -1288,15 +1343,15 @@ fn resolve_session_database(session: Option<String>, configured: Option<String>)
 /// runtime/client/session plumbing lives in one place. `host`/`port` are
 /// only used to format a meaningful error if the dial fails.
 fn establish_mssql_session(
-    tiberius_config: Config,
+    endpoint: MssqlEndpoint,
     host: &str,
     port: u16,
 ) -> Result<EstablishedMssqlSession, DbError> {
-    let reconnect_config = tiberius_config.clone();
+    let reconnect_config = endpoint.clone();
     let runtime = build_runtime()?;
     let (client, spid, database) = runtime
         .block_on(async move {
-            let mut client = establish_tiberius(tiberius_config).await?;
+            let mut client = establish_endpoint(endpoint).await?;
             let (spid, database) = capture_session_info(&mut client).await?;
             Ok::<_, tiberius::error::Error>((client, spid, database))
         })
@@ -1352,14 +1407,14 @@ pub struct MssqlConnection {
     // after the session is killed. `poisoned` is set true once KILL has been
     // sent so `cleanup_after_cancel` knows it needs to reconnect.
     spid: Arc<AtomicI32>,
-    reconnect_config: Arc<tiberius::Config>,
+    reconnect_config: Arc<MssqlEndpoint>,
     poisoned: Arc<AtomicBool>,
 }
 
 struct MssqlCancelHandle {
     cancelled: Arc<AtomicBool>,
     spid: Arc<AtomicI32>,
-    reconnect_config: Arc<tiberius::Config>,
+    reconnect_config: Arc<MssqlEndpoint>,
     poisoned: Arc<AtomicBool>,
 }
 
@@ -1389,11 +1444,9 @@ impl QueryCancelHandle for MssqlCancelHandle {
             .build()
             .map_err(|e| DbError::query_failed(format!("Failed to start KILL runtime: {}", e)))?;
 
-        let config = (*self.reconnect_config).clone();
+        let endpoint = (*self.reconnect_config).clone();
         let result: Result<(), tiberius::error::Error> = rt.block_on(async move {
-            let tcp = TcpStream::connect_named(&config).await?;
-            tcp.set_nodelay(true)?;
-            let mut killer = Client::connect(config, tcp.compat_write()).await?;
+            let mut killer = establish_endpoint(endpoint).await?;
             killer
                 .simple_query(format!("KILL {}", spid))
                 .await?
@@ -2067,7 +2120,7 @@ impl Connection for MssqlConnection {
 
         log::info!("[CLEANUP] Reconnecting SQL Server connection after KILL");
 
-        let config = (*self.reconnect_config).clone();
+        let endpoint = (*self.reconnect_config).clone();
         let active_database = self
             .current_database
             .lock()
@@ -2085,7 +2138,7 @@ impl Connection for MssqlConnection {
             guard.client = None;
 
             guard.runtime.block_on(async move {
-                let mut client = establish_tiberius(config).await?;
+                let mut client = establish_endpoint(endpoint).await?;
                 let (spid, database) = capture_session_info(&mut client).await?;
                 Ok((client, spid, database))
             })
@@ -4387,7 +4440,7 @@ fn ado_sets_application_name(s: &str) -> bool {
     })
 }
 
-fn parse_uri_query_params(params: &str) -> UriQueryParams {
+fn parse_uri_query_params(params: &str) -> Result<UriQueryParams, tiberius::error::Error> {
     // SSL Mode is the single user-facing knob; trust_cert is derived from
     // it unless the caller explicitly overrides via `?trust=` in the URI.
     //
@@ -4411,7 +4464,17 @@ fn parse_uri_query_params(params: &str) -> UriQueryParams {
                     "true" | "yes" | "on" | "1" => EncryptionLevel::On,
                     "false" | "no" | "off" | "0" => EncryptionLevel::Off,
                     "strict" | "required" => EncryptionLevel::Required,
-                    _ => EncryptionLevel::On,
+                    // A typo must not quietly become `on`, which accepts any
+                    // certificate.
+                    other => {
+                        return Err(tiberius::error::Error::Conversion(
+                            format!(
+                                "unknown encrypt value '{other}' in the SQL Server URI; \
+                                 expected true, false, on, off, strict or required"
+                            )
+                            .into(),
+                        ));
+                    }
                 };
             }
             "trustservercertificate" | "trust_server_certificate" | "trust" => {
@@ -4436,7 +4499,7 @@ fn parse_uri_query_params(params: &str) -> UriQueryParams {
         }
     }
 
-    out
+    Ok(out)
 }
 
 fn apply_uri_credentials(config: &mut Config, credentials: &str) {
@@ -4458,7 +4521,7 @@ fn apply_uri_credentials(config: &mut Config, credentials: &str) {
 
 fn parse_mssql_url(uri: &str) -> Result<Config, tiberius::error::Error> {
     let parsed = split_mssql_uri(uri)?;
-    let query = parse_uri_query_params(parsed.params);
+    let query = parse_uri_query_params(parsed.params)?;
 
     // `?instance=` wins over the SSMS-style `host\instance` form.
     let instance = query
@@ -5877,7 +5940,102 @@ mod tests {
                 trust_server_certificate,
                 ssl_root_cert_path,
             })
+            .expect("known mode")
         )
+    }
+
+    /// Each declared mode must reach tiberius as its label says: `required`
+    /// checks the certificate, the others trust any certificate.
+    #[test]
+    fn every_mode_maps_to_its_declared_verification() {
+        for option in SSL_MODES {
+            let (mode, trust) = extract_ssl(build_form_values_for_ssl(Some(option.id)));
+            let debug = tiberius_debug(&mode, trust, None);
+
+            assert_eq!(
+                !debug.contains("trust: TrustAll"),
+                option.kind.verifies_hostname(),
+                "{}: {debug}",
+                option.id
+            );
+            let level = encryption_for(option.id).expect("declared modes map");
+            assert_eq!(
+                level != EncryptionLevel::Off,
+                option.kind.always_encrypts(),
+                "{}",
+                option.id
+            );
+        }
+    }
+
+    /// An unknown mode used to become `on`, which accepts any certificate.
+    #[test]
+    fn unknown_ssl_mode_is_an_error_not_on() {
+        for mode in ["requried", "REQUIRED", "verify", ""] {
+            assert!(
+                matches!(encryption_for(mode), Err(DbError::InvalidProfile(_))),
+                "{mode:?} must be rejected"
+            );
+        }
+
+        let error = build_tiberius_config(&MssqlConnectParams {
+            host: "db.corp",
+            port: 1433,
+            user: "sa",
+            password: "",
+            database: None,
+            instance: None,
+            ssl_mode: "requried",
+            trust_server_certificate: false,
+            ssl_root_cert_path: None,
+        })
+        .err();
+        assert!(
+            matches!(error, Some(DbError::InvalidProfile(_))),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_uri_encrypt_value_is_an_error() {
+        assert!(parse_mssql_url("sqlserver://sa:pw@db.corp:1433/?encrypt=strcit").is_err());
+        assert!(parse_mssql_url("sqlserver://sa:pw@db.corp:1433/?encrypt=strict").is_ok());
+    }
+
+    #[test]
+    fn new_connections_encrypt_and_unset_profiles_keep_on() {
+        assert_eq!(METADATA.default_ssl_mode().map(|mode| mode.id), Some("on"));
+        assert_eq!(METADATA.unset_ssl_mode().map(|mode| mode.id), Some("on"));
+    }
+
+    /// Through an SSH tunnel the socket goes to the tunnel's local end, but
+    /// tiberius checks the certificate against the config's host, which must
+    /// stay the configured database host.
+    #[test]
+    fn a_tunneled_session_dials_locally_and_verifies_the_configured_host() {
+        let endpoint = tunneled_endpoint(
+            &MssqlConnectParams {
+                host: "db.corp.example.com",
+                port: 1433,
+                user: "sa",
+                password: "",
+                database: None,
+                instance: None,
+                ssl_mode: "required",
+                trust_server_certificate: false,
+                ssl_root_cert_path: None,
+            },
+            40123,
+        )
+        .expect("known mode");
+
+        assert_eq!(endpoint.dial, Some(("127.0.0.1".to_string(), 40123)));
+        let debug = format!("{:?}", endpoint.config);
+        assert!(
+            debug.contains("host: Some(\"db.corp.example.com\")"),
+            "{debug}"
+        );
+        assert!(!debug.contains("trust: TrustAll"), "{debug}");
     }
 
     #[test]
@@ -6006,13 +6164,13 @@ mod tests {
 
     #[test]
     fn parse_uri_query_params_captures_application_name() {
-        let query = parse_uri_query_params("applicationname=MyTool");
+        let query = parse_uri_query_params("applicationname=MyTool").expect("valid query");
         assert_eq!(query.application_name.as_deref(), Some("MyTool"));
     }
 
     #[test]
     fn parse_uri_query_params_leaves_application_name_absent_without_param() {
-        let query = parse_uri_query_params("instance=SQLEXPRESS");
+        let query = parse_uri_query_params("instance=SQLEXPRESS").expect("valid query");
         assert!(query.application_name.is_none());
     }
 
@@ -7240,8 +7398,8 @@ mod tests {
 #[cfg(test)]
 mod query_safety_tests {
     use super::{
-        MssqlConnection, MssqlConnectionInner, TiberiusClient, build_runtime, collect_result_sets,
-        establish_tiberius, parse_mssql_url,
+        MssqlConnection, MssqlConnectionInner, MssqlEndpoint, TiberiusClient, build_runtime,
+        collect_result_sets, establish_tiberius, parse_mssql_url,
     };
     use dbflux_core::{
         Connection as _, DbError, ExecutionContext, ExecutionSourceContext, QueryRequest,
@@ -7337,7 +7495,7 @@ mod query_safety_tests {
             ssh_tunnel: None,
             cancelled: Arc::new(AtomicBool::new(false)),
             spid: Arc::new(AtomicI32::new(0)),
-            reconnect_config: Arc::new(tiberius::Config::new()),
+            reconnect_config: Arc::new(MssqlEndpoint::direct(tiberius::Config::new())),
             poisoned: Arc::new(AtomicBool::new(false)),
         }
     }

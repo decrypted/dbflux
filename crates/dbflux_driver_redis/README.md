@@ -24,6 +24,7 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
   - `off` — plain `redis://` connection.
   - `on` — `rediss://` with the certificate trusted without chain validation (insecure marker).
   - `verify` — `rediss://` with a supplied root certificate and optional client certificate/key, built through `Client::build_with_tls`.
+  New connections start with `on`. Through an SSH tunnel `verify` is refused unless the database host is `127.0.0.1`, because the client checks the certificate against the tunnel's local address.
 - SSH tunnel support for reaching Redis through a bastion host (manual mode only; see Limitations).
 - Deployment topology can be detected automatically or set explicitly (`standalone`, `cluster`, `sentinel`):
   - Automatic detection probes `ROLE` and `INFO cluster` at connect time and routes to standalone or Cluster handling.

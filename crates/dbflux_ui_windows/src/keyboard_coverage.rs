@@ -366,6 +366,10 @@ pub(crate) const CONNECTION_MANAGER: SurfaceRegistry = SurfaceRegistry {
         ("save-password", KeyboardPath::Command(Command::Execute)),
         ("toggle-password", KeyboardPath::Command(Command::Execute)),
         ("test-connection", KeyboardPath::Command(Command::Execute)),
+        // The certificate pickers are ring stops too: Enter opens the file
+        // dialog. New connections start with an encrypting mode, which shows
+        // the client certificate pickers.
+        ("ssl-cert-picker-*", KeyboardPath::Command(Command::Execute)),
         // The driver parameter list: Enter on a row's Edit or Remove, and on
         // Add (Update) or Cancel of the editor.
         (

@@ -38,6 +38,10 @@ Microsoft SQL Server driver for DBFlux, built on the
     mode ignores the path.
   In URI mode, `?trust=true|false` explicitly overrides the derived
   value if you need an unusual combination (e.g. `?encrypt=required&trust=true`).
+  New connections start with `on`. An unknown mode, or an unknown
+  `encrypt=` value in a URI, fails the connection instead of falling
+  back to `on`. Through an SSH tunnel `required` checks the certificate
+  against the configured host, not the tunnel's local address.
 - Optional SQL Server named instances (`SQLEXPRESS`, `MSSQLSERVER2019`,
   etc.) resolved at connect time by querying SQL Browser on UDP 1434
   (enabled via tiberius's `sql-browser-tokio` feature). The form's

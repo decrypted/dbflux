@@ -52,6 +52,28 @@ use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 /// PostgreSQL driver metadata.
+/// libpq `allow` and `prefer` stay for stored profiles only: both continue
+/// in plaintext when the server declines TLS, and neither checks the
+/// certificate, so the form offers `require` and the verify modes instead.
+pub(crate) const SSL_MODES: &[dbflux_core::SslModeOption] = &[
+    dbflux_core::SslModeOption::new("disable", dbflux_core::SslModeKind::Off),
+    dbflux_core::SslModeOption::new("allow", dbflux_core::SslModeKind::Prefer).legacy(),
+    dbflux_core::SslModeOption::new("prefer", dbflux_core::SslModeKind::Prefer)
+        .legacy()
+        .when_unset(),
+    dbflux_core::SslModeOption::new("require", dbflux_core::SslModeKind::RequiredUnverified)
+        .default_for_new(),
+    dbflux_core::SslModeOption::new("verify-ca", dbflux_core::SslModeKind::VerifyCa),
+    dbflux_core::SslModeOption::new("verify-full", dbflux_core::SslModeKind::VerifyFull),
+];
+
+/// The mode a new connection starts with.
+const NEW_CONNECTION_SSL_MODE: &str = "require";
+
+/// The mode of a stored profile that carries none, as before modes were
+/// stored. Kept as `prefer` so such profiles connect as they always did.
+const UNSET_SSL_MODE: &str = "prefer";
+
 pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "postgres".into(),
     display_name: "PostgreSQL".into(),
@@ -194,32 +216,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_indexes_per_table: 32,
         max_bulk_insert_rows: 0,
     }),
-    ssl_modes: Some(&[
-        dbflux_core::SslModeOption {
-            id: "disable",
-            label: "disable",
-        },
-        dbflux_core::SslModeOption {
-            id: "allow",
-            label: "allow",
-        },
-        dbflux_core::SslModeOption {
-            id: "prefer",
-            label: "prefer",
-        },
-        dbflux_core::SslModeOption {
-            id: "require",
-            label: "require",
-        },
-        dbflux_core::SslModeOption {
-            id: "verify-ca",
-            label: "verify-ca",
-        },
-        dbflux_core::SslModeOption {
-            id: "verify-full",
-            label: "verify-full",
-        },
-    ]),
+    ssl_modes: Some(SSL_MODES),
     ssl_cert_fields: Some(dbflux_core::SslCertFields {
         root_cert: true,
         client_cert: true,
@@ -816,6 +813,7 @@ impl DbDriver for PostgresDriver {
                 ssl_mode: &config.ssl_mode,
                 tls_files: &config.tls_files,
                 driver_params: &driver_params,
+                tls_server_name: None,
             })
         }
     }
@@ -873,7 +871,7 @@ impl DbDriver for PostgresDriver {
                 port: 5432,
                 user: String::new(),
                 database: String::new(),
-                ssl_mode: Some("prefer".to_string()),
+                ssl_mode: Some(NEW_CONNECTION_SSL_MODE.to_string()),
                 ssl_root_cert_path: None,
                 ssl_client_cert_path: None,
                 ssl_client_key_path: None,
@@ -914,7 +912,7 @@ impl DbDriver for PostgresDriver {
             port,
             user,
             database,
-            ssl_mode: Some("prefer".to_string()),
+            ssl_mode: Some(NEW_CONNECTION_SSL_MODE.to_string()),
             ssl_root_cert_path: None,
             ssl_client_cert_path: None,
             ssl_client_key_path: None,
@@ -1063,7 +1061,7 @@ struct ExtractedPostgresConfig {
     port: u16,
     user: String,
     database: String,
-    /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`). Defaults to `"prefer"` when absent.
+    /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`); `UNSET_SSL_MODE` when absent.
     ssl_mode: String,
     tls_files: PgTlsFiles,
     ssh_tunnel: Option<SshTunnelConfig>,
@@ -1104,7 +1102,9 @@ fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig,
             port: *port,
             user: user.clone(),
             database: database.clone(),
-            ssl_mode: ssl_mode.clone().unwrap_or_else(|| "prefer".to_string()),
+            ssl_mode: ssl_mode
+                .clone()
+                .unwrap_or_else(|| UNSET_SSL_MODE.to_string()),
             tls_files: PgTlsFiles::new(
                 ssl_root_cert_path.as_deref(),
                 ssl_client_cert_path.as_deref(),
@@ -1128,6 +1128,10 @@ struct PostgresConnectParams<'a> {
     ssl_mode: &'a str,
     tls_files: &'a PgTlsFiles,
     driver_params: &'a PgDriverParams,
+    /// The name the server certificate is checked against when it differs
+    /// from `host`: through an SSH tunnel `host` is the tunnel's local
+    /// address, while the certificate names the configured database host.
+    tls_server_name: Option<&'a str>,
 }
 
 /// Escapes a value for a libpq keyword/value connection string.
@@ -1268,7 +1272,7 @@ fn connect_postgres(
     params: &PostgresConnectParams,
     notices: &NoticeBuffer,
 ) -> Result<Client, DbError> {
-    let ssl_mode = parse_pg_sslmode(params.ssl_mode);
+    let ssl_mode = parse_pg_sslmode(params.ssl_mode)?;
     let conn_string = direct_conn_string(params, ssl_mode);
 
     if ssl_mode == PgSslMode::Disable {
@@ -1292,21 +1296,49 @@ fn connect_postgres(
     }
 }
 
+/// The parameters of `params` sent through an SSH tunnel's local port: the
+/// socket goes to the tunnel, the certificate is still checked against the
+/// configured database host.
+fn through_tunnel(params: PostgresConnectParams<'_>, local_port: u16) -> PostgresConnectParams<'_> {
+    PostgresConnectParams {
+        host: "127.0.0.1",
+        port: local_port,
+        tls_server_name: Some(params.host),
+        ..params
+    }
+}
+
 /// The keyword/value connection string of a direct or tunneled connection:
 /// the form fields, the TLS mode, DBFlux's client identity, then the driver
 /// parameters, which win over everything before them.
 fn direct_conn_string(params: &PostgresConnectParams, ssl_mode: PgSslMode) -> String {
-    params
-        .driver_params
-        .append_to_keyword(&with_client_identity(&with_keyword_sslmode(
-            &build_keyword_conn_string(
-                params.host,
+    // libpq semantics: `hostaddr` is where the socket connects, `host` is the
+    // name TLS verifies, so a tunneled connection checks the real host.
+    let base = match params.tls_server_name {
+        Some(server_name) => format!(
+            "{} hostaddr={}",
+            build_keyword_conn_string(
+                server_name,
                 params.port,
                 params.user,
                 params.password,
                 params.database,
             ),
-            ssl_mode,
+            escape_keyword_value(params.host)
+        ),
+        None => build_keyword_conn_string(
+            params.host,
+            params.port,
+            params.user,
+            params.password,
+            params.database,
+        ),
+    };
+
+    params
+        .driver_params
+        .append_to_keyword(&with_client_identity(&with_keyword_sslmode(
+            &base, ssl_mode,
         )))
 }
 
@@ -1343,7 +1375,7 @@ impl PostgresDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = uri_conn_string(base_uri, password, driver_params);
 
-        let ssl_mode = parse_pg_uri_sslmode(&uri);
+        let ssl_mode = parse_pg_uri_sslmode(&uri)?;
         let uri = with_protocol_sslmode(&uri);
         let (uri, tls_files) = take_uri_tls_files(&uri);
         let notices = NoticeBuffer::default();
@@ -1446,16 +1478,20 @@ impl PostgresDriver {
 
         let notices = NoticeBuffer::default();
         let client = connect_postgres(
-            &PostgresConnectParams {
-                host: "127.0.0.1",
-                port: local_port,
-                user: db_user,
-                password: db_password,
-                database,
-                ssl_mode,
-                tls_files,
-                driver_params,
-            },
+            &through_tunnel(
+                PostgresConnectParams {
+                    host: db_host,
+                    port: db_port,
+                    user: db_user,
+                    password: db_password,
+                    database,
+                    ssl_mode,
+                    tls_files,
+                    driver_params,
+                    tls_server_name: None,
+                },
+                local_port,
+            ),
             &notices,
         )?;
 
@@ -1525,14 +1561,21 @@ impl PgSslMode {
     }
 }
 
-/// Parses a libpq `sslmode` value. Unknown values fall back to `prefer`.
-fn parse_pg_sslmode(value: &str) -> PgSslMode {
+/// Parses a libpq `sslmode` value. `allow` is treated as `prefer`; an
+/// unknown value is an error, because falling back to `prefer` would turn a
+/// mistyped `verify-full` into a connection that verifies nothing.
+fn parse_pg_sslmode(value: &str) -> Result<PgSslMode, DbError> {
     match value.to_ascii_lowercase().as_str() {
-        "disable" => PgSslMode::Disable,
-        "require" => PgSslMode::Require,
-        "verify-ca" => PgSslMode::VerifyCa,
-        "verify-full" => PgSslMode::VerifyFull,
-        _ => PgSslMode::Prefer,
+        "disable" => Ok(PgSslMode::Disable),
+        "allow" | "prefer" => Ok(PgSslMode::Prefer),
+        "require" => Ok(PgSslMode::Require),
+        "verify-ca" => Ok(PgSslMode::VerifyCa),
+        "verify-full" => Ok(PgSslMode::VerifyFull),
+        _ => Err(dbflux_core::unknown_ssl_mode(
+            "PostgreSQL",
+            value,
+            SSL_MODES,
+        )),
     }
 }
 
@@ -1551,9 +1594,10 @@ fn with_protocol_sslmode(uri: &str) -> String {
     let pairs: Vec<String> = query
         .split('&')
         .map(|pair| match pair.split_once('=') {
-            Some(("sslmode", value)) if is_libpq_sslmode(value) => {
-                format!("sslmode={}", parse_pg_sslmode(value).protocol_sslmode())
-            }
+            Some(("sslmode", value)) => match parse_pg_sslmode(value) {
+                Ok(mode) => format!("sslmode={}", mode.protocol_sslmode()),
+                Err(_) => pair.to_string(),
+            },
             _ => pair.to_string(),
         })
         .collect();
@@ -1561,16 +1605,11 @@ fn with_protocol_sslmode(uri: &str) -> String {
     format!("{}?{}", base, pairs.join("&"))
 }
 
-fn is_libpq_sslmode(value: &str) -> bool {
-    matches!(
-        value.to_ascii_lowercase().as_str(),
-        "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full"
-    )
-}
-
-fn parse_pg_uri_sslmode(uri: &str) -> PgSslMode {
+/// A URI without `sslmode` gets libpq's own default, `prefer`: a pasted URI
+/// keeps the meaning it has everywhere else.
+fn parse_pg_uri_sslmode(uri: &str) -> Result<PgSslMode, DbError> {
     let Some(query_start) = uri.find('?') else {
-        return PgSslMode::Prefer;
+        return Ok(PgSslMode::Prefer);
     };
 
     let query = &uri[query_start + 1..];
@@ -1579,7 +1618,7 @@ fn parse_pg_uri_sslmode(uri: &str) -> PgSslMode {
         .split('&')
         .find_map(|pair| pair.split_once('=').filter(|(key, _)| *key == "sslmode"))
         .map(|(_, value)| parse_pg_sslmode(value))
-        .unwrap_or(PgSslMode::Prefer)
+        .unwrap_or(Ok(PgSslMode::Prefer))
 }
 
 pub struct PostgresConnection {
@@ -6629,6 +6668,11 @@ fn get_schema_routines(
 #[cfg(test)]
 mod tests {
     use super::{
+        METADATA, NEW_CONNECTION_SSL_MODE, NoticeBuffer, PgDriverParams, PostgresConnectParams,
+        SSL_MODES, UNSET_SSL_MODE, connect_postgres, direct_conn_string, extract_postgres_config,
+        through_tunnel,
+    };
+    use super::{
         NUMERIC_SIGN_NAN, NUMERIC_SIGN_NEGATIVE, NUMERIC_SIGN_NEGATIVE_INFINITY,
         NUMERIC_SIGN_POSITIVE, NUMERIC_SIGN_POSITIVE_INFINITY, POSTGRES_DIALECT, PgAnyValue,
         PgNumericText, PgSslMode, PgTextSearchText, PgVectorText, PostgresCodeGenerator,
@@ -6644,6 +6688,7 @@ mod tests {
         with_client_identity, with_keyword_sslmode, with_protocol_sslmode,
     };
     use super::{PgSystemInteger, PgTid, system_integer_value};
+    use crate::tls::PgTlsFiles;
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, ConnectionProfile,
         CreateTableSpec, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
@@ -6654,6 +6699,7 @@ mod tests {
     };
     use postgres::config::SslMode;
     use postgres::types::{FromSql, Kind, Type};
+    use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::RwLock;
     use uuid::Uuid;
@@ -7742,38 +7788,206 @@ mod tests {
 
     #[test]
     fn parse_pg_uri_sslmode_uses_reasonable_defaults() {
-        assert_eq!(
-            parse_pg_uri_sslmode("postgresql://localhost:5432/app"),
-            PgSslMode::Prefer
-        );
-        assert_eq!(
-            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=disable"),
-            PgSslMode::Disable
-        );
-        assert_eq!(
-            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=require"),
-            PgSslMode::Require
-        );
-        assert_eq!(
-            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=verify-full"),
-            PgSslMode::VerifyFull
-        );
-        assert_eq!(
-            parse_pg_uri_sslmode("postgresql://localhost:5432/app?sslmode=verify-ca"),
-            PgSslMode::VerifyCa
-        );
+        for (uri, expected) in [
+            ("postgresql://localhost:5432/app", PgSslMode::Prefer),
+            (
+                "postgresql://localhost:5432/app?sslmode=disable",
+                PgSslMode::Disable,
+            ),
+            (
+                "postgresql://localhost:5432/app?sslmode=require",
+                PgSslMode::Require,
+            ),
+            (
+                "postgresql://localhost:5432/app?sslmode=verify-full",
+                PgSslMode::VerifyFull,
+            ),
+            (
+                "postgresql://localhost:5432/app?sslmode=verify-ca",
+                PgSslMode::VerifyCa,
+            ),
+        ] {
+            assert_eq!(parse_pg_uri_sslmode(uri).ok(), Some(expected), "{uri}");
+        }
     }
 
     #[test]
     fn parse_pg_sslmode_maps_every_form_value() {
-        assert_eq!(parse_pg_sslmode("disable"), PgSslMode::Disable);
-        assert_eq!(parse_pg_sslmode("allow"), PgSslMode::Prefer);
-        assert_eq!(parse_pg_sslmode("prefer"), PgSslMode::Prefer);
-        assert_eq!(parse_pg_sslmode("require"), PgSslMode::Require);
-        assert_eq!(parse_pg_sslmode("verify-ca"), PgSslMode::VerifyCa);
-        assert_eq!(parse_pg_sslmode("verify-full"), PgSslMode::VerifyFull);
-        assert_eq!(parse_pg_sslmode("VERIFY-CA"), PgSslMode::VerifyCa);
-        assert_eq!(parse_pg_sslmode("bogus"), PgSslMode::Prefer);
+        for (value, expected) in [
+            ("disable", PgSslMode::Disable),
+            ("allow", PgSslMode::Prefer),
+            ("prefer", PgSslMode::Prefer),
+            ("require", PgSslMode::Require),
+            ("verify-ca", PgSslMode::VerifyCa),
+            ("verify-full", PgSslMode::VerifyFull),
+            ("VERIFY-CA", PgSslMode::VerifyCa),
+        ] {
+            assert_eq!(parse_pg_sslmode(value).ok(), Some(expected), "{value}");
+        }
+    }
+
+    /// A mistyped or unsupported sslmode must fail the connection instead of
+    /// silently becoming `prefer`, which verifies nothing and may end up in
+    /// plaintext.
+    #[test]
+    fn unknown_sslmode_is_an_error_not_prefer() {
+        for value in ["bogus", "verify_full", "verify-full ", ""] {
+            assert!(
+                matches!(parse_pg_sslmode(value), Err(DbError::InvalidProfile(_))),
+                "{value:?} must be rejected"
+            );
+        }
+
+        assert!(matches!(
+            parse_pg_uri_sslmode("postgresql://db.example.com/app?sslmode=verify_full"),
+            Err(DbError::InvalidProfile(_))
+        ));
+    }
+
+    #[test]
+    fn the_form_stops_an_unknown_sslmode_before_any_connection() {
+        let tls_files = PgTlsFiles::default();
+        let error = connect_postgres(
+            &PostgresConnectParams {
+                host: "127.0.0.1",
+                port: 1,
+                user: "app",
+                password: None,
+                database: "app",
+                ssl_mode: "verify_full",
+                tls_files: &tls_files,
+                driver_params: &PgDriverParams::default(),
+                tls_server_name: None,
+            },
+            &NoticeBuffer::default(),
+        )
+        .err();
+
+        assert!(
+            matches!(&error, Some(DbError::InvalidProfile(message)) if message.contains("verify_full")),
+            "{error:?}"
+        );
+    }
+
+    /// Through an SSH tunnel the socket goes to the tunnel's local port, but
+    /// the certificate must be checked against the configured database host.
+    #[test]
+    fn a_tunneled_connection_verifies_the_configured_host() {
+        let tls_files = PgTlsFiles::default();
+        let driver_params = PgDriverParams::default();
+        let params = through_tunnel(
+            PostgresConnectParams {
+                host: "db.internal.example.com",
+                port: 5432,
+                user: "app",
+                password: None,
+                database: "app",
+                ssl_mode: "verify-full",
+                tls_files: &tls_files,
+                driver_params: &driver_params,
+                tls_server_name: None,
+            },
+            40123,
+        );
+
+        let conn_string = direct_conn_string(&params, PgSslMode::VerifyFull);
+        let config: postgres::Config = conn_string.parse().expect("conn string should parse");
+
+        assert_eq!(
+            config.get_hosts(),
+            [postgres::config::Host::Tcp(
+                "db.internal.example.com".to_string()
+            )]
+        );
+        assert_eq!(
+            config.get_hostaddrs(),
+            ["127.0.0.1".parse::<std::net::IpAddr>().expect("an IP")]
+        );
+        assert_eq!(config.get_ports(), [40123]);
+    }
+
+    #[test]
+    fn a_direct_connection_has_no_separate_address() {
+        let tls_files = PgTlsFiles::default();
+        let params = PostgresConnectParams {
+            host: "db.example.com",
+            port: 5432,
+            user: "app",
+            password: None,
+            database: "app",
+            ssl_mode: "verify-full",
+            tls_files: &tls_files,
+            driver_params: &PgDriverParams::default(),
+            tls_server_name: None,
+        };
+
+        let config: postgres::Config = direct_conn_string(&params, PgSslMode::VerifyFull)
+            .parse()
+            .expect("conn string should parse");
+
+        assert!(config.get_hostaddrs().is_empty());
+    }
+
+    /// The verify modes must really switch certificate checks on; the
+    /// others must say they do not.
+    #[test]
+    fn every_mode_maps_to_its_declared_verification() {
+        for option in SSL_MODES {
+            let mode = parse_pg_sslmode(option.id).expect("declared modes parse");
+            let verification = mode.tls_verification();
+
+            assert_eq!(
+                verification.chain,
+                option.kind.verifies_certificate(),
+                "{}",
+                option.id
+            );
+            assert_eq!(
+                verification.hostname,
+                option.kind.verifies_hostname(),
+                "{}",
+                option.id
+            );
+            assert_eq!(
+                mode != PgSslMode::Disable && mode != PgSslMode::Prefer,
+                option.kind.always_encrypts(),
+                "{}",
+                option.id
+            );
+        }
+    }
+
+    #[test]
+    fn new_connections_require_tls_and_unset_profiles_keep_prefer() {
+        assert_eq!(
+            METADATA.default_ssl_mode().map(|mode| mode.id),
+            Some(NEW_CONNECTION_SSL_MODE)
+        );
+        assert_eq!(NEW_CONNECTION_SSL_MODE, "require");
+        assert_eq!(
+            METADATA.unset_ssl_mode().map(|mode| mode.id),
+            Some(UNSET_SSL_MODE)
+        );
+
+        let mut config = DbConfig::default_postgres();
+        if let DbConfig::Postgres { ssl_mode, .. } = &mut config {
+            *ssl_mode = None;
+        }
+        let extracted = extract_postgres_config(&config).expect("postgres config");
+        assert_eq!(extracted.ssl_mode, UNSET_SSL_MODE);
+
+        let values = HashMap::from([
+            ("host".to_string(), "db.example.com".to_string()),
+            ("port".to_string(), "5432".to_string()),
+            ("user".to_string(), "app".to_string()),
+            ("database".to_string(), "app".to_string()),
+        ]);
+        let built = PostgresDriver::new()
+            .build_config(&values)
+            .expect("config builds");
+        assert!(
+            matches!(&built, DbConfig::Postgres { ssl_mode: Some(mode), .. } if mode == "require")
+        );
     }
 
     #[test]
@@ -7799,7 +8013,7 @@ mod tests {
         ] {
             let conn_string = with_keyword_sslmode(
                 &build_keyword_conn_string("db.example.com", 5432, "app", None, "app"),
-                parse_pg_sslmode(form_value),
+                parse_pg_sslmode(form_value).expect("known mode"),
             );
             let config: postgres::Config = conn_string.parse().expect("conn string should parse");
 

@@ -2832,7 +2832,11 @@ impl ConnectionManagerWindow {
                     return false;
                 };
 
-                let values: Vec<String> = modes.iter().map(|mode| mode.id.to_string()).collect();
+                let values: Vec<String> =
+                    dbflux_core::visible_ssl_modes(modes, &self.form.selected_ssl_mode)
+                        .into_iter()
+                        .map(|mode| mode.id.to_string())
+                        .collect();
 
                 if let Some(next) = step_choice(&values, &self.form.selected_ssl_mode, forward) {
                     self.form.selected_ssl_mode = next;

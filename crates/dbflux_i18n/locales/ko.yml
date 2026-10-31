@@ -761,6 +761,20 @@ connection_manager:
         import_selected:
           one: "연결 %{count}개 가져오기"
           many: "연결 %{count}개 가져오기"
+  ssl_mode:
+    option:
+      off: "끄기"
+      off_login_only: "끄기 (로그인만 암호화, 인증서 미확인)"
+      prefer: "선호 (평문일 수 있음, 인증서 미확인)"
+      required_unverified: "필수, 인증서 미확인"
+      verify_ca: "CA 확인, 호스트 이름 미확인"
+      verify_full: "CA 및 호스트 이름 확인"
+  ssl_warning:
+    plaintext: "암호화되지 않음: 쿼리, 결과, 경우에 따라 비밀번호까지 네트워크에서 평문으로 전송됩니다."
+    may_be_plaintext: "TLS가 실패하면 알리지 않고 암호화 없이 계속할 수 있으며, 서버 인증서를 확인하지 않습니다."
+    certificate_not_checked: "암호화되지만 서버 인증서를 확인하지 않습니다: 네트워크 경로상의 누구든 서버로 가장할 수 있습니다."
+    hostname_not_checked: "인증서 체인은 확인하지만 호스트 이름은 확인하지 않습니다: 신뢰할 수 있는 CA가 발급한 인증서라면 무엇이든 허용됩니다."
+    uri_mode: "URI 모드에서는 이 선택기가 아니라 URI 자체의 매개변수가 TLS 설정을 결정합니다."
 connections:
   window:
     manager_title: 연결 관리자

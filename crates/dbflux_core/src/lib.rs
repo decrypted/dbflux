@@ -173,10 +173,14 @@ pub use driver::{
     ExecutionClassification, ExportFieldHint, FieldEquals, FieldExportTransform, FormFieldDef,
     FormFieldKind, FormSection, FormSectionIcon, FormTab, FormValues, Icon, IsolationLevel,
     MutationCapabilities, NativeConsoleProfile, OperationClassifier, OrderByMode, PaginationStyle,
-    QueryCapabilities, QueryLanguage, RefreshTrigger, SelectOption, SslCertFields, SslModeOption,
-    SyntaxInfo, TransactionCapabilities, TransferFamily, WhereOperator, field, field_file_path,
-    field_password, field_required, field_use_uri, ssh_tab, transfer_compatible, when_checked,
-    when_field_equals, when_unchecked, with_default, with_help,
+    QueryCapabilities, QueryLanguage, RefreshTrigger, SelectOption, SslCertFields, SslModeKind,
+    SslModeOption, SyntaxInfo, TransactionCapabilities, TransferFamily, TransportWarning,
+    WhereOperator, field, field_file_path, field_password, field_required, field_use_uri, ssh_tab,
+    transfer_compatible, when_checked, when_field_equals, when_unchecked, with_default, with_help,
+};
+pub use driver::{
+    default_ssl_mode, find_ssl_mode, is_loopback_host, transport_warning,
+    tunnel_hostname_check_unsupported, unknown_ssl_mode, unset_ssl_mode, visible_ssl_modes,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};

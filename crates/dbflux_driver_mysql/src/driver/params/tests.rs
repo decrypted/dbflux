@@ -47,7 +47,7 @@ fn connect_opts(profile: &ConnectionProfile) -> Result<Opts, DbError> {
         None,
         &config.ssl_mode,
         &MysqlSslPaths::default(),
-    ))
+    )?)
 }
 
 fn error_text(result: Result<MysqlDriverParams, DbError>) -> String {

@@ -21,6 +21,7 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
   - `on` — 암호화하며 자체 서명된 인증서를 허용합니다. 자동 생성 인증서를 쓰는 로컬/개발용 SQL Server에 가장 적합합니다.
   - `required` — 암호화하며 인증서 체인을 검증합니다. 실제 CA 서명 인증서를 사용하는 서버(Azure SQL 등)에 사용하세요. `required`를 선택하면 **CA certificate** 경로가 표시되며, 값을 지정하면 해당 CA로 체인을 검증하므로(tiberius `trust_cert_ca`) 사설 또는 기업 CA가 서명한 서버에 모든 인증서를 신뢰하지 않고도 연결할 수 있습니다. 비워 두면 시스템 신뢰 저장소를 사용합니다. `on` 모드는 이 경로를 무시합니다.
   URI 모드에서는 `?trust=true|false`로 도출된 값을 명시적으로 재정의할 수 있으므로, 특수한 조합이 필요할 때 사용합니다(예: `?encrypt=required&trust=true`).
+- 새 연결은 `on`으로 시작합니다. 알 수 없는 모드나 URI의 알 수 없는 `encrypt=` 값은 `on`으로 대체되지 않고 연결을 실패시킵니다. SSH 터널을 통한 연결에서 `required`는 터널의 로컬 주소가 아니라 구성된 호스트를 기준으로 인증서를 확인합니다.
 - 선택적인 SQL Server 명명된 인스턴스(`SQLEXPRESS`, `MSSQLSERVER2019` 등)는 연결 시점에 UDP 1434의 SQL Browser에 질의하여 확인됩니다(tiberius의 `sql-browser-tokio` 기능으로 활성화됩니다). 폼의 Instance 필드, URI 모드에서 SSMS 스타일의 `host\instance` 형식, `?instance=` URI 쿼리 파라미터는 모두 tiberius 설정의 동일한 `instance_name`을 설정합니다.
 - 배스천 호스트를 경유한 연결을 위한 SSH 터널 지원(TCP 전용 터널을 통해서는 명명된 인스턴스 조회를 사용할 수 없습니다).
 - `USE [database]`를 통한 탭별 데이터베이스 전환. 세션 상태(SET 옵션, 임시 테이블, 트랜잭션)는 동일한 연결의 `execute()` 호출 간에 유지됩니다.

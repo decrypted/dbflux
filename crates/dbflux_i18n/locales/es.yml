@@ -761,6 +761,20 @@ connection_manager:
         import_selected:
           one: "Importar %{count} conexión"
           many: "Importar %{count} conexiones"
+  ssl_mode:
+    option:
+      off: "Desactivado"
+      off_login_only: "Desactivado (solo el inicio de sesión, certificado sin comprobar)"
+      prefer: "Preferir (puede ir sin cifrar, certificado sin comprobar)"
+      required_unverified: "Obligatorio, certificado sin comprobar"
+      verify_ca: "Verificar CA, nombre de host sin comprobar"
+      verify_full: "Verificar CA y nombre de host"
+  ssl_warning:
+    plaintext: "Sin cifrar: las consultas, los resultados y posiblemente la contraseña viajan por la red en claro."
+    may_be_plaintext: "Puede continuar sin cifrar sin avisar cuando TLS falla, y el certificado del servidor no se comprueba."
+    certificate_not_checked: "Cifrado, pero el certificado del servidor no se comprueba: cualquiera en la ruta de red puede hacerse pasar por el servidor."
+    hostname_not_checked: "Se comprueba la cadena de certificados pero no el nombre de host: se acepta cualquier certificado de una CA de confianza."
+    uri_mode: "En modo URI, la configuración TLS sale de los parámetros de la propia URI, no de este selector."
 connections:
   window:
     manager_title: Administrador de conexiones

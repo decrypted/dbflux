@@ -24,6 +24,7 @@ Driver de documentos MongoDB para DBFlux.
 - Autenticación (`AUTHENTICATION`) y TLS/SSL con tres modos (`off`, `on`,
   `verify`), soportando un certificado raíz y un certificado de cliente
   opcional.
+- `on` cifra sin comprobar el certificado, `verify` comprueba la cadena y el nombre de host, y las conexiones nuevas empiezan con `on`. A través de un túnel SSH se rechaza `verify` salvo que el host de la base de datos sea `127.0.0.1`, porque el driver comprueba el certificado contra la dirección local del túnel.
 - Soporte de túnel SSH para llegar a MongoDB a través de un bastion host.
 - Parseo de queries en estilo shell para las formas `db.collection.method(...)`
   y `db.method(...)`, con un fallback de documento JSON para

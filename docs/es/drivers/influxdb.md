@@ -22,6 +22,7 @@ Driver de InfluxDB para DBFlux.
   `REQUEST_ROW_LIMIT`. Las
   conexiones usan el esquema de URI `http` en el puerto por defecto 8086, con
   TLS provisto por el cliente HTTP basado en rustls.
+- Un token o una contraseña solo se envían por `https://` a un host remoto: una URL `http://` con credenciales se rechaza salvo que apunte a esta máquina.
 - **InfluxDB v1 y v2** — ambas versiones de la API se soportan en un único crate
   de driver.
 - **InfluxQL en ambas versiones** — el lenguaje de query de v1 funciona en v1 y

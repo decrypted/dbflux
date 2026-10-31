@@ -46,6 +46,7 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
   En modo URI, `?trust=true|false` sobrescribe explícitamente el valor derivado
     si necesitas una combinación inusual (p. ej.
     `?encrypt=required&trust=true`).
+- Las conexiones nuevas empiezan con `on`. Un modo desconocido, o un valor `encrypt=` desconocido en una URI, hace fallar la conexión en lugar de caer en `on`. A través de un túnel SSH, `required` comprueba el certificado contra el host configurado, no contra la dirección local del túnel.
 - Soporte opcional de instancias con nombre de SQL Server (`SQLEXPRESS`,
   `MSSQLSERVER2019`, etc.) resueltas en el momento de conectar consultando SQL
   Browser sobre UDP 1434 (habilitado vía el feature `sql-browser-tokio` de

@@ -177,6 +177,15 @@ fn plan_redis_semantic_request(request: &SemanticRequest) -> Result<SemanticPlan
     }
 }
 
+/// `on` encrypts without checking the certificate; `verify` checks the chain
+/// and the hostname.
+pub(crate) const SSL_MODES: &[dbflux_core::SslModeOption] = &[
+    dbflux_core::SslModeOption::new("off", dbflux_core::SslModeKind::Off).when_unset(),
+    dbflux_core::SslModeOption::new("on", dbflux_core::SslModeKind::RequiredUnverified)
+        .default_for_new(),
+    dbflux_core::SslModeOption::new("verify", dbflux_core::SslModeKind::VerifyFull),
+];
+
 /// Redis driver metadata.
 pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "redis".into(),
@@ -287,20 +296,7 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         max_indexes_per_table: 0,
         max_bulk_insert_rows: 0,
     }),
-    ssl_modes: Some(&[
-        dbflux_core::SslModeOption {
-            id: "off",
-            label: "off",
-        },
-        dbflux_core::SslModeOption {
-            id: "on",
-            label: "on",
-        },
-        dbflux_core::SslModeOption {
-            id: "verify",
-            label: "verify",
-        },
-    ]),
+    ssl_modes: Some(SSL_MODES),
     ssl_cert_fields: Some(dbflux_core::SslCertFields {
         root_cert: true,
         client_cert: true,
@@ -594,6 +590,8 @@ impl RedisDriver {
         ssh_secret: Option<&str>,
         password: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
+        check_tunnel_tls(config.ssl_mode.as_deref(), &config.host)?;
+
         let OpenedSshTunnel { tunnel, .. } =
             dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, &config.host, config.port)?;
         let local_port = tunnel.local_port();
@@ -1195,6 +1193,20 @@ fn redis_ssl_mode_to_config(
         }
         other => Err(format!("Unknown Redis SSL mode: '{}'", other)),
     }
+}
+
+/// Through an SSH tunnel the client connects to `127.0.0.1`, and the redis
+/// crate checks the certificate against the address it connects to, with no
+/// way to name another host. `verify` would then check the wrong name, so it
+/// fails up front unless the database host is that address.
+fn check_tunnel_tls(mode_id: Option<&str>, db_host: &str) -> Result<(), DbError> {
+    if mode_id == Some("verify") && db_host.trim() != "127.0.0.1" {
+        return Err(dbflux_core::tunnel_hostname_check_unsupported(
+            "Redis", db_host, "verify",
+        ));
+    }
+
+    Ok(())
 }
 
 fn non_empty(s: &str) -> Option<&str> {
@@ -5319,6 +5331,52 @@ mod tests {
         let cfg =
             redis_ssl_mode_to_config(None, None, None, None).expect("None should map to plain");
         assert!(matches!(cfg, RedisTlsConfig::Plain));
+    }
+
+    /// Each declared mode must configure the client as its label says.
+    #[test]
+    fn every_mode_maps_to_its_declared_verification() {
+        for option in SSL_MODES {
+            let cfg = redis_ssl_mode_to_config(Some(option.id), None, None, None)
+                .expect("declared modes map");
+            let (encrypts, verifies) = match cfg {
+                RedisTlsConfig::Plain => (false, false),
+                RedisTlsConfig::TlsInsecure => (true, false),
+                RedisTlsConfig::TlsVerify(_) => (true, true),
+            };
+
+            assert_eq!(encrypts, option.kind.always_encrypts(), "{}", option.id);
+            assert_eq!(verifies, option.kind.verifies_hostname(), "{}", option.id);
+        }
+    }
+
+    #[test]
+    fn new_connections_use_tls_and_unset_profiles_stay_plain() {
+        assert_eq!(
+            REDIS_METADATA.default_ssl_mode().map(|mode| mode.id),
+            Some("on")
+        );
+        assert_eq!(
+            REDIS_METADATA.unset_ssl_mode().map(|mode| mode.id),
+            Some("off")
+        );
+    }
+
+    /// The crate checks the certificate against the address it dials, which
+    /// is the tunnel's local end, so `verify` through a tunnel must fail
+    /// clearly instead of checking the wrong name.
+    #[test]
+    fn verify_through_a_tunnel_fails_clearly() {
+        let error = check_tunnel_tls(Some("verify"), "cache.internal.example.com")
+            .expect_err("the hostname cannot be checked through the tunnel");
+        assert!(
+            matches!(&error, DbError::InvalidProfile(message) if message.contains("cache.internal.example.com")),
+            "{error:?}"
+        );
+
+        assert!(check_tunnel_tls(Some("verify"), "127.0.0.1").is_ok());
+        assert!(check_tunnel_tls(Some("on"), "cache.internal.example.com").is_ok());
+        assert!(check_tunnel_tls(Some("off"), "cache.internal.example.com").is_ok());
     }
 
     #[test]

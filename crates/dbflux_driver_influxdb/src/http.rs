@@ -49,6 +49,34 @@ pub enum HttpError {
 
     #[error("Failed to read response body: {0}")]
     Body(String),
+
+    #[error("{0}")]
+    InsecureEndpoint(String),
+}
+
+/// Refuses to send a token or password over plain `http://` to a host other
+/// than this machine, the rule the ClickHouse driver applies: anyone on the
+/// network path would read the credential from the request headers.
+pub fn check_credentials_transport(base_url: &str, auth: &AuthCreds) -> Result<(), HttpError> {
+    if matches!(auth, AuthCreds::None) {
+        return Ok(());
+    }
+
+    let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
+        return Ok(());
+    };
+
+    if url.scheme().eq_ignore_ascii_case("http")
+        && !url.host_str().is_some_and(dbflux_core::is_loopback_host)
+    {
+        return Err(HttpError::InsecureEndpoint(
+            "InfluxDB credentials are only sent over https:// to a remote host; plain \
+             http:// is accepted for localhost only. Use an https:// URL."
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +196,8 @@ impl HttpClient {
         auth: AuthCreds,
         version: InfluxVersion,
     ) -> Result<Self, HttpError> {
+        check_credentials_transport(&base_url, &auth)?;
+
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
             .gzip(true)
@@ -312,6 +342,37 @@ impl HttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credentials_never_go_over_http_to_a_remote_host() {
+        for auth in [
+            AuthCreds::Token("t".into()),
+            AuthCreds::Basic {
+                user: "u".into(),
+                password: "p".into(),
+            },
+        ] {
+            assert!(matches!(
+                check_credentials_transport("http://influx.example.com:8086", &auth),
+                Err(HttpError::InsecureEndpoint(_))
+            ));
+            assert!(check_credentials_transport("https://influx.example.com:8086", &auth).is_ok());
+            assert!(check_credentials_transport("http://localhost:8086", &auth).is_ok());
+            assert!(check_credentials_transport("http://127.0.0.1:8086", &auth).is_ok());
+            assert!(
+                HttpClient::new(
+                    "http://influx.example.com:8086".into(),
+                    auth.clone(),
+                    InfluxVersion::V2
+                )
+                .is_err()
+            );
+        }
+
+        assert!(
+            check_credentials_transport("http://influx.example.com:8086", &AuthCreds::None).is_ok()
+        );
+    }
 
     // C.1.1
     #[test]

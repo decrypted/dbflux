@@ -761,6 +761,20 @@ connection_manager:
         import_selected:
           one: "Import %{count} connection"
           many: "Import %{count} connections"
+  ssl_mode:
+    option:
+      off: "Off"
+      off_login_only: "Off (login only, cert not checked)"
+      prefer: "Prefer (may be plaintext, cert not checked)"
+      required_unverified: "Required, cert not checked"
+      verify_ca: "Verify CA, hostname not checked"
+      verify_full: "Verify CA and hostname"
+  ssl_warning:
+    plaintext: "Not encrypted: queries, results and possibly the password cross the network in the clear."
+    may_be_plaintext: "Can silently continue unencrypted when TLS fails, and the server certificate is not checked."
+    certificate_not_checked: "Encrypted, but the server certificate is not checked: anyone in the network path can pose as the server."
+    hostname_not_checked: "The certificate chain is checked but not the hostname: any certificate from a trusted CA is accepted."
+    uri_mode: "In URI mode the TLS settings come from the URI's own parameters, not from this selector."
 connections:
   window:
     manager_title: Connection Manager

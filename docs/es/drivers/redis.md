@@ -46,6 +46,7 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
   - `verify` — `rediss://` con un certificado raíz suministrado y
     certificado/clave de cliente opcionales, construido a través de
     `Client::build_with_tls`.
+- Las conexiones nuevas empiezan con `on`. A través de un túnel SSH se rechaza `verify` salvo que el host de la base de datos sea `127.0.0.1`, porque el cliente comprueba el certificado contra la dirección local del túnel.
 - Soporte de túnel SSH para llegar a Redis a través de un bastion host (solo en
   modo manual; ver Limitaciones).
 - La topología de despliegue puede detectarse automáticamente o configurarse

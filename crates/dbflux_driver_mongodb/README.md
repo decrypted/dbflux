@@ -16,7 +16,7 @@ MongoDB document driver for DBFlux.
 - Document driver classified as `DatabaseCategory::Document` with the `MongoQuery` query language; the editor uses MongoDB shell syntax, not SQL.
 - Connection modes: manual (host/port/credentials/database) and URI mode. URI mode accepts `mongodb://` and `mongodb+srv://` connection strings (SRV records are parsed for replica-set discovery).
 - Multiple logical databases (`MULTIPLE_DATABASES`) with collection browsing and document counting.
-- Authentication (`AUTHENTICATION`) and TLS/SSL with three modes (`off`, `on`, `verify`), supporting a root certificate and optional client certificate.
+- Authentication (`AUTHENTICATION`) and TLS/SSL with three modes (`off`, `on`, `verify`), supporting a root certificate and optional client certificate. `on` encrypts without checking the certificate, `verify` checks the chain and the hostname, and new connections start with `on`. Through an SSH tunnel `verify` is refused unless the database host is `127.0.0.1`, because the driver checks the certificate against the tunnel's local address.
 - SSH tunnel support for reaching MongoDB through a bastion host.
 - Shell-style query parsing for `db.collection.method(...)` and `db.method(...)` forms, with a JSON-document fallback for backward compatibility. Supported methods: `find`, `findOne`, `aggregate`, `count`/`countDocuments`, `insertOne`, `insertMany`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`. Parse errors carry byte-offset positions for editor diagnostics.
 - Aggregation pipelines (`AGGREGATION`); query capabilities advertise order-by, group-by, having, limit, and offset.

@@ -24,6 +24,7 @@
   - `off` —— 明文 `redis://` 连接。
   - `on` —— `rediss://`，信任证书但不校验证书链（标记为不安全）。
   - `verify` —— `rediss://`，使用提供的根证书以及可选的客户端证书/私钥，通过 `Client::build_with_tls` 构建。
+- 新连接默认使用 `on`。通过 SSH 隧道时，除非数据库主机是 `127.0.0.1`，否则会拒绝 `verify`，因为客户端会以隧道的本地地址校验证书。
 - 支持 SSH 隧道，以便通过堡垒机访问 Redis（仅限手动模式；见限制部分）。
 - 部署拓扑可自动检测，也可显式设置（`standalone`、`cluster`、`sentinel`）：
   - 自动检测会在连接时探测 `ROLE` 与 `INFO cluster`，并路由到单机（standalone）或 Cluster 的处理路径。

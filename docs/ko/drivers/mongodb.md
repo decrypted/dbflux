@@ -17,6 +17,7 @@ DBFlux용 MongoDB 문서 드라이버입니다.
 - 연결 모드: 수동(호스트/포트/자격 증명/데이터베이스)과 URI 모드. URI 모드는 `mongodb://`와 `mongodb+srv://` 연결 문자열을 받아 들이며, 복제 세트 탐색을 위해 SRV 레코드가 파싱됩니다.
 - 여러 논리 데이터베이스(`MULTIPLE_DATABASES`)와 컬렉션 탐색, 문서 수 세기를 지원합니다.
 - 인증(`AUTHENTICATION`)과 세 가지 모드(`off`, `on`, `verify`)의 TLS/SSL을 지원하며, 루트 인증서와 선택적 클라이언트 인증서를 사용할 수 있습니다.
+- `on`은 인증서를 확인하지 않고 암호화하고, `verify`는 체인과 호스트 이름을 확인하며, 새 연결은 `on`으로 시작합니다. 드라이버가 터널의 로컬 주소를 기준으로 인증서를 확인하므로, SSH 터널을 통한 연결에서는 데이터베이스 호스트가 `127.0.0.1`이 아니면 `verify`를 거부합니다.
 - 배스천 호스트를 거쳐 MongoDB에 도달하기 위한 SSH 터널을 지원합니다.
 - `db.collection.method(...)`와 `db.method(...)` 형태에 대한 셸 스타일 쿼리 파싱을 지원하며, 하위 호환을 위한 JSON 문서 폴백이 있습니다. 지원되는 메서드: `find`, `findOne`, `aggregate`, `count`/`countDocuments`, `insertOne`, `insertMany`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`. 파싱 오류는 에디터 진단을 위해 바이트 오프셋 위치를 담고 있습니다.
 - 집계 파이프라인(`AGGREGATION`); 쿼리 기능은 order-by, group-by, having, limit, offset을 알립니다.

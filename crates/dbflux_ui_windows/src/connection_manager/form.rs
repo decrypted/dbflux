@@ -3949,6 +3949,179 @@ mod sqlserver_ssl_tests {
         assert_eq!(ssl_root_cert_path, None);
     }
 }
+/// SSL mode defaults, stored-mode restoration and label honesty. A separate
+/// module with explicit imports: combining `use super::*` with
+/// `#[gpui::test]` sends the gpui_macros expansion into unbounded recursion
+/// (see `ssh_config_host_tests`).
+#[cfg(test)]
+mod ssl_mode_default_tests {
+    use crate::connection_manager::{ConnectionManagerWindow, ssl_mode_from_config};
+    use dbflux_core::{ConnectionProfile, DbConfig, SslModeKind, TransportWarning};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, WindowHandle, WindowOptions};
+
+    fn init_test_runtime(cx: &mut TestAppContext) -> Entity<ToastHost> {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        })
+    }
+
+    fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        })
+    }
+
+    fn new_form_ssl_mode(driver_id: &str, cx: &mut TestAppContext) -> String {
+        let app_state = test_app_state(cx);
+        let window: WindowHandle<ConnectionManagerWindow> = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver(driver_id, window, cx);
+                manager.form.selected_ssl_mode.clone()
+            })
+            .expect("read the SSL mode")
+    }
+
+    fn edit_form_ssl_mode(profile: &ConnectionProfile, cx: &mut TestAppContext) -> String {
+        let app_state = test_app_state(cx);
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+
+        window
+            .update(cx, |manager, _window, _cx| {
+                manager.form.selected_ssl_mode.clone()
+            })
+            .expect("read the SSL mode")
+    }
+
+    /// A new connection starts with the driver's declared encrypting default.
+    /// The form used to take the first listed mode, which was the
+    /// unencrypted one for every driver.
+    #[gpui::test]
+    fn a_new_connection_starts_with_the_drivers_encrypting_default(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+
+        for (driver_id, expected) in [
+            ("postgres", "require"),
+            ("mysql", "REQUIRED"),
+            ("mariadb", "REQUIRED"),
+            ("mssql", "on"),
+            ("mongodb", "on"),
+            ("redis", "on"),
+        ] {
+            assert_eq!(new_form_ssl_mode(driver_id, cx), expected, "{driver_id}");
+        }
+    }
+
+    /// A profile saved before modes were stored shows, and saves, the mode
+    /// the driver has always applied to it.
+    #[gpui::test]
+    fn a_profile_without_a_stored_mode_shows_the_drivers_legacy_mode(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+
+        let mut config = DbConfig::default_postgres();
+        if let DbConfig::Postgres { ssl_mode, .. } = &mut config {
+            *ssl_mode = None;
+        }
+        let profile = ConnectionProfile::new("old postgres", config);
+
+        assert_eq!(edit_form_ssl_mode(&profile, cx), "prefer");
+    }
+
+    /// Existing profiles keep their stored mode, also the unencrypted one:
+    /// the new defaults never migrate a saved connection.
+    #[gpui::test]
+    fn a_stored_mode_is_kept_when_editing(cx: &mut TestAppContext) {
+        let _toast_host = init_test_runtime(cx);
+
+        let mut config = DbConfig::default_postgres();
+        if let DbConfig::Postgres { ssl_mode, .. } = &mut config {
+            *ssl_mode = Some("disable".to_string());
+        }
+        let profile = ConnectionProfile::new("plain postgres", config);
+
+        assert_eq!(edit_form_ssl_mode(&profile, cx), "disable");
+    }
+
+    /// Redshift was missing from the stored-mode lookup, so editing a
+    /// Redshift profile reset it to the first listed mode.
+    #[test]
+    fn redshift_and_legacy_redis_profiles_report_their_stored_mode() {
+        let mut redshift = DbConfig::default_redshift();
+        if let DbConfig::Redshift { ssl_mode, .. } = &mut redshift {
+            *ssl_mode = Some("verify-full".to_string());
+        }
+        assert_eq!(
+            ssl_mode_from_config(&redshift).as_deref(),
+            Some("verify-full")
+        );
+
+        let mut redis = DbConfig::default_redis();
+        if let DbConfig::Redis { ssl_mode, tls, .. } = &mut redis {
+            *ssl_mode = None;
+            *tls = true;
+        }
+        assert_eq!(ssl_mode_from_config(&redis).as_deref(), Some("on"));
+    }
+
+    /// Every mode label and warning exists in English, and every mode that
+    /// does not verify the server says so in its label.
+    #[test]
+    fn mode_labels_are_honest_about_verification() {
+        for kind in SslModeKind::ALL {
+            let label = dbflux_i18n::translate_in("en", kind.label_key());
+            assert_ne!(label, kind.label_key(), "{kind:?} has no English label");
+
+            if !kind.verifies_hostname() && kind != SslModeKind::Off {
+                assert!(
+                    label.contains("not checked"),
+                    "{kind:?} label must say what is not checked: {label}"
+                );
+            }
+        }
+
+        for warning in [
+            TransportWarning::Plaintext,
+            TransportWarning::MayBePlaintext,
+            TransportWarning::CertificateNotChecked,
+            TransportWarning::HostnameNotChecked,
+        ] {
+            let text = dbflux_i18n::translate_in("en", warning.message_key());
+            assert_ne!(
+                text,
+                warning.message_key(),
+                "{warning:?} has no English text"
+            );
+        }
+    }
+}
+
 /// Tests of the SSH config host picker on the Access tab (#837, T5). A
 /// separate module with explicit imports: combining `use super::*` with
 /// `#[gpui::test]` sends the gpui_macros expansion into unbounded recursion

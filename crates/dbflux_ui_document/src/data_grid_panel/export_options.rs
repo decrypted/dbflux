@@ -116,6 +116,9 @@ pub(crate) struct ExportOptions {
     pub(crate) columns: ExportColumns,
     pub(crate) csv_header: bool,
     pub(crate) csv_delimiter: ExportDelimiter,
+    /// Neutralize cells a spreadsheet would run as a formula. Off unless
+    /// asked for, so a CSV holds the values exactly.
+    pub(crate) csv_protect_formulas: bool,
 }
 
 impl Default for ExportOptions {
@@ -127,6 +130,7 @@ impl Default for ExportOptions {
             columns: ExportColumns::Visible,
             csv_header: true,
             csv_delimiter: ExportDelimiter::Comma,
+            csv_protect_formulas: false,
         }
     }
 }
@@ -136,6 +140,7 @@ impl ExportOptions {
         CsvOptions {
             include_header: self.csv_header,
             delimiter: self.csv_delimiter.csv(),
+            protect_formulas: self.csv_protect_formulas,
         }
     }
 }
@@ -147,6 +152,7 @@ pub(crate) enum ExportOptionRow {
     Columns,
     CsvHeader,
     CsvDelimiter,
+    CsvProtectFormulas,
 }
 
 /// What the grid shows and has selected, as model indices, for resolving
@@ -428,6 +434,7 @@ impl DataGridPanel {
         if self.offers_csv_options() {
             rows.push(ExportOptionRow::CsvHeader);
             rows.push(ExportOptionRow::CsvDelimiter);
+            rows.push(ExportOptionRow::CsvProtectFormulas);
         }
         rows
     }
@@ -649,6 +656,12 @@ impl DataGridPanel {
             ExportOptionRow::CsvHeader => {
                 self.update_export_options(|options| options.csv_header = !options.csv_header, cx);
             }
+            ExportOptionRow::CsvProtectFormulas => {
+                self.update_export_options(
+                    |options| options.csv_protect_formulas = !options.csv_protect_formulas,
+                    cx,
+                );
+            }
             ExportOptionRow::CsvDelimiter => {
                 let next = next_choice(&ExportDelimiter::ORDER, options.csv_delimiter, |_| true);
                 self.set_export_delimiter(next, cx);
@@ -689,24 +702,24 @@ impl DataGridPanel {
         });
 
         match row {
-            ExportOptionRow::CsvHeader => {
-                let on = options.csv_header;
-                let label = dbflux_i18n::t!("document.data.grid.export.options.header");
-                let mut item = MenuItem::new(label.clone());
-                if on {
-                    item = item.icon(AppIcon::Check);
-                }
-
-                menu_row("export-option-header", &item, selected, cx)
-                    .role(Role::MenuItemCheckBox)
-                    .aria_label(label)
-                    .aria_toggled(if on { Toggled::True } else { Toggled::False })
-                    .on_mouse_move(hover)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.activate_export_option(ExportOptionRow::CsvHeader, cx);
-                    }))
-                    .into_any_element()
-            }
+            ExportOptionRow::CsvHeader => checkbox_option_row(
+                "export-option-header",
+                dbflux_i18n::t!("document.data.grid.export.options.header"),
+                options.csv_header,
+                ExportOptionRow::CsvHeader,
+                selected,
+                hover,
+                cx,
+            ),
+            ExportOptionRow::CsvProtectFormulas => checkbox_option_row(
+                "export-option-protect-formulas",
+                dbflux_i18n::t!("document.data.grid.export.options.protect_formulas"),
+                options.csv_protect_formulas,
+                ExportOptionRow::CsvProtectFormulas,
+                selected,
+                hover,
+                cx,
+            ),
             ExportOptionRow::Rows => {
                 let active = effective_rows(&options, &view);
                 let items = ExportRows::ORDER
@@ -845,6 +858,32 @@ impl DataGridPanel {
             _ => None,
         }
     }
+}
+
+/// A checkbox row of the export menu: a click and Enter both flip it.
+fn checkbox_option_row(
+    id: &'static str,
+    label: String,
+    on: bool,
+    row: ExportOptionRow,
+    selected: bool,
+    hover: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
+    cx: &mut Context<DataGridPanel>,
+) -> AnyElement {
+    let mut item = MenuItem::new(label.clone());
+    if on {
+        item = item.icon(AppIcon::Check);
+    }
+
+    menu_row(id, &item, selected, cx)
+        .role(Role::MenuItemCheckBox)
+        .aria_label(label)
+        .aria_toggled(if on { Toggled::True } else { Toggled::False })
+        .on_mouse_move(hover)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.activate_export_option(row, cx);
+        }))
+        .into_any_element()
 }
 
 /// A menu row with a label, an optional muted reason under it, and a
@@ -1083,12 +1122,14 @@ mod tests {
             columns: ExportColumns::All,
             csv_header: false,
             csv_delimiter: ExportDelimiter::Tab,
+            csv_protect_formulas: true,
         };
         let json = serde_json::to_string(&options).expect("encodes");
         assert_eq!(
             json,
-            r#"{"rows":"selected","columns":"all","csv_header":false,"csv_delimiter":"tab"}"#
+            r#"{"rows":"selected","columns":"all","csv_header":false,"csv_delimiter":"tab","csv_protect_formulas":true}"#
         );
+        assert!(options.csv().protect_formulas);
         assert_eq!(
             serde_json::from_str::<ExportOptions>(&json).ok(),
             Some(options)
@@ -1096,6 +1137,10 @@ mod tests {
 
         let partial: ExportOptions =
             serde_json::from_str(r#"{"csv_header":false}"#).expect("decodes");
+        assert!(
+            !partial.csv().protect_formulas,
+            "options stored before the formula guard keep exports byte-exact"
+        );
         assert_eq!(
             partial,
             ExportOptions {

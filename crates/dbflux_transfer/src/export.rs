@@ -17,15 +17,18 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use dbflux_core::local_files::{SafeFileName, UniqueFileNames};
 use dbflux_core::{CancelToken, Connection, TransferColumn};
 
 use crate::column_map::AutoColumnMap;
-use crate::file_sink::{FileFormat, FileSink};
+use crate::file_sink::{FileFormat, FileSink, default_file_name};
 use crate::manifest::{ManifestSource, ManifestTable, TransferManifest};
 use crate::pipeline::{
     TableMappingMode, TableTransferStatus, TransferError, TransferOutcome, run_transfer,
 };
 use crate::table_source::TableSource;
+
+const MANIFEST_FILE_NAME: &str = "manifest.json";
 
 /// One table selected for export, with its column shape already resolved by
 /// the caller (e.g. from `Connection::table_details`).
@@ -96,6 +99,11 @@ pub fn run_export(
         })
         .collect();
 
+    // Distinct server names can sanitize to one file name, and a table
+    // named `manifest` would write `manifest.json`.
+    let mut file_names = UniqueFileNames::new();
+    file_names.claim(SafeFileName::new(MANIFEST_FILE_NAME));
+
     for (index, table) in tables.iter().enumerate() {
         if cancel.is_cancelled() {
             break;
@@ -113,12 +121,18 @@ pub fn run_export(
         // Export never remaps columns — the file mirrors the source table
         // exactly — so source and target column lists are identical.
         let column_map = AutoColumnMap::new(&table.columns, &table.columns);
+        let file_name = file_names.claim(default_file_name(
+            table.schema.as_deref(),
+            &table.name,
+            options.format,
+        ));
         let mut sink = FileSink::new(
             output_dir,
             table.schema.clone(),
             table.name.clone(),
             options.format,
-        );
+        )
+        .with_file_name(file_name);
 
         let result = run_transfer(
             &mut source,
@@ -166,7 +180,7 @@ pub fn run_export(
         manifest_tables.push(ManifestTable {
             schema: table.schema.clone(),
             name: table.name.clone(),
-            file: sink.file_name(),
+            file: sink.file_name().as_str().to_string(),
             format: options.format.extension().to_string(),
             columns: table.columns.clone(),
             row_count: report.rows_transferred,
@@ -200,10 +214,10 @@ pub fn run_export(
         let manifest_json = serde_json::to_string_pretty(&manifest)
             .map_err(|e| TransferError::Sink(format!("failed to serialize manifest: {e}")))?;
 
-        std::fs::write(output_dir.join("manifest.json"), manifest_json).map_err(|e| {
+        std::fs::write(output_dir.join(MANIFEST_FILE_NAME), manifest_json).map_err(|e| {
             TransferError::Sink(format!(
                 "{}: {e}",
-                output_dir.join("manifest.json").display()
+                output_dir.join(MANIFEST_FILE_NAME).display()
             ))
         })?;
 
@@ -558,6 +572,79 @@ mod tests {
         assert!(dir.join("users.csv").exists());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Schema and table names come from the server: a malicious one must
+    /// not write outside the chosen folder, two names that sanitize alike
+    /// must not overwrite each other, and the manifest records the names
+    /// actually written.
+    #[test]
+    fn malicious_server_names_write_only_inside_the_output_dir() {
+        let outside = temp_dir("malicious_outside");
+        let escape_table = format!("{}/settings", outside.display());
+        let mut pages = std::collections::HashMap::new();
+        pages.insert("settings".to_string(), vec![vec![vec![Value::Int(1)]]]);
+        pages.insert("passwd".to_string(), vec![vec![vec![Value::Int(2)]]]);
+        pages.insert("a_b".to_string(), vec![vec![vec![Value::Int(3)]]]);
+        pages.insert("manifest".to_string(), vec![vec![vec![Value::Int(4)]]]);
+
+        let connection: Arc<dyn Connection> = Arc::new(FakeConnection::new(pages));
+        let table = |schema: Option<&str>, name: &str| ExportTable {
+            schema: schema.map(str::to_string),
+            name: name.to_string(),
+            columns: vec![pk_column("id")],
+            estimated_total: None,
+        };
+        let tables = vec![
+            table(None, &escape_table),
+            table(Some("../../.."), "etc/passwd"),
+            table(Some("x"), "a/b"),
+            table(Some("x"), "a_b"),
+            table(None, "manifest"),
+        ];
+        let dir = temp_dir("malicious_names");
+        std::fs::remove_dir_all(&dir).ok();
+        let cancel = CancelToken::new();
+        let options = ExportOptions {
+            driver_id: "postgres",
+            database: "app",
+            format: FileFormat::Json,
+            segment_size: 10,
+        };
+
+        let outcome =
+            run_export(&connection, &tables, &dir, &options, &cancel, |_, _, _| {}).unwrap();
+
+        assert!(
+            !outside.join("settings.json").exists(),
+            "an absolute table name escaped the output folder"
+        );
+        let manifest = outcome.manifest.expect("manifest must be written");
+        let files: Vec<&str> = manifest.tables.iter().map(|t| t.file.as_str()).collect();
+        assert_eq!(
+            files[1..],
+            [
+                "_._.etc_passwd.json",
+                "x.a_b.json",
+                "x.a_b-2.json",
+                "manifest-2.json"
+            ]
+        );
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        on_disk.sort();
+        let mut expected: Vec<String> = files.iter().map(|f| f.to_string()).collect();
+        expected.push("manifest.json".to_string());
+        expected.sort();
+        assert_eq!(on_disk, expected, "every file stays inside the folder");
+        for file in files {
+            assert!(!file.contains('/') && !file.contains(".."), "{file}");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 
     #[test]

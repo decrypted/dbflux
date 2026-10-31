@@ -1943,6 +1943,7 @@ document:
           columns: "列"
           header: "包含标题行（列名）"
           delimiter: "分隔符"
+          protect_formulas: 防止电子表格公式执行
           rows_selected: "已选"
           rows_loaded: "已加载"
           rows_all: "全部"
@@ -3233,14 +3234,11 @@ document:
         encoding_auto: 自动
         encoding_raw: 原始
         fit_to_width: 适应宽度
-        image_decode_error: "无法解码图像：%{error}"
-        image_header_error: "无法读取图像头：%{error}"
+        image_unsupported_format: 仅预览 PNG、JPEG、GIF、WebP 和 BMP 图像。请下载此对象或在系统查看器中打开。
         interpret_as: "解释为："
         load_anyway: 仍要加载
         loading: 正在加载预览…
         loading_metadata: 正在加载元数据…
-        svg_invalid_utf8: 此对象不是有效的 UTF-8，因此不能是 SVG。
-        svg_missing_root: 此对象不包含 <svg> 根元素。
         unpreviewable:
           generic: 此文件类型没有应用内预览。请下载此对象或在系统查看器中打开。
           pdf: PDF 不在应用内渲染。请下载此对象或在系统查看器中打开。
@@ -4331,6 +4329,9 @@ settings:
     grid_copy_column_names:
       label: "复制时包含列名"
       hint: "从数据网格复制（Ctrl+C，macOS 上为 Cmd+C）时，制表符分隔的文本以一行列名开头。复制为 CSV、JSON 及其他“复制为”项不受影响。"
+    grid_copy_protect_formulas:
+      label: "防止复制的单元格作为电子表格公式执行"
+      hint: "复制（Ctrl+C，macOS 上为 Cmd+C）和复制为 CSV 会在以 =、+、-、@、制表符或回车开头的单元格前加上 '，使粘贴到的电子表格将其显示为文本，而不是作为公式执行。数字不变。关闭时按原样复制单元格。"
     grid_header_click_sorts:
       label: "点击列标题时对该列排序"
       hint: "关：点击列标题选择整列，标题右侧的箭头用于排序。开：点击即对该列排序；Shift+单击和 Ctrl+单击仍然选择列。"

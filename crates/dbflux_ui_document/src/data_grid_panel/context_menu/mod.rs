@@ -845,7 +845,8 @@ impl DataGridPanel {
         let csv_options = self.export_menu_csv_options();
         let base_name = self.export_base_name();
         let extension = format.extension();
-        let suggested_name = format!("{}.{}", base_name, extension);
+        let suggested_name =
+            dbflux_core::local_files::SafeFileName::new(&format!("{}.{}", base_name, extension));
         let format_name = format.name();
 
         let entity = cx.entity().clone();
@@ -863,7 +864,7 @@ impl DataGridPanel {
                 async {
                     let file_handle = rfd::AsyncFileDialog::new()
                         .set_title(crate::labels::context_menu_export_dialog_title(format_name))
-                        .set_file_name(&suggested_name)
+                        .set_file_name(suggested_name.as_str())
                         .add_filter(format_name, &[extension])
                         .save_file()
                         .await;
@@ -1022,8 +1023,17 @@ impl DataGridPanel {
         let Some(selected) = self.selection_result(cx) else {
             return;
         };
+        let csv_options = dbflux_export::CsvOptions {
+            protect_formulas: self
+                .app_state
+                .read(cx)
+                .general_settings()
+                .grid_copy_protect_formulas,
+            ..dbflux_export::CsvOptions::default()
+        };
         let mut buffer: Vec<u8> = Vec::new();
-        let export_result = dbflux_export::export(&selected, format, &mut buffer);
+        let export_result =
+            dbflux_export::export_with_csv_options(&selected, format, csv_options, &mut buffer);
         let row_count = Some(selected.rows.len());
         self.finish_clipboard_copy(export_result, buffer, format, row_count, cx);
     }

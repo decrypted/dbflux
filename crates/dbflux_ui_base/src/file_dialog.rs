@@ -10,8 +10,9 @@
 //! Open pickers have no fallback location, so `pick_existing_file()` and
 //! `pick_existing_folder()` report the missing picker to the user instead.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use dbflux_core::local_files::{SafeFileName, confined_join};
 use gpui::AsyncApp;
 
 use crate::app_state_entity::{SaveTargetOutcome, SaveTargetProvider, SaveTargetRequest};
@@ -102,29 +103,25 @@ pub fn fallback_export_dir() -> Result<PathBuf, String> {
 /// Builds a non-clobbering path inside `dir` for `filename`. If the file
 /// already exists, suffixes `-2`, `-3`, ... before the extension until a free
 /// slot is found.
-pub fn unique_path_in(dir: &std::path::Path, filename: &str) -> PathBuf {
-    let initial = dir.join(filename);
+///
+/// `filename` is a [`SafeFileName`] because the name is often a table or
+/// object name from the server, and this path is written without a dialog.
+pub fn unique_path_in(dir: &Path, filename: &SafeFileName) -> Result<PathBuf, String> {
+    let confined = |name: &SafeFileName| confined_join(dir, name).map_err(|e| e.to_string());
+
+    let initial = confined(filename)?;
     if !initial.exists() {
-        return initial;
+        return Ok(initial);
     }
 
-    let (stem, ext) = match filename.rfind('.') {
-        Some(i) if i > 0 => (&filename[..i], Some(&filename[i + 1..])),
-        _ => (filename, None),
-    };
-
-    for n in 2..u32::MAX {
-        let candidate_name = match ext {
-            Some(ext) => format!("{}-{}.{}", stem, n, ext),
-            None => format!("{}-{}", stem, n),
-        };
-        let candidate = dir.join(candidate_name);
+    for number in 2..u32::MAX {
+        let candidate = confined(&filename.numbered(number))?;
         if !candidate.exists() {
-            return candidate;
+            return Ok(candidate);
         }
     }
 
-    initial
+    Ok(initial)
 }
 
 /// Resolves a save destination through a per-entity test/embedding provider if
@@ -145,9 +142,12 @@ pub async fn resolve_save_target<'a>(
 
     if !is_native_file_dialog_available() {
         return match fallback_export_dir() {
-            Ok(dir) => SaveTargetOutcome::Selected {
-                path: unique_path_in(&dir, request.suggested_name),
-                used_fallback: true,
+            Ok(dir) => match unique_path_in(&dir, request.suggested_name) {
+                Ok(path) => SaveTargetOutcome::Selected {
+                    path,
+                    used_fallback: true,
+                },
+                Err(err) => SaveTargetOutcome::Failed(err),
             },
             Err(err) => SaveTargetOutcome::Failed(err),
         };
@@ -264,9 +264,10 @@ mod tests {
 
     use super::{
         OpenTargetOutcome, file_picker_unavailable_error, folder_picker_unavailable_error,
-        resolve_open_target_with,
+        resolve_open_target_with, unique_path_in,
     };
     use crate::user_error::ErrorKind;
+    use dbflux_core::local_files::SafeFileName;
 
     #[gpui::test]
     async fn open_target_returns_the_picked_path() {
@@ -298,6 +299,34 @@ mod tests {
 
         assert_eq!(outcome, OpenTargetOutcome::Unavailable);
         assert!(!polled.get());
+    }
+
+    /// The no-dialog fallback writes straight to this path, and the name is
+    /// often a table or object name the server chose.
+    #[test]
+    fn fallback_paths_stay_inside_the_exports_dir() {
+        let dir = tempfile::tempdir().expect("temp dir");
+
+        for raw in [
+            "/etc/cron.d/x.csv",
+            "../../.bashrc",
+            "..\\..\\x.csv",
+            "CON.csv",
+        ] {
+            let path = unique_path_in(dir.path(), &SafeFileName::new(raw)).expect("path");
+
+            assert_eq!(path.parent(), Some(dir.path()), "{raw}");
+        }
+    }
+
+    #[test]
+    fn fallback_paths_never_reuse_an_existing_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(dir.path().join("users.csv"), "keep").expect("write");
+
+        let path = unique_path_in(dir.path(), &SafeFileName::new("users.csv")).expect("path");
+
+        assert_eq!(path, dir.path().join("users-2.csv"));
     }
 
     #[test]

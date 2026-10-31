@@ -190,8 +190,10 @@ pub struct McpRuntimeEventRaised {
 /// decide where a Save As should write. Production leaves the provider unset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SaveTargetRequest<'a> {
-    /// File name (with extension) suggested to the user.
-    pub suggested_name: &'a str,
+    /// File name (with extension) suggested to the user, and the name the
+    /// no-dialog fallback writes under. Often built from a server's table or
+    /// object name, hence sanitized.
+    pub suggested_name: &'a dbflux_core::local_files::SafeFileName,
     /// Human-readable language/format name for picker filtering.
     pub language_name: &'a str,
     /// Default extension for the picker.

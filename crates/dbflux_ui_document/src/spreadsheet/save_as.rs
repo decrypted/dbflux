@@ -154,7 +154,10 @@ impl SpreadsheetDocument {
         };
 
         let title = self.title();
-        let suggested_name = format!("{}.{XLSX_EXTENSION}", file_stem(&title));
+        let suggested_name = dbflux_core::local_files::SafeFileName::new(&format!(
+            "{}.{XLSX_EXTENSION}",
+            file_stem(&title)
+        ));
         let provider = self.save_target_override.clone();
         let on_saved_as = self.on_saved_as.clone();
 
@@ -217,7 +220,7 @@ impl SpreadsheetDocument {
 /// is the original file; the last two are reported here.
 async fn choose_target(
     provider: Option<SaveTargetProvider>,
-    suggested_name: &str,
+    suggested_name: &dbflux_core::local_files::SafeFileName,
     original: Option<&Path>,
     title: &str,
     cx: &mut AsyncApp,
@@ -239,7 +242,7 @@ async fn choose_target(
         async {
             let mut dialog = rfd::AsyncFileDialog::new()
                 .set_title(dialog_title)
-                .set_file_name(suggested_name)
+                .set_file_name(suggested_name.as_str())
                 .add_filter(&filter, &[XLSX_EXTENSION]);
 
             if let Some(directory) = &directory {

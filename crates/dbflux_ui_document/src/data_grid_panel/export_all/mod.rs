@@ -124,7 +124,11 @@ impl DataGridPanel {
             ReplayableRead::VisualQuery { .. } => None,
             _ => source.estimated_total,
         };
-        let suggested_name = format!("{}.{}", source.object_name, format.extension());
+        let suggested_name = dbflux_core::local_files::SafeFileName::new(&format!(
+            "{}.{}",
+            source.object_name,
+            format.extension()
+        ));
         let save_target_override = self.app_state.read(cx).save_target_override();
         let entity = cx.entity().downgrade();
 
@@ -324,7 +328,7 @@ impl DataGridPanel {
 /// could be found, which has already been reported.
 async fn choose_target_path(
     save_target_override: Option<dbflux_ui_base::SaveTargetProvider>,
-    suggested_name: &str,
+    suggested_name: &dbflux_core::local_files::SafeFileName,
     format: FileFormat,
     cx: &mut AsyncApp,
 ) -> Option<PathBuf> {
@@ -340,7 +344,7 @@ async fn choose_target_path(
                 .set_title(crate::labels::context_menu_export_dialog_title(
                     format.label(),
                 ))
-                .set_file_name(suggested_name)
+                .set_file_name(suggested_name.as_str())
                 .add_filter(format.label(), &[format.extension()])
                 .save_file()
                 .await

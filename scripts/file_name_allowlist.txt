@@ -1,0 +1,36 @@
+# Paths built from a value called like a name (`name`, `table`, `schema`,
+# `key`, `file`, `title`, `object`).
+#
+# Checked by `python3 scripts/lint.py file-names` over non-test code under
+# `crates/`. A table, collection or object name comes from the server: it
+# becomes a `dbflux_core::local_files::SafeFileName` and is placed with
+# `confined_join`, never with a bare `join`. A site listed here must never
+# see a server-provided name.
+#
+# Format: `path:function: reason`, one line per site. `function` is the
+# innermost `fn` around it, so a function with two sites is listed twice.
+# Reasons:
+#   constant       - a fixed name, a uuid or a timestamp
+#   local          - a name the user typed or picked on this machine
+#   own path       - the last component of a path that already exists here
+#   sanitized      - already a SafeFileName or sanitized by the caller
+#   test support   - only used by tests
+
+crates/dbflux/build.rs:main: constant (icon file of the release channel)
+crates/dbflux_aws/src/config.rs:create_backup_for_path: constant (timestamped backup name)
+crates/dbflux_core/src/config/scripts_directory.rs:create_file: local (script name typed by the user)
+crates/dbflux_core/src/config/scripts_directory.rs:create_folder: local (folder name typed by the user)
+crates/dbflux_core/src/config/scripts_directory.rs:rename: local (new name typed by the user)
+crates/dbflux_core/src/config/scripts_directory.rs:move_entry: own path (name of the moved script)
+crates/dbflux_core/src/config/scripts_directory.rs:import: own path (name of the imported local file)
+crates/dbflux_driver_duckdb/src/driver.rs:instance_path: own path (database file the user configured)
+crates/dbflux_driver_mongodb/src/driver.rs:create: constant (uuid name for the combined PEM file)
+crates/dbflux_mcp_server/src/tools/scripts.rs:create_script_impl: sanitized (validate_script_file_name, then ensure_resolves_inside_root)
+crates/dbflux_spreadsheet/src/test_support.rs:fixture: test support
+crates/dbflux_spreadsheet/src/test_support.rs:fixture_path: test support
+crates/dbflux_storage/src/bootstrap.rs:in_memory: constant (unique test runtime directory)
+crates/dbflux_storage/src/paths.rs:dbflux_db_path: constant (database file of the release channel)
+crates/dbflux_transfer/src/export.rs:run_export: sanitized (FileSink::with_file_name takes a SafeFileName)
+crates/dbflux_ui_document/src/spreadsheet/save_as.rs:with_resolved_directory: own path (file name of the path the user chose)
+crates/dbflux_ui_sidebar/src/operations/script_ops.rs:generate_unique_script_name: local (script name typed by the user)
+crates/dbflux_ui_windows/src/connection_manager/export_modal.rs:open_target: sanitized (sanitize_filename of a local profile name)

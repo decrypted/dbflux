@@ -12,11 +12,13 @@ mod facade;
 #[cfg(test)]
 mod isolated_env;
 pub mod keymap_types;
+pub mod local_files;
 pub mod observability;
 pub mod pipeline;
 mod query;
 pub mod release_channel;
 mod schema;
+pub mod spreadsheet_formula;
 mod sql;
 mod storage;
 pub mod values;

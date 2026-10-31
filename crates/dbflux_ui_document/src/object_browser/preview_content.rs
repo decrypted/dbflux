@@ -6,14 +6,18 @@
 //! them once they are allowed.
 
 use crate::buckets_table::format_bytes;
+use crate::data_grid_panel::value_panel::picture::{ImageKind, decode_image};
 use dbflux_core::{DecodeOutcome, DecodedPayload, Encoding, decode_as, detect};
-use gpui::{Image, ImageFormat};
+use gpui::{ImageFormat, RenderImage};
 use std::sync::Arc;
 
 /// How a previewable object is presented.
 ///
-/// SVG rides the `Image` path too: gpui renders it natively, but it skips the
-/// raster validation decode — `dimensions` stays `None` for it.
+/// Only the raster formats the cell image preview decodes are images here,
+/// and they are decoded the same way, within its byte and pixel limits. SVG
+/// is shown as its source: gpui's renderer resolves `<image href>` against
+/// the local filesystem and allocates the canvas an object declares, and an
+/// object's bytes are whatever the bucket's writers chose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewKind {
     Image(ImageFormat),
@@ -283,6 +287,7 @@ fn kind_from_content_type(content_type: Option<&str>) -> Option<PreviewKind> {
                 | "application/x-yaml"
                 | "application/toml"
                 | "application/sql"
+                | "image/svg+xml"
         )
     {
         return Some(PreviewKind::Text);
@@ -298,12 +303,6 @@ fn raster_format_from_mime(content_type: &str) -> Option<ImageFormat> {
         "image/webp" => Some(ImageFormat::Webp),
         "image/gif" => Some(ImageFormat::Gif),
         "image/bmp" | "image/x-ms-bmp" => Some(ImageFormat::Bmp),
-        "image/x-icon" | "image/vnd.microsoft.icon" => Some(ImageFormat::Ico),
-        "image/x-portable-anymap"
-        | "image/x-portable-bitmap"
-        | "image/x-portable-graymap"
-        | "image/x-portable-pixmap" => Some(ImageFormat::Pnm),
-        "image/svg+xml" => Some(ImageFormat::Svg),
         _ => None,
     }
 }
@@ -313,17 +312,14 @@ fn kind_from_extension(key: &str) -> Option<PreviewKind> {
     let extension = name.rsplit_once('.')?.1.to_lowercase();
 
     let kind = match extension.as_str() {
-        "svg" => PreviewKind::Image(ImageFormat::Svg),
         "png" => PreviewKind::Image(ImageFormat::Png),
         "jpg" | "jpeg" => PreviewKind::Image(ImageFormat::Jpeg),
         "webp" => PreviewKind::Image(ImageFormat::Webp),
         "gif" => PreviewKind::Image(ImageFormat::Gif),
         "bmp" => PreviewKind::Image(ImageFormat::Bmp),
-        "ico" => PreviewKind::Image(ImageFormat::Ico),
-        "pnm" | "pbm" | "pgm" | "ppm" => PreviewKind::Image(ImageFormat::Pnm),
         "pdf" => PreviewKind::Pdf,
         "txt" | "text" | "md" | "log" | "json" | "ndjson" | "csv" | "tsv" | "xml" | "yaml"
-        | "yml" | "toml" | "ini" | "sql" | "sh" | "conf" | "env" | "properties" => {
+        | "yml" | "toml" | "ini" | "sql" | "sh" | "conf" | "env" | "properties" | "svg" => {
             PreviewKind::Text
         }
         _ => return None,
@@ -336,23 +332,24 @@ fn kind_from_extension(key: &str) -> Option<PreviewKind> {
 /// the selection changes, so at most one object's bytes are resident.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImagePreview {
-    pub image: Arc<Image>,
-    /// Pixel dimensions from the validation decode; `None` for vector formats.
-    pub dimensions: Option<(u32, u32)>,
+    /// Pixels decoded within the cell preview's limits; gpui draws them as
+    /// they are and never decodes the object's bytes itself.
+    pub image: Arc<RenderImage>,
+    pub(crate) kind: ImageKind,
+    /// Pixel dimensions the image is stored at.
+    pub dimensions: (u32, u32),
     pub byte_len: u64,
 }
 
 impl ImagePreview {
-    /// Meta strip under the image: pixel dimensions (when known), format,
-    /// transferred size.
+    /// Meta strip under the image: pixel dimensions, format, transferred
+    /// size.
     pub fn meta_line(&self) -> String {
-        let format = format_label(self.image.format);
+        let (width, height) = self.dimensions;
+        let format = self.kind.label();
         let size = format_bytes(self.byte_len);
 
-        match self.dimensions {
-            Some((width, height)) => format!("{width} × {height} · {format} · {size}"),
-            None => format!("{format} · {size}"),
-        }
+        format!("{width} × {height} · {format} · {size}")
     }
 }
 
@@ -388,49 +385,23 @@ pub enum PreviewContentState {
     Failed(String),
 }
 
-pub fn format_label(format: ImageFormat) -> &'static str {
-    match format {
-        ImageFormat::Png => "PNG",
-        ImageFormat::Jpeg => "JPEG",
-        ImageFormat::Webp => "WEBP",
-        ImageFormat::Gif => "GIF",
-        ImageFormat::Svg => "SVG",
-        ImageFormat::Bmp => "BMP",
-        ImageFormat::Tiff => "TIFF",
-        ImageFormat::Ico => "ICO",
-        ImageFormat::Pnm => "PNM",
-    }
-}
+/// Decodes an image body the way the cell image preview does: the format
+/// comes from the bytes' magic, never from the content type or the key, and
+/// only PNG, JPEG, GIF, WebP and BMP are decoded, within the same byte,
+/// pixel and allocation limits. Anything else is refused, so a TIFF, EXR or
+/// other rarely fuzzed decoder never sees an object's bytes.
+pub fn decode_preview_image(bytes: &[u8]) -> Result<ImagePreview, String> {
+    let kind = ImageKind::sniff(bytes).ok_or_else(|| {
+        dbflux_i18n::t!("document.object_browser.preview.body.image_unsupported_format")
+    })?;
+    let decoded = decode_image(kind, bytes).map_err(|refusal| refusal.message(kind))?;
 
-/// Fully decodes `bytes` to prove they render and to read their true pixel
-/// size. Header-only probing would accept a truncated body that then fails
-/// silently inside the renderer, leaving an empty preview with no explanation.
-pub fn decode_image_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
-    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|e| crate::labels::image_header_error(&e.to_string()))?;
-
-    let decoded = reader
-        .decode()
-        .map_err(|e| crate::labels::image_decode_error(&e.to_string()))?;
-
-    Ok((decoded.width(), decoded.height()))
-}
-
-/// Sanity check for an SVG body: it must be UTF-8 and actually contain an
-/// `<svg` root. gpui's renderer fails silently at paint time, so an obviously
-/// broken body has to be caught here to reach the decode-failure fallback.
-pub fn validate_svg_body(bytes: &[u8]) -> Result<(), String> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|_| dbflux_i18n::t!("document.object_browser.preview.body.svg_invalid_utf8"))?;
-
-    if text.to_ascii_lowercase().contains("<svg") {
-        Ok(())
-    } else {
-        Err(dbflux_i18n::t!(
-            "document.object_browser.preview.body.svg_missing_root"
-        ))
-    }
+    Ok(ImagePreview {
+        image: decoded.image,
+        kind,
+        dimensions: (decoded.width, decoded.height),
+        byte_len: bytes.len() as u64,
+    })
 }
 
 /// A fetched object body, fully prepared for the preview pane: everything
@@ -469,19 +440,7 @@ pub fn prepare_preview(
     override_choice: Option<EncodingChoice>,
 ) -> PreparedPreview {
     match resolve_body(bytes, content_type, key, max_output_bytes, override_choice) {
-        ResolvedBody::Image(format) => {
-            let dimensions = if format == ImageFormat::Svg {
-                validate_svg_body(bytes).map(|_| None)
-            } else {
-                decode_image_dimensions(bytes).map(Some)
-            };
-
-            PreparedPreview::Image(dimensions.map(|dimensions| ImagePreview {
-                byte_len: bytes.len() as u64,
-                image: Arc::new(Image::from_bytes(format, bytes.to_vec())),
-                dimensions,
-            }))
-        }
+        ResolvedBody::Image(_) => PreparedPreview::Image(decode_preview_image(bytes)),
         ResolvedBody::Text { text, source } => PreparedPreview::Text { text, source },
         ResolvedBody::Pdf => PreparedPreview::Pdf,
         ResolvedBody::Binary => PreparedPreview::Binary,
@@ -501,13 +460,12 @@ pub fn prepare_preview(
 #[cfg(test)]
 mod tests {
     use super::{
-        EncodingChoice, ImagePreview, PreparedPreview, PreviewContentState, PreviewKind,
-        ResolvedBody, TextSource, decode_image_dimensions, decode_label, detect_preview_kind,
-        prepare_preview, resolve_body,
+        EncodingChoice, PreparedPreview, PreviewContentState, PreviewKind, ResolvedBody,
+        TextSource, decode_label, decode_preview_image, detect_preview_kind, prepare_preview,
+        resolve_body,
     };
     use dbflux_core::Encoding;
-    use gpui::{Image, ImageFormat};
-    use std::sync::Arc;
+    use gpui::ImageFormat;
 
     /// T29: a meaningful content type decides the presentation on its own.
     #[test]
@@ -545,8 +503,8 @@ mod tests {
         assert_eq!(detect_preview_kind(None, "logs/app.log"), PreviewKind::Text);
     }
 
-    /// T32: anything unrecognised — including SVG, which the raster decoder
-    /// cannot read — lands on the download/open-externally path.
+    /// T32: anything unrecognised lands on the download/open-externally
+    /// path.
     #[test]
     fn unrecognised_objects_fall_back_to_binary() {
         assert_eq!(
@@ -556,66 +514,84 @@ mod tests {
         assert_eq!(detect_preview_kind(None, "dataset"), PreviewKind::Binary);
     }
 
+    /// An SVG is shown as its source, never rendered: gpui's renderer would
+    /// read the local files its `<image href>` names.
     #[test]
-    fn svg_objects_route_to_the_image_path() {
+    fn svg_objects_are_shown_as_text() {
         assert_eq!(
             detect_preview_kind(Some("image/svg+xml"), "icon.svg"),
-            PreviewKind::Image(ImageFormat::Svg)
+            PreviewKind::Text
         );
-        assert_eq!(
-            detect_preview_kind(None, "logo.SVG"),
-            PreviewKind::Image(ImageFormat::Svg)
-        );
+        assert_eq!(detect_preview_kind(None, "logo.SVG"), PreviewKind::Text);
     }
 
+    /// An SVG that points at a local file must not reach the image renderer,
+    /// whatever its content type or key says.
     #[test]
-    fn svg_body_validation_requires_an_svg_root() {
-        assert_eq!(
-            super::validate_svg_body(b"<svg viewBox=\"0 0 1 1\"/>"),
-            Ok(())
-        );
-        assert!(super::validate_svg_body(b"<html></html>").is_err());
-        assert!(super::validate_svg_body(&[0xFF, 0xFE, 0x00]).is_err());
+    fn an_svg_with_an_external_href_is_never_rendered() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="10" height="10"><image href="/etc/passwd" xlink:href="file:///home/user/.ssh/id_ed25519" width="10" height="10"/></svg>"#;
+
+        for (content_type, key) in [
+            (Some("image/svg+xml"), "x.svg"),
+            (None, "x.svg"),
+            (Some("application/octet-stream"), "x.svg"),
+        ] {
+            match prepare_preview(svg, content_type, key, 1024 * 1024, None) {
+                PreparedPreview::Text { text, source } => {
+                    assert_eq!(source, TextSource::Raw);
+                    assert!(text.contains("/etc/passwd"));
+                }
+                other => panic!("{content_type:?} {key}: {other:?}"),
+            }
+        }
     }
 
-    /// T19: the SVG body-validation refusals route through the catalog
-    /// instead of hardcoding the English prose.
+    /// Only the cell preview's raster formats are decoded; a PNM, ICO or
+    /// TIFF body is not handed to a decoder, even under an image type.
     #[test]
-    fn svg_body_validation_errors_are_translated() {
+    fn unsupported_raster_formats_are_refused() {
+        let pbm = b"P1\n1 1\n1\n".as_slice();
+
         assert_eq!(
-            super::validate_svg_body(&[0xFF, 0xFE, 0x00]).unwrap_err(),
-            dbflux_i18n::t!("document.object_browser.preview.body.svg_invalid_utf8")
+            detect_preview_kind(Some("image/x-portable-bitmap"), "dot.pbm"),
+            PreviewKind::Binary
         );
         assert_eq!(
-            super::validate_svg_body(b"<html></html>").unwrap_err(),
-            dbflux_i18n::t!("document.object_browser.preview.body.svg_missing_root")
+            detect_preview_kind(None, "favicon.ico"),
+            PreviewKind::Binary
         );
+        assert!(!matches!(
+            prepare_preview(pbm, Some("image/x-portable-bitmap"), "dot.pbm", 1024, None),
+            PreparedPreview::Image(_)
+        ));
+
+        let tiff = b"II*\0\x08\0\0\0".as_slice();
+        match prepare_preview(tiff, Some("image/png"), "fake.png", 1024, None) {
+            PreparedPreview::Image(Err(message)) => assert_eq!(
+                message,
+                dbflux_i18n::t!("document.object_browser.preview.body.image_unsupported_format")
+            ),
+            other => panic!("a TIFF labelled as PNG must be refused: {other:?}"),
+        }
+    }
+
+    /// The pixel cap of the cell preview applies: a tiny PNG header that
+    /// declares a huge canvas is refused before any pixel is decoded.
+    #[test]
+    fn oversized_images_are_refused_from_the_header() {
+        let mut png = one_by_one_png();
+        // IHDR width and height (bytes 16..24) set to 100000 x 100000.
+        png[16..20].copy_from_slice(&100_000u32.to_be_bytes());
+        png[20..24].copy_from_slice(&100_000u32.to_be_bytes());
+
+        assert!(decode_preview_image(&png).is_err());
     }
 
     /// T29: garbage bytes are rejected by the decode probe instead of reaching
     /// the renderer as an empty image.
     #[test]
     fn decode_rejects_bytes_that_are_not_an_image() {
-        assert!(decode_image_dimensions(b"not an image at all").is_err());
-    }
-
-    /// T19: garbage bytes with a guessable-but-wrong header fail the decode
-    /// step, and the resulting error routes through the translated
-    /// `image_decode_error` helper rather than a hardcoded English prefix,
-    /// with the underlying decoder cause interpolated verbatim.
-    #[test]
-    fn decode_failure_is_translated() {
-        let bytes: &[u8] = b"not an image at all";
-        let underlying = image::ImageReader::new(std::io::Cursor::new(bytes))
-            .with_guessed_format()
-            .expect("heuristic format guess still succeeds on this input")
-            .decode()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-            .unwrap_err();
-
-        let message = decode_image_dimensions(bytes).unwrap_err();
-        assert_eq!(message, crate::labels::image_decode_error(&underlying));
+        assert!(decode_preview_image(b"not an image at all").is_err());
     }
 
     /// T29: a real image reports its pixel size, which the meta strip shows
@@ -624,14 +600,9 @@ mod tests {
     fn decode_reports_dimensions_for_a_real_image() {
         let png = one_by_one_png();
 
-        assert_eq!(decode_image_dimensions(&png), Ok((1, 1)));
+        let preview = decode_preview_image(&png).expect("a 1x1 PNG decodes");
 
-        let preview = ImagePreview {
-            byte_len: png.len() as u64,
-            image: Arc::new(Image::from_bytes(ImageFormat::Png, png)),
-            dimensions: Some((1, 1)),
-        };
-
+        assert_eq!(preview.dimensions, (1, 1));
         assert!(preview.meta_line().starts_with("1 × 1 · PNG · "));
     }
 
@@ -873,7 +844,7 @@ mod tests {
 
         match prepare_preview(&png, None, "logo.png", 1024, None) {
             PreparedPreview::Image(Ok(preview)) => {
-                assert_eq!(preview.dimensions, Some((1, 1)));
+                assert_eq!(preview.dimensions, (1, 1));
             }
             other => panic!("unexpected outcome: {other:?}"),
         }

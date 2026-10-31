@@ -510,11 +510,11 @@ impl super::KeyValueDocument {
         };
 
         let keyspace = self.keyspace_index();
-        let suggested_name = format!(
+        let suggested_name = dbflux_core::local_files::SafeFileName::new(&format!(
             "{}-keys.jsonl",
             self.database
                 .replace(|character: char| !character.is_alphanumeric(), "-")
-        );
+        ));
         let save_target_override = self.app_state.read(cx).save_target_override();
         let entity = cx.entity().clone();
 
@@ -531,7 +531,7 @@ impl super::KeyValueDocument {
                         .set_title(dbflux_i18n::t!(
                             "document.key_value.bulk_delete.export_dialog_title"
                         ))
-                        .set_file_name(&suggested_name)
+                        .set_file_name(suggested_name.as_str())
                         .add_filter("JSON Lines", &["jsonl"])
                         .save_file()
                         .await

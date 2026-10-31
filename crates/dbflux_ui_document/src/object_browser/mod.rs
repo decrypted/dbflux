@@ -1246,11 +1246,9 @@ mod tests {
 
     fn image_preview() -> PreviewContentState {
         PreviewContentState::Image(Box::new(ImagePreview {
-            image: std::sync::Arc::new(gpui::Image::from_bytes(
-                gpui::ImageFormat::Png,
-                vec![1, 2, 3],
-            )),
-            dimensions: Some((640, 480)),
+            image: std::sync::Arc::new(gpui::RenderImage::new(Vec::new())),
+            kind: crate::data_grid_panel::value_panel::picture::ImageKind::Png,
+            dimensions: (640, 480),
             byte_len: 3,
         }))
     }

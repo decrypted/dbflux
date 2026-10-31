@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 
+use dbflux_core::local_files::{SafeFileName, confined_join};
 use dbflux_core::{ColumnKind, ColumnMeta, TransferColumn, Value};
 use dbflux_export::{CsvOptions, CsvStreamWriter, JsonStreamWriter};
 
@@ -57,16 +58,16 @@ enum StreamWriter {
     Json(JsonStreamWriter<BufWriter<File>>),
 }
 
-/// Writes one table's rows to `<dir>/<schema>.<table>.<ext>`.
+/// Writes one table's rows to `<dir>/<schema>.<table>.<ext>`, with the
+/// name sanitized: schema and table names come from the server.
 ///
 /// `begin()`'s `mode: TableMappingMode` parameter is part of the shared
 /// `RowSink` trait but has no meaning for a file target — a file is always
 /// (re)created fresh, so it is ignored here.
 pub struct FileSink {
     dir: PathBuf,
-    schema: Option<String>,
-    table: String,
     format: FileFormat,
+    file_name: SafeFileName,
     /// Set by [`FileSink::to_file`]; overrides the `schema.table.ext` name.
     target_path: Option<PathBuf>,
     columns: Vec<ColumnMeta>,
@@ -86,11 +87,13 @@ impl FileSink {
         table: impl Into<String>,
         format: FileFormat,
     ) -> Self {
+        let table: String = table.into();
+        let file_name = default_file_name(schema.as_deref(), &table, format);
+
         Self {
             dir: dir.into(),
-            schema,
-            table: table.into(),
             format,
+            file_name,
             target_path: None,
             columns: Vec::new(),
             writer: None,
@@ -131,22 +134,41 @@ impl FileSink {
         self
     }
 
-    /// The `schema.table.ext` file name this sink writes, matching the name
-    /// recorded in the export folder's `manifest.json`.
-    pub fn file_name(&self) -> String {
-        match &self.schema {
-            Some(schema) => format!("{schema}.{}.{}", self.table, self.format.extension()),
-            None => format!("{}.{}", self.table, self.format.extension()),
-        }
+    /// Writes to `file_name` inside the folder instead of the default
+    /// name, so an export can give two tables whose names sanitize alike
+    /// different files.
+    pub fn with_file_name(mut self, file_name: SafeFileName) -> Self {
+        self.file_name = file_name;
+        self
     }
 
-    fn path(&self) -> PathBuf {
+    /// The file name this sink writes, matching the name recorded in the
+    /// export folder's `manifest.json`.
+    pub fn file_name(&self) -> &SafeFileName {
+        &self.file_name
+    }
+
+    fn path(&self) -> Result<PathBuf, TransferError> {
         if let Some(path) = &self.target_path {
-            return path.clone();
+            return Ok(path.clone());
         }
 
-        self.dir.join(self.file_name())
+        confined_join(&self.dir, &self.file_name).map_err(|e| TransferError::Sink(e.to_string()))
     }
+}
+
+/// `schema.table.ext`, sanitized: an absolute or `..` name from the server
+/// would otherwise make `Path::join` write outside the export folder.
+pub(crate) fn default_file_name(
+    schema: Option<&str>,
+    table: &str,
+    format: FileFormat,
+) -> SafeFileName {
+    let raw = match schema {
+        Some(schema) => format!("{schema}.{table}.{}", format.extension()),
+        None => format!("{table}.{}", format.extension()),
+    };
+    SafeFileName::new(&raw)
 }
 
 /// A whole-document row as the columns and values of its own fields, so a
@@ -190,7 +212,7 @@ impl RowSink for FileSink {
     ) -> Result<(), TransferError> {
         self.columns = columns.iter().map(to_column_meta).collect();
 
-        let path = self.path();
+        let path = self.path()?;
         let file = File::create(&path)
             .map_err(|e| TransferError::Sink(format!("{}: {e}", path.display())))?;
         let writer = BufWriter::new(file);
@@ -317,6 +339,7 @@ mod tests {
         let mut sink = FileSink::to_file(&path, FileFormat::Csv).with_csv_options(CsvOptions {
             include_header: false,
             delimiter: dbflux_export::CsvDelimiter::Tab,
+            protect_formulas: false,
         });
 
         sink.begin(&columns, TableMappingMode::Existing).unwrap();
@@ -354,10 +377,44 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A schema or table name from the server is not a path: an absolute
+    /// or `..` name must still land inside the export folder.
+    #[test]
+    fn server_names_with_paths_stay_inside_the_folder() {
+        let dir = temp_dir("malicious_names");
+        let outside = temp_dir("malicious_names_outside");
+        let table = format!("{}/settings", outside.display());
+        let mut sink = FileSink::new(&dir, None, table, FileFormat::Json);
+
+        sink.begin(&[column("id")], TableMappingMode::Existing)
+            .unwrap();
+        sink.write_chunk(&RowChunk(vec![vec![Value::Int(1)]]))
+            .unwrap();
+        sink.finish().unwrap();
+
+        assert!(
+            !outside.join("settings.json").exists(),
+            "an absolute table name must not write outside the export folder"
+        );
+        let written: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            written,
+            vec![std::ffi::OsString::from(sink.file_name().as_str())]
+        );
+        assert!(!sink.file_name().contains('/'));
+        assert!(!sink.file_name().contains(".."));
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
     #[test]
     fn file_name_omits_schema_when_none() {
         let sink = FileSink::new("/tmp/whatever", None, "orders", FileFormat::Csv);
-        assert_eq!(sink.file_name(), "orders.csv");
+        assert_eq!(sink.file_name().as_str(), "orders.csv");
     }
 
     #[test]
@@ -382,7 +439,7 @@ mod tests {
             "orders",
             FileFormat::Json,
         );
-        assert_eq!(sink.file_name(), "public.orders.json");
+        assert_eq!(sink.file_name().as_str(), "public.orders.json");
     }
 
     #[test]

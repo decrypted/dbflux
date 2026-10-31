@@ -1943,6 +1943,7 @@ document:
           columns: "Colunas"
           header: "Incluir linha de cabeçalho (nomes das colunas)"
           delimiter: "Separador"
+          protect_formulas: "Proteger contra fórmulas de planilha"
           rows_selected: "Selecionadas"
           rows_loaded: "Carregadas"
           rows_all: "Todas"
@@ -3233,14 +3234,11 @@ document:
         encoding_auto: Auto
         encoding_raw: Raw
         fit_to_width: Ajustar à largura
-        image_decode_error: "Não foi possível decodificar a imagem: %{error}"
-        image_header_error: "Não foi possível ler o cabeçalho da imagem: %{error}"
+        image_unsupported_format: "Só imagens PNG, JPEG, GIF, WebP e BMP são pré-visualizadas. Baixe este objeto ou abra-o no visualizador do sistema."
         interpret_as: "Interpretar como:"
         load_anyway: Carregar mesmo assim
         loading: "Carregando pré-visualização…"
         loading_metadata: "Carregando metadados…"
-        svg_invalid_utf8: "Este objeto não é UTF-8 válido, então não pode ser um SVG."
-        svg_missing_root: "Este objeto não contém um elemento raiz <svg>."
         unpreviewable:
           generic: "Este tipo de arquivo não tem pré-visualização no app. Baixe este objeto ou abra-o no visualizador do sistema."
           pdf: "PDFs não são renderizados no app. Baixe este objeto ou abra-o no visualizador do sistema."
@@ -4331,6 +4329,9 @@ settings:
     grid_copy_column_names:
       label: "Incluir os nomes das colunas ao copiar"
       hint: "Copiar (Ctrl+C, Cmd+C no macOS) na grade de dados começa o texto separado por tabulações com uma linha de nomes de colunas. Copiar como CSV, JSON e as outras entradas Copiar como não mudam."
+    grid_copy_protect_formulas:
+      label: "Proteger as células copiadas contra fórmulas de planilha"
+      hint: "Copiar (Ctrl+C, Cmd+C no macOS) e Copiar como CSV colocam um ' antes de uma célula que começa com =, +, -, @, uma tabulação ou um retorno de carro, para que a planilha onde você cola a mostre como texto em vez de executá-la como fórmula. Números não mudam. Desligado: as células são copiadas exatamente."
     grid_header_click_sorts:
       label: "Clicar no cabeçalho de uma coluna a ordena"
       hint: "Desligado: um clique no cabeçalho de uma coluna seleciona a coluna inteira e a seta na borda direita ordena. Ligado: o clique ordena a coluna; Shift+clique e Ctrl+clique continuam selecionando colunas."

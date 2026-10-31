@@ -562,11 +562,12 @@ impl ExportBundleModal {
             .map(ExportTarget::kind_label)
             .unwrap_or("bundle");
 
-        let file_name = if self.default_file_name.is_empty() {
-            format!("{}.toml", kind_label.replace(' ', "-"))
-        } else {
-            self.default_file_name.clone()
-        };
+        let file_name =
+            dbflux_core::local_files::SafeFileName::new(&if self.default_file_name.is_empty() {
+                format!("{}.toml", kind_label.replace(' ', "-"))
+            } else {
+                self.default_file_name.clone()
+            });
 
         let display_kind = self
             .target
@@ -591,7 +592,7 @@ impl ExportBundleModal {
                         .set_title(title)
                         .add_filter(&toml_filter_label, &["toml"])
                         .add_filter(&all_files_filter_label, &["*"])
-                        .set_file_name(&file_name)
+                        .set_file_name(file_name.as_str())
                         .save_file()
                         .await
                         .map(|handle| handle.path().to_path_buf())

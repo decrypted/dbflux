@@ -11,6 +11,7 @@ Usage:
     scripts/lint.py clippy [extra cargo arguments...]
     scripts/lint.py mouse-down
     scripts/lint.py unquoted-sql
+    scripts/lint.py file-names
 
 Arguments given to `clippy` are passed to cargo verbatim before `--`, for
 example `--locked --features "sqlite,postgres"` or `--tests`.
@@ -28,6 +29,14 @@ is listed in `scripts/unquoted_sql_allowlist.txt`. Names and values in SQL go
 through the dialect's quoting helper; a hand-written pair of quotes around a
 placeholder is how a server-provided name that contains the quote character
 ends up running as SQL.
+
+`file-names` fails on every `Path::join`, `with_file_name` or `set_file_name`
+call in non-test code under `crates/` whose argument is a variable or field
+called like a name (`name`, `table`, `schema`, `key`, `file`, `title`,
+`object`), unless the site is listed in `scripts/file_name_allowlist.txt`. A
+table, collection or object name comes from the server, and `join` with an
+absolute or `..` name writes outside the directory; such names become
+`dbflux_core::local_files::SafeFileName` and are placed with `confined_join`.
 """
 
 import argparse
@@ -41,6 +50,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MOUSE_DOWN_ALLOWLIST = ROOT / "scripts" / "mouse_down_allowlist.txt"
 UNQUOTED_SQL_ALLOWLIST = ROOT / "scripts" / "unquoted_sql_allowlist.txt"
+FILE_NAME_ALLOWLIST = ROOT / "scripts" / "file_name_allowlist.txt"
+FILE_NAME_EXEMPT = ("crates/dbflux_core/src/local_files/",)
+NAME_TO_PATH = re.compile(
+    r"\.(?:join|with_file_name|set_file_name)\(\s*&?(?:[A-Za-z_][\w.]*\.)?\w*"
+    r"(?:name|table|schema|key|file|title|object)\w*(?:\(\))?\s*\)"
+)
 UNQUOTED_SQL_SOURCES = ("crates/dbflux_driver_*/src/**/*.rs", "crates/dbflux_core/src/**/*.rs")
 FORMAT_MACRO_CALL = re.compile(r"\b(?:format|write|writeln|format_args)!\s*\(\s*(?:[^,()\"]+,\s*)?$")
 SQL_KEYWORD = re.compile(
@@ -421,6 +436,55 @@ def check_unquoted_sql() -> int:
     return 0
 
 
+def file_name_sites(root: Path = ROOT) -> list[tuple[str, str, int]]:
+    """Find every non-test path built from a name-like value as (path, function, line)."""
+    sites = []
+
+    for path in sorted((root / "crates").rglob("*.rs")):
+        if is_test_path(path, root):
+            continue
+
+        relative = path.relative_to(root).as_posix()
+        if relative.startswith(FILE_NAME_EXEMPT):
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        lines = text.split("\n")
+        excluded = test_module_lines(lines)
+
+        for match in NAME_TO_PATH.finditer(text):
+            line_index = text.count("\n", 0, match.start())
+            if line_index in excluded:
+                continue
+
+            sites.append((relative, enclosing_function(lines, line_index), line_index + 1))
+
+    return sites
+
+
+def check_file_names() -> int:
+    """Fail on paths built from unlisted name-like values, and on stale allowlist entries."""
+    allowed = read_allowlist(FILE_NAME_ALLOWLIST)
+    if allowed is None:
+        return 1
+
+    sites = file_name_sites()
+    errors = allowlist_errors(
+        sites,
+        allowed,
+        "path built from a name; make a server-provided name a SafeFileName and place it "
+        "with confined_join, or allowlist a name that never comes from a server",
+    )
+
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        print(f"file-names: {len(errors)} problem(s), {len(sites)} site(s) found", file=sys.stderr)
+        return 1
+
+    print(f"file-names: {len(sites)} allowlisted site(s), no unlisted paths built from names")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run rustfmt, clippy, or static checks on first-party crates only (never vendor/)."
@@ -446,9 +510,14 @@ def main() -> int:
         help="Fail on self-quoted SQL placeholders missing from scripts/unquoted_sql_allowlist.txt",
     )
 
+    subcommands.add_parser(
+        "file-names",
+        help="Fail on paths built from names missing from scripts/file_name_allowlist.txt",
+    )
+
     arguments, extra = parser.parse_known_args()
 
-    if arguments.command in ("fmt", "mouse-down", "unquoted-sql") and extra:
+    if arguments.command in ("fmt", "mouse-down", "unquoted-sql", "file-names") and extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
     if arguments.command == "mouse-down":
@@ -456,6 +525,9 @@ def main() -> int:
 
     if arguments.command == "unquoted-sql":
         return check_unquoted_sql()
+
+    if arguments.command == "file-names":
+        return check_file_names()
 
     packages = package_arguments(first_party_packages())
 

@@ -1943,6 +1943,7 @@ document:
           columns: "Columnas"
           header: "Incluir fila de encabezado (nombres de columna)"
           delimiter: "Separador"
+          protect_formulas: "Proteger contra fórmulas de hojas de cálculo"
           rows_selected: "Seleccionadas"
           rows_loaded: "Cargadas"
           rows_all: "Todas"
@@ -3233,14 +3234,11 @@ document:
         encoding_auto: Automático
         encoding_raw: Raw
         fit_to_width: Ajustar al ancho
-        image_decode_error: "No se pudo decodificar la imagen: %{error}"
-        image_header_error: "No se pudo leer el encabezado de la imagen: %{error}"
+        image_unsupported_format: "Solo se previsualizan imágenes PNG, JPEG, GIF, WebP y BMP. Descarga este objeto o ábrelo en tu visor del sistema."
         interpret_as: "Interpretar como:"
         load_anyway: Cargar de todas formas
         loading: "Cargando vista previa…"
         loading_metadata: "Cargando metadatos…"
-        svg_invalid_utf8: "Este objeto no es UTF-8 válido, por lo que no puede ser un SVG."
-        svg_missing_root: "Este objeto no contiene un elemento raíz <svg>."
         unpreviewable:
           generic: "Este tipo de archivo no tiene vista previa en la aplicación. Descarga este objeto o ábrelo en tu visor del sistema."
           pdf: "Los PDF no se renderizan en la aplicación. Descarga este objeto o ábrelo en tu visor del sistema."
@@ -4331,6 +4329,9 @@ settings:
     grid_copy_column_names:
       label: "Incluir los nombres de columna al copiar"
       hint: "Copiar (Ctrl+C, Cmd+C en macOS) en la cuadrícula de datos empieza el texto separado por tabulaciones con una línea de nombres de columna. Copiar como CSV, JSON y las demás entradas Copiar como no cambian."
+    grid_copy_protect_formulas:
+      label: "Proteger las celdas copiadas contra fórmulas de hojas de cálculo"
+      hint: "Copiar (Ctrl+C, Cmd+C en macOS) y Copiar como CSV ponen un ' delante de una celda que empieza por =, +, -, @, un tabulador o un retorno de carro, para que la hoja de cálculo donde pegas la muestre como texto en lugar de ejecutarla como fórmula. Los números no cambian. Desactivado: las celdas se copian tal cual."
     grid_header_click_sorts:
       label: "Hacer clic en la cabecera de una columna la ordena"
       hint: "Desactivado: un clic en la cabecera de una columna selecciona la columna entera y la flecha de su borde derecho ordena. Activado: el clic ordena la columna; Shift+clic y Ctrl+clic siguen seleccionando columnas."

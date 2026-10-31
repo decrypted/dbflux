@@ -259,12 +259,12 @@ impl DataGridPanel {
         column: &str,
         cx: &mut Context<Self>,
     ) {
-        let suggested_name = format!(
+        let suggested_name = dbflux_core::local_files::SafeFileName::new(&format!(
             "{}_{}.{}",
             self.export_base_name(),
             file_name_part(column),
             kind.extension()
-        );
+        ));
         let format_name = format!("Image ({})", kind.label());
         let extension = kind.extension();
         let entity = cx.entity().clone();
@@ -282,7 +282,7 @@ impl DataGridPanel {
                 async {
                     rfd::AsyncFileDialog::new()
                         .set_title(dbflux_i18n::t!("components.value_panel.image.save_title"))
-                        .set_file_name(&suggested_name)
+                        .set_file_name(suggested_name.as_str())
                         .add_filter(kind.label(), &[extension])
                         .save_file()
                         .await

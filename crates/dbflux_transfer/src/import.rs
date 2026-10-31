@@ -23,6 +23,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use dbflux_core::local_files::confined_existing_file;
 use dbflux_core::{CancelToken, Connection, TransferColumn};
 
 use crate::column_map::{AutoColumnMap, ColumnMappingOverride};
@@ -205,8 +206,18 @@ fn import_one_table(
         ))
     })?;
 
+    // A bundle can come from anyone: its `file` entries must name files
+    // inside it, or a crafted manifest imports any local file the user can
+    // read into the target database.
+    let data_file = confined_existing_file(manifest_dir, &manifest_table.file).map_err(|e| {
+        TransferError::Source(format!(
+            "manifest table '{}' file '{}': {e}",
+            manifest_table.name, manifest_table.file
+        ))
+    })?;
+
     let mut source = FileSource::open(
-        &manifest_dir.join(&manifest_table.file),
+        &data_file,
         format,
         manifest_table.columns.clone(),
         options.segment_size,
@@ -736,6 +747,64 @@ mod tests {
             TableTransferStatus::Completed { rows: 2 }
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A shared bundle's manifest names its data files; one pointing out of
+    /// the bundle (an absolute path, `..`, or a link) must fail that table
+    /// without reading the file or writing a row.
+    #[test]
+    fn manifest_files_outside_the_bundle_are_refused() {
+        let outside = temp_dir("outside_bundle");
+        let secret = outside.join("credentials.csv");
+        std::fs::write(&secret, "id\n41\n42\n").unwrap();
+        let absolute = secret.to_string_lossy().into_owned();
+
+        let outside_name = outside.file_name().unwrap().to_string_lossy().into_owned();
+        let mut names = vec![absolute, format!("../{outside_name}/credentials.csv")];
+        if cfg!(unix) {
+            names.push("linked.csv".to_string());
+        }
+
+        for (index, file) in names.into_iter().enumerate() {
+            let dir = temp_dir(&format!("escape_{index}"));
+            write_bundle(&dir, "users", "id\n1\n2\n");
+            #[cfg(unix)]
+            if file == "linked.csv" {
+                std::os::unix::fs::symlink(&secret, dir.join("linked.csv")).unwrap();
+            }
+            let manifest_path = dir.join("manifest.json");
+            let mut manifest: TransferManifest =
+                serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+            manifest.tables[0].file = file.clone();
+            std::fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+
+            let fake = Arc::new(FakeConnection::new(vec![existing_column_info()]));
+            let connection: Arc<dyn Connection> = fake.clone();
+            let plans = vec![existing_plan("users")];
+
+            let outcome = run_import(
+                &connection,
+                &dir,
+                &plans,
+                &default_options("main"),
+                &CancelToken::new(),
+                |_, _, _| {},
+            )
+            .unwrap();
+
+            assert!(
+                matches!(outcome.tables[0].status, TableTransferStatus::Failed { .. }),
+                "{file}: {:?}",
+                outcome.tables[0].status
+            );
+            assert!(
+                fake.executed_sql.lock().unwrap().is_empty(),
+                "{file}: rows from outside the bundle reached the database"
+            );
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        std::fs::remove_dir_all(&outside).ok();
     }
 
     /// R4-002/B-007 regression: a plan referencing an unknown manifest table

@@ -44,6 +44,7 @@ pub(super) enum GeneralFormRow {
     GridPkSortDesc,
     GridReviewBeforeSave,
     GridCopyColumnNames,
+    GridCopyProtectFormulas,
     GridHeaderClickSorts,
     GridFilterAutoquote,
     RestoreSession,
@@ -2011,6 +2012,10 @@ mod tests {
             (
                 "grid-copy-column-names",
                 "settings.general.grid_copy_column_names.label",
+            ),
+            (
+                "grid-copy-protect-formulas",
+                "settings.general.grid_copy_protect_formulas.label",
             ),
             (
                 "grid-header-click-sorts",

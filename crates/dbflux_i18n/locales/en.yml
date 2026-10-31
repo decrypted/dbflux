@@ -1943,6 +1943,7 @@ document:
           columns: "Columns"
           header: "Include header row (column names)"
           delimiter: "Delimiter"
+          protect_formulas: "Protect against spreadsheet formulas"
           rows_selected: "Selected"
           rows_loaded: "Loaded"
           rows_all: "All"
@@ -3233,14 +3234,11 @@ document:
         encoding_auto: Auto
         encoding_raw: Raw
         fit_to_width: Fit to width
-        image_decode_error: "Could not decode the image: %{error}"
-        image_header_error: "Could not read the image header: %{error}"
+        image_unsupported_format: "Only PNG, JPEG, GIF, WebP and BMP images are previewed. Download this object or open it in your system viewer."
         interpret_as: "Interpret as:"
         load_anyway: Load anyway
         loading: "Loading preview…"
         loading_metadata: "Loading metadata…"
-        svg_invalid_utf8: "This object is not valid UTF-8, so it cannot be an SVG."
-        svg_missing_root: "This object does not contain an <svg> root element."
         unpreviewable:
           generic: "This file type has no in-app preview. Download this object or open it in your system viewer."
           pdf: "PDFs are not rendered in-app. Download this object or open it in your system viewer."
@@ -4331,6 +4329,9 @@ settings:
     grid_copy_column_names:
       label: "Include column names when copying"
       hint: "Copy (Ctrl+C, Cmd+C on macOS) from the data grid starts the tab-separated text with a line of column names. Copy as CSV, JSON and the other Copy as entries are not affected."
+    grid_copy_protect_formulas:
+      label: "Protect copied cells against spreadsheet formulas"
+      hint: "Copy (Ctrl+C, Cmd+C on macOS) and Copy as CSV put a ' before a cell that starts with =, +, -, @, a tab or a carriage return, so a spreadsheet you paste into shows it as text instead of running it as a formula. Numbers are not changed. Off: cells are copied exactly."
     grid_header_click_sorts:
       label: "Clicking a column header sorts the column"
       hint: "Off: a click on a column header selects the whole column and the arrow at its right edge sorts. On: the click sorts the column; Shift+click and Ctrl+click still select columns."

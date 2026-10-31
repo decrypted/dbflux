@@ -9,6 +9,7 @@ use super::ObjectBrowserDocument;
 use super::preview_content::PreviewContentState;
 use crate::buckets_table::format_bytes;
 use dbflux_core::DbError;
+use dbflux_core::local_files::SafeFileName;
 use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use dbflux_ui_base::{file_dialog, open_external};
@@ -69,7 +70,10 @@ impl TransferError {
 }
 
 /// Last path segment of a key, used as the suggested local file name.
-pub(super) fn object_file_name(key: &str) -> String {
+///
+/// Only `/` delimits an S3 key, so the segment can still hold `\` (a
+/// separator on Windows), `..` or control characters: it is sanitized.
+pub(super) fn object_file_name(key: &str) -> SafeFileName {
     let name = key
         .trim_end_matches('/')
         .rsplit_once('/')
@@ -77,11 +81,7 @@ pub(super) fn object_file_name(key: &str) -> String {
         .unwrap_or(key)
         .trim();
 
-    if name.is_empty() {
-        "object".to_string()
-    } else {
-        name.to_string()
-    }
+    SafeFileName::new(if name.is_empty() { "object" } else { name })
 }
 
 impl ObjectBrowserDocument {
@@ -142,22 +142,24 @@ impl ObjectBrowserDocument {
                         }
                     }
                 }
-                TransferPurpose::OpenExternally => match open_external::external_open_dir() {
-                    Ok(dir) => file_dialog::unique_path_in(&dir, &suggested_name),
-                    Err(message) => {
-                        let error = TransferError::Local(message);
-                        record_transfer_audit(
-                            &audit_service,
-                            purpose,
-                            profile_id,
-                            &bucket,
-                            &key,
-                            Some(&error.message()),
-                        );
-                        report_error_async(error.to_user_facing(), cx);
-                        return;
+                TransferPurpose::OpenExternally => {
+                    match open_external::create_external_open_file(&suggested_name) {
+                        Ok(path) => path,
+                        Err(message) => {
+                            let error = TransferError::Local(message);
+                            record_transfer_audit(
+                                &audit_service,
+                                purpose,
+                                profile_id,
+                                &bucket,
+                                &key,
+                                Some(&error.message()),
+                            );
+                            report_error_async(error.to_user_facing(), cx);
+                            return;
+                        }
                     }
-                },
+                }
             };
 
             let transfer = cx
@@ -227,7 +229,7 @@ impl ObjectBrowserDocument {
 /// working picker at all.
 async fn choose_download_path(
     provider: Option<dbflux_ui_base::SaveTargetProvider>,
-    suggested_name: &str,
+    suggested_name: &SafeFileName,
 ) -> Result<Option<PathBuf>, String> {
     let title = dbflux_i18n::t!("document.object_browser.transfer.dialog_title");
     let all_files_filter =
@@ -243,7 +245,7 @@ async fn choose_download_path(
         async {
             let handle = rfd::AsyncFileDialog::new()
                 .set_title(title)
-                .set_file_name(suggested_name)
+                .set_file_name(suggested_name.as_str())
                 .add_filter(&all_files_filter, &["*"])
                 .save_file()
                 .await;
@@ -333,9 +335,22 @@ mod tests {
     /// T32: the suggested local name is the object's leaf, never the full key.
     #[test]
     fn local_file_name_is_the_key_leaf() {
-        assert_eq!(object_file_name("reports/2026/q1.pdf"), "q1.pdf");
-        assert_eq!(object_file_name("q1.pdf"), "q1.pdf");
-        assert_eq!(object_file_name(""), "object");
+        assert_eq!(object_file_name("reports/2026/q1.pdf").as_str(), "q1.pdf");
+        assert_eq!(object_file_name("q1.pdf").as_str(), "q1.pdf");
+        assert_eq!(object_file_name("").as_str(), "object");
+    }
+
+    /// A key's leaf can hold `\`, which Windows treats as a separator, and
+    /// names that are not files at all; none of it may reach the path.
+    #[test]
+    fn local_file_name_has_no_separators_or_parent_steps() {
+        assert_eq!(
+            object_file_name("drop/..\\..\\AppData\\evil.bat").as_str(),
+            "_._AppData_evil.bat"
+        );
+        assert_eq!(object_file_name("a/..").as_str(), "unnamed");
+        assert_eq!(object_file_name("logs/.bashrc").as_str(), "bashrc");
+        assert_eq!(object_file_name("x/nul.txt").as_str(), "_nul.txt");
     }
 
     /// T32: successes and failures are distinguishable in the audit log.

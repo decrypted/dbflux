@@ -1,6 +1,7 @@
 use super::*;
 use dbflux_components::components::data_table::ContextMenuAction;
 use dbflux_core::{Connection as _, Value};
+use dbflux_export::ExportFormat;
 
 fn people_result() -> QueryResult {
     QueryResult::table(
@@ -154,6 +155,63 @@ fn plain_copy_adds_column_names_when_the_setting_is_on(cx: &mut TestAppContext) 
         });
     });
     assert_eq!(copy(window), "name\nO'Brien\nAnn\nO'Brien");
+}
+
+/// With Protect copied cells against spreadsheet formulas on, Ctrl+C and
+/// Copy as CSV put a `'` before a text cell a spreadsheet would run; off,
+/// they copy the cell as it is.
+#[gpui::test]
+fn copies_guard_formulas_only_when_the_setting_is_on(cx: &mut TestAppContext) {
+    let result = QueryResult::table(
+        vec![key_column("id", true), key_column("note", false)],
+        vec![
+            vec![Value::Int(-1), Value::Text("=HYPERLINK(\"x\")".to_string())],
+            vec![Value::Int(2), Value::Text("@SUM(A1)".to_string())],
+        ],
+        None,
+        Duration::ZERO,
+    );
+    let (panel, app_state, window) = query_result_panel_of(cx, result);
+    select_columns(&panel, window, 0, 1);
+
+    let plain_copy = |window: &mut VisualTestContext| {
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.sync_copy_column_names(cx));
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .as_ref()
+                .expect("table state")
+                .read(app)
+                .copy_selection()
+                .unwrap_or_default()
+        })
+    };
+    let csv_copy = |window: &mut VisualTestContext| {
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.copy_selection_with_format(ExportFormat::Csv, window, cx)
+            });
+        });
+        clipboard_text(window)
+    };
+
+    assert_eq!(plain_copy(window), "-1\t=HYPERLINK(\"x\")\n2\t@SUM(A1)");
+    assert!(csv_copy(window).contains("\n2,@SUM(A1)"));
+
+    window.update(|_, app| {
+        app_state.update(app, |state, _| {
+            let mut settings = state.general_settings().clone();
+            settings.grid_copy_protect_formulas = true;
+            state.update_general_settings(settings);
+        });
+    });
+
+    assert_eq!(plain_copy(window), "-1\t'=HYPERLINK(\"x\")\n2\t'@SUM(A1)");
+    let csv = csv_copy(window);
+    assert!(csv.contains("-1,"), "numbers stay numbers: {csv}");
+    assert!(csv.contains("\n2,'@SUM(A1)"), "{csv}");
 }
 
 /// A query result has no table to insert into, so the menu offers the IN

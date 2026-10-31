@@ -1440,26 +1440,6 @@ pub(crate) fn object_browser_versions_count_label(count: usize) -> String {
     }
 }
 
-/// Error shown in the preview pane when a fetched image's bytes fail the
-/// header-guess probe before any decode is attempted. `cause` is the
-/// underlying decoder error and is interpolated verbatim, never translated.
-pub(crate) fn image_header_error(cause: &str) -> String {
-    dbflux_i18n::t!(
-        "document.object_browser.preview.body.image_header_error",
-        error = cause
-    )
-}
-
-/// Error shown in the preview pane when a fetched image's bytes have a
-/// recognised header but fail to fully decode. `cause` is the underlying
-/// decoder error and is interpolated verbatim, never translated.
-pub(crate) fn image_decode_error(cause: &str) -> String {
-    dbflux_i18n::t!(
-        "document.object_browser.preview.body.image_decode_error",
-        error = cause
-    )
-}
-
 /// Segment label for a [`crate::object_browser::PresignMethodChoice`].
 /// Exhaustive by construction so a new method fails this crate's build until
 /// its catalog key is added here.
@@ -4028,23 +4008,22 @@ mod tests {
         error_with_detail_clipboard, execution_count_state_label, execution_mode_label,
         export_running_position_label, export_running_rows_label, export_summary_label,
         export_table_status_line, export_wizard_task_label, export_wizard_title, history_tab_label,
-        image_decode_error, image_header_error, import_mapping_mode_label, import_rail_labels,
-        import_summary_label, import_table_status_line, import_wizard_task_label,
-        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
-        live_output_truncated_label, metric_picker_custom_dropdown_label,
-        metric_picker_dimensions_error_label, metric_picker_period_error_label,
-        metric_picker_period_not_a_number_error, metric_picker_statistic_error_label,
-        migrate_mapping_unmapped_count_label, migrate_running_position_label,
-        migrate_running_rows_label, migrate_source_target_checked_count_label,
-        migrate_summary_label, migrate_table_status_line,
-        migrate_wizard_target_schema_read_failed_error, migrate_wizard_task_label,
-        mutation_chunk_size_adjusted_toast, mutation_chunk_size_reduced_toast,
-        mutation_chunked_execution_failed_error, mutation_delete_document_task_label,
-        mutation_delete_row_task_label, mutation_delete_task_label,
-        mutation_execution_cancelled_toast, mutation_execution_completed_toast,
-        mutation_execution_failed_error, mutation_insert_document_task_label,
-        mutation_insert_row_task_label, mutation_read_only_error,
-        mutation_save_document_task_label, mutation_save_row_task_label,
+        import_mapping_mode_label, import_rail_labels, import_summary_label,
+        import_table_status_line, import_wizard_task_label, incomplete_aggregate_rows_label,
+        join_kind_label, live_output_lines_label, live_output_truncated_label,
+        metric_picker_custom_dropdown_label, metric_picker_dimensions_error_label,
+        metric_picker_period_error_label, metric_picker_period_not_a_number_error,
+        metric_picker_statistic_error_label, migrate_mapping_unmapped_count_label,
+        migrate_running_position_label, migrate_running_rows_label,
+        migrate_source_target_checked_count_label, migrate_summary_label,
+        migrate_table_status_line, migrate_wizard_target_schema_read_failed_error,
+        migrate_wizard_task_label, mutation_chunk_size_adjusted_toast,
+        mutation_chunk_size_reduced_toast, mutation_chunked_execution_failed_error,
+        mutation_delete_document_task_label, mutation_delete_row_task_label,
+        mutation_delete_task_label, mutation_execution_cancelled_toast,
+        mutation_execution_completed_toast, mutation_execution_failed_error,
+        mutation_insert_document_task_label, mutation_insert_row_task_label,
+        mutation_read_only_error, mutation_save_document_task_label, mutation_save_row_task_label,
         mutation_update_document_field_task_label, object_browser_copied_uri_toast,
         object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
         pending_change_count_label, pending_edits_summary, pk_details_fetch_failed_error,
@@ -5725,10 +5704,7 @@ mod tests {
             "document.object_browser.metadata.versions",
             "document.object_browser.error.connection_unavailable",
             "document.object_browser.error.api_unavailable",
-            "document.object_browser.preview.body.svg_invalid_utf8",
-            "document.object_browser.preview.body.svg_missing_root",
-            "document.object_browser.preview.body.image_header_error",
-            "document.object_browser.preview.body.image_decode_error",
+            "document.object_browser.preview.body.image_unsupported_format",
             "document.object_browser.preview.body.text_kind.json",
             "document.object_browser.preview.body.text_kind.text",
         ];
@@ -5821,44 +5797,6 @@ mod tests {
             locale = "es"
         );
         assert_ne!(api_en, api_es);
-    }
-
-    /// T19: the SVG body-validation refusals translate and diverge between
-    /// locales.
-    #[test]
-    fn object_browser_svg_validation_keys_differ_between_locales() {
-        let utf8_en = dbflux_i18n::t!(
-            "document.object_browser.preview.body.svg_invalid_utf8",
-            locale = "en"
-        );
-        let utf8_es = dbflux_i18n::t!(
-            "document.object_browser.preview.body.svg_invalid_utf8",
-            locale = "es"
-        );
-        assert_ne!(utf8_en, utf8_es);
-
-        let root_en = dbflux_i18n::t!(
-            "document.object_browser.preview.body.svg_missing_root",
-            locale = "en"
-        );
-        let root_es = dbflux_i18n::t!(
-            "document.object_browser.preview.body.svg_missing_root",
-            locale = "es"
-        );
-        assert_ne!(root_en, root_es);
-    }
-
-    /// T19: the image decode-failure helpers interpolate the underlying
-    /// decoder cause verbatim into the translated prefix.
-    #[test]
-    fn image_error_helpers_interpolate_the_cause() {
-        let header = image_header_error("truncated header");
-        assert!(header.contains("truncated header"));
-        assert_ne!(header, "truncated header");
-
-        let decode = image_decode_error("unsupported color type");
-        assert!(decode.contains("unsupported color type"));
-        assert_ne!(decode, "unsupported color type");
     }
 
     /// T19: every `PresignMethodChoice` variant has a translated segment

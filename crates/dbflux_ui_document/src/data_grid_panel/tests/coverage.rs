@@ -71,6 +71,7 @@ fn a_table_grid_and_its_menus_are_covered(cx: &mut TestAppContext) {
     );
     for option in [
         "export-option-header",
+        "export-option-protect-formulas",
         "segmented-export-rows-loaded",
         "segmented-export-columns-visible",
         "segmented-export-delimiter-semicolon",

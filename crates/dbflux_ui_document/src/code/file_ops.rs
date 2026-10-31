@@ -443,22 +443,24 @@ impl CodeDocument {
         let default_ext = self.effective_language().default_extension().to_string();
         let language_name = self.effective_language().display_name().to_string();
 
-        let suggested_name = if let Some(path) = &self.editor.path {
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("untitled")
-                .to_string()
-        } else {
-            let title = self.title.trim();
-
-            if title.is_empty() {
-                format!("untitled.{}", default_ext)
-            } else if title.contains('.') {
-                title.to_string()
+        // A routine tab is titled with the routine's name from the server.
+        let suggested_name =
+            dbflux_core::local_files::SafeFileName::new(&if let Some(path) = &self.editor.path {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("untitled")
+                    .to_string()
             } else {
-                format!("{}.{}", title, default_ext)
-            }
-        };
+                let title = self.title.trim();
+
+                if title.is_empty() {
+                    format!("untitled.{}", default_ext)
+                } else if title.contains('.') {
+                    title.to_string()
+                } else {
+                    format!("{}.{}", title, default_ext)
+                }
+            });
 
         let entity = cx.entity().clone();
         let save_target_override = self.app_state.read(cx).save_target_override();
@@ -474,7 +476,7 @@ impl CodeDocument {
                 async {
                     let file_handle = rfd::AsyncFileDialog::new()
                         .set_title(dbflux_i18n::t!("document.code.file_ops.save_as.title"))
-                        .set_file_name(&suggested_name)
+                        .set_file_name(suggested_name.as_str())
                         .add_filter(&language_name, &[&default_ext])
                         .add_filter(
                             dbflux_i18n::t!("document.code.file_ops.save_as.all_files"),

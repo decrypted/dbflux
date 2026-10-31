@@ -127,6 +127,7 @@ pub struct DataTableState {
     /// Whether a plain copy starts with a line of column names. The host
     /// sets it from its settings; off keeps the values-only TSV.
     copy_column_names: bool,
+    copy_protect_formulas: bool,
 
     /// Whether a modifier click on a sort arrow adds a sort key. Off unless
     /// the host sorts by several keys; without it the click sorts as a plain
@@ -307,6 +308,7 @@ impl DataTableState {
             then_sorts: Vec::new(),
             multi_sort: false,
             copy_column_names: false,
+            copy_protect_formulas: false,
             sortable: true,
             columns_reorderable: false,
             viewport_size: Size::default(),
@@ -1235,9 +1237,12 @@ impl DataTableState {
         let header = self
             .copy_column_names
             .then_some(self.model.columns.as_slice());
-        clipboard::copy_selection_with(&self.selection, header, |row, col| {
-            self.displayed_cell(&visual_order, row, col)
-        })
+        clipboard::copy_selection_with(
+            &self.selection,
+            header,
+            self.copy_protect_formulas,
+            |row, col| self.displayed_cell(&visual_order, row, col),
+        )
     }
 
     pub fn copy_column_names(&self) -> bool {
@@ -1246,6 +1251,16 @@ impl DataTableState {
 
     pub fn set_copy_column_names(&mut self, enabled: bool) {
         self.copy_column_names = enabled;
+    }
+
+    pub fn copy_protect_formulas(&self) -> bool {
+        self.copy_protect_formulas
+    }
+
+    /// Guards copied text cells against running as spreadsheet formulas
+    /// (Settings > General > Data grid).
+    pub fn set_copy_protect_formulas(&mut self, enabled: bool) {
+        self.copy_protect_formulas = enabled;
     }
 
     /// The cell the grid shows at visual `row`: a pending insert's value, or

@@ -44,7 +44,7 @@ impl GeneralSettingsRepository {
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        table_alias_completion, table_alias_use_as,
                        grid_fk_labels, grid_pk_sort_desc, grid_copy_column_names, grid_review_before_save, grid_filter_autoquote, grid_header_click_sorts,
-                       max_concurrent_queries, max_queued_queries,
+                       max_concurrent_queries, max_queued_queries, grid_copy_protect_formulas,
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -96,7 +96,8 @@ impl GeneralSettingsRepository {
                 grid_header_click_sorts: row.get(37)?,
                 max_concurrent_queries: row.get(38)?,
                 max_queued_queries: row.get(39)?,
-                updated_at: row.get(40)?,
+                grid_copy_protect_formulas: row.get(40)?,
+                updated_at: row.get(41)?,
             })
         });
 
@@ -129,9 +130,9 @@ impl GeneralSettingsRepository {
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     table_alias_completion, table_alias_use_as,
                     grid_fk_labels, grid_pk_sort_desc, grid_copy_column_names, grid_review_before_save, grid_filter_autoquote, grid_header_click_sorts,
-                    max_concurrent_queries, max_queued_queries,
+                    max_concurrent_queries, max_queued_queries, grid_copy_protect_formulas,
                     updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, datetime('now'))
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -172,6 +173,7 @@ impl GeneralSettingsRepository {
                     grid_header_click_sorts = excluded.grid_header_click_sorts,
                     max_concurrent_queries = excluded.max_concurrent_queries,
                     max_queued_queries = excluded.max_queued_queries,
+                    grid_copy_protect_formulas = excluded.grid_copy_protect_formulas,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -214,6 +216,7 @@ impl GeneralSettingsRepository {
                     settings.grid_header_click_sorts,
                     settings.max_concurrent_queries,
                     settings.max_queued_queries,
+                    settings.grid_copy_protect_formulas,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -303,6 +306,9 @@ pub struct GeneralSettingsDto {
     pub max_concurrent_queries: i64,
     /// Queries that may wait on one connection.
     pub max_queued_queries: i64,
+    /// 1 when cells copied from the grid are guarded against spreadsheet
+    /// formulas.
+    pub grid_copy_protect_formulas: i32,
     pub updated_at: String,
 }
 
@@ -377,6 +383,7 @@ mod tests {
             grid_header_click_sorts: 0,
             max_concurrent_queries: 8,
             max_queued_queries: 50,
+            grid_copy_protect_formulas: 0,
             updated_at: String::new(),
         };
 
@@ -446,6 +453,7 @@ mod tests {
                 grid_header_click_sorts: 0,
                 max_concurrent_queries: 8,
                 max_queued_queries: 50,
+                grid_copy_protect_formulas: 0,
                 updated_at: String::new(),
             };
 
@@ -535,6 +543,7 @@ mod tests {
             grid_header_click_sorts: 0,
             max_concurrent_queries: 8,
             max_queued_queries: 50,
+            grid_copy_protect_formulas: 0,
             updated_at: String::new(),
         };
 
@@ -646,6 +655,7 @@ mod tests {
             grid_header_click_sorts: 0,
             max_concurrent_queries: 8,
             max_queued_queries: 50,
+            grid_copy_protect_formulas: 0,
             updated_at: String::new(),
         };
 
@@ -709,6 +719,7 @@ mod tests {
             grid_header_click_sorts: 0,
             max_concurrent_queries: 8,
             max_queued_queries: 50,
+            grid_copy_protect_formulas: 0,
             updated_at: String::new(),
         };
 
@@ -804,6 +815,7 @@ mod tests {
             grid_header_click_sorts: 0,
             max_concurrent_queries: 8,
             max_queued_queries: 50,
+            grid_copy_protect_formulas: 0,
             updated_at: String::new(),
         };
 
@@ -889,6 +901,7 @@ mod tests {
             grid_header_click_sorts: 0,
             max_concurrent_queries: 8,
             max_queued_queries: 50,
+            grid_copy_protect_formulas: 0,
             updated_at: String::new(),
         };
 
@@ -954,6 +967,7 @@ mod tests {
             grid_header_click_sorts: 0,
             max_concurrent_queries: 8,
             max_queued_queries: 50,
+            grid_copy_protect_formulas: 0,
             updated_at: String::new(),
         };
 
@@ -1020,6 +1034,7 @@ mod tests {
             grid_header_click_sorts: 1,
             max_concurrent_queries: 8,
             max_queued_queries: 50,
+            grid_copy_protect_formulas: 0,
             updated_at: String::new(),
         };
 
@@ -1085,6 +1100,7 @@ mod tests {
             grid_header_click_sorts: 0,
             max_concurrent_queries: 3,
             max_queued_queries: 17,
+            grid_copy_protect_formulas: 0,
             updated_at: String::new(),
         };
 

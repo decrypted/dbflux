@@ -55,6 +55,7 @@ impl GeneralSection {
             current.grid_pk_sort_desc != saved.grid_pk_sort_desc,
             current.grid_review_before_save != saved.grid_review_before_save,
             current.grid_copy_column_names != saved.grid_copy_column_names,
+            current.grid_copy_protect_formulas != saved.grid_copy_protect_formulas,
             current.grid_header_click_sorts != saved.grid_header_click_sorts,
             current.grid_filter_autoquote != saved.grid_filter_autoquote,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
@@ -142,6 +143,7 @@ impl GeneralSection {
             GeneralFormRow::GridPkSortDesc,
             GeneralFormRow::GridReviewBeforeSave,
             GeneralFormRow::GridCopyColumnNames,
+            GeneralFormRow::GridCopyProtectFormulas,
             GeneralFormRow::GridHeaderClickSorts,
             GeneralFormRow::GridFilterAutoquote,
             GeneralFormRow::RestoreSession,
@@ -312,6 +314,11 @@ impl GeneralSection {
             Some(GeneralFormRow::GridCopyColumnNames) => {
                 self.gen_settings.grid_copy_column_names =
                     !self.gen_settings.grid_copy_column_names;
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridCopyProtectFormulas) => {
+                self.gen_settings.grid_copy_protect_formulas =
+                    !self.gen_settings.grid_copy_protect_formulas;
                 cx.notify();
             }
             Some(GeneralFormRow::GridHeaderClickSorts) => {
@@ -1141,6 +1148,17 @@ impl GeneralSection {
                 self.gen_settings.grid_copy_column_names,
                 GeneralFormRow::GridCopyColumnNames,
                 |this, value, _cx| this.gen_settings.grid_copy_column_names = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-copy-protect-formulas",
+                dbflux_i18n::t!("settings.general.grid_copy_protect_formulas.label"),
+                Some(dbflux_i18n::t!(
+                    "settings.general.grid_copy_protect_formulas.hint"
+                )),
+                self.gen_settings.grid_copy_protect_formulas,
+                GeneralFormRow::GridCopyProtectFormulas,
+                |this, value, _cx| this.gen_settings.grid_copy_protect_formulas = value,
                 cx,
             ))
             .child(self.render_gen_checkbox(

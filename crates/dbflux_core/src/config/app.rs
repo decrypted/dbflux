@@ -446,6 +446,12 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub grid_header_click_sorts: bool,
 
+    /// Cells copied from the grid (Ctrl+C and Copy as CSV) that a
+    /// spreadsheet would run as a formula get a leading `'`. Off by default,
+    /// so a copy holds the values exactly.
+    #[serde(default)]
+    pub grid_copy_protect_formulas: bool,
+
     /// Insert a pair of quotes, with the caret between them, after a
     /// comparison typed in the data grid's WHERE filter on a string or
     /// date/time column. Off by default.
@@ -587,6 +593,7 @@ impl Default for GeneralSettings {
             grid_review_before_save: false,
             grid_copy_column_names: false,
             grid_header_click_sorts: false,
+            grid_copy_protect_formulas: false,
             grid_filter_autoquote: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
@@ -618,6 +625,7 @@ mod font_settings_tests {
         assert!(!legacy.grid_review_before_save);
         assert!(!legacy.grid_copy_column_names);
         assert!(!legacy.grid_header_click_sorts);
+        assert!(!legacy.grid_copy_protect_formulas);
         assert!(!legacy.grid_filter_autoquote);
         assert_eq!(legacy.max_concurrent_queries, 8);
         assert_eq!(legacy.max_queued_queries, 50);

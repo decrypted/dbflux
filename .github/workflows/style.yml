@@ -133,6 +133,12 @@ jobs:
       - name: Check self-quoted SQL placeholders
         run: python3 scripts/lint.py unquoted-sql
 
+      # A table, collection or object name comes from the server; a path built
+      # from a name goes through the SafeFileName sanitizer unless the site is
+      # listed in scripts/file_name_allowlist.txt with the reason it is safe.
+      - name: Check paths built from names
+        run: python3 scripts/lint.py file-names
+
   # Gated at the job level, unlike cross-platform-check in tests.yml: the
   # required "Clippy" context is carried by clippy-result below, not by these
   # matrix legs. Fail-open like every other gate: `always()` keeps this job

@@ -206,6 +206,8 @@ fn table_details(&self, name: &str) -> TableDetails // Columns, indexes
 
 **Quoting in generated SQL**: Names and values come from the dialect (`quote_identifier`, `qualified_table`, `value_to_literal`) or the driver's own quoting helper, never from quotes written around a `{}` placeholder: server-provided names can contain the quote character. `python3 scripts/lint.py unquoted-sql` flags such placeholders in the driver crates and `dbflux_core`; a provably safe site goes into `scripts/unquoted_sql_allowlist.txt` with its reason.
 
+**File names from server data**: A table, schema, collection or object name is chosen by whoever controls the server, so it is never joined onto a path as it is. Build the file name with `dbflux_core::local_files::SafeFileName::new` and place it with `confined_join`; a bundle's stored file name is read back with `confined_existing_file`. Scratch files handed to other programs go into a `private_dir_in` directory through `create_private_file`. `python3 scripts/lint.py file-names` flags `join`, `with_file_name` and `set_file_name` calls on name-like values; a site that never sees a server name goes into `scripts/file_name_allowlist.txt` with its reason.
+
 ## GPUI Guidelines
 
 ### Context Types

@@ -98,7 +98,7 @@ fn the_menu_keys_export_the_selected_cells_in_screen_order(cx: &mut TestAppConte
     );
 
     // Up to Rows: Loaded steps to Selected (a query result has no All).
-    keys(window, "k k k k");
+    keys(window, "k k k k k");
     assert_eq!(
         selected_entry(&panel, window),
         Some(ExportMenuEntry::Option(ExportOptionRow::Rows))
@@ -116,8 +116,9 @@ fn the_menu_keys_export_the_selected_cells_in_screen_order(cx: &mut TestAppConte
         "an option leaves the menu open"
     );
 
-    // Past the delimiter and the three save rows to Copy CSV.
-    keys(window, "j j j j j enter");
+    // Past the delimiter, the formula guard and the three save rows to
+    // Copy CSV.
+    keys(window, "j j j j j j enter");
     assert_eq!(clipboard(window), "row 1,1\nrow 2,2\n");
     assert_eq!(
         super::last_toast_title(window),
@@ -178,7 +179,7 @@ fn selected_rows_are_disabled_with_nothing_selected(cx: &mut TestAppContext) {
     );
 
     // Copy CSV writes every loaded row.
-    window.update(|_, cx| panel.update(cx, |panel, _| panel.chrome.export_menu_selected = 7));
+    window.update(|_, cx| panel.update(cx, |panel, _| panel.chrome.export_menu_selected = 8));
     assert_eq!(
         selected_entry(&panel, window),
         Some(ExportMenuEntry::Copy(dbflux_export::ExportFormat::Csv))
@@ -222,8 +223,9 @@ fn the_choices_are_remembered_across_grids(cx: &mut TestAppContext) {
     let state = app_state(cx);
     let (_host, first, window) = host_result_grid(cx, state.clone());
 
-    keys(window, "ctrl-e k enter escape");
+    keys(window, "ctrl-e k enter k enter escape");
     let chosen = options(&first, window);
+    assert!(chosen.csv_protect_formulas, "Enter ticks the formula guard");
     assert_eq!(chosen.csv_delimiter, ExportDelimiter::Semicolon);
 
     let (_host, second, window) = host_result_grid(cx, state);

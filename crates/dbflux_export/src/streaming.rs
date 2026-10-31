@@ -11,7 +11,7 @@
 //! incrementally instead of buffering the whole file — see its own docs.
 
 use crate::ExportError;
-use crate::csv::{CsvOptions, value_to_csv_field};
+use crate::csv::CsvOptions;
 use crate::json::row_to_json_object;
 use dbflux_core::{ColumnMeta, Value};
 use std::io::Write;
@@ -20,7 +20,7 @@ use std::io::Write;
 /// any number of `write_row` calls, then `finish` to flush the underlying writer.
 pub struct CsvStreamWriter<W: Write> {
     inner: ::csv::Writer<W>,
-    include_header: bool,
+    options: CsvOptions,
 }
 
 impl<W: Write> CsvStreamWriter<W> {
@@ -31,24 +31,28 @@ impl<W: Write> CsvStreamWriter<W> {
     pub fn with_options(writer: W, options: CsvOptions) -> Self {
         Self {
             inner: options.writer(writer),
-            include_header: options.include_header,
+            options,
         }
     }
 
     /// Writes the header row, or nothing when the options leave it out, so
     /// callers keep one call shape either way.
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
-        if !self.include_header {
+        if !self.options.include_header {
             return Ok(());
         }
-        let headers: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
-        self.inner.write_record(&headers)?;
+        let headers: Vec<std::borrow::Cow<'_, str>> = columns
+            .iter()
+            .map(|c| self.options.header_field(&c.name))
+            .collect();
+        self.inner
+            .write_record(headers.iter().map(|header| header.as_ref()))?;
         Ok(())
     }
 
     pub fn write_row(&mut self, row: &[Value]) -> Result<(), ExportError> {
         for value in row {
-            let field = value_to_csv_field(value);
+            let field = self.options.field(value);
             self.inner.write_field(&field)?;
         }
         self.inner.write_record(None::<&[u8]>)?;
@@ -200,6 +204,36 @@ mod tests {
         );
     }
 
+    /// "Export all rows" streams; it must guard formulas exactly like a
+    /// single-shot export.
+    #[test]
+    fn csv_streaming_protects_formulas_like_single_shot_export() {
+        use crate::CsvOptions;
+
+        let cols = vec![ColumnMeta {
+            name: "=x".to_string(),
+            type_name: "text".to_string(),
+            kind: dbflux_core::ColumnKind::Unknown,
+            nullable: true,
+            is_primary_key: false,
+        }];
+        let all_rows = vec![vec![Value::Text("+1".to_string())]];
+        let options = CsvOptions {
+            protect_formulas: true,
+            ..CsvOptions::default()
+        };
+
+        let mut streamed = Vec::new();
+        let mut writer = CsvStreamWriter::with_options(&mut streamed, options);
+        writer.write_header(&cols).unwrap();
+        for row in &all_rows {
+            writer.write_row(row).unwrap();
+        }
+        writer.finish().unwrap();
+
+        assert_eq!(String::from_utf8(streamed).unwrap(), "'=x\n'+1\n");
+    }
+
     #[test]
     fn csv_streaming_with_options_matches_single_shot_export() {
         use crate::{CsvDelimiter, CsvOptions};
@@ -209,6 +243,7 @@ mod tests {
         let options = CsvOptions {
             include_header: false,
             delimiter: CsvDelimiter::Semicolon,
+            protect_formulas: false,
         };
 
         let result = QueryResult::table(

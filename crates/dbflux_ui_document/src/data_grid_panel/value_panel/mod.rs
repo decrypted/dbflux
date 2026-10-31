@@ -33,7 +33,7 @@
 
 mod host;
 mod image_view;
-mod picture;
+pub(crate) mod picture;
 
 pub(crate) use image_view::ValueView;
 pub(crate) use picture::{CellBytes, ImageKind};

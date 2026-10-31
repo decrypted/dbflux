@@ -179,6 +179,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Execute),
         ),
         (
+            "grid-copy-protect-formulas",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
             "grid-header-click-sorts",
             KeyboardPath::Command(Command::Execute),
         ),

@@ -147,21 +147,26 @@ fn markdown_cell(text: &str) -> String {
 }
 
 impl DataGridPanel {
-    /// Carries Settings > General > Include column names when copying to the
-    /// table, which owns Ctrl+C but cannot read settings itself. Run on every
-    /// render, so a saved change applies to open grids at once.
+    /// Carries Settings > General > Include column names when copying and
+    /// Protect copied cells against spreadsheet formulas to the table, which
+    /// owns Ctrl+C but cannot read settings itself. Run on every render, so a
+    /// saved change applies to open grids at once.
     pub(in crate::data_grid_panel) fn sync_copy_column_names(&mut self, cx: &mut Context<Self>) {
-        let enabled = self
-            .app_state
-            .read(cx)
-            .general_settings()
-            .grid_copy_column_names;
+        let settings = self.app_state.read(cx).general_settings();
+        let column_names = settings.grid_copy_column_names;
+        let protect_formulas = settings.grid_copy_protect_formulas;
         let Some(table_state) = self.grid_table.table_state.clone() else {
             return;
         };
 
-        if table_state.read(cx).copy_column_names() != enabled {
-            table_state.update(cx, |state, _| state.set_copy_column_names(enabled));
+        let state = table_state.read(cx);
+        if state.copy_column_names() != column_names
+            || state.copy_protect_formulas() != protect_formulas
+        {
+            table_state.update(cx, |state, _| {
+                state.set_copy_column_names(column_names);
+                state.set_copy_protect_formulas(protect_formulas);
+            });
         }
     }
 

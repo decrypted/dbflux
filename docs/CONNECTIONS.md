@@ -180,8 +180,8 @@ like) or that starts with `-`, so a host alias cannot inject shell commands.
 The command's error output, where an access proxy prints its login URL, is
 logged at debug level only, so one-time URLs and tokens stay out of the audit
 log; run DBFlux with `RUST_LOG=debug` to see it. When the SSH handshake
-through the command fails, the error shows its last three lines, shortened and
-with credentials in URLs replaced by `***`. The log names only the program the
+through the command fails, the error shows its last three lines, shortened,
+with URLs cut to their host and credentials replaced by `***`. The log names only the program the
 command runs; the full command line, which can carry an access token, is
 logged at debug level only.
 
@@ -268,7 +268,8 @@ The access token that `aws sso login` caches lives about an hour, while the
 refresh token cached with it for a profile that uses an `sso_session` lives much
 longer. When the access token has expired, DBFlux first renews it with that
 refresh token, as the AWS CLI and SDKs do, and writes it back to the same file
-in `~/.aws/sso/cache` (other entries and the file permissions are kept), so no
+in `~/.aws/sso/cache` (other entries are kept, and the file stays readable
+only by you), so no
 browser opens. A login is needed only when there is no cached session, the
 refresh token or the client registration has expired or was revoked, or the
 renewal fails; and every time the access token expires for a profile that sets

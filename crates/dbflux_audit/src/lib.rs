@@ -632,10 +632,14 @@ impl AuditService {
     /// error_message.
     fn apply_redaction(&self, mut event: EventRecord) -> EventRecord {
         // Captured log lines become events with the log message as summary,
-        // so a URL with credentials in a log line lands here too.
-        let result = redact_error_message(&event.summary, true);
-        if result.redaction_count > 0 {
-            event.summary = result.redacted;
+        // so a connection string with credentials in a log line lands here
+        // too. Only credential syntax is redacted: the entropy patterns used
+        // for error messages would also eat ordinary paths and identifiers
+        // in log lines.
+        let (summary, redactions) =
+            dbflux_core::redact_connection_credentials(&event.summary, "[REDACTED]");
+        if redactions > 0 {
+            event.summary = summary;
         }
 
         // Redact sensitive values in details_json

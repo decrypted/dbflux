@@ -525,7 +525,7 @@ pub(crate) fn update_aws_config_atomic(
         return Ok(());
     }
 
-    write_atomic_with_backup_perms(path, &updated)
+    write_atomic_with_backup_perms(path, &updated, AwsFile::Config)
 }
 
 /// Timestamped backups kept next to a file on top of its first backup.
@@ -576,7 +576,7 @@ fn create_backup_for_path(path: &Path, mode: u32) -> Result<(), io::Error> {
 
     if let Err(err) = copied {
         drop(backup);
-        let _ = fs::remove_file(&backup_path);
+        remove_leftover(&backup_path, "incomplete AWS backup");
         return Err(err);
     }
 
@@ -604,9 +604,59 @@ fn create_rolling_backup(path: &Path, mode: u32) -> Result<(PathBuf, fs::File), 
     ))
 }
 
+/// Which AWS file a write targets; it decides which backups count as its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AwsFile {
+    Config,
+    Credentials,
+}
+
+/// Earlier versions named the timestamped backups of both files
+/// `config.dbflux-backup.<unix seconds>`, the credentials file included.
+const LEGACY_BACKUP_PREFIX: &str = "config.dbflux-backup.";
+
+fn is_legacy_backup_name(name: &str) -> bool {
+    name.strip_prefix(LEGACY_BACKUP_PREFIX)
+        .is_some_and(|stamp| {
+            (1..=10).contains(&stamp.len()) && stamp.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
+/// Whether a legacy backup is a copy of the credentials file rather than of
+/// the config file.
+fn holds_credentials(path: &Path) -> bool {
+    use std::io::Read as _;
+
+    let mut head = Vec::new();
+    let read = open_no_follow(path).and_then(|file| file.take(64 * 1024).read_to_end(&mut head));
+    if read.is_err() {
+        return false;
+    }
+    let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+    head.contains("aws_secret_access_key") || head.contains("aws_access_key_id")
+}
+
+/// Whether `name` is a timestamped backup of `file` at `path`.
+///
+/// Legacy `config.dbflux-backup.<secs>` files are told apart by content: a
+/// copy of the credentials file counts against the credentials cap, so a
+/// credentials save prunes old keys and a config save never deletes real
+/// config backups to keep them.
+fn is_own_rolling_backup(file: AwsFile, prefix: &str, name: &str, entry: &Path) -> bool {
+    let legacy = is_legacy_backup_name(name);
+    match file {
+        AwsFile::Config => {
+            is_rolling_backup_name(name, prefix) && !(legacy && holds_credentials(entry))
+        }
+        AwsFile::Credentials => {
+            is_rolling_backup_name(name, prefix) || (legacy && holds_credentials(entry))
+        }
+    }
+}
+
 /// Deletes all but the newest [`ROLLING_BACKUPS_KEPT`] timestamped backups of
 /// `path`. The first backup is never touched.
-fn prune_rolling_backups(path: &Path) {
+fn prune_rolling_backups(path: &Path, file: AwsFile) {
     let (Some(dir), Some(prefix)) = (path.parent(), rolling_backup_prefix(path)) else {
         return;
     };
@@ -629,16 +679,16 @@ fn prune_rolling_backups(path: &Path) {
         .filter_map(|entry| {
             let name = entry.file_name();
             let name = name.to_str()?;
-            if !is_rolling_backup_name(name, &prefix) {
-                return None;
-            }
             // `DirEntry::metadata` does not follow symlinks, so only regular
             // files DBFlux could have written are candidates.
             let metadata = entry.metadata().ok().filter(|m| m.is_file())?;
+            if !is_own_rolling_backup(file, &prefix, name, &entry.path()) {
+                return None;
+            }
             let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
             let stamp = name
-                .strip_prefix(prefix.as_str())
-                .and_then(|stamp| stamp.parse().ok())
+                .rsplit_once('.')
+                .and_then(|(_, stamp)| stamp.parse().ok())
                 .unwrap_or(0);
             Some((modified, stamp, entry.path()))
         })
@@ -674,7 +724,7 @@ fn restore_backup_for_path(path: &std::path::Path) -> Result<(), io::Error> {
         let entry = entry?;
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
-        if !is_rolling_backup_name(&name, &prefix) {
+        if !is_own_rolling_backup(AwsFile::Config, &prefix, &name, &entry.path()) {
             continue;
         }
 
@@ -1043,7 +1093,7 @@ pub(crate) fn update_aws_credentials_atomic(
         return Ok(());
     }
 
-    write_atomic_with_backup_perms(path, &updated)
+    write_atomic_with_backup_perms(path, &updated, AwsFile::Credentials)
 }
 
 /// Atomically writes `content` to `path` through a temp file in the same
@@ -1056,7 +1106,11 @@ pub(crate) fn update_aws_credentials_atomic(
 /// name is never written through, and concurrent writers never share one.
 ///
 /// Used by both `update_aws_config_atomic` and `update_aws_credentials_atomic`.
-fn write_atomic_with_backup_perms(path: &Path, content: &str) -> Result<(), io::Error> {
+fn write_atomic_with_backup_perms(
+    path: &Path,
+    content: &str,
+    file: AwsFile,
+) -> Result<(), io::Error> {
     let dir = path.parent().ok_or_else(|| invalid_target(path))?;
     let file_name = path
         .file_name()
@@ -1076,11 +1130,11 @@ fn write_atomic_with_backup_perms(path: &Path, content: &str) -> Result<(), io::
     // A failed rename leaves the original untouched, so only the temp file
     // needs cleaning up.
     if let Err(error) = write_private_then_rename(&temp_path, path, content.as_bytes(), mode) {
-        let _ = fs::remove_file(&temp_path);
+        remove_leftover(&temp_path, "AWS temp file");
         return Err(error);
     }
 
-    prune_rolling_backups(path);
+    prune_rolling_backups(path, file);
     Ok(())
 }
 
@@ -1174,6 +1228,16 @@ fn create_private_dir_all(dir: &Path) -> Result<(), io::Error> {
     }
 
     builder.create(dir)
+}
+
+/// Removes a file a failed write left behind. A failure is only logged: the
+/// write's own error is what the caller reports.
+fn remove_leftover(path: &Path, what: &str) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => log::warn!("Could not remove {what} {}: {err}", path.display()),
+    }
 }
 
 fn invalid_target(path: &Path) -> io::Error {
@@ -3092,7 +3156,10 @@ output=json
 
         let _umask = UmaskGuard::common();
 
-        for (name, seed_mode) in [("credentials", 0o600), ("config", 0o644)] {
+        for (name, seed_mode, kind) in [
+            ("credentials", 0o600, AwsFile::Credentials),
+            ("config", 0o644, AwsFile::Config),
+        ] {
             let dir = tempfile::tempdir().expect("tempdir");
             let path = dir.path().join(name);
             std::fs::write(&path, "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n")
@@ -3121,6 +3188,7 @@ output=json
                     write_atomic_with_backup_perms(
                         &path,
                         "[ci]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n",
+                        kind,
                     )
                     .expect("write");
                 },
@@ -3313,6 +3381,62 @@ output=json
         );
     }
 
+    /// Earlier versions filed credentials backups under the config prefix.
+    /// A credentials save prunes those copies of old keys, and a config save
+    /// never spends its cap on them.
+    #[test]
+    fn legacy_credentials_backups_count_against_the_credentials_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("config");
+        let credentials = dir.path().join("credentials");
+        std::fs::write(&config, "[profile a]\nregion = us-east-1\n").expect("seed config");
+        std::fs::write(&credentials, "[a]\naws_access_key_id = AKIANEW\n").expect("seed creds");
+        std::fs::write(config.with_extension("dbflux-backup"), "original config").expect("base");
+        std::fs::write(
+            credentials.with_extension("dbflux-backup"),
+            "original creds",
+        )
+        .expect("base");
+
+        let legacy = |stamp: i64, content: &str| {
+            let path = dir.path().join(format!("config.dbflux-backup.{stamp}"));
+            std::fs::write(&path, content).expect("legacy");
+            filetime::set_file_mtime(&path, filetime::FileTime::from_unix_time(stamp, 0))
+                .expect("mtime");
+            path
+        };
+        let old_keys: Vec<PathBuf> = (0..5)
+            .map(|n| {
+                legacy(
+                    1_700_000_000 + n,
+                    &format!("[a]\naws_secret_access_key = OLDKEY{n}\n"),
+                )
+            })
+            .collect();
+        let old_configs: Vec<PathBuf> = (0..4)
+            .map(|n| legacy(1_700_000_100 + n, "[profile a]\nregion = eu-west-1\n"))
+            .collect();
+
+        update_aws_credentials_atomic(&credentials, |existing| existing.replace("NEW", "NEWER"))
+            .expect("credentials write");
+
+        // The credentials save made one new backup and kept the two newest
+        // legacy key copies; the legacy config backups are not its business.
+        let surviving_keys: Vec<_> = old_keys.iter().filter(|path| path.exists()).collect();
+        assert_eq!(surviving_keys, [&old_keys[3], &old_keys[4]]);
+        assert!(old_configs.iter().all(|path| path.exists()));
+
+        update_aws_config_atomic(&config, |existing| {
+            existing.replace("us-east-1", "us-west-2")
+        })
+        .expect("config write");
+
+        // The config save pruned its own legacy backups, not the key copies.
+        let surviving_configs: Vec<_> = old_configs.iter().filter(|path| path.exists()).collect();
+        assert_eq!(surviving_configs, [&old_configs[2], &old_configs[3]]);
+        assert!(old_keys[3].exists() && old_keys[4].exists());
+    }
+
     /// A failed rename leaves the original content and no temp file behind.
     #[cfg(unix)]
     #[test]
@@ -3326,7 +3450,13 @@ output=json
         // Removing the finished temp file makes the rename fail.
         let result = with_before_rename(
             |temp_path| std::fs::remove_file(temp_path).expect("remove temp"),
-            || write_atomic_with_backup_perms(&path, "[profile dev]\nregion = us-west-2\n"),
+            || {
+                write_atomic_with_backup_perms(
+                    &path,
+                    "[profile dev]\nregion = us-west-2\n",
+                    AwsFile::Config,
+                )
+            },
         );
 
         assert!(result.is_err(), "expected Err when the rename fails");

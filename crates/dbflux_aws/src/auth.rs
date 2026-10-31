@@ -1067,6 +1067,21 @@ fn apply_value_source_endpoint_edit(
     }
 }
 
+/// A failed write is not a conflict: a reload cannot fix a symlinked or
+/// unwritable file, so the reason has to reach the user.
+fn write_failed(
+    file: AwsEditFileKind,
+    written: Option<dbflux_core::auth::AuthEditTarget>,
+    error: &std::io::Error,
+) -> AuthSaveOutcome {
+    log::warn!("Saving the AWS auth profile failed: {error}");
+    AuthSaveOutcome::Failed {
+        target: file.to_target(),
+        written,
+        message: error.to_string(),
+    }
+}
+
 fn new_profile_endpoint_url(profile: &AuthProfile) -> String {
     profile
         .fields
@@ -1310,7 +1325,10 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             apply_value_source_endpoint_edit(updated, name, &endpoint_edit)
         });
 
-        if result.is_err() || conflict_detected.get() {
+        if let Err(error) = result {
+            return write_failed(AwsEditFileKind::Config, None, &error);
+        }
+        if conflict_detected.get() {
             return AuthSaveOutcome::Conflict {
                 target: AwsEditFileKind::Config.to_target(),
             };
@@ -1761,7 +1779,10 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
                 apply_value_source_endpoint_edit(updated, name, &endpoint_edit)
             });
 
-            if result.is_err() || conflict_detected.get() {
+            if let Err(error) = result {
+                return write_failed(AwsEditFileKind::Config, None, &error);
+            }
+            if conflict_detected.get() {
                 return AuthSaveOutcome::Conflict {
                     target: AwsEditFileKind::Config.to_target(),
                 };
@@ -1801,7 +1822,11 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
                     crate::config::replace_or_append_credentials_block(existing, name, &borrowed)
                 });
 
-            if result.is_err() || conflict_detected.get() {
+            if let Err(error) = result {
+                let written = config_written.then(|| AwsEditFileKind::Config.to_target());
+                return write_failed(AwsEditFileKind::Credentials, written, &error);
+            }
+            if conflict_detected.get() {
                 return if config_written {
                     AuthSaveOutcome::PartialSaved {
                         written: AwsEditFileKind::Config.to_target(),
@@ -2000,7 +2025,10 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
             crate::config::replace_or_append_sso_session_block(existing, name, &borrowed)
         });
 
-        if result.is_err() || conflict_detected.get() {
+        if let Err(error) = result {
+            return write_failed(AwsEditFileKind::Config, None, &error);
+        }
+        if conflict_detected.get() {
             return AuthSaveOutcome::Conflict {
                 target: AwsEditFileKind::Config.to_target(),
             };
@@ -3854,6 +3882,73 @@ sso_region = us-east-1
             !debug_repr.contains("wJalrXUtnFEMI"),
             "AuthSaveOutcome debug must not expose the old secret value"
         );
+    }
+
+    // ── Failed path ───────────────────────────────────────────────────────────
+
+    /// Swaps `path` for a symlink to a copy of it, as dotfile managers do.
+    #[cfg(unix)]
+    fn replace_with_symlink(path: &std::path::Path) {
+        let managed = path.with_file_name(format!(
+            "managed-{}",
+            path.file_name().unwrap().to_string_lossy()
+        ));
+        std::fs::rename(path, &managed).unwrap();
+        std::os::unix::fs::symlink(&managed, path).unwrap();
+    }
+
+    /// A refused write reaches the user with its reason, not as a conflict
+    /// that a reload cannot resolve.
+    #[cfg(unix)]
+    #[test]
+    fn sso_save_edit_reports_a_symlinked_config_as_failed() {
+        let config = "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nsso_account_id = 111111111111\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+        replace_with_symlink(&config_path);
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "999999999999".to_string());
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+
+        assert!(
+            matches!(
+                &outcome,
+                AuthSaveOutcome::Failed { target, written: None, message }
+                    if target.id == "config" && message.contains("symbolic link")
+            ),
+            "got {outcome:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_save_edit_reports_a_symlinked_credentials_file_after_the_config_write() {
+        let config = "[profile ci]\nregion = us-east-1\n";
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+        let (provider, _config_path, creds_path, _dir) = shared_provider_with_paths(config, creds);
+        replace_with_symlink(&creds_path);
+        let snapshot = provider.open_edit_snapshot("ci");
+
+        let mut fields = HashMap::new();
+        fields.insert("region".to_string(), "eu-west-1".to_string());
+        fields.insert(
+            "aws_access_key_id".to_string(),
+            "AKIAZZZZZZZZZEXAMPLE".to_string(),
+        );
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+
+        assert!(
+            matches!(
+                &outcome,
+                AuthSaveOutcome::Failed { target, written: Some(written), message }
+                    if target.id == "credentials"
+                        && written.id == "config"
+                        && message.contains("symbolic link")
+            ),
+            "got {outcome:?}"
+        );
+        assert!(!format!("{outcome:?}").contains("AKIA"), "{outcome:?}");
     }
 
     // ── PartialSaved path ─────────────────────────────────────────────────────

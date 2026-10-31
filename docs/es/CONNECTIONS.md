@@ -195,8 +195,8 @@ del comando, donde un proxy de acceso imprime su URL de inicio de sesión, solo
 se registra en el nivel debug, para que las URL de un solo uso y los tokens no
 acaben en el log de auditoría; ejecuta DBFlux con `RUST_LOG=debug` para verla.
 Si el handshake SSH a través del comando falla, el error muestra sus tres
-últimas líneas, acortadas y con las credenciales de las URL sustituidas por
-`***`. El log solo nombra el programa que ejecuta el comando; la
+últimas líneas, acortadas, con las URL reducidas a su host y las credenciales
+sustituidas por `***`. El log solo nombra el programa que ejecuta el comando; la
 línea de comando completa, que puede llevar un token de acceso, solo se
 registra en el nivel debug.
 
@@ -285,8 +285,8 @@ El access token que guarda `aws sso login` dura alrededor de una hora, mientras
 que el refresh token guardado con él para un perfil que usa `sso_session` dura
 mucho más. Cuando el access token ha expirado, DBFlux primero lo renueva con ese
 refresh token, como hacen el AWS CLI y los SDK, y lo escribe de vuelta en el
-mismo archivo de `~/.aws/sso/cache` (se conservan las demás entradas y los
-permisos del archivo), así que no se abre el navegador. Solo hace falta un login
+mismo archivo de `~/.aws/sso/cache` (se conservan las demás entradas y el
+archivo sigue siendo legible solo por ti), así que no se abre el navegador. Solo hace falta un login
 cuando no hay sesión en caché, el refresh token o el registro del cliente ha
 expirado o fue revocado, o la renovación falla; y cada vez que expira el access
 token de un perfil que define `sso_start_url` sin `sso_session`, porque esos

@@ -12,7 +12,7 @@ pub(crate) mod work_gate;
 pub use error::{DbError, TransactionStateNote};
 pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
-    QueryErrorFormatter, redact_uri_credentials, sanitize_uri,
+    QueryErrorFormatter, redact_connection_credentials, redact_uri_credentials, sanitize_uri,
 };
 pub use execution_session::ExecutionSessionScope;
 pub use log_err::LogErr;

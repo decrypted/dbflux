@@ -90,6 +90,17 @@ pub enum AuthSaveOutcome {
         /// The resource whose section hash did not match the snapshot.
         conflicted: AuthEditTarget,
     },
+
+    /// Writing `target` failed for a reason a reload cannot fix, such as a
+    /// file that is a symbolic link or a permission error. `written` names a
+    /// resource of a two-resource edit that was written before; it is not
+    /// rolled back. `message` names the file and the reason and never
+    /// carries file content.
+    Failed {
+        target: AuthEditTarget,
+        written: Option<AuthEditTarget>,
+        message: String,
+    },
 }
 
 #[cfg(test)]
@@ -189,6 +200,11 @@ mod tests {
                     id: "credentials".to_string(),
                     label: "path/to/secondary".to_string(),
                 },
+            },
+            AuthSaveOutcome::Failed {
+                target: target.clone(),
+                written: None,
+                message: "path/to/config is a symbolic link".to_string(),
             },
         ];
 

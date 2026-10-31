@@ -4858,6 +4858,8 @@ settings:
     mirror_label_fallback: Read-only — managed externally
     conflict_message: "This profile was modified on disk (%{label}) since you opened it. Reload to see the current values before saving."
     partial_saved_message: "%{written_label} was saved successfully, but %{conflicted_label} was modified on disk since you opened the form. Reload to refresh and re-apply your changes."
+    write_failed_message: "Could not save %{label}: %{reason}"
+    partial_write_failed_message: "%{written_label} was saved, but %{failed_label} could not be saved: %{reason}"
     login_required_hint: "Login required — click Login to load dropdown options."
     session_expired_hint: Session expired — log in again to reload options
     session_expired_click_hint: "Session expired — click Login to refresh dropdown options."

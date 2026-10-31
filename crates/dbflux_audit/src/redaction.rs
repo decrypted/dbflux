@@ -182,11 +182,11 @@ fn redact_string_values(input: &str, count: &mut usize) -> (String, usize) {
 fn redact_sensitive_text(input: &str) -> (String, usize) {
     let (mut result, mut redaction_count) = dbflux_core::redact_uri_credentials(input, REDACTED);
 
-    for (_, pattern) in SENSITIVE_PATTERNS {
-        let matches = count_regex_matches(&result, pattern);
+    for pattern in sensitive_patterns() {
+        let matches = pattern.find_iter(&result).count();
         if matches > 0 {
             redaction_count += matches;
-            result = regex_replace(&result, pattern, REDACTED);
+            result = pattern.replace_all(&result, REDACTED).into_owned();
         }
     }
 
@@ -226,23 +226,28 @@ pub fn redact_error_message(input: &str, redact_sensitive: bool) -> RedactionRes
     }
 }
 
-/// Count the number of regex matches in a string.
-fn count_regex_matches(input: &str, pattern: &str) -> usize {
-    regex::Regex::new(pattern)
-        .map(|re| re.find_iter(input).count())
-        .unwrap_or(0)
-}
-
-/// Replace all regex matches in a string with a replacement.
-fn regex_replace(input: &str, pattern: &str, replacement: &str) -> String {
-    regex::Regex::new(pattern)
-        .map(|re| re.replace_all(input, replacement).to_string())
-        .unwrap_or_else(|_| input.to_string())
+/// `SENSITIVE_PATTERNS`, compiled once: every audited event runs through
+/// them, and compiling per call made redaction the cost of each record.
+fn sensitive_patterns() -> &'static [regex::Regex] {
+    static COMPILED: std::sync::LazyLock<Vec<regex::Regex>> = std::sync::LazyLock::new(|| {
+        SENSITIVE_PATTERNS
+            .iter()
+            // The patterns are constants; `every_sensitive_pattern_compiles`
+            // keeps a broken one from being skipped silently.
+            .filter_map(|(_, pattern)| regex::Regex::new(pattern).ok())
+            .collect()
+    });
+    &COMPILED
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_sensitive_pattern_compiles() {
+        assert_eq!(sensitive_patterns().len(), SENSITIVE_PATTERNS.len());
+    }
 
     #[test]
     fn test_redact_json_object_with_password() {

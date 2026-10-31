@@ -88,7 +88,7 @@ DBFlux 将所有重要操作记录到存储在 SQLite 中的统一审计追踪�
 
 默认情况下，`AuditService` 按以下设置运行：
 
-- **`redact_sensitive = true`**：`details_json` 与 `error_message` 中的敏感值（密码、令牌、连接字符串）在写入前会被替换为 `[REDACTED]`。
+- **`redact_sensitive = true`**：`details_json` 与 `error_message` 中的敏感值（密码、令牌、连接字符串）在写入前会被替换为 `[REDACTED]`。在保存捕获日志行的 `summary` 中，URL 和 `key=value` 连接字符串里的凭据会被替换；长令牌模式不会应用于此处，因此日志行中的路径和标识符保持可读。
 - **`capture_query_text = false`**：完整查询文本一律不存储。取而代之的是存储一个 SHA256 指纹加上原始长度，格式为 `[FINGERPRINT:<16-char-hex>]`，并附带 `query_length`。这样可以避免查询中的敏感数据泄漏到审计日志里。
 - **`max_detail_bytes = 65536`**：超过 64 KiB 的载荷会被拒绝，以防存储膨胀。
 

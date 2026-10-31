@@ -95,9 +95,11 @@ La validación la aplica `AuditService::validate_event()` antes de almacenar:
 Por defecto, `AuditService` se ejecuta con estos ajustes:
 
 - **`redact_sensitive = true`**: los valores sensibles (contraseñas, tokens,
-  connection strings) en `summary`, `details_json` y `error_message` se
-  reemplazan por `[REDACTED]` antes de almacenarse. Las líneas de log
-  capturadas se guardan con el mensaje del log como `summary`.
+  connection strings) en `details_json` y `error_message` se reemplazan por
+  `[REDACTED]` antes de almacenarse. En `summary`, donde se guardan las líneas
+  de log capturadas, se reemplazan las credenciales de URL y de connection
+  strings `clave=valor`; ahí no se aplican los patrones de tokens largos, así
+  que las rutas e identificadores de las líneas de log siguen siendo legibles.
 - **`capture_query_text = false`**: el texto completo de la query nunca se
   almacena. En su lugar, se guardan un fingerprint SHA256 más la longitud
   original como `[FINGERPRINT:<16-char-hex>]` con `query_length`. Esto evita que

@@ -53,7 +53,7 @@ impl StderrTail {
         if state.lines.len() == STDERR_TAIL_LINES {
             state.lines.pop_front();
         }
-        state.lines.push_back(shorten(line.trim_end()));
+        state.lines.push_back(tail_line(line));
     }
 
     fn close(&self) {
@@ -64,8 +64,8 @@ impl StderrTail {
         closed.notify_all();
     }
 
-    /// `ProxyCommand stderr: a | b | c`, redacted, or `None` when the command
-    /// printed nothing. Waits up to `wait` for stderr to close first.
+    /// `ProxyCommand stderr: a | b | c`, or `None` when the command printed
+    /// nothing. Waits up to `wait` for stderr to close first.
     pub(crate) fn summary(&self, wait: Duration) -> Option<String> {
         let (state, closed) = &*self.0;
         let state = state.lock().ok()?;
@@ -84,16 +84,57 @@ impl StderrTail {
             return None;
         }
 
-        Some(format!(
-            "ProxyCommand stderr: {}",
-            dbflux_core::sanitize_uri(&lines.join(" | "))
-        ))
+        Some(format!("ProxyCommand stderr: {}", lines.join(" | ")))
     }
 
     /// The summary for the error of a failed connect.
     pub(crate) fn for_error(&self) -> Option<String> {
         self.summary(STDERR_TAIL_WAIT)
     }
+}
+
+/// A stderr line as it may appear in an error.
+///
+/// The error of a failed connect is stored in the audit log, and a login or
+/// device URL can carry its one-time code in the path or under any query
+/// parameter, so URLs keep only their scheme and host. Credentials in
+/// `key=value` form are redacted too. Both happen before the line is
+/// shortened, so a cut cannot hide a secret from them.
+fn tail_line(line: &str) -> String {
+    shorten(&dbflux_core::sanitize_uri(&reduce_urls_to_host(
+        line.trim_end(),
+    )))
+}
+
+/// Replaces every `scheme://[user@]host...` with `scheme://host/…`.
+fn reduce_urls_to_host(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while let Some(separator) = rest.find("://") {
+        let (before, after) = rest.split_at(separator + 3);
+        output.push_str(before);
+
+        let url_end = after
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>'))
+            .unwrap_or(after.len());
+        let (url, remainder) = after.split_at(url_end);
+
+        let authority_end = url.find(['/', '?', '#']).unwrap_or(url.len());
+        let (authority, location) = url.split_at(authority_end);
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        output.push_str(host);
+        if !location.is_empty() {
+            output.push_str("/…");
+        }
+
+        rest = remainder;
+    }
+
+    output.push_str(rest);
+    output
 }
 
 fn shorten(line: &str) -> String {
@@ -280,8 +321,10 @@ mod tests {
     /// URLs and tokens on stderr.
     #[test]
     fn stderr_is_logged_at_debug_only() {
-        // Another test in this binary may have installed the same logger.
-        let _ = log::set_logger(&LOGGER);
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            log::set_logger(&LOGGER).expect("no other logger is installed in this test binary");
+        });
         log::set_max_level(log::LevelFilter::Trace);
 
         let marker = "dbflux-proxy-stderr-marker";
@@ -339,11 +382,42 @@ mod tests {
             "{summary}"
         );
         assert!(!summary.contains(&"x".repeat(201)), "{summary}");
-        assert!(
-            summary.contains("https://h.example/cb?token=***"),
-            "{summary}"
-        );
+        assert!(summary.contains("login https://h.example/…"), "{summary}");
         assert!(!summary.contains("s3cr3t"), "{summary}");
+    }
+
+    /// One-time codes ride in URL paths and in parameters no list knows.
+    #[test]
+    fn tail_lines_keep_only_the_host_of_urls() {
+        assert_eq!(
+            tail_line("open https://login.example/device/ABCD-1234 to continue"),
+            "open https://login.example/… to continue"
+        );
+        assert_eq!(
+            tail_line("callback \"http://127.0.0.1:8080/cb?user_code=XYZ#f\" ready"),
+            "callback \"http://127.0.0.1:8080/…\" ready"
+        );
+        assert_eq!(tail_line("via ssh://alice:pw@bastion"), "via ssh://bastion");
+        assert_eq!(
+            tail_line("auth failed: password=hunter2"),
+            "auth failed: password=***"
+        );
+        assert_eq!(tail_line("no url here"), "no url here");
+    }
+
+    /// Redaction runs before the cut, so a secret past the cut point cannot
+    /// lose the part that marks it as one.
+    #[test]
+    fn tail_lines_are_redacted_before_they_are_shortened() {
+        let line = format!(
+            "{} https://alice:hunter2@h.example/x",
+            "x".repeat(STDERR_TAIL_LINE_CHARS - 20)
+        );
+
+        let tail = tail_line(&line);
+
+        assert!(!tail.contains("hunter2"), "{tail}");
+        assert!(!tail.contains("alice"), "{tail}");
     }
 
     #[test]

@@ -296,6 +296,23 @@ fn resolve_partial_saved_message(
     crate::labels::auth_profiles_partial_saved_message(&written.label, &conflicted.label)
 }
 
+/// Build the user-visible message for a `Failed` save outcome, naming the
+/// file, the reason and, for a two-file edit, the file that was written.
+fn resolve_write_failed_message(
+    target: &dbflux_core::AuthEditTarget,
+    written: Option<&dbflux_core::AuthEditTarget>,
+    message: &str,
+) -> String {
+    match written {
+        Some(written) => crate::labels::auth_profiles_partial_write_failed_message(
+            &written.label,
+            &target.label,
+            message,
+        ),
+        None => crate::labels::auth_profiles_write_failed_message(&target.label, message),
+    }
+}
+
 /// Update `field_login_hint` and `provider_login_status` for a
 /// `FetchOptionsError` returned for `field_id`.
 ///
@@ -1735,6 +1752,18 @@ impl AuthProfilesSection {
                 // One resource succeeded; the other conflicted.
                 self.edit_conflict_msg =
                     Some((resolve_partial_saved_message(&written, &conflicted), true));
+                cx.notify();
+            }
+
+            AuthSaveOutcome::Failed {
+                target,
+                written,
+                message,
+            } => {
+                self.edit_conflict_msg = Some((
+                    resolve_write_failed_message(&target, written.as_ref(), &message),
+                    true,
+                ));
                 cx.notify();
             }
         }
@@ -3803,8 +3832,13 @@ mod tests {
                 target: config_target.clone(),
             },
             AuthSaveOutcome::PartialSaved {
-                written: config_target,
-                conflicted: credentials_target,
+                written: config_target.clone(),
+                conflicted: credentials_target.clone(),
+            },
+            AuthSaveOutcome::Failed {
+                target: credentials_target,
+                written: Some(config_target),
+                message: "~/.aws/credentials is a symbolic link".to_string(),
             },
         ];
 

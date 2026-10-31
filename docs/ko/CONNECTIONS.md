@@ -179,20 +179,27 @@ DBFlux는 SSH 서버에 로그인하기 전에(직접 연결이든 `ProxyCommand
 `/etc/ssh/ssh_known_hosts`, 또는 `UserKnownHostsFile`/`GlobalKnownHostsFile`이
 가리키는 파일. `HostKeyAlias`, `[host]:port`, 해시된 항목, `@revoked`는
 OpenSSH와 같게 처리)에서, 그다음 데이터 디렉터리의 자체 목록
-`ssh_known_hosts`에서 확인합니다. 다른 사용자(root 제외) 소유이거나 모든
-사용자가 쓸 수 있는 파일은 건너뛰며, 그룹이 쓸 수 있는 전역 파일도 건너뜁니다.
+`ssh_known_hosts`에서 확인합니다. Linux와 macOS에서는 다른 사용자(root 제외)
+소유이거나 모든 사용자가 쓸 수 있는 파일은 건너뛰며, 그룹이 쓸 수 있는 전역
+파일도 건너뜁니다. Windows에서는 파일 권한을 확인하지 않습니다.
 Windows에서는 기본 `%ProgramData%\ssh\ssh_known_hosts`를 읽지 않고 SSH 설정의
-`GlobalKnownHostsFile`만 읽습니다. 알려진 키면 연결합니다. 다른 키나
+`GlobalKnownHostsFile`만 읽습니다. 모든 출처가 일치해야 합니다. 하나 이상이 키를
+기록하고 다른 키를 기록한 곳이 없으면 연결합니다. 어느 한 곳이라도 같은 종류의
+다른 키를 기록하고 있으면(다른 출처가 일치하더라도) 실패하며, 경고에 불일치하는
+항목이 모두 표시됩니다(`ssh-keygen -R` 또는 DBFlux 파일의 해당 줄을 삭제). 다른 키나
 `@revoked` 키는 새 SHA256 지문을 보여 주는 경고와 함께 실패하며, 경고에서
 수락할 수 없습니다. 아무도 모르는 키는 서버, 키 종류, 지문을 보여 주는
 **알 수 없는 SSH 호스트 키** 대화 상자를 엽니다. **신뢰하고 기억**을 누르면
 키를 DBFlux 목록에만 저장하고(`~/.ssh/known_hosts`에는 쓰지 않음) 다시
 연결합니다. 대화 상자는 **취소**에 포커스가 있는 상태로 열리므로 Enter는
-취소입니다. `Tab`으로 **신뢰하고 기억**으로 이동해 Enter나 Space를 누르거나
-`Alt+T`를 누르세요. 시작 시 연결이나 MCP 서버처럼 지켜보는 사람이 없는 연결은 이런
+취소입니다. **신뢰하고 기억**은 대화 상자가 열린 뒤 1초 동안 비활성화되며, 그
+뒤 `Tab`으로 이동해 Enter나 Space를 누르거나 `Alt+T`(macOS에서는 `Option+T`)를
+누르세요. `Escape`는 언제든 취소합니다. 대화 상자가 열려 있는 동안 거부된
+연결은 기다렸다가 차례로 묻습니다. 시작 시 연결이나 MCP 서버처럼 지켜보는 사람이 없는 연결은 이런
 키를 거부합니다. SSH 설정의 `StrictHostKeyChecking`을 따르며,
 **설정 → 일반 → 새 SSH 호스트 키를 묻지 않고 신뢰**(기본값 꺼짐, 권장하지
-않음)는 `accept-new`와 같습니다. 둘 다 known_hosts에 해당 호스트의 다른 종류
+않음)는 `accept-new`와 같지만, SSH 설정에 명시한 `StrictHostKeyChecking`(`ask`
+포함)이 이 설정보다 우선합니다. 둘 다 known_hosts에 해당 호스트의 다른 종류
 키가 이미 있으면 묻지 않고 신뢰하지 않으며, MCP 서버는 시작할 때 이 설정을
 읽습니다. DBFlux가 읽을 수 없는 `StrictHostKeyChecking` 값은 `yes`로 취급합니다. 자세한 내용은 이 페이지의 영어판을 참고하세요.
 

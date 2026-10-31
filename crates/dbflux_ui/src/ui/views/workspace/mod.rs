@@ -669,17 +669,20 @@ impl Workspace {
             |this, _, outcome: &crate::ui::overlays::modals::HostKeyConfirmOutcome, _window, cx| {
                 use crate::ui::overlays::modals::HostKeyConfirmOutcome;
 
-                let Some((profile_id, key)) = this.pending_host_key.take() else {
+                let Some((_, key)) = this.pending_host_key.take() else {
                     return;
                 };
+                // The sidebar retries the answered profile and shows the next
+                // refusal that waited behind this prompt.
                 match outcome {
                     HostKeyConfirmOutcome::Trusted => match key.trust() {
                         Ok(()) => this.sidebar.update(cx, |sidebar, cx| {
-                            sidebar.connect_after_host_key_trust(profile_id, cx);
+                            sidebar.resolve_host_key_prompt(true, cx);
                         }),
                         Err(error) => {
-                            this.sidebar
-                                .update(cx, |sidebar, _| sidebar.clear_pending_host_key_trust());
+                            this.sidebar.update(cx, |sidebar, cx| {
+                                sidebar.resolve_host_key_prompt(false, cx)
+                            });
                             dbflux_ui_base::user_error::report_error(
                                 dbflux_ui_base::user_error::UserFacingError::new(
                                     dbflux_ui_base::user_error::ErrorKind::Storage,
@@ -692,7 +695,7 @@ impl Workspace {
                     HostKeyConfirmOutcome::Cancelled => {
                         key.dismiss();
                         this.sidebar
-                            .update(cx, |sidebar, _| sidebar.clear_pending_host_key_trust());
+                            .update(cx, |sidebar, cx| sidebar.resolve_host_key_prompt(false, cx));
                     }
                 }
             },
@@ -1401,11 +1404,8 @@ impl Workspace {
                     });
                 }
                 SidebarEvent::RequestHostKeyTrust { profile_id, key } => {
-                    // Never swap the key under a prompt the user is reading;
-                    // the second connect stays failed and asks on its retry.
-                    if this.modal_host_key.read(cx).is_visible() {
-                        return;
-                    }
+                    // The sidebar sends one request at a time and queues the
+                    // rest, so this never swaps the key under an open prompt.
                     let request = dbflux_ui_windows::ssh_shared::host_key_confirm_request(key);
                     this.pending_host_key = Some((*profile_id, key.clone()));
                     this.modal_host_key

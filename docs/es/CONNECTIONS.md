@@ -208,21 +208,29 @@ known_hosts de OpenSSH (`~/.ssh/known_hosts`, `/etc/ssh/ssh_known_hosts`, o los
 que indiquen `UserKnownHostsFile` y `GlobalKnownHostsFile`, con `HostKeyAlias`,
 `[host]:puerto`, entradas cifradas y `@revoked` como en OpenSSH) y después en su
 propia lista, `ssh_known_hosts` en su directorio de datos. Una clave conocida
-conecta. Se ignora un archivo de otro usuario (salvo root) o que cualquier
-usuario puede escribir, y también un archivo global con escritura para el
-grupo; en Windows no se lee el archivo predeterminado
+conecta. En Linux y macOS se ignora un archivo de otro usuario (salvo root) o
+que cualquier usuario puede escribir, y también un archivo global con
+escritura para el grupo; en Windows no se comprueban los permisos, y no se lee el archivo predeterminado
 `%ProgramData%\ssh\ssh_known_hosts`, solo un `GlobalKnownHostsFile` de tu
-configuración SSH. Una clave distinta o marcada `@revoked` falla con un aviso que muestra
-la huella SHA256 nueva y no se puede aceptar desde el aviso. Una clave que nadie
+configuración SSH. Todas las fuentes deben coincidir: si cualquiera registra
+otra clave del mismo tipo para el host (aunque otra fuente coincida), o la
+clave está marcada `@revoked`, la conexión falla con un aviso que muestra la
+huella SHA256 nueva y cada entrada que no coincide, y no se puede aceptar desde
+el aviso; elimina esas entradas (`ssh-keygen -R` o la línea que indica en el
+archivo de DBFlux). Una clave que nadie
 conoce abre **Clave de host SSH desconocida** con el servidor, el tipo y la
 huella: **Confiar y recordar** la guarda en la lista de DBFlux (nunca en
 `~/.ssh/known_hosts`) y vuelve a conectar. El diálogo abre con **Cancelar**
-enfocado, así que Enter cancela; llega a **Confiar y recordar** con `Tab` y
-pulsa Enter o Espacio, o pulsa `Alt+T`. Las conexiones sin nadie delante,
+enfocado, así que Enter cancela. **Confiar y recordar** queda desactivado un
+segundo tras abrirse el diálogo; después llega a él con `Tab` y pulsa Enter o
+Espacio, o pulsa `Alt+T` (`Option+T` en macOS). `Escape` cancela en cualquier
+momento. Las conexiones rechazadas con el diálogo abierto esperan y se
+preguntan una tras otra. Las conexiones sin nadie delante,
 como Conectar al iniciar y el servidor MCP, la rechazan. `StrictHostKeyChecking`
 de tu configuración SSH se respeta, y **Ajustes → General → Confiar en claves de
 host SSH nuevas sin preguntar** (desactivado, no recomendado) equivale a
-`accept-new`; ni uno ni otro confía sin preguntar cuando known_hosts ya tiene
+`accept-new`, aunque un `StrictHostKeyChecking` explícito en tu configuración
+SSH (incluido `ask`) tiene prioridad sobre el ajuste; ni uno ni otro confía sin preguntar cuando known_hosts ya tiene
 una clave de otro tipo para el host, y el servidor MCP lee el ajuste al
 arrancar. Un valor de `StrictHostKeyChecking` que DBFlux no entiende cuenta
 como `yes`. Detalles en la versión en inglés de esta página.

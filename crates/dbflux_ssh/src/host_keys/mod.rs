@@ -492,12 +492,13 @@ impl HostKeyVerifier {
         format!("{}\t{}", self.store_host, self.store_port)
     }
 
-    /// The OpenSSH known_hosts files are checked first and are authoritative
-    /// for the key type they record: a match there is trusted even when an
-    /// older DBFlux pin differs, and a different key there is a change even
-    /// when DBFlux pinned the presented one (the pin may come from a version
-    /// that trusted first connects silently). DBFlux's store decides only
-    /// when known_hosts holds no key of this type for the host.
+    /// Every source must agree: a key that differs from any key of the same
+    /// type recorded for the host, in any known_hosts file or in DBFlux's
+    /// store, is a change, even when another source matches it. A stale or
+    /// planted entry is then noticed instead of being outvoted, and the
+    /// message names every entry that disagrees. With no disagreement, one
+    /// matching source is enough. DBFlux's pins carry no key type, so a pin
+    /// for the host that differs always disagrees.
     pub fn check(&self, key: &PresentedKey) -> Result<HostKeyStatus, DbError> {
         let mut findings = Findings::default();
         for (path, entries) in self.read_entries() {
@@ -507,32 +508,32 @@ impl HostKeyVerifier {
         if let Some(location) = findings.revoked {
             return Ok(HostKeyStatus::Revoked { location });
         }
-        if findings.matched {
-            return Ok(HostKeyStatus::Trusted);
-        }
-        if !findings.mismatched.is_empty() {
-            return Ok(HostKeyStatus::Changed {
-                expected_in: findings.mismatched,
-            });
-        }
 
+        let mut matched = findings.matched;
+        let mut conflicts = findings.mismatched;
         let store_path = self.store.resolve()?;
         let mut pins = load_tofu_known_hosts(&store_path)?;
         let entry_key = self.store_entry_key();
         if let Some(pinned) = pins.get(&entry_key) {
-            return match host_key_matches_stored(pinned, &key.blob) {
-                HostKeyMatch::NewFormat => Ok(HostKeyStatus::Trusted),
+            match host_key_matches_stored(pinned, &key.blob) {
+                HostKeyMatch::NewFormat => matched = true,
                 HostKeyMatch::LegacyHex => {
+                    matched = true;
                     pins.insert(entry_key, key.fingerprint());
                     save_tofu_known_hosts(&store_path, &pins)?;
-                    Ok(HostKeyStatus::Trusted)
                 }
-                HostKeyMatch::Mismatch => Ok(HostKeyStatus::Changed {
-                    expected_in: vec![store_path.display().to_string()],
-                }),
-            };
+                HostKeyMatch::Mismatch => conflicts.push(store_path.display().to_string()),
+            }
         }
 
+        if !conflicts.is_empty() {
+            return Ok(HostKeyStatus::Changed {
+                expected_in: conflicts,
+            });
+        }
+        if matched {
+            return Ok(HostKeyStatus::Trusted);
+        }
         Ok(HostKeyStatus::Unknown {
             other_key_types: findings.other_types.into_iter().collect(),
         })
@@ -596,24 +597,37 @@ impl HostKeyVerifier {
     }
 
     fn changed_message(&self, key: &PresentedKey, expected_in: &[String]) -> String {
+        let store_path = self
+            .store
+            .resolve()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "DBFlux's ssh_known_hosts file".to_string());
+        let mut removals = Vec::new();
+        if expected_in.iter().any(|location| location != &store_path) {
+            removals.push(format!(
+                "{} for the known_hosts file named above",
+                keygen_remove_hint(&self.lookup_name, cfg!(unix))
+            ));
+        }
+        if expected_in.iter().any(|location| location == &store_path) {
+            removals.push(format!(
+                "delete DBFlux's pin, the line `{}` (a tab between name and port), from {}",
+                self.store_entry_key(),
+                store_path
+            ));
+        }
         format!(
             "WARNING: THE SSH HOST KEY OF {} HAS CHANGED. Someone may be intercepting this \
              connection (a man-in-the-middle attack), or the server's key was replaced. The \
              server presented a {} key with fingerprint {}, which does not match the key \
              recorded in {}. DBFlux did not connect. If the key was changed on purpose, \
              confirm the new fingerprint with the server's administrator, then remove the old \
-             key: {} for a known_hosts file, or delete the line `{}` (a tab \
-             between name and port) from {}.",
+             key: {}.",
             self.display,
             key.key_type,
             key.fingerprint(),
             expected_in.join(", "),
-            keygen_remove_hint(&self.lookup_name, cfg!(unix)),
-            self.store_entry_key(),
-            self.store
-                .resolve()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|_| "DBFlux's ssh_known_hosts file".to_string()),
+            removals.join(", and "),
         )
     }
 
@@ -865,6 +879,12 @@ impl UnknownHostKey {
     /// The user declined to trust the key; it is no longer offered.
     pub fn dismiss(&self) {
         forget_pending(self);
+    }
+
+    /// Whether the key still waits for an answer. A queued prompt for the
+    /// same host and key is settled once that key was trusted or dismissed.
+    pub fn is_pending(&self) -> bool {
+        pending().iter().any(|existing| existing == self)
     }
 }
 

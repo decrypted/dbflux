@@ -6,8 +6,9 @@ use crate::primitives::{BannerBlock, BannerVariant, SurfaceRole, surface};
 use crate::tokens::{FontSizes, Spacing};
 use dbflux_core::LogErr;
 use gpui::prelude::*;
-use gpui::{Context, EventEmitter, FocusHandle, KeyDownEvent, Window, div, px};
+use gpui::{Context, EventEmitter, FocusHandle, KeyDownEvent, Task, Window, div, px};
 use gpui_component::ActiveTheme;
+use std::time::Duration;
 
 /// Debug selector of the fingerprint box, for tests.
 pub const HOST_KEY_FINGERPRINT_SELECTOR: &str = "host-key-fingerprint";
@@ -35,12 +36,19 @@ pub enum HostKeyConfirmOutcome {
 /// The shortcut for Trust and remember, as the button's keycap shows it.
 pub const HOST_KEY_TRUST_SHORTCUT: &str = "Alt+T";
 
+/// How long Trust stays disabled after the prompt opens, as browsers do for
+/// download and permission prompts: keys typed for something else when the
+/// prompt appears (Tab then Enter in an editor) cannot reach it.
+pub const HOST_KEY_TRUST_ARM_DELAY: Duration = Duration::from_millis(1000);
+
 /// Asks whether to trust an SSH host key seen for the first time.
 ///
 /// The prompt opens when a connect is refused, often while the user is still
 /// pressing keys meant for something else, so Enter must never trust: focus
 /// starts on Cancel, and Enter or Space activate the focused button. Trust is
-/// reached with Tab, or with Alt+T. Escape cancels.
+/// reached with Tab, or with Alt+T, and only once it is armed
+/// ([`HOST_KEY_TRUST_ARM_DELAY`] after the prompt opened, again for each new
+/// request). Escape and Cancel work at once.
 pub struct ModalHostKeyConfirm {
     request: Option<HostKeyConfirmRequest>,
     visible: bool,
@@ -48,6 +56,8 @@ pub struct ModalHostKeyConfirm {
     cancel_focus: FocusHandle,
     trust_focus: FocusHandle,
     focus_cancel_on_render: bool,
+    trust_armed: bool,
+    _arm_task: Option<Task<()>>,
 }
 
 impl ModalHostKeyConfirm {
@@ -59,6 +69,8 @@ impl ModalHostKeyConfirm {
             cancel_focus: cx.focus_handle(),
             trust_focus: cx.focus_handle(),
             focus_cancel_on_render: false,
+            trust_armed: false,
+            _arm_task: None,
         }
     }
 
@@ -74,17 +86,46 @@ impl ModalHostKeyConfirm {
         self.request = Some(request);
         self.visible = true;
         self.focus_cancel_on_render = true;
+        self.arm_trust_later(cx);
         cx.notify();
+    }
+
+    /// Disarms Trust and arms it after the delay; replacing the task drops
+    /// (cancels) the timer of an earlier request.
+    fn arm_trust_later(&mut self, cx: &mut Context<Self>) {
+        self.trust_armed = false;
+        let entity = cx.entity().downgrade();
+        self._arm_task = Some(cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(HOST_KEY_TRUST_ARM_DELAY)
+                .await;
+            entity
+                .update(cx, |this, cx| {
+                    this.trust_armed = true;
+                    cx.notify();
+                })
+                .log_err();
+        }));
+    }
+
+    pub fn is_trust_armed(&self) -> bool {
+        self.trust_armed
     }
 
     fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.request = None;
+        self.trust_armed = false;
+        self._arm_task = None;
         self.focus.restore(cx);
         cx.notify();
     }
 
+    /// Does nothing until Trust is armed.
     pub fn trust(&mut self, cx: &mut Context<Self>) {
+        if !self.trust_armed {
+            return;
+        }
         cx.emit(HostKeyConfirmOutcome::Trusted);
         self.close(cx);
     }
@@ -210,6 +251,7 @@ impl Render for ModalHostKeyConfirm {
                 )
                 .kbd(HOST_KEY_TRUST_SHORTCUT)
                 .danger()
+                .disabled(!self.trust_armed)
                 .focus_handle(&self.trust_focus)
                 .on_click(on_trust),
             );
@@ -266,7 +308,9 @@ mod tests {
         assert!(text.contains("ssh-ed25519, ssh-rsa"), "{text}");
     }
 
-    use super::{HostKeyConfirmOutcome, HostKeyConfirmRequest, ModalHostKeyConfirm};
+    use super::{
+        HOST_KEY_TRUST_ARM_DELAY, HostKeyConfirmOutcome, HostKeyConfirmRequest, ModalHostKeyConfirm,
+    };
     use gpui::{AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _};
     use gpui::{TestAppContext, VisualTestContext};
     use std::cell::RefCell;
@@ -287,6 +331,14 @@ mod tests {
     }
 
     type Outcomes = Rc<RefCell<Vec<HostKeyConfirmOutcome>>>;
+
+    /// Lets the test clock pass the arming delay.
+    fn wait_until_armed(window: &mut VisualTestContext) {
+        window
+            .executor()
+            .advance_clock(HOST_KEY_TRUST_ARM_DELAY + std::time::Duration::from_millis(50));
+        window.run_until_parked();
+    }
 
     /// A full key press: a focused button activates on the release.
     fn press(window: &mut VisualTestContext, key: &str) {
@@ -367,6 +419,7 @@ mod tests {
     #[gpui::test]
     fn enter_on_the_dialog_itself_does_nothing(cx: &mut TestAppContext) {
         let (modal, outcomes, window) = open(cx);
+        wait_until_armed(window);
         window.update(|window, cx| {
             let handle = modal.read(cx).focus.handle().clone();
             handle.focus(window, cx);
@@ -379,9 +432,66 @@ mod tests {
         assert!(window.update(|_, cx| modal.read(cx).is_visible()));
     }
 
+    /// Tab then Enter, or Alt+T, typed for something else as the prompt
+    /// appears must not trust: Trust is disabled until the delay passed.
+    #[gpui::test]
+    fn trust_is_disarmed_right_after_opening(cx: &mut TestAppContext) {
+        let (modal, outcomes, window) = open(cx);
+        assert!(!window.update(|_, cx| modal.read(cx).is_trust_armed()));
+
+        window.simulate_keystrokes("alt-t");
+        window.run_until_parked();
+        press(window, "tab");
+        press(window, "enter");
+
+        assert!(
+            !outcomes.borrow().contains(&HostKeyConfirmOutcome::Trusted),
+            "{:?}",
+            outcomes.borrow()
+        );
+    }
+
+    #[gpui::test]
+    fn escape_works_before_trust_is_armed(cx: &mut TestAppContext) {
+        let (_, outcomes, window) = open(cx);
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        assert_eq!(*outcomes.borrow(), vec![HostKeyConfirmOutcome::Cancelled]);
+    }
+
+    #[gpui::test]
+    fn a_new_request_disarms_trust_again(cx: &mut TestAppContext) {
+        let (modal, outcomes, window) = open(cx);
+        wait_until_armed(window);
+        assert!(window.update(|_, cx| modal.read(cx).is_trust_armed()));
+
+        window.update(|_, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    HostKeyConfirmRequest {
+                        host: "other.example:22".to_string(),
+                        key_type: "ssh-ed25519".to_string(),
+                        fingerprint: "SHA256:def".to_string(),
+                        other_key_types: Vec::new(),
+                    },
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        assert!(!window.update(|_, cx| modal.read(cx).is_trust_armed()));
+        window.simulate_keystrokes("alt-t");
+        window.run_until_parked();
+        assert!(outcomes.borrow().is_empty());
+    }
+
     #[gpui::test]
     fn tab_then_enter_trusts(cx: &mut TestAppContext) {
         let (_, outcomes, window) = open(cx);
+        wait_until_armed(window);
 
         press(window, "tab");
         press(window, "enter");
@@ -392,6 +502,7 @@ mod tests {
     #[gpui::test]
     fn alt_t_trusts(cx: &mut TestAppContext) {
         let (_, outcomes, window) = open(cx);
+        wait_until_armed(window);
 
         window.simulate_keystrokes("alt-t");
         window.run_until_parked();

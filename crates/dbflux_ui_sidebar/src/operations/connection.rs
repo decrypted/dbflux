@@ -263,19 +263,60 @@ impl Sidebar {
         let Some(key) = dbflux_ssh::unknown_host_key_in_error(error) else {
             return false;
         };
-        self.pending_host_key_retry = Some((profile_id, password));
-        cx.emit(SidebarEvent::RequestHostKeyTrust { profile_id, key });
+        let prompt = crate::HostKeyPrompt {
+            profile_id,
+            key,
+            password,
+        };
+        let prompts = &mut self.host_key_prompts;
+        match &mut prompts.current {
+            Some(current) if current.profile_id == profile_id => *current = prompt,
+            Some(_) => {
+                // One prompt at a time: this one waits its turn instead of
+                // being dropped, and keeps its own password for the retry.
+                prompts
+                    .queued
+                    .retain(|queued| queued.profile_id != profile_id);
+                prompts.queued.push_back(prompt);
+            }
+            None => self.show_host_key_prompt(prompt, cx),
+        }
         true
     }
 
-    /// Connects `profile_id` again after its SSH host key was trusted, with
-    /// the password the refused attempt had.
-    pub fn connect_after_host_key_trust(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        match self.pending_host_key_retry.take() {
-            Some((pending, password)) if pending == profile_id => {
-                self.connect_to_profile_inner(profile_id, None, false, password, cx);
+    fn show_host_key_prompt(&mut self, prompt: crate::HostKeyPrompt, cx: &mut Context<Self>) {
+        cx.emit(SidebarEvent::RequestHostKeyTrust {
+            profile_id: prompt.profile_id,
+            key: prompt.key.clone(),
+        });
+        self.host_key_prompts.current = Some(prompt);
+    }
+
+    /// The host answered the shown prompt: `trusted` after its key was
+    /// pinned. A trusted profile connects again with the password of its
+    /// refused attempt. Queued refusals for the same host and key follow
+    /// that answer; the next other one is shown.
+    pub fn resolve_host_key_prompt(&mut self, trusted: bool, cx: &mut Context<Self>) {
+        let Some(answered) = self.host_key_prompts.current.take() else {
+            return;
+        };
+        let mut retries = Vec::new();
+        if trusted {
+            retries.push((answered.profile_id, answered.password));
+        }
+        while let Some(next) = self.host_key_prompts.queued.pop_front() {
+            if next.key == answered.key {
+                // Declined: the profile keeps its recorded connect failure.
+                if trusted {
+                    retries.push((next.profile_id, next.password));
+                }
+                continue;
             }
-            _ => self.connect_to_profile(profile_id, cx),
+            self.show_host_key_prompt(next, cx);
+            break;
+        }
+        for (profile_id, password) in retries {
+            self.connect_to_profile_inner(profile_id, None, false, password, cx);
         }
     }
 
@@ -2176,10 +2217,14 @@ mod tests {
             "the prompt replaces the error toast"
         );
         fixture.sidebar.read_with(cx, |sidebar, _| {
-            assert!(matches!(
-                sidebar.pending_host_key_retry,
-                Some((pending, _)) if pending == profile_id
-            ));
+            assert_eq!(
+                sidebar
+                    .host_key_prompts
+                    .current
+                    .as_ref()
+                    .map(|prompt| prompt.profile_id),
+                Some(profile_id)
+            );
         });
         fixture.state.read_with(cx, |state, _| {
             assert!(!state.connections().contains_key(&profile_id));
@@ -2189,9 +2234,111 @@ mod tests {
         // Cancel drops the retry; the profile stays disconnected.
         fixture
             .sidebar
-            .update(cx, |sidebar, _| sidebar.clear_pending_host_key_trust());
+            .update(cx, |sidebar, cx| sidebar.resolve_host_key_prompt(false, cx));
+        cx.run_until_parked();
         fixture.sidebar.read_with(cx, |sidebar, _| {
-            assert!(sidebar.pending_host_key_retry.is_none());
+            assert!(sidebar.host_key_prompts.current.is_none());
+        });
+        assert_eq!(requests.lock().expect("host key requests").len(), 1);
+    }
+
+    /// Several connects refused at once (Reopen last connections through a
+    /// new bastion): each waits for its own prompt instead of being dropped,
+    /// with its own password for the retry.
+    #[gpui::test]
+    fn refusals_while_a_prompt_is_open_wait_their_turn(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let first = add_saved_profile(&fixture, "unknown-host-key-q1", false, cx);
+        let second = add_saved_profile(&fixture, "unknown-host-key-q2", false, cx);
+        let requests = host_key_requests(&fixture, cx);
+
+        for profile_id in [first, second] {
+            fixture
+                .sidebar
+                .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+            cx.run_until_parked();
+        }
+
+        assert_eq!(
+            *requests.lock().expect("host key requests"),
+            vec![(first, "unknown-host-key-q1:22".to_string())],
+            "one prompt at a time"
+        );
+        fixture.sidebar.read_with(cx, |sidebar, _| {
+            let prompts = &sidebar.host_key_prompts;
+            assert_eq!(prompts.current.as_ref().map(|p| p.profile_id), Some(first));
+            assert_eq!(
+                prompts
+                    .queued
+                    .iter()
+                    .map(|p| p.profile_id)
+                    .collect::<Vec<_>>(),
+                vec![second]
+            );
+        });
+        assert!(
+            !shown_toasts(&fixture, cx)
+                .iter()
+                .any(|toast| toast.contains("Unknown SSH host key")),
+            "the waiting refusal is not shown as an error either"
+        );
+
+        // Answering the first prompt shows the second one.
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.resolve_host_key_prompt(false, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            requests.lock().expect("host key requests").last().cloned(),
+            Some((second, "unknown-host-key-q2:22".to_string()))
+        );
+        fixture.sidebar.read_with(cx, |sidebar, _| {
+            assert_eq!(
+                sidebar
+                    .host_key_prompts
+                    .current
+                    .as_ref()
+                    .map(|p| p.profile_id),
+                Some(second)
+            );
+            assert!(sidebar.host_key_prompts.queued.is_empty());
+        });
+    }
+
+    /// Trusting retries the answered profile with the password its refused
+    /// attempt had, not whatever another refusal left behind.
+    #[gpui::test]
+    fn trusting_retries_the_answered_profile_with_its_own_password(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(false, cx);
+        let first = fixture.profile_id;
+        fixture.state.update(cx, |state, _| {
+            if let Some(profile) = state.profiles_mut().iter_mut().find(|p| p.id == first) {
+                profile.name = "unknown-host-key-p1".to_string();
+            }
+        });
+        let requests = host_key_requests(&fixture, cx);
+
+        fixture.sidebar.update(cx, |sidebar, cx| {
+            sidebar.connect_to_profile_with_password(first, SecretString::from("one"), false, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(requests.lock().expect("host key requests").len(), 1);
+
+        // The fake driver accepts the profile once it is renamed, which
+        // stands in for the key being trusted now.
+        fixture.state.update(cx, |state, _| {
+            if let Some(profile) = state.profiles_mut().iter_mut().find(|p| p.id == first) {
+                profile.name = "orders".to_string();
+            }
+        });
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.resolve_host_key_prompt(true, cx));
+        cx.run_until_parked();
+
+        assert_eq!(recorded(&fixture.passwords), vec![Some("one".to_string())]);
+        fixture.state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&first));
         });
     }
 

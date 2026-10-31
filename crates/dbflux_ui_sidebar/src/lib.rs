@@ -74,6 +74,22 @@ impl SidebarTab {
     }
 }
 
+/// A connect refused for an unknown SSH host key, with the password the
+/// refused attempt had so its retry does not ask again.
+pub(crate) struct HostKeyPrompt {
+    pub(crate) profile_id: Uuid,
+    pub(crate) key: dbflux_ssh::UnknownHostKey,
+    pub(crate) password: Option<dbflux_core::secrecy::SecretString>,
+}
+
+/// One host key prompt is shown at a time; refusals that arrive meanwhile
+/// wait here, one per profile, instead of being dropped.
+#[derive(Default)]
+pub(crate) struct HostKeyPrompts {
+    pub(crate) current: Option<HostKeyPrompt>,
+    pub(crate) queued: std::collections::VecDeque<HostKeyPrompt>,
+}
+
 pub enum SidebarEvent {
     GenerateSql(String),
     RequestFocus,
@@ -1177,10 +1193,9 @@ pub struct Sidebar {
     /// Connection password of the attempt waiting for the SSH passphrase, so
     /// the retry does not ask for it again.
     pub(crate) pending_tunnel_auth_password: Option<dbflux_core::secrecy::SecretString>,
-    /// Profile and connection password of the attempt waiting for an SSH
-    /// host key to be confirmed, so the retry after "Trust and remember"
-    /// does not ask for the password again.
-    pending_host_key_retry: Option<(Uuid, Option<dbflux_core::secrecy::SecretString>)>,
+    /// Connects refused for an unknown SSH host key: the one the host is
+    /// asking about and the ones waiting behind it.
+    pub(crate) host_key_prompts: HostKeyPrompts,
     /// Profiles whose next connect was started by "Connect on startup".
     /// Nobody asked for those connects, so a tunnel passphrase they turn out
     /// to need is reported instead of opening the single-profile modal.
@@ -1519,7 +1534,7 @@ impl Sidebar {
             hovered_item_id: None,
             pending_tunnel_auth_profile_id: None,
             pending_tunnel_auth_password: None,
-            pending_host_key_retry: None,
+            host_key_prompts: HostKeyPrompts::default(),
             startup_connects: HashSet::new(),
             pending_metric_namespace_fetches: HashMap::new(),
             pending_metric_fetches: HashMap::new(),
@@ -1546,11 +1561,6 @@ impl Sidebar {
     pub fn clear_pending_tunnel_auth(&mut self) {
         self.pending_tunnel_auth_profile_id = None;
         self.pending_tunnel_auth_password = None;
-    }
-
-    /// Drops the connect attempt that was waiting for an SSH host key.
-    pub fn clear_pending_host_key_trust(&mut self) {
-        self.pending_host_key_retry = None;
     }
 
     /// Records whether the sidebar holds keyboard focus. Gaining it, including

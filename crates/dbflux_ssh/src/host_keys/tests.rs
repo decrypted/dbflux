@@ -354,7 +354,8 @@ fn a_different_key_of_the_same_type_is_a_change_with_the_fingerprint() {
 }
 
 #[test]
-fn any_matching_line_wins_over_an_older_line_like_openssh() {
+fn an_older_line_for_the_same_key_type_is_a_conflict() {
+    // Unlike OpenSSH, one match does not outvote a line that disagrees.
     let fixture = Fixture::new();
     let (old, old_line) = other_ed25519();
     fixture.write_known_hosts(&format!(
@@ -362,8 +363,18 @@ fn any_matching_line_wins_over_an_older_line_like_openssh() {
     ));
 
     let verifier = fixture.verifier("host.example", 22);
-    assert_eq!(verifier.check(&ed25519()).unwrap(), HostKeyStatus::Trusted);
-    assert_eq!(verifier.check(&old).unwrap(), HostKeyStatus::Trusted);
+    assert_eq!(
+        verifier.check(&ed25519()).unwrap(),
+        HostKeyStatus::Changed {
+            expected_in: vec![format!("{}:1", fixture.known_hosts().display())]
+        }
+    );
+    assert_eq!(
+        verifier.check(&old).unwrap(),
+        HostKeyStatus::Changed {
+            expected_in: vec![format!("{}:2", fixture.known_hosts().display())]
+        }
+    );
 }
 
 #[test]
@@ -442,23 +453,47 @@ fn the_store_decides_when_known_hosts_is_silent() {
 }
 
 #[test]
-fn known_hosts_overrules_a_pin_from_a_silent_first_connect() {
-    // The pin is what an older DBFlux stored without asking; known_hosts
-    // holds the real key.
+fn known_hosts_and_the_store_must_agree() {
     let fixture = Fixture::new();
-    let (attacker, _) = other_ed25519();
-    fixture.write_known_hosts(&format!("host.example {ED25519_LINE}\n"));
-    fs::write(
-        fixture.store(),
-        format!("host.example\t22\t{}\n", attacker.fingerprint()),
-    )
-    .unwrap();
+    let (other, _) = other_ed25519();
     let verifier = fixture.verifier("host.example", 22);
+    let pin = |fingerprint: &str| {
+        fs::write(
+            fixture.store(),
+            format!("host.example\t22\t{fingerprint}\n"),
+        )
+        .unwrap();
+    };
 
-    assert!(matches!(
-        verifier.check(&attacker).unwrap(),
-        HostKeyStatus::Changed { .. }
-    ));
+    // known_hosts matches, the store pin differs (for example a pin an older
+    // DBFlux stored without asking): refused, naming the pin.
+    fixture.write_known_hosts(&format!("host.example {ED25519_LINE}\n"));
+    pin(&other.fingerprint());
+    assert_eq!(
+        verifier.check(&ed25519()).unwrap(),
+        HostKeyStatus::Changed {
+            expected_in: vec![fixture.store().display().to_string()]
+        }
+    );
+    let message = verifier
+        .verify_presented(&ed25519())
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("delete DBFlux's pin"), "{message}");
+    assert!(!message.contains("ssh-keygen -R"), "{message}");
+
+    // The store matches, known_hosts differs: refused, naming the file.
+    pin(&other.fingerprint());
+    let message = verifier.verify_presented(&other).unwrap_err().to_string();
+    assert!(
+        message.contains(&format!("{}:1", fixture.known_hosts().display())),
+        "{message}"
+    );
+    assert!(message.contains("ssh-keygen -R"), "{message}");
+    assert!(!message.contains("delete DBFlux's pin"), "{message}");
+
+    // Both match: connect.
+    pin(ED25519_FINGERPRINT);
     assert_eq!(verifier.check(&ed25519()).unwrap(), HostKeyStatus::Trusted);
 }
 
@@ -778,8 +813,11 @@ fn a_dismissed_key_is_no_longer_offered() {
         .unwrap_err()
         .to_string();
 
-    unknown_host_key_in_error(&message).unwrap().dismiss();
+    let offered = unknown_host_key_in_error(&message).unwrap();
+    assert!(offered.is_pending());
+    offered.dismiss();
 
+    assert!(!offered.is_pending());
     assert!(unknown_host_key_in_error(&message).is_none());
     assert!(!fixture.store().exists());
 }
@@ -888,25 +926,22 @@ fn accept_new_still_asks_when_known_hosts_has_another_key_type() {
 #[test]
 fn the_suggested_ssh_keygen_command_quotes_the_name_for_the_shell() {
     let fixture = Fixture::new();
-    let name = "evil';touch pwned;'";
+    let name = "evil';touch_pwned;'";
     let alias = HostKeyOptions {
         host_key_alias: Some(name.to_string()),
         ..HostKeyOptions::default()
     };
-    fs::write(
-        fixture.store(),
-        format!("{name}\t22\t{ED25519_FINGERPRINT}\n"),
-    )
-    .unwrap();
+    fixture.write_known_hosts(&format!("{name} {ED25519_LINE}\n"));
+    let (other, _) = other_ed25519();
 
     let message = fixture
         .verifier_with("h.example", 22, &alias)
-        .verify_presented(&ecdsa())
+        .verify_presented(&other)
         .unwrap_err()
         .to_string();
 
     assert!(
-        message.contains(r#"ssh-keygen -R 'evil'\'';touch pwned;'\'''"#),
+        message.contains(r#"ssh-keygen -R 'evil'\'';touch_pwned;'\'''"#),
         "{message}"
     );
     assert_eq!(shell_quote("a'b"), r#"'a'\''b'"#);

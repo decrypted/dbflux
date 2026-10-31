@@ -454,6 +454,11 @@ impl SshTunnelsSection {
     /// Asks to trust the SSH host key `error` refused, if it is such a
     /// refusal; trusting runs the test again.
     fn offer_host_key_trust(&mut self, error: &str, cx: &mut Context<Self>) {
+        // Never swap the key under an open prompt; this test's error stays
+        // in its banner.
+        if self.host_key_modal.read(cx).is_visible() {
+            return;
+        }
         let Some(key) = dbflux_ssh::unknown_host_key_in_error(error) else {
             return;
         };

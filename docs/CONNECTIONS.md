@@ -197,31 +197,38 @@ it checks the server's host key in two places:
    up the way `ssh` looks it up: under the `HostKeyAlias` if the host sets one,
    otherwise under the host name, as `[host]:port` for a port other than 22.
    Hashed entries, wildcards and `@revoked` work as in OpenSSH. `@cert-authority`
-   lines are ignored, since DBFlux does not check host certificates. A file
-   owned by another user (other than root) or writable by every user is
-   skipped, and so is a global file that is group-writable. On Windows the default
+   lines are ignored, since DBFlux does not check host certificates. On Linux
+   and macOS a file owned by another user (other than root) or writable by
+   every user is skipped, and so is a global file that is group-writable;
+   Windows file permissions are not checked. On Windows the default
    `%ProgramData%\ssh\ssh_known_hosts` is not read, only a
    `GlobalKnownHostsFile` your SSH config names.
-2. DBFlux's own list, `ssh_known_hosts` in its data directory. It counts only
-   when known_hosts holds no key of that type for the host.
+2. DBFlux's own list, `ssh_known_hosts` in its data directory.
 
-What happens next:
+Every source has to agree. What happens next:
 
-- **A key one of them records**: DBFlux connects.
-- **A different key, or one marked `@revoked`**: the connection fails with a
-  warning that the host key has changed, the new key's SHA256 fingerprint and
-  where the old key is recorded. The warning cannot accept the key. If the key
+- **At least one of them records the key and none records a different one**:
+  DBFlux connects.
+- **Any of them records a different key of the same type for the host, or the
+  key is marked `@revoked`**: the connection fails, even if another source
+  matches, with a warning that the host key has changed, the new key's SHA256
+  fingerprint and every entry that disagrees. A stale line next to the
+  current one in known_hosts, or a DBFlux pin that differs from known_hosts,
+  therefore fails too. The warning cannot accept the key. If the key
   was changed on purpose, check the new fingerprint with the server's
-  administrator, remove the old entry (`ssh-keygen -R <host>` for known_hosts,
-  or the line the warning names in DBFlux's file) and connect again.
+  administrator, remove each entry the warning names (`ssh-keygen -R <host>` for
+  known_hosts, or the pin line it gives in DBFlux's file) and connect again.
 - **A key nobody knows yet**: **Unknown SSH host key** shows the server, the key
   type and the SHA256 fingerprint. Compare it with the server's own, for
   example `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the
   server, before you choose **Trust and remember**: DBFlux then adds the key to
   its own list (never to `~/.ssh/known_hosts`) and connects again. **Cancel**
   leaves the connection closed. The dialog opens with **Cancel** focused, so
-  Enter cancels; reach **Trust and remember** with `Tab` and press Enter or
-  Space, or press `Alt+T`. `Escape` cancels. The dialog opens when you connect from the
+  Enter cancels. **Trust and remember** stays disabled for a second after the
+  dialog opens, so keys typed for something else cannot reach it; then reach
+  it with `Tab` and press Enter or Space, or press `Alt+T` (`Option+T` on
+  macOS). `Escape` cancels at any time. Connects refused while the dialog is
+  open wait and are asked about one after another. The dialog opens when you connect from the
   sidebar and for **Test SSH** and **Test connection**. Connects nobody is
   watching, such as **Connect on startup** and the MCP server, refuse an
   unknown key instead, with a message to connect once by hand.

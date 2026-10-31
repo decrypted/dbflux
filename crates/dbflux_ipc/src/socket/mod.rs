@@ -476,8 +476,11 @@ fn check_ancestors(
     let mut check = |entry: &Path, metadata: &std::fs::Metadata| -> io::Result<()> {
         let is_link = metadata.file_type().is_symlink();
         let group_is_private = |gid: u32| {
-            let (passwd, group) = group_files.get_or_insert_with(read_group_files);
-            group_has_no_other_members(gid, owner, passwd, group)
+            let files =
+                group_files.get_or_insert_with(|| read_group_files(|path| std::fs::read(path)));
+            files.as_ref().is_some_and(|(passwd, group)| {
+                group_has_no_other_members(gid, owner, passwd, group)
+            })
         };
 
         if ancestor_is_trusted(
@@ -569,7 +572,8 @@ fn check_ancestors(
 /// `owner` whose group id equals `owner` and `group_is_private` finds no other
 /// member: the per-user group that common Linux distributions create, where
 /// umask 002 makes a user's own folders group-writable for that user alone.
-/// That is a heuristic, not proof: group members known only to a directory
+/// Unreadable account files count as a shared group. That is a heuristic, not
+/// proof: group members known only to a directory
 /// service, and write grants in POSIX ACLs (which show up as the group bits),
 /// are not seen. Refusing all group write instead would break those umask
 /// 002 setups. A sticky directory of `owner` or root is accepted whatever its
@@ -598,24 +602,37 @@ fn ancestor_is_trusted(
     mode & 0o020 == 0 || (uid == owner && gid == owner && group_is_private(gid))
 }
 
+/// The local account files as bytes, or `None` when either cannot be read.
+/// `None` makes every group count as possibly shared: a file that cannot be
+/// read cannot show that nobody else is in the group. Bytes, not text, so one
+/// non-UTF-8 entry cannot void the whole file.
 #[cfg(unix)]
-fn read_group_files() -> (String, String) {
-    // Missing files (a directory-service-only system) leave the uid == gid
-    // heuristic on its own, which the docs describe.
-    let read = |path: &str| std::fs::read_to_string(path).unwrap_or_default();
-    (read("/etc/passwd"), read("/etc/group"))
+fn read_group_files(read: impl Fn(&str) -> io::Result<Vec<u8>>) -> Option<(Vec<u8>, Vec<u8>)> {
+    match (read("/etc/passwd"), read("/etc/group")) {
+        (Ok(passwd), Ok(group)) => Some((passwd, group)),
+        (Err(error), _) | (_, Err(error)) => {
+            log::debug!("account files unreadable, group write above the IPC dir refused: {error}");
+            None
+        }
+    }
 }
 
 /// Whether the local account files show anyone but `owner` in group `gid`:
 /// another account with it as primary group, or another member listed for it.
+/// Names are compared as bytes; a line whose ids do not parse is one the
+/// system cannot use either, and is skipped.
 #[cfg(unix)]
-fn group_has_no_other_members(gid: u32, owner: u32, passwd: &str, group: &str) -> bool {
+fn group_has_no_other_members(gid: u32, owner: u32, passwd: &[u8], group: &[u8]) -> bool {
+    fn number(field: Option<&[u8]>) -> Option<u32> {
+        std::str::from_utf8(field?).ok()?.trim().parse().ok()
+    }
+
     let accounts = || {
-        passwd.lines().filter_map(|line| {
-            let mut fields = line.split(':');
+        passwd.split(|byte| *byte == b'\n').filter_map(|line| {
+            let mut fields = line.split(|byte| *byte == b':');
             let name = fields.next()?;
-            let uid = fields.nth(1)?.parse::<u32>().ok()?;
-            let primary_gid = fields.next()?.parse::<u32>().ok()?;
+            let uid = number(fields.nth(1))?;
+            let primary_gid = number(fields.next())?;
             Some((name, uid, primary_gid))
         })
     };
@@ -627,15 +644,15 @@ fn group_has_no_other_members(gid: u32, owner: u32, passwd: &str, group: &str) -
     let another_primary =
         accounts().any(|(_, uid, primary_gid)| primary_gid == gid && uid != owner);
 
-    let another_listed = group.lines().any(|line| {
-        let mut fields = line.split(':');
-        let listed_gid = fields.nth(2).and_then(|value| value.parse::<u32>().ok());
+    let another_listed = group.split(|byte| *byte == b'\n').any(|line| {
+        let mut fields = line.split(|byte| *byte == b':');
+        let listed_gid = number(fields.nth(2));
         let members = fields.next().unwrap_or_default();
 
         listed_gid == Some(gid)
             && members
-                .split(',')
-                .map(str::trim)
+                .split(|byte| *byte == b',')
+                .map(<[u8]>::trim_ascii)
                 .filter(|member| !member.is_empty())
                 .any(|member| Some(member) != own_name)
     });

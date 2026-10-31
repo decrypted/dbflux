@@ -81,7 +81,8 @@ escribible por otros, y la escritura de grupo en él solo se acepta si es tuyo,
 su id de grupo es igual a tu id de usuario y `/etc/passwd` y `/etc/group` no
 muestran a nadie más en ese grupo: el grupo por usuario de la mayoría de
 distribuciones Linux, donde un umask 002 deja tus carpetas escribibles por el
-grupo solo para ti. Es una heurística: no se ven los miembros de grupo que solo
+grupo solo para ti. Si alguno de los dos archivos no se puede leer, la
+escritura de grupo se rechaza. Es una heurística: no se ven los miembros de grupo que solo
 conoce un servicio de directorio como LDAP ni los permisos de escritura en ACL
 POSIX. Rechazar toda escritura de grupo rompería esas configuraciones con umask
 002, así que no pongas `$DBFLUX_IPC_DIR` en carpetas que comparte un grupo o

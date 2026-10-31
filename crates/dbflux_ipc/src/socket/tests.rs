@@ -416,25 +416,73 @@ fn group_write_above_the_dir_is_trusted_only_for_a_private_group() {
 
 #[test]
 fn a_group_with_another_member_in_the_account_files_is_not_private() {
-    let passwd = "root:x:0:0::/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\nbob:x:1001:1001::/home/bob:/bin/sh\n";
-    let alone = "alice:x:1000:\nbob:x:1001:\n";
-    let shared = "alice:x:1000:bob\nbob:x:1001:\n";
-    let self_listed = "alice:x:1000:alice\n";
+    let passwd: &[u8] = b"root:x:0:0::/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\nbob:x:1001:1001::/home/bob:/bin/sh\n";
+    let alone: &[u8] = b"alice:x:1000:\nbob:x:1001:\n";
+    let shared: &[u8] = b"alice:x:1000:bob\nbob:x:1001:\n";
+    let self_listed: &[u8] = b"alice:x:1000:alice\n";
 
     assert!(group_has_no_other_members(1000, 1000, passwd, alone));
     assert!(group_has_no_other_members(1000, 1000, passwd, self_listed));
     assert!(!group_has_no_other_members(1000, 1000, passwd, shared));
 
-    let carol_primary = format!("{passwd}carol:x:1002:1000::/home/carol:/bin/sh\n");
+    let carol_primary = [passwd, b"carol:x:1002:1000::/home/carol:/bin/sh\n"].concat();
     assert!(!group_has_no_other_members(
         1000,
         1000,
         &carol_primary,
         alone
     ));
+}
 
-    // No account files (directory services only): the uid == gid rule alone.
-    assert!(group_has_no_other_members(1000, 1000, "", ""));
+/// One non-UTF-8 byte used to void the whole file as text, so a member
+/// listed anywhere in it went unseen.
+#[test]
+fn a_non_utf8_entry_does_not_hide_another_member() {
+    let passwd: &[u8] =
+        b"alice:x:1000:1000::/home/alice:/bin/sh\nj\xf6rg:x:1003:1003::/home/j:/bin/sh\n";
+    let group: &[u8] = b"j\xf6rg:x:1003:\nalice:x:1000:j\xf6rg\n";
+    assert!(!group_has_no_other_members(1000, 1000, passwd, group));
+
+    let primary: &[u8] =
+        b"alice:x:1000:1000::/home/alice:/bin/sh\nj\xf6rg:x:1003:1000::/home/j:/bin/sh\n";
+    assert!(!group_has_no_other_members(
+        1000,
+        1000,
+        primary,
+        b"alice:x:1000:\n"
+    ));
+}
+
+/// A file that cannot be read cannot show the group is private.
+#[test]
+fn unreadable_account_files_make_group_write_untrusted() {
+    let unreadable = |path: &str| -> io::Result<Vec<u8>> {
+        if path == "/etc/group" {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        } else {
+            Ok(b"alice:x:1000:1000::/home/alice:/bin/sh\n".to_vec())
+        }
+    };
+    assert!(read_group_files(unreadable).is_none());
+
+    let readable = |_: &str| -> io::Result<Vec<u8>> { Ok(Vec::new()) };
+    assert!(read_group_files(readable).is_some());
+
+    // What check_ancestors does with the result.
+    let files = read_group_files(unreadable);
+    let group_is_private = |gid: u32| {
+        files
+            .as_ref()
+            .is_some_and(|(passwd, group)| group_has_no_other_members(gid, 1000, passwd, group))
+    };
+    assert!(!ancestor_is_trusted(
+        1000,
+        1000,
+        0o40775,
+        false,
+        1000,
+        group_is_private
+    ));
 }
 
 /// `alias -> mid/link2 -> real`: `mid` holds the second link but is on

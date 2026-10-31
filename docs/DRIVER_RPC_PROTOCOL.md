@@ -67,7 +67,8 @@ accepted. A directory that is not sticky must not be writable by others, and
 group write on it is accepted only if it is yours, its group id equals your
 user id, and `/etc/passwd` and `/etc/group` list no one else in that group:
 the per-user group of most Linux distributions, where umask 002 makes your
-folders group-writable for you alone. This is a heuristic: group members known
+folders group-writable for you alone. If either file cannot be read, group
+write is refused. This is a heuristic: group members known
 only to a directory service such as LDAP, and write grants in POSIX ACLs, are
 not seen. Refusing all group write instead would break those umask 002 setups,
 so keep `$DBFLUX_IPC_DIR` out of folders that a group or an ACL shares.

@@ -4,14 +4,14 @@ use std::sync::{Arc, Mutex};
 use dbflux_core::DbError;
 use dbflux_ipc::{
     DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ExternalAuditEmitter, ExternalAuditSource,
-    ProtocolVersion, RpcApiFamily,
+    IpcSocket, ProtocolVersion, RpcApiFamily,
     driver_protocol::{
         DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
         DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
     },
     driver_rpc_supported_versions, framing, process_auth_token,
 };
-use interprocess::local_socket::{Name, Stream as IpcStream, prelude::*};
+use interprocess::local_socket::Stream as IpcStream;
 use uuid::Uuid;
 
 /// Holds the mutable transport state protected by a single mutex.
@@ -77,9 +77,9 @@ impl From<RpcError> for DbError {
 }
 
 impl RpcClient {
-    /// Connects to a driver-host via a local socket name and performs the Hello handshake.
-    pub fn connect(name: Name<'_>) -> Result<Self, RpcError> {
-        Self::connect_with_audit(name, String::new(), None)
+    /// Connects to a driver host and performs the Hello handshake.
+    pub fn connect(socket: &IpcSocket) -> Result<Self, RpcError> {
+        Self::connect_with_audit(socket, String::new(), None)
     }
 
     /// Connects with an audit emitter attached for handling `EmitAuditEvent` frames.
@@ -87,12 +87,15 @@ impl RpcClient {
     /// `socket_id` is the registry key (`rpc:<socket_id>`) used for correlation.
     /// `audit_emitter` is `None` when audit emission is not wired (e.g. in tests).
     pub fn connect_with_audit(
-        name: Name<'_>,
+        socket: &IpcSocket,
         socket_id: String,
         audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
     ) -> Result<Self, RpcError> {
-        let stream =
-            IpcStream::connect(name).map_err(|e| RpcError::ConnectionFailed(e.to_string()))?;
+        // The Hello carries the auth token and later requests carry the
+        // connection secrets, so the server's uid is checked before either.
+        let stream = socket
+            .connect()
+            .map_err(|e| RpcError::ConnectionFailed(e.to_string()))?;
 
         let mut inner = RpcClientInner { stream, next_id: 0 };
         let hello = Self::perform_hello(&mut inner)?;
@@ -1020,7 +1023,7 @@ mod tests {
         ExternalAuditEmitter, ExternalAuditSource,
     };
     use dbflux_ipc::driver_protocol::DriverRequestBody;
-    use dbflux_ipc::{ProtocolVersion, driver_rpc_supported_versions, driver_socket_name};
+    use dbflux_ipc::{ProtocolVersion, driver_rpc_supported_versions, driver_socket};
     use std::sync::{Arc, Mutex};
     use uuid::Uuid;
 
@@ -1076,9 +1079,9 @@ mod tests {
         .expect("fake driver server must start");
 
         let emitter = RecordingEmitter::new();
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let socket = driver_socket(&socket_id).expect("socket");
         let client = RpcClient::connect_with_audit(
-            socket_name.borrow(),
+            &socket,
             socket_id.clone(),
             Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
         )
@@ -1103,9 +1106,9 @@ mod tests {
         .expect("fake driver server must start");
 
         let emitter = RecordingEmitter::new();
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let socket = driver_socket(&socket_id).expect("socket");
         let client = RpcClient::connect_with_audit(
-            socket_name.borrow(),
+            &socket,
             socket_id.clone(),
             Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
         )
@@ -1228,9 +1231,8 @@ mod tests {
         )
         .expect("fake driver server must start");
 
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client =
-            Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect must succeed"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect must succeed"));
 
         let handles: Vec<_> = (0..THREAD_COUNT)
             .map(|_| {
@@ -1271,9 +1273,9 @@ mod tests {
         .expect("fake driver server must start");
 
         let emitter = RecordingEmitter::new();
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let socket = driver_socket(&socket_id).expect("socket");
         let client = RpcClient::connect_with_audit(
-            socket_name.borrow(),
+            &socket,
             socket_id.clone(),
             Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
         )
@@ -1394,6 +1396,8 @@ mod tests {
             return;
         }
 
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+
         // Child side: the store holds the token; the environment does not.
         let token =
             dbflux_ipc::init_process_auth_tokens().expect("token initialization must succeed");
@@ -1467,6 +1471,8 @@ mod tests {
             return;
         }
 
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+
         // Child side: no init call, so the store is empty and the environment is
         // the only token source the parent uses.
         let data_dir = std::env::var_os("XDG_DATA_HOME")
@@ -1521,8 +1527,8 @@ mod tests {
     /// caller-supplied `DBFLUX_DRIVER_IPC_TOKEN` must still reach the Hello.
     #[test]
     fn driver_hello_carries_env_token_when_store_is_empty() {
+        use interprocess::local_socket::ListenerNonblockingMode::Neither;
         use interprocess::local_socket::traits::Listener;
-        use interprocess::local_socket::{ListenerNonblockingMode::Neither, ListenerOptions};
 
         let data_dir = fixture_data_dir("driver-fallback");
 
@@ -1542,6 +1548,8 @@ mod tests {
             return;
         }
 
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+
         // Child side: no init call, so the store is empty; the fixture-provided
         // environment variable is the only token source.
         let expected = std::env::var(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV)
@@ -1557,12 +1565,10 @@ mod tests {
                 .map(|since| since.as_nanos())
                 .unwrap_or_default()
         );
-        let name = dbflux_ipc::driver_socket_name(&socket_id).expect("socket name");
+        let socket = dbflux_ipc::driver_socket(&socket_id).expect("socket");
 
-        let listener = ListenerOptions::new()
-            .name(name.borrow())
-            .nonblocking(Neither)
-            .create_sync()
+        let listener = socket
+            .listen(Neither)
             .expect("fake driver listener must bind");
 
         let server = std::thread::spawn(move || {
@@ -1574,7 +1580,7 @@ mod tests {
 
         // The client fails once the server drops the stream after reading the
         // Hello; the captured request is the assertion.
-        let _client = RpcClient::connect(name.borrow());
+        let _client = RpcClient::connect(&socket);
 
         let request = server.join().expect("server thread must not panic");
         let dbflux_ipc::driver_protocol::DriverRequestBody::Hello(hello) = request.body else {
@@ -1584,6 +1590,109 @@ mod tests {
             hello.auth_token.as_deref(),
             Some(expected.as_str()),
             "hello must carry the caller-supplied environment token when the store is empty"
+        );
+    }
+
+    /// Every byte the squatter (another local user, or a host built before
+    /// the move to the private socket directory, bound to the old abstract
+    /// name) received until `done`.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn bytes_received_by_squatter(
+        squatter: &interprocess::local_socket::Listener,
+        done: impl Fn() -> bool,
+    ) -> Vec<u8> {
+        use interprocess::local_socket::traits::{Listener, Stream as _};
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        let mut received = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(3);
+
+        while Instant::now() < deadline {
+            match squatter.accept() {
+                Ok(mut stream) => {
+                    stream
+                        .set_recv_timeout(Some(Duration::from_millis(500)))
+                        .expect("recv timeout");
+                    let mut buffer = [0_u8; 512];
+                    while let Ok(read) = stream.read(&mut buffer) {
+                        if read == 0 {
+                            break;
+                        }
+                        received.extend_from_slice(&buffer[..read]);
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if done() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("squatter accept failed: {error}"),
+            }
+        }
+
+        received
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn rpc_client_never_sends_the_hello_to_a_squatted_abstract_name() {
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+        let socket = driver_socket(&format!("squat-{}", Uuid::new_v4().simple())).expect("socket");
+        let squatter =
+            dbflux_ipc::socket::bind_legacy_name_for_tests(&socket).expect("squatter binds");
+
+        let client = std::thread::spawn({
+            let socket = socket.clone();
+            move || RpcClient::connect(&socket).is_ok()
+        });
+        let received = bytes_received_by_squatter(&squatter, || client.is_finished());
+        let connected = client.join().expect("client thread");
+
+        assert!(
+            received.is_empty(),
+            "the squatter received {} bytes of the Hello (auth token)",
+            received.len()
+        );
+        assert!(!connected);
+    }
+
+    /// A new GUI next to a driver host that still binds the abstract name: the
+    /// probe fails at once with a message naming the cause, sends nothing to
+    /// the old host and does not wait for it.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn probing_an_rpc_driver_on_the_old_name_fails_cleanly() {
+        use crate::driver::IpcDriver;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+        let socket_id = format!("old-host-{}", Uuid::new_v4().simple());
+        let socket = dbflux_ipc::rpc_driver_socket(&socket_id).expect("socket");
+        let old_host =
+            dbflux_ipc::socket::bind_legacy_name_for_tests(&socket).expect("old host binds");
+
+        let (result_tx, result_rx) = mpsc::channel();
+        let prober = std::thread::spawn(move || {
+            let result = IpcDriver::probe_driver(&socket_id, None).map(|_| ());
+            result_tx
+                .send(result)
+                .expect("the test waits for the probe result");
+        });
+
+        let received = bytes_received_by_squatter(&old_host, || prober.is_finished());
+        prober.join().expect("prober thread");
+        let error = result_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the probe returned")
+            .expect_err("nothing listens at the new path");
+
+        assert!(received.is_empty(), "the old host received {received:?}");
+        assert!(
+            error.to_string().contains("old socket name"),
+            "the error should name the old host: {error}"
         );
     }
 }

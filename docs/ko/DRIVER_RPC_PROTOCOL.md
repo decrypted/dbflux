@@ -41,9 +41,53 @@ DBFlux는 실행 구성을 SQLite 기반의 서비스 구성에 저장합니다.
 
 DBFlux는 `interprocess`를 통해 로컬 소켓을 사용합니다:
 
-- **Linux**: 추상 네임스페이스 Unix 소켓 (`\0name`)
-- **macOS**: `/tmp/` 아래의 Unix 소켓
-- **Windows**: 네임드 파이프 (`\\.\pipe\...`)
+- **Linux 및 macOS**: 비공개 디렉터리 안에 socket ID 이름으로 만든 Unix 소켓 파일.
+  `$DBFLUX_IPC_DIR`가 있으면 그 디렉터리, 없으면 `$XDG_RUNTIME_DIR/dbflux/`
+  (Linux에서 변수가 없으면 `/run/user/<uid>/dbflux/`),
+  그것도 없으면 사용자 캐시 디렉터리의 `dbflux-ipc/`(Linux는 `~/.cache`,
+  macOS는 `~/Library/Caches`)입니다. DBFlux는 디렉터리를 `0700` 모드로 만들고,
+  심볼릭 링크이거나 다른 사용자 소유이거나 다른 사용자가 쓸 수 있는 디렉터리는 거부합니다.
+- **Windows**: 네임드 파이프 (`\\.\pipe\<name>`)
+
+관리형 호스트는 DBFlux가 사용하는 디렉터리를 `DBFLUX_IPC_DIR`로 전달받으며
+`$DBFLUX_IPC_DIR/<name>`에 바인드해야 합니다. 직접 실행하는 호스트도 같은 디렉터리를
+찾아야 합니다. `$DBFLUX_IPC_DIR`는 주어진 그대로 사용되며, 끝의 `/`나 `.`, `..`가 없는
+절대 경로이고 상위 디렉터리가 존재해야 합니다. 빈 값은 설정되지 않은 것으로 간주합니다.
+Rust에서는 `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`(또는
+`auth_provider_socket` / `secret_provider_socket`)이 디렉터리를 찾고 그 안에 소켓을
+바인드합니다.
+
+`$DBFLUX_IPC_DIR` 위쪽의 링크는 허용되며 경로는 다시 쓰이지 않습니다. DBFlux는 시스템과
+같은 방식으로 경로를 한 항목씩 따라가며, 지나가는 모든 디렉터리, 모든 링크, 링크가 가리키는
+모든 대상(링크 대상 안의 링크 포함)을 확인합니다. 각 항목은 본인 또는 root 소유여야 합니다.
+링크는 소유자만 봅니다. `/tmp`처럼 sticky인 디렉터리는 허용됩니다. sticky가 아닌 디렉터리는
+다른 사용자가 쓸 수 있어서는 안 되며, 그룹 쓰기는 본인 디렉터리이고 그룹 ID가 사용자 ID와
+같으며 `/etc/passwd`와 `/etc/group`에 그 그룹의 다른 구성원이 없을 때만 허용됩니다. 이는
+대부분의 Linux 배포판이 만드는 사용자별 그룹으로, umask 002에서는 본인 폴더가 본인만을 위한
+그룹 쓰기 권한을 갖습니다. 두 파일 중 하나라도 읽을 수 없으면 그룹 쓰기는 거부됩니다. 이것은 휴리스틱입니다. LDAP 같은 디렉터리 서비스에만 있는 그룹
+구성원과 POSIX ACL의 쓰기 권한은 보이지 않습니다. 모든 그룹 쓰기를 거부하면 umask 002 환경이
+깨지므로, 그룹이나 ACL로 공유되는 폴더에는 `$DBFLUX_IPC_DIR`를 두지 마십시오.
+
+소켓 파일 이름은 서비스 종류에 따라 다릅니다:
+
+| 종류 | 파일 이름 |
+|---|---|
+| 드라이버 | `<socket_id>` 그대로 |
+| 인증 제공자 | `dbflux-auth-provider-<socket_id>.sock` |
+| 시크릿 제공자 | `dbflux-secret-provider-<socket_id>.sock` |
+
+DBFlux 디버그 빌드는 제공자 이름의 `.sock` 앞에 `-debug`를 붙입니다. 전체 경로는
+플랫폼 한도(Linux 107바이트, macOS 103바이트)를 넘으면 안 됩니다.
+
+Linux와 macOS에서는 양쪽 모두 상대를 확인합니다. DBFlux는 인증 토큰이 담긴 `Hello`를
+보내기 전에 다른 사용자로 실행 중인 서버를 거부하고, `dbflux-driver-host`는 프레임을
+읽기 전에 다른 사용자의 클라이언트를 끊습니다. 호스트도 같은 확인을 해야 합니다:
+Linux는 `SO_PEERCRED`, macOS는 `getpeereid`, Rust에서는 `dbflux_ipc::verify_peer`.
+Windows에서는 아직 상대 확인을 하지 않습니다.
+
+이전 버전용으로 빌드된 호스트는 Linux 추상 이름이나 `/tmp/<name>`에 바인드하며, 이
+버전은 그곳에 연결하지 않습니다. 소켓을 사용할 수 없을 때 오류 메시지는 이전 버전용으로
+빌드된 호스트가 원인일 수 있으며 새 경로에서 대기하도록 업데이트해야 한다는 내용을 덧붙입니다.
 
 메시지는 다음처럼 프레이밍됩니다:
 
@@ -52,7 +96,8 @@ DBFlux는 `interprocess`를 통해 로컬 소켓을 사용합니다:
 
 최대 메시지 크기: `16 MiB`.
 
-소켓 정리는 프로세스 종료/drop 시 자동으로 이루어집니다(`interprocess`가 제공합니다).
+호스트는 정상 종료 시 소켓 파일을 삭제합니다. 비정상 종료한 호스트가 남긴 같은 사용자의
+소켓 파일은 다음 바인드 때 교체되며, 사용 중인 소켓이나 소켓이 아닌 파일은 삭제하지 않습니다.
 
 ## 런타임 구성
 
@@ -414,7 +459,7 @@ DBFlux 종료 시:
 
 서비스는 다음을 수행해야 합니다:
 
-1. `interprocess`로 소켓을 바인딩합니다
+1. 비공개 IPC 디렉터리에 소켓을 바인딩하고([전송](#전송) 참고) 다른 사용자의 상대를 거부합니다
 2. `Hello`를 처리하고 메타데이터/종류를 반환합니다
 3. `Hello`에서 폼 정의를 반환합니다
 4. `OpenSession`/`CloseSession`을 처리합니다

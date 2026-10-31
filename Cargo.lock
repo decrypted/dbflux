@@ -3604,6 +3604,7 @@ dependencies = [
  "async-trait",
  "dbflux_core",
  "dbflux_storage",
+ "dirs 6.0.0",
  "futures",
  "interprocess",
  "log",
@@ -3611,6 +3612,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "subtle",
  "tokio",
  "uuid",
 ]

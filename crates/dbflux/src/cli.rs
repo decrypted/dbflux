@@ -1,9 +1,9 @@
 use dbflux_ipc::{
-    APP_CONTROL_VERSION, framing,
+    APP_CONTROL_VERSION, app_control_socket, framing,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
-    read_app_control_token, socket_name,
+    read_app_control_token,
 };
-use interprocess::local_socket::{Stream as IpcStream, prelude::*};
+use interprocess::local_socket::prelude::*;
 use std::io;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 const CONNECT_RETRIES: usize = 20;
+const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 const RETRY_DELAY_MS: u64 = 50;
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -37,8 +38,13 @@ pub(crate) fn run(args: &[String]) -> i32 {
 }
 
 fn try_send(path: Option<&PathBuf>) -> io::Result<()> {
-    let name = socket_name()?;
-    let mut stream = IpcStream::connect(name)?;
+    // A peer that is not this user is refused before the token is sent.
+    let mut stream = app_control_socket()?.connect()?;
+    // Windows named pipes have no timeouts and report an error; the read then
+    // simply has no limit, as before.
+    if let Err(error) = stream.set_recv_timeout(Some(REPLY_TIMEOUT)) {
+        log::debug!("app-control reply timeout not applied: {error}");
+    }
 
     let msg = match path {
         Some(p) => IpcMessage::OpenScript { path: p.clone() },

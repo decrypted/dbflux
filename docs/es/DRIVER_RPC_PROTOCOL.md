@@ -54,9 +54,64 @@ Comportamiento importante:
 
 DBFlux usa sockets locales vía `interprocess`:
 
-- **Linux**: sockets Unix de namespace abstracto (`\0name`)
-- **macOS**: sockets Unix en `/tmp/`
-- **Windows**: named pipes (`\\.\pipe\...`)
+- **Linux y macOS**: un archivo de socket Unix con el nombre del socket ID,
+  dentro de un directorio privado: `$DBFLUX_IPC_DIR` si está definido; si no,
+  `$XDG_RUNTIME_DIR/dbflux/` (en Linux, `/run/user/<uid>/dbflux/` si la variable
+  no está definida); si no, `dbflux-ipc/` en el directorio de caché del
+  usuario (`~/.cache` en Linux, `~/Library/Caches` en macOS). DBFlux crea el
+  directorio con modo `0700` y rechaza uno que sea un enlace simbólico,
+  pertenezca a otro usuario o que otros puedan escribir.
+- **Windows**: named pipes (`\\.\pipe\<name>`)
+
+Un host gestionado recibe el directorio que usa DBFlux en `DBFLUX_IPC_DIR` y
+debe hacer bind de `$DBFLUX_IPC_DIR/<name>`. Un host que arrancas tú mismo debe
+resolver el mismo directorio; `$DBFLUX_IPC_DIR` se usa tal cual y debe ser una
+ruta absoluta simple (sin `/` final, sin `.` ni `..`) cuyo directorio padre
+exista. Un valor vacío cuenta como no definido. En Rust,
+`dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (o `auth_provider_socket`
+/ `secret_provider_socket`) resuelve el directorio y hace bind del socket en él.
+
+Se permiten enlaces por encima de `$DBFLUX_IPC_DIR` y la ruta no se reescribe.
+DBFlux recorre la ruta entrada a entrada, como hace el sistema, y comprueba cada
+directorio por el que pasa, cada enlace y todo lo que un enlace alcanza,
+incluidos los enlaces dentro del destino de un enlace. Cada uno debe
+pertenecerte a ti o a root. Un enlace se juzga solo por su dueño. Un directorio
+sticky como `/tmp` se acepta. Un directorio que no es sticky no puede ser
+escribible por otros, y la escritura de grupo en él solo se acepta si es tuyo,
+su id de grupo es igual a tu id de usuario y `/etc/passwd` y `/etc/group` no
+muestran a nadie más en ese grupo: el grupo por usuario de la mayoría de
+distribuciones Linux, donde un umask 002 deja tus carpetas escribibles por el
+grupo solo para ti. Si alguno de los dos archivos no se puede leer, la
+escritura de grupo se rechaza. Es una heurística: no se ven los miembros de grupo que solo
+conoce un servicio de directorio como LDAP ni los permisos de escritura en ACL
+POSIX. Rechazar toda escritura de grupo rompería esas configuraciones con umask
+002, así que no pongas `$DBFLUX_IPC_DIR` en carpetas que comparte un grupo o
+una ACL.
+
+El nombre del archivo de socket depende del tipo de service:
+
+| Tipo | Nombre de archivo |
+|---|---|
+| Driver | `<socket_id>` tal cual |
+| Auth provider | `dbflux-auth-provider-<socket_id>.sock` |
+| Secret provider | `dbflux-secret-provider-<socket_id>.sock` |
+
+Una build de debug de DBFlux pone `-debug` antes de `.sock` en los nombres de
+los providers. La ruta completa debe caber en el límite de la plataforma: 107
+bytes en Linux, 103 en macOS.
+
+En Linux y macOS ambos extremos comprueban quién está al otro lado. DBFlux
+rechaza un servidor que corre como otro usuario antes de enviar `Hello`, que
+lleva el token de autenticación, y `dbflux-driver-host` descarta clientes de
+otros usuarios antes de leer un frame. Un host debería hacer lo mismo:
+`SO_PEERCRED` en Linux, `getpeereid` en macOS, o `dbflux_ipc::verify_peer` en
+Rust. En Windows todavía no se hace ninguna comprobación del peer.
+
+Un host compilado para una versión anterior de DBFlux hace bind del nombre
+abstracto de Linux o de `/tmp/<name>`, donde esta versión ya no se conecta.
+Cuando un socket no está disponible, el error añade que la causa puede ser un
+host compilado para una versión anterior de DBFlux, que debe actualizarse para
+escuchar en la nueva ruta.
 
 Los mensajes se enmarcan como:
 
@@ -65,8 +120,9 @@ Los mensajes se enmarcan como:
 
 Tamaño máximo de mensaje: `16 MiB`.
 
-La limpieza de sockets es automática al salir/soltar el proceso (provista por
-`interprocess`).
+Un host elimina su archivo de socket al cerrarse. Un archivo de socket del mismo
+usuario que dejó un host caído se reemplaza en el siguiente bind; nunca se
+elimina un socket activo ni un archivo que no sea un socket.
 
 ## Configuración en runtime
 
@@ -587,7 +643,7 @@ del stdout/stderr reciente para ayudar en el diagnóstico.
 
 Tu servicio debería:
 
-1. hacer bind del socket vía `interprocess`
+1. hacer bind del socket en el directorio IPC privado (ver [Transporte](#transporte)) y rechazar peers de otros usuarios
 2. manejar `Hello` y devolver metadata/kind
 3. devolver una definición de formulario en `Hello`
 4. manejar `OpenSession`/`CloseSession`

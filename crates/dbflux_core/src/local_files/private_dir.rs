@@ -17,9 +17,31 @@ const MAX_NAME_ATTEMPTS: u32 = 10_000;
 /// and then read, replace or redirect every file written into it. A
 /// directory of ours that others can only read is narrowed to `0700`.
 pub fn private_dir_in(parent: &Path, name: &str) -> io::Result<PathBuf> {
+    #[cfg(unix)]
+    let owner = effective_uid();
+    #[cfg(not(unix))]
+    let owner = 0;
+
+    private_dir_in_owned_by(parent, name, owner)
+}
+
+/// [`private_dir_in`] with the expected owner passed in, so a test can make a
+/// directory of its own look like another user's. `owner` is ignored outside
+/// Unix.
+#[doc(hidden)]
+pub fn private_dir_in_owned_by(parent: &Path, name: &str, owner: u32) -> io::Result<PathBuf> {
     let path = confined_join(parent, &SafeFileName::new(name))?;
-    ensure_private_dir(&path)?;
+    ensure_private_dir(&path, owner)?;
     Ok(path)
+}
+
+/// `path` itself as a directory only `owner` can use, with the checks of
+/// [`private_dir_in`] but no rewriting of the name: for a directory the user
+/// configured, which other programs locate by the exact same path. The parent
+/// must exist. `owner` is ignored outside Unix.
+pub fn private_dir_at_owned_by(path: &Path, owner: u32) -> io::Result<PathBuf> {
+    ensure_private_dir(path, owner)?;
+    Ok(path.to_path_buf())
 }
 
 /// Creates a new, empty file only this user can read and write, named
@@ -73,7 +95,7 @@ fn private_new_file_options() -> OpenOptions {
 }
 
 #[cfg(unix)]
-fn ensure_private_dir(path: &Path) -> io::Result<()> {
+fn ensure_private_dir(path: &Path, owner: u32) -> io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 
     match std::fs::DirBuilder::new().mode(0o700).create(path) {
@@ -86,7 +108,7 @@ fn ensure_private_dir(path: &Path) -> io::Result<()> {
     if !metadata.file_type().is_dir() {
         return Err(refused(path, "is not a directory"));
     }
-    if metadata.uid() != effective_uid() {
+    if metadata.uid() != owner {
         return Err(refused(path, "belongs to another user"));
     }
 
@@ -102,7 +124,7 @@ fn ensure_private_dir(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn ensure_private_dir(path: &Path) -> io::Result<()> {
+fn ensure_private_dir(path: &Path, _owner: u32) -> io::Result<()> {
     std::fs::create_dir_all(path)?;
 
     if std::fs::symlink_metadata(path)?.file_type().is_dir() {

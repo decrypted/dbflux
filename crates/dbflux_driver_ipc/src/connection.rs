@@ -697,7 +697,7 @@ mod tests {
     use dbflux_ipc::driver_protocol::{
         DriverRequestBody, DriverResponseBody, QueryResultDto, QueryResultShapeDto,
     };
-    use dbflux_ipc::driver_socket_name;
+    use dbflux_ipc::driver_socket;
     use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
     use std::{sync::Arc, time::Duration};
     use uuid::Uuid;
@@ -710,8 +710,8 @@ mod tests {
                 .with_actions(vec![FakeDriverAction::Pong, FakeDriverAction::Pong]),
         )
         .expect("start server");
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect"));
         let connection = IpcConnection::new(
             client,
             Uuid::nil(),
@@ -787,8 +787,8 @@ mod tests {
                 .with_actions(vec![FakeDriverAction::Pong]),
         )
         .expect("start server");
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect"));
         let connection = IpcConnection::new(
             client,
             Uuid::nil(),
@@ -895,8 +895,8 @@ mod tests {
                 ]),
         )
         .expect("start server");
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect"));
         let connection = connection_declaring(
             client,
             DriverCapabilities::REQUEST_ROW_LIMIT,
@@ -1014,8 +1014,8 @@ mod tests {
                 ]),
         )
         .expect("start server");
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect"));
         let connection = connection_declaring(
             client,
             DriverCapabilities::REQUEST_ROW_LIMIT,
@@ -1061,8 +1061,8 @@ mod tests {
                 .with_actions(vec![FakeDriverAction::Pong]),
         )
         .expect("start server");
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect"));
         // Metadata is the declaration; a capability bit without it is ignored.
         let connection = connection_declaring(
             client,
@@ -1102,8 +1102,8 @@ mod tests {
                 .with_actions(vec![FakeDriverAction::Pong, FakeDriverAction::Pong]),
         )
         .expect("start server");
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect"));
         let connection = IpcConnection::new(
             client,
             Uuid::nil(),
@@ -1153,8 +1153,8 @@ mod tests {
             FakeDriverRpcConfig::new(&socket_id).with_actions(vec![FakeDriverAction::Pong]),
         )
         .expect("start server");
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect"));
         let connection = IpcConnection::new(
             client,
             Uuid::nil(),

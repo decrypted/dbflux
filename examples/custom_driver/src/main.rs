@@ -29,9 +29,7 @@ use dbflux_ipc::{
     driver_rpc_supported_versions, framing, negotiate_highest_mutual_version, ProtocolVersion,
     RpcApiFamily, DRIVER_RPC_VERSION,
 };
-use interprocess::local_socket::{
-    prelude::*, GenericNamespaced, ListenerOptions, Stream as IpcStream,
-};
+use interprocess::local_socket::{prelude::*, ListenerNonblockingMode, Stream as IpcStream};
 use uuid::Uuid;
 
 /// Mock database state - stores key-value pairs per session
@@ -90,24 +88,21 @@ fn main() {
 
     let args = parse_args();
 
-    // Create socket name using interprocess naming
-    let socket_name = format!("{}", args.socket)
-        .to_ns_name::<GenericNamespaced>()
+    // The socket file goes in the private IPC directory DBFlux connects to
+    // (`$DBFLUX_IPC_DIR`, else `$XDG_RUNTIME_DIR/dbflux`), named by the socket ID.
+    let socket = dbflux_ipc::rpc_driver_socket(&args.socket).unwrap_or_else(|e| {
+        eprintln!("Invalid socket name: {}", e);
+        std::process::exit(1);
+    });
+
+    let listener = socket
+        .listen(ListenerNonblockingMode::Neither)
         .unwrap_or_else(|e| {
-            eprintln!("Invalid socket name: {}", e);
+            eprintln!("Failed to bind socket {}: {}", socket, e);
             std::process::exit(1);
         });
 
-    // Bind to the socket
-    let listener = ListenerOptions::new()
-        .name(socket_name)
-        .create_sync()
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to bind socket: {}", e);
-            std::process::exit(1);
-        });
-
-    log::info!("Custom driver listening on socket: {}", args.socket);
+    log::info!("Custom driver listening on socket: {}", socket);
     log::info!("Press Ctrl+C to stop");
 
     let sessions = Arc::new(Mutex::new(SessionManager::new()));
@@ -116,6 +111,12 @@ fn main() {
     loop {
         match listener.accept() {
             Ok(stream) => {
+                // Only a process of this user may talk to the driver.
+                if let Err(e) = dbflux_ipc::verify_peer(&stream) {
+                    log::warn!("Rejected client: {}", e);
+                    continue;
+                }
+
                 log::info!("Client connected");
                 let sessions = Arc::clone(&sessions);
 

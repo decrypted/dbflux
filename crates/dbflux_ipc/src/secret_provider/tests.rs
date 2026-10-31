@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use dbflux_core::DbError;
 use dbflux_core::auth::ResolvedCredentials;
 use dbflux_core::values::{DynSecretProvider, ResolveContext};
+use interprocess::local_socket::ListenerNonblockingMode;
 use interprocess::local_socket::traits::Listener;
-use interprocess::local_socket::{ListenerNonblockingMode, ListenerOptions};
 use secrecy::{ExposeSecret, SecretString};
 
 use super::client::sanitize_provider_message;
@@ -17,7 +17,7 @@ use crate::envelope::{
     SECRET_PROVIDER_RPC_V1_0, SECRET_PROVIDER_RPC_VERSION, negotiate_highest_mutual_version,
 };
 use crate::framing;
-use crate::socket::secret_provider_socket_name;
+use crate::socket::secret_provider_socket;
 
 const SECRET_VALUE: &str = "s3cr3t-value-never-printed";
 
@@ -375,11 +375,9 @@ impl FakeServer {
         handler: Box<GetSecretHandler>,
     ) -> Self {
         let socket_id = format!("sp-test-{}", uuid::Uuid::new_v4().simple());
-        let name = secret_provider_socket_name(&socket_id).expect("socket name");
-        let listener = ListenerOptions::new()
-            .name(name)
-            .nonblocking(ListenerNonblockingMode::Neither)
-            .create_sync()
+        let listener = secret_provider_socket(&socket_id)
+            .expect("socket")
+            .listen(ListenerNonblockingMode::Neither)
             .expect("listener");
 
         let get_secret_requests = Arc::new(Mutex::new(Vec::new()));

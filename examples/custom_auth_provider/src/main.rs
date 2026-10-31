@@ -31,10 +31,10 @@ use dbflux_ipc::auth_provider_protocol::{
 };
 use dbflux_ipc::{
     AUTH_PROVIDER_RPC_API_CONTRACT, ProtocolVersion, RpcApiFamily,
-    auth_provider_rpc_supported_versions, auth_provider_socket_name, framing,
+    auth_provider_rpc_supported_versions, auth_provider_socket, framing,
     negotiate_highest_mutual_version,
 };
-use interprocess::local_socket::{ListenerOptions, Stream as IpcStream, traits::Listener};
+use interprocess::local_socket::{ListenerNonblockingMode, Stream as IpcStream, traits::Listener};
 
 const PROVIDER_ID: &str = "example-device-auth";
 const PROVIDER_NAME: &str = "Example Device Auth";
@@ -43,25 +43,32 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = parse_args();
-    let socket_name = auth_provider_socket_name(&args.socket).unwrap_or_else(|error| {
+    // The socket file goes in the private IPC directory DBFlux connects to
+    // (`$DBFLUX_IPC_DIR`, else `$XDG_RUNTIME_DIR/dbflux`).
+    let socket = auth_provider_socket(&args.socket).unwrap_or_else(|error| {
         eprintln!("Invalid socket name: {error}");
         std::process::exit(1);
     });
 
-    let listener = ListenerOptions::new()
-        .name(socket_name.borrow())
-        .create_sync()
+    let listener = socket
+        .listen(ListenerNonblockingMode::Neither)
         .unwrap_or_else(|error| {
-            eprintln!("Failed to bind socket: {error}");
+            eprintln!("Failed to bind socket {socket}: {error}");
             std::process::exit(1);
         });
 
-    log::info!("Custom auth provider listening on socket: {}", args.socket);
+    log::info!("Custom auth provider listening on socket: {socket}");
     log::info!("Press Ctrl+C to stop");
 
     loop {
         match listener.accept() {
             Ok(stream) => {
+                // Only a process of this user may talk to the provider.
+                if let Err(error) = dbflux_ipc::verify_peer(&stream) {
+                    log::warn!("Rejected client: {error}");
+                    continue;
+                }
+
                 log::info!("Client connected");
 
                 std::thread::spawn(move || {

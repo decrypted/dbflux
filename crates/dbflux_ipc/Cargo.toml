@@ -20,6 +20,8 @@ secrecy = "0.10"
 async-trait = { workspace = true }
 log.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+dirs.workspace = true
+subtle = "2.6"
 
 [dev-dependencies]
 futures = "0.3"

@@ -5,11 +5,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dbflux_core::DbError;
-use interprocess::local_socket::{Stream as IpcStream, prelude::*};
+use interprocess::local_socket::Stream as IpcStream;
 
 use crate::auth::{SECRET_PROVIDER_RPC_AUTH_TOKEN_ENV, process_auth_token};
 use crate::auth_provider_client::IpcServiceLaunchConfig;
-use crate::socket::secret_provider_socket_name;
+use crate::socket::{pass_ipc_dir_to, secret_provider_socket};
 
 const UNMANAGED_STARTUP_WAIT: Duration = Duration::from_millis(2_000);
 const POLL_INTERVAL: Duration = Duration::from_millis(75);
@@ -84,25 +84,29 @@ pub(super) fn validate_socket_id(socket_id: &str) -> Result<(), DbError> {
         )));
     }
 
-    secret_provider_socket_name(socket_id)
-        .map(|_| ())
-        .map_err(|error| DbError::connection_failed(error.to_string()))
+    Ok(())
 }
 
 #[allow(clippy::result_large_err)]
 pub(super) fn connect(socket_id: &str) -> Result<IpcStream, DbError> {
-    let name = secret_provider_socket_name(socket_id)
-        .map_err(|error| DbError::connection_failed(error.to_string()))?;
-
-    IpcStream::connect(name).map_err(|error| DbError::connection_failed(error.to_string()))
+    secret_provider_socket(socket_id)
+        .and_then(|socket| socket.connect())
+        .map_err(|error| DbError::connection_failed(error.to_string()))
 }
 
 #[allow(clippy::result_large_err)]
 fn socket_is_live_for(socket_id: &str) -> Result<bool, DbError> {
-    let name = secret_provider_socket_name(socket_id)
+    let socket = secret_provider_socket(socket_id)
         .map_err(|error| DbError::connection_failed(error.to_string()))?;
 
-    Ok(IpcStream::connect(name).is_ok())
+    Ok(socket.is_listening())
+}
+
+/// The legacy-host hint for an error about `socket_id`, empty when none applies.
+fn legacy_hint(socket_id: &str) -> String {
+    secret_provider_socket(socket_id)
+        .map(|socket| socket.legacy_hint())
+        .unwrap_or_default()
 }
 
 #[allow(clippy::result_large_err)]
@@ -203,8 +207,9 @@ pub(super) fn ensure_host_running_for(
 
     let Some(launch) = launch else {
         return Err(DbError::connection_failed(format!(
-            "Secret-provider socket '{}' is not available",
-            socket_id
+            "Secret-provider socket '{}' is not available{}",
+            socket_id,
+            legacy_hint(socket_id)
         )));
     };
 
@@ -220,6 +225,8 @@ fn launch_managed_host(socket_id: &str, launch: &IpcServiceLaunchConfig) -> Resu
     if let Some(token) = process_auth_token() {
         command.env(SECRET_PROVIDER_RPC_AUTH_TOKEN_ENV, token);
     }
+
+    pass_ipc_dir_to(&mut command).map_err(|error| DbError::connection_failed(error.to_string()))?;
 
     let child = command.spawn().map_err(DbError::IoError)?;
     register_managed_host(socket_id, child)?;
@@ -241,8 +248,9 @@ fn launch_managed_host(socket_id: &str, launch: &IpcServiceLaunchConfig) -> Resu
     }
 
     Err(DbError::connection_failed(format!(
-        "Managed secret-provider host for '{}' did not become ready within {} ms",
+        "Managed secret-provider host for '{}' did not become ready within {} ms{}",
         socket_id,
-        launch.startup_timeout.as_millis()
+        launch.startup_timeout.as_millis(),
+        legacy_hint(socket_id)
     )))
 }

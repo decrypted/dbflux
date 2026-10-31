@@ -701,24 +701,17 @@ pub(super) mod tests {
         use dbflux_ipc::protocol::{
             AppControlRequest, AppControlResponse, IpcMessage, IpcResponse,
         };
-        use interprocess::local_socket::{
-            GenericNamespaced, ListenerNonblockingMode, ListenerOptions, Stream as IpcStream,
-            prelude::*,
-        };
+        use interprocess::local_socket::ListenerNonblockingMode;
 
         let (workspace, window) = new_workspace(cx);
         let file = TestFile::new(&format.file_name("cities"));
 
-        let socket = format!("dbflux-test-{}.sock", uuid::Uuid::new_v4());
-        let listener = ListenerOptions::new()
-            .name(
-                socket
-                    .clone()
-                    .to_ns_name::<GenericNamespaced>()
-                    .expect("a valid socket name"),
-            )
-            .nonblocking(ListenerNonblockingMode::Accept)
-            .create_sync()
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("a private test socket dir");
+        let socket =
+            dbflux_ipc::driver_socket(&format!("ui-test-{}", uuid::Uuid::new_v4().simple()))
+                .expect("a valid socket name");
+        let listener = socket
+            .listen(ListenerNonblockingMode::Accept)
             .expect("the test socket binds");
 
         window.update(|window, cx| {
@@ -731,12 +724,7 @@ pub(super) mod tests {
             );
         });
 
-        let mut stream = IpcStream::connect(
-            socket
-                .to_ns_name::<GenericNamespaced>()
-                .expect("a valid socket name"),
-        )
-        .expect("the test socket accepts");
+        let mut stream = socket.connect().expect("the test socket accepts");
         let request = AppControlRequest::new(
             1,
             Some("token".to_string()),

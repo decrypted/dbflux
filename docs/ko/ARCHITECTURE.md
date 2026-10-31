@@ -439,7 +439,7 @@ crates/
     src/protocol.rs         # 단일 인스턴스 앱 제어 메시지
     src/driver_protocol.rs  # 드라이버 RPC 요청/응답 스키마 (DTO + 오류)
     src/framing.rs          # 길이 접두사 postcard 전송 프레이밍
-    src/socket.rs           # 크로스 플랫폼 소켓 이름 지정 헬퍼
+    src/socket/             # 사용자별 비공개 IPC 소켓 디렉터리, 소켓 이름, 상대 확인
   dbflux_driver_ipc/        # 외부 RPC 서비스를 위한 DbDriver 어댑터
     src/driver.rs           # IpcDriver + 관리형 호스트 수명 주기
     src/transport.rs        # RPC 클라이언트 전송 및 핸드셰이크

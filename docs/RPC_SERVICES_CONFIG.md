@@ -94,7 +94,8 @@ Notes:
 - `socket_id` (required): local socket name used by DBFlux and the service.
   - Allowed characters: ASCII letters, numbers, `.`, `_`, `-`
   - Path separators, spaces, and other punctuation are rejected.
-  - The value is passed to the platform socket namespace as-is, so keep it short and stable.
+  - The value names the socket file in the private IPC directory (see [Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md#transport)): a driver uses `<socket_id>` as-is, an auth provider `dbflux-auth-provider-<socket_id>.sock` and a secret provider `dbflux-secret-provider-<socket_id>.sock` (`-debug` before `.sock` from a debug build).
+  - The whole path, prefix included, must fit the platform limit of 107 bytes on Linux and 103 on macOS, so keep it short and stable.
 - `command` (optional): executable to run when DBFlux needs to start the service.
   - If omitted and `args` is also empty, DBFlux treats the service as already running and does not spawn anything.
   - For `driver`, if omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.

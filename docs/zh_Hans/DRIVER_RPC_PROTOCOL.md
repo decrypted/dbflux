@@ -41,9 +41,44 @@ DBFlux 将启动配置存放在基于 SQLite 的服务配置中。RPC 服务在 
 
 DBFlux 通过 `interprocess` 使用本地 Socket：
 
-- **Linux**：抽象命名空间 Unix Socket（`\0name`）
-- **macOS**：位于 `/tmp/` 的 Unix Socket
-- **Windows**：命名管道（`\\.\pipe\...`）
+- **Linux 和 macOS**：私有目录中以 socket ID 命名的 Unix Socket 文件。目录依次为
+  `$DBFLUX_IPC_DIR`（如已设置）、`$XDG_RUNTIME_DIR/dbflux/`（Linux 上未设置该变量时为
+  `/run/user/<uid>/dbflux/`）、用户缓存目录中的
+  `dbflux-ipc/`（Linux 为 `~/.cache`，macOS 为 `~/Library/Caches`）。DBFlux 以
+  `0700` 权限创建该目录，并拒绝符号链接、属于其他用户或其他用户可写的目录。
+- **Windows**：命名管道（`\\.\pipe\<name>`）
+
+受管主机通过 `DBFLUX_IPC_DIR` 获得 DBFlux 使用的目录，必须绑定
+`$DBFLUX_IPC_DIR/<name>`。手动启动的主机也必须解析出同一目录；`$DBFLUX_IPC_DIR`
+按原样使用，必须是不带末尾 `/`、不含 `.` 或 `..` 的绝对路径，其父目录必须存在。空值视为未设置。
+在 Rust 中，`dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`（或
+`auth_provider_socket` / `secret_provider_socket`）会解析该目录并在其中绑定 Socket。
+
+允许 `$DBFLUX_IPC_DIR` 上方存在链接，且路径不会被改写。DBFlux 像系统一样逐项解析路径，
+检查经过的每个目录、每个链接以及链接指向的一切，包括链接目标中的链接。每一项都必须属于你或 root。
+链接只看其所有者。像 `/tmp` 一样设置了 sticky 位的目录会被接受。未设置 sticky 位的目录不能被其他用户写入，
+其组写权限仅在以下情况下被接受：目录属于你、其组 ID 等于你的用户 ID，且 `/etc/passwd` 和 `/etc/group`
+中没有该组的其他成员。这就是大多数 Linux 发行版为每个用户创建的私有组，umask 002 会让你的文件夹仅对你自己具有组写权限。
+若任一文件无法读取，则拒绝组写权限。这是一种启发式判断：仅存在于 LDAP 等目录服务中的组成员以及 POSIX ACL 中的写权限无法被识别。
+拒绝所有组写权限会破坏这些 umask 002 环境，因此请不要把 `$DBFLUX_IPC_DIR` 放在由组或 ACL 共享的文件夹中。
+
+Socket 文件名取决于服务类型：
+
+| 类型 | 文件名 |
+|---|---|
+| 驱动 | 原样使用 `<socket_id>` |
+| 认证提供者 | `dbflux-auth-provider-<socket_id>.sock` |
+| 密钥提供者 | `dbflux-secret-provider-<socket_id>.sock` |
+
+DBFlux 的调试构建会在提供者名称的 `.sock` 前加上 `-debug`。完整路径必须符合平台限制：
+Linux 107 字节，macOS 103 字节。
+
+在 Linux 和 macOS 上，双方都会校验对端。DBFlux 在发送携带认证令牌的 `Hello` 之前拒绝以其他用户身份运行的服务端，
+`dbflux-driver-host` 会在读取帧之前断开其他用户的客户端。主机也应做同样的校验：Linux 上用
+`SO_PEERCRED`，macOS 上用 `getpeereid`，Rust 中用 `dbflux_ipc::verify_peer`。Windows 上目前尚不做对端校验。
+
+为旧版本 DBFlux 构建的主机绑定 Linux 抽象名称或 `/tmp/<name>`，本版本不再连接这些位置。
+当 Socket 不可用时，错误信息会补充说明原因可能是为旧版本 DBFlux 构建的主机，此类主机必须更新以监听新路径。
 
 消息帧格式如下：
 
@@ -52,7 +87,8 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
 
 最大消息大小：`16 MiB`。
 
-进程退出或 Socket 被 drop 时会自动清理（由 `interprocess` 提供）。
+主机正常退出时会删除其 Socket 文件。崩溃的主机遗留的同一用户的 Socket 文件会在下次绑定时被替换；
+正在使用的 Socket 或非 Socket 文件永远不会被删除。
 
 ## 运行时配置
 
@@ -414,7 +450,7 @@ DBFlux 关闭时：
 
 你的服务应当：
 
-1. 通过 `interprocess` 绑定 Socket
+1. 在私有 IPC 目录中绑定 Socket（参见[传输层](#传输层)），并拒绝其他用户的对端
 2. 处理 `Hello` 并返回元数据与 `kind`
 3. 在 `Hello` 中返回表单定义
 4. 处理 `OpenSession` / `CloseSession`

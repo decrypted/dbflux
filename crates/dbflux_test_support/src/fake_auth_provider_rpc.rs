@@ -11,10 +11,10 @@ use dbflux_ipc::auth_provider_protocol::{
 };
 use dbflux_ipc::{
     AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, ProtocolVersion,
-    auth_provider_rpc_supported_versions, auth_provider_socket_name, framing,
+    auth_provider_rpc_supported_versions, auth_provider_socket, framing,
     negotiate_auth_provider_version,
 };
-use interprocess::local_socket::{ListenerNonblockingMode::Neither, ListenerOptions};
+use interprocess::local_socket::ListenerNonblockingMode::Neither;
 
 #[derive(Clone, Debug)]
 pub enum FakeAuthRpcResult<T> {
@@ -81,11 +81,9 @@ pub struct FakeAuthProviderRpcServer {
 
 impl FakeAuthProviderRpcServer {
     pub fn start(config: FakeAuthProviderRpcConfig) -> io::Result<Self> {
-        let socket_name = auth_provider_socket_name(&config.socket_id)?;
-        let listener = ListenerOptions::new()
-            .name(socket_name.borrow())
-            .nonblocking(Neither)
-            .create_sync()?;
+        // Never the sockets of a DBFlux that runs on this machine.
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests()?;
+        let listener = auth_provider_socket(&config.socket_id)?.listen(Neither)?;
 
         let join_handle = thread::spawn(move || run_server(listener, config));
 

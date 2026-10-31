@@ -158,6 +158,7 @@ fn spawned_auth_provider_host_receives_store_token_explicitly() {
     }
 
     // Child side: the store holds the token; the environment does not.
+    dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
     let token = init_process_auth_tokens().expect("token initialization must succeed");
 
     // The scratch dir is whatever the parent provisioned via the fixture.

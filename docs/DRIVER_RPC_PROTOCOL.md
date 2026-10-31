@@ -41,9 +41,60 @@ Important behavior:
 
 DBFlux uses local sockets via `interprocess`:
 
-- **Linux**: abstract namespace Unix sockets (`\0name`)
-- **macOS**: Unix sockets in `/tmp/`
-- **Windows**: named pipes (`\\.\pipe\...`)
+- **Linux and macOS**: a Unix socket file named after the socket ID, inside a
+  private directory: `$DBFLUX_IPC_DIR` when set, otherwise
+  `$XDG_RUNTIME_DIR/dbflux/` (`/run/user/<uid>/dbflux/` on Linux when the
+  variable is unset), otherwise `dbflux-ipc/` in the user cache
+  directory (`~/.cache` on Linux, `~/Library/Caches` on macOS). DBFlux creates
+  the directory with mode `0700` and refuses one that is a symbolic link,
+  belongs to another user or can be written by others.
+- **Windows**: named pipes (`\\.\pipe\<name>`)
+
+A managed host receives the directory DBFlux uses in `DBFLUX_IPC_DIR` and must
+bind `$DBFLUX_IPC_DIR/<name>`. A host you start yourself must resolve the same
+directory; `$DBFLUX_IPC_DIR` is used exactly as given and must be a plain
+absolute path (no trailing `/`, no `.` or `..`) whose parent exists. An empty
+value counts as unset. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
+(or `auth_provider_socket` / `secret_provider_socket`) resolves the directory
+and binds the socket in it.
+
+Links above `$DBFLUX_IPC_DIR` are allowed and the path is not rewritten. DBFlux
+follows the path one entry at a time, as the system does, and checks every
+directory it passes through, every link and everything a link leads to,
+including links inside a link's target. Each must belong to you or root. A link
+is judged by its owner only. A directory that is sticky like `/tmp` is
+accepted. A directory that is not sticky must not be writable by others, and
+group write on it is accepted only if it is yours, its group id equals your
+user id, and `/etc/passwd` and `/etc/group` list no one else in that group:
+the per-user group of most Linux distributions, where umask 002 makes your
+folders group-writable for you alone. If either file cannot be read, group
+write is refused. This is a heuristic: group members known
+only to a directory service such as LDAP, and write grants in POSIX ACLs, are
+not seen. Refusing all group write instead would break those umask 002 setups,
+so keep `$DBFLUX_IPC_DIR` out of folders that a group or an ACL shares.
+
+The socket file name depends on the service kind:
+
+| Kind | File name |
+|---|---|
+| Driver | `<socket_id>` as-is |
+| Auth provider | `dbflux-auth-provider-<socket_id>.sock` |
+| Secret provider | `dbflux-secret-provider-<socket_id>.sock` |
+
+A debug build of DBFlux puts `-debug` before `.sock` in the provider names.
+The whole path must fit the platform limit: 107 bytes on Linux, 103 on macOS.
+
+On Linux and macOS both ends check who is on the other side. DBFlux refuses a
+server that runs as another user before it sends `Hello`, which carries the
+auth token, and `dbflux-driver-host` drops clients of other users before
+reading a frame. A host should do the same: `SO_PEERCRED` on Linux,
+`getpeereid` on macOS, or `dbflux_ipc::verify_peer` in Rust. On Windows no peer
+check is made yet.
+
+A host built for an older DBFlux binds the Linux abstract name or `/tmp/<name>`,
+which this version no longer connects to. When a socket is not available, the
+error adds that a host built for an older DBFlux may be the cause and must be
+updated to listen on the new path.
 
 Messages are framed as:
 
@@ -52,7 +103,9 @@ Messages are framed as:
 
 Maximum message size: `16 MiB`.
 
-Socket cleanup is automatic on process exit/drop (provided by `interprocess`).
+A host removes its socket file when it shuts down cleanly. A socket file of the
+same user that a crashed host left behind is replaced on the next bind; a live
+socket or a file that is not a socket is never removed.
 
 ## Runtime configuration
 
@@ -414,7 +467,7 @@ If a managed host exits early or times out before the socket is ready, DBFlux re
 
 Your service should:
 
-1. bind socket via `interprocess`
+1. bind the socket in the private IPC directory (see [Transport](#transport)) and refuse peers of other users
 2. handle `Hello` and return metadata/kind
 3. return a form definition in `Hello`
 4. handle `OpenSession`/`CloseSession`

@@ -139,6 +139,11 @@ jobs:
       - name: Check paths built from names
         run: python3 scripts/lint.py file-names
 
+      # An abstract socket name has no owner, so another local user can bind
+      # it first; sockets come only from the dbflux_ipc::socket helpers.
+      - name: Check local socket names
+        run: python3 scripts/lint.py abstract-sockets
+
   # Gated at the job level, unlike cross-platform-check in tests.yml: the
   # required "Clippy" context is carried by clippy-result below, not by these
   # matrix legs. Fail-open like every other gate: `always()` keeps this job

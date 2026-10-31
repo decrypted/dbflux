@@ -11,8 +11,8 @@ use dbflux_core::{
     ConnectionProfile, DbConfig, DbError, DbKind, DriverFormDef, DriverMetadata, FormValues,
 };
 use dbflux_ipc::ExternalAuditEmitter;
+use dbflux_ipc::IpcSocket;
 use dbflux_ipc::driver_protocol::DriverResponseBody;
-use interprocess::local_socket::{GenericNamespaced, Name, Stream as IpcStream, prelude::*};
 
 use crate::connection::IpcConnection;
 use crate::transport::RpcClient;
@@ -87,9 +87,9 @@ pub fn shutdown_managed_hosts() -> usize {
 
 /// An IPC-based driver that proxies all operations to a remote driver-host process.
 ///
-/// The driver connects to a driver-host over a local socket identified by a
-/// string name (not a filesystem path). The underlying transport is cross-platform:
-/// abstract namespace UDS on Linux, UDS in /tmp on macOS, named pipes on Windows.
+/// The driver connects to a driver host over the local socket named by the
+/// service's `socket_id`: a socket file in the private IPC directory on Linux
+/// and macOS (see `dbflux_ipc::socket`), a named pipe on Windows.
 ///
 /// `kind`, `metadata`, and `form_definition` are provided at construction time
 /// (typically from a probe against the driver host), so the driver can satisfy
@@ -226,7 +226,7 @@ impl IpcDriver {
             ));
         }
 
-        Self::parse_socket_name(socket_id).map(|_| ())
+        Ok(())
     }
 
     #[allow(clippy::result_large_err)]
@@ -236,9 +236,9 @@ impl IpcDriver {
     ) -> Result<(DbKind, DriverMetadata, DriverFormDef, Option<DriverFormDef>), DbError> {
         Self::ensure_host_running_for(socket_id, launch)?;
 
-        let name = Self::parse_socket_name(socket_id)?;
+        let socket = Self::socket_for(socket_id)?;
 
-        let client = RpcClient::connect(name).map_err(DbError::from)?;
+        let client = RpcClient::connect(&socket).map_err(DbError::from)?;
         let hello = client.hello_response();
 
         Ok((
@@ -251,12 +251,14 @@ impl IpcDriver {
 
     #[allow(clippy::result_large_err)]
     fn socket_is_live_for(socket_id: &str) -> Result<bool, DbError> {
-        let name = Self::parse_socket_name(socket_id)?;
+        Ok(Self::socket_for(socket_id)?.is_listening())
+    }
 
-        match IpcStream::connect(name) {
-            Ok(_) => Ok(true),
-            Err(_) => Ok(false),
-        }
+    /// The legacy-host hint for an error about `socket_id`, empty when none applies.
+    fn legacy_hint(socket_id: &str) -> String {
+        Self::socket_for(socket_id)
+            .map(|socket| socket.legacy_hint())
+            .unwrap_or_default()
     }
 
     #[allow(clippy::result_large_err)]
@@ -309,10 +311,8 @@ impl IpcDriver {
     }
 
     #[allow(clippy::result_large_err)]
-    fn parse_socket_name(socket_id: &str) -> Result<Name<'static>, DbError> {
-        socket_id
-            .to_string()
-            .to_ns_name::<GenericNamespaced>()
+    fn socket_for(socket_id: &str) -> Result<IpcSocket, DbError> {
+        dbflux_ipc::rpc_driver_socket(socket_id)
             .map_err(|e| DbError::ConnectionFailed(e.to_string().into()))
     }
 
@@ -356,7 +356,12 @@ impl IpcDriver {
 
         let Some(launch) = launch else {
             return Err(DbError::ConnectionFailed(
-                format!("Driver host socket '{}' is not available", socket_id).into(),
+                format!(
+                    "Driver host socket '{}' is not available{}",
+                    socket_id,
+                    Self::legacy_hint(socket_id)
+                )
+                .into(),
             ));
         };
 
@@ -385,6 +390,9 @@ impl IpcDriver {
         if let Some(token) = auth_token {
             command.env(dbflux_ipc::DRIVER_RPC_AUTH_TOKEN_ENV, token);
         }
+
+        dbflux_ipc::socket::pass_ipc_dir_to(&mut command)
+            .map_err(|e| DbError::ConnectionFailed(e.to_string().into()))?;
 
         let mut child = command.spawn().map_err(|e| {
             DbError::ConnectionFailed(
@@ -433,9 +441,10 @@ impl IpcDriver {
         Err(DbError::ConnectionFailed(
             Self::with_startup_details(
                 format!(
-                    "Driver host '{}' did not become ready within {} ms",
+                    "Driver host '{}' did not become ready within {} ms{}",
                     launch.program,
-                    launch.startup_timeout.as_millis()
+                    launch.startup_timeout.as_millis(),
+                    Self::legacy_hint(socket_id)
                 ),
                 details,
             )
@@ -732,11 +741,14 @@ impl dbflux_core::DbDriver for IpcDriver {
     ) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
         self.ensure_host_running()?;
 
-        let name = Self::parse_socket_name(&self.socket_id)?;
+        let socket = Self::socket_for(&self.socket_id)?;
 
-        let client =
-            RpcClient::connect_with_audit(name, self.socket_id.clone(), self.audit_emitter.clone())
-                .map_err(DbError::from)?;
+        let client = RpcClient::connect_with_audit(
+            &socket,
+            self.socket_id.clone(),
+            self.audit_emitter.clone(),
+        )
+        .map_err(DbError::from)?;
 
         let profile_json = serde_json::to_string(profile)
             .map_err(|e| DbError::InvalidProfile(format!("JSON serialization failed: {e}")))?;
@@ -780,11 +792,14 @@ impl dbflux_core::DbDriver for IpcDriver {
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
         self.ensure_host_running()?;
 
-        let name = Self::parse_socket_name(&self.socket_id)?;
+        let socket = Self::socket_for(&self.socket_id)?;
 
-        let client =
-            RpcClient::connect_with_audit(name, self.socket_id.clone(), self.audit_emitter.clone())
-                .map_err(DbError::from)?;
+        let client = RpcClient::connect_with_audit(
+            &socket,
+            self.socket_id.clone(),
+            self.audit_emitter.clone(),
+        )
+        .map_err(DbError::from)?;
 
         let profile_json = serde_json::to_string(profile)
             .map_err(|e| DbError::InvalidProfile(format!("JSON serialization failed: {e}")))?;

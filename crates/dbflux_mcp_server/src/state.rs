@@ -2336,6 +2336,9 @@ mod tests {
 
     #[test]
     fn build_auth_provider_registry_skips_incompatible_persisted_service() {
+        // The registries probe these services; never in the real IPC dir.
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+
         let mut services = vec![ServiceConfig {
             socket_id: "bad-auth".to_string(),
             enabled: true,
@@ -2375,6 +2378,9 @@ mod tests {
 
     #[test]
     fn secret_provider_service_is_not_treated_as_auth_provider() {
+        // The registries probe these services; never in the real IPC dir.
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+
         let socket_id = format!("mcp-secret-{}", uuid::Uuid::new_v4().simple());
         let services = vec![unreachable_service(
             &socket_id,
@@ -2395,6 +2401,9 @@ mod tests {
 
     #[test]
     fn auth_and_driver_services_are_not_treated_as_secret_providers() {
+        // The registries probe these services; never in the real IPC dir.
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+
         let services = vec![
             unreachable_service("mcp-auth-only", RpcServiceKind::AuthProvider),
             unreachable_service("mcp-driver-only", RpcServiceKind::Driver),
@@ -2405,6 +2414,9 @@ mod tests {
 
     #[test]
     fn build_secret_provider_registry_skips_incompatible_and_unreachable_services() {
+        // The registries probe these services; never in the real IPC dir.
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+
         let mut incompatible = unreachable_service("bad-secret", RpcServiceKind::SecretProvider);
         incompatible.api_contract = Some(dbflux_core::ServiceRpcApiContract::new(
             "auth_provider_rpc",

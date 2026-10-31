@@ -75,6 +75,15 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update && sudo apt-get install -y python3-yaml; }
           python3 scripts/test_workflow_security.py
 
+      - name: Check the static source contracts
+        # style.yml does not run in the fork. A left-button on_mouse_down must be a press handler
+        # in scripts/mouse_down_allowlist.txt, and generated SQL must quote names and values with
+        # the dialect's helper unless the site is in scripts/unquoted_sql_allowlist.txt. Plain
+        # Python over the checkout: no build, no secrets.
+        run: |
+          python3 scripts/lint.py mouse-down
+          python3 scripts/lint.py unquoted-sql
+
   build:
     name: Build
     needs: [compute-version, checks]

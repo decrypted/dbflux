@@ -1,5 +1,6 @@
 use super::*;
 use crate::api::hook::LuaHookOutcome;
+use crate::test_support::path_lock;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -301,16 +302,6 @@ fn env_get_allows_unrelated_vars() {
 // =========================================================================
 // Child environment of dbflux.process.run
 // =========================================================================
-
-/// Held by tests that spawn a child and by the test that swaps `PATH`: under a
-/// threaded `cargo test` a spawn during the swap cannot find the interpreter.
-static PATH_LOCK: Mutex<()> = Mutex::new(());
-
-fn path_lock() -> std::sync::MutexGuard<'static, ()> {
-    PATH_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
 
 const PRINT_ENV_SCRIPT: &str = "import os, sys\nfor name in sys.argv[1:]:\n    print(name + '=' + os.environ.get(name, '<unset>'))";
 

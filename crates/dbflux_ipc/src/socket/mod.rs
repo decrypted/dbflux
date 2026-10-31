@@ -436,50 +436,117 @@ fn explicit_ipc_dir(explicit: &Path, owner: u32) -> io::Result<PathBuf> {
     dbflux_core::local_files::private_dir_at_owned_by(explicit, owner).map_err(not_private)
 }
 
-/// Every directory above the IPC directory must be one nobody else can change,
-/// or another user could rename the IPC directory away after the checks and
-/// put their own in its place. Links above it are allowed (`/tmp` is one on
-/// macOS): the given path is walked entry by entry, so a link's own owner is
-/// checked, and then the resolved path, so its target is checked too. The
-/// path DBFlux uses stays the one configured.
+/// Every entry above the IPC directory must be one nobody else can change, or
+/// another user could rename the IPC directory away after the checks, or
+/// repoint a link on the way, and put their own directory in its place.
+///
+/// The path is resolved one component at a time, the way the kernel does it,
+/// so every entry the lookup passes through is checked: each directory, each
+/// link (by its owner) and, through the link's target, every directory and
+/// link that target leads to, nested links included. The path DBFlux uses
+/// stays the one configured.
 #[cfg(unix)]
 fn check_ancestors(
     parent: &Path,
     owner: u32,
     with_context: impl Fn(io::Error, &Path) -> io::Error,
 ) -> io::Result<()> {
+    use std::collections::VecDeque;
     use std::os::unix::fs::MetadataExt;
 
-    let canonical = parent
-        .canonicalize()
-        .map_err(|error| with_context(error, parent))?;
+    /// Bounded like the kernel's own limit, so a link loop ends in an error.
+    const MAX_LINK_HOPS: usize = 40;
 
-    let given = parent
-        .ancestors()
-        .map(|dir| (dir, std::fs::symlink_metadata(dir)));
-    let resolved = canonical
-        .ancestors()
-        .map(|dir| (dir, std::fs::metadata(dir)));
+    enum Step {
+        Up,
+        Name(std::ffi::OsString),
+    }
 
-    for (dir, metadata) in given.chain(resolved) {
-        let metadata = metadata.map_err(|error| with_context(error, dir))?;
+    fn steps(path: &Path) -> Vec<Step> {
+        path.components()
+            .filter_map(|component| match component {
+                Component::ParentDir => Some(Step::Up),
+                Component::Normal(name) => Some(Step::Name(name.to_os_string())),
+                Component::RootDir | Component::CurDir | Component::Prefix(_) => None,
+            })
+            .collect()
+    }
+
+    let mut group_files = None;
+    let mut check = |entry: &Path, metadata: &std::fs::Metadata| -> io::Result<()> {
         let is_link = metadata.file_type().is_symlink();
+        let group_is_private = |gid: u32| {
+            let (passwd, group) = group_files.get_or_insert_with(read_group_files);
+            group_has_no_other_members(gid, owner, passwd, group)
+        };
 
-        if !ancestor_is_trusted(
+        if ancestor_is_trusted(
             metadata.uid(),
             metadata.gid(),
             metadata.mode(),
             is_link,
             owner,
+            group_is_private,
         ) {
-            return Err(io::Error::new(
+            Ok(())
+        } else {
+            Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
                     "IPC socket directory is not private: {} above it can be changed by \
                      another user",
-                    dir.display()
+                    entry.display()
                 ),
+            ))
+        }
+    };
+
+    let root = PathBuf::from("/");
+    let metadata = std::fs::symlink_metadata(&root).map_err(|error| with_context(error, &root))?;
+    check(&root, &metadata)?;
+
+    let mut current = root;
+    let mut pending: VecDeque<Step> = steps(parent).into();
+    let mut hops = 0;
+
+    while let Some(step) = pending.pop_front() {
+        let part = match step {
+            // `current` holds no links, so its parent is the physical one,
+            // as the kernel resolves `..`; it was checked on the way down.
+            Step::Up => {
+                current.pop();
+                continue;
+            }
+            Step::Name(part) => part,
+        };
+
+        let entry = current.join(&part);
+        let metadata =
+            std::fs::symlink_metadata(&entry).map_err(|error| with_context(error, &entry))?;
+        check(&entry, &metadata)?;
+
+        if !metadata.file_type().is_symlink() {
+            current = entry;
+            continue;
+        }
+
+        hops += 1;
+        if hops > MAX_LINK_HOPS {
+            return Err(with_context(
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "too many levels of symbolic links",
+                ),
+                &entry,
             ));
+        }
+
+        let target = std::fs::read_link(&entry).map_err(|error| with_context(error, &entry))?;
+        if target.is_absolute() {
+            current = PathBuf::from("/");
+        }
+        for step in steps(&target).into_iter().rev() {
+            pending.push_front(step);
         }
     }
 
@@ -497,29 +564,83 @@ fn check_ancestors(
 
 /// Whether an entry above the IPC directory is out of other users' reach. It
 /// must belong to `owner` or root. A link's mode means nothing; only who owns
-/// it. A directory must not be writable by others unless sticky, so they
-/// cannot rename what they do not own. Group write is accepted only on a
-/// directory of `owner` whose group id equals `owner`: the per-user group that
-/// common Linux distributions create, where umask 002 makes a user's own
-/// folders group-writable for that user alone. A shared group (a team group,
-/// `staff` on macOS, a root-owned group-writable directory) is refused, since
-/// its other members could swap the entry.
+/// it. A directory that is not sticky like `/tmp` must not be writable by
+/// others, and group write on it is accepted only when it is a directory of
+/// `owner` whose group id equals `owner` and `group_is_private` finds no other
+/// member: the per-user group that common Linux distributions create, where
+/// umask 002 makes a user's own folders group-writable for that user alone.
+/// That is a heuristic, not proof: group members known only to a directory
+/// service, and write grants in POSIX ACLs (which show up as the group bits),
+/// are not seen. Refusing all group write instead would break those umask
+/// 002 setups. A sticky directory of `owner` or root is accepted whatever its
+/// group, since others cannot rename what they do not own there.
 #[cfg(unix)]
-fn ancestor_is_trusted(uid: u32, gid: u32, mode: u32, is_link: bool, owner: u32) -> bool {
+fn ancestor_is_trusted(
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    is_link: bool,
+    owner: u32,
+    group_is_private: impl FnOnce(u32) -> bool,
+) -> bool {
     if uid != owner && uid != 0 {
         return false;
     }
 
-    if is_link {
+    if is_link || mode & 0o1000 != 0 {
         return true;
     }
 
-    let sticky = mode & 0o1000 != 0;
-    let world_writable = mode & 0o002 != 0;
-    let group_writable = mode & 0o020 != 0;
-    let private_group = uid == owner && gid == owner;
+    if mode & 0o002 != 0 {
+        return false;
+    }
 
-    sticky || !(world_writable || (group_writable && !private_group))
+    mode & 0o020 == 0 || (uid == owner && gid == owner && group_is_private(gid))
+}
+
+#[cfg(unix)]
+fn read_group_files() -> (String, String) {
+    // Missing files (a directory-service-only system) leave the uid == gid
+    // heuristic on its own, which the docs describe.
+    let read = |path: &str| std::fs::read_to_string(path).unwrap_or_default();
+    (read("/etc/passwd"), read("/etc/group"))
+}
+
+/// Whether the local account files show anyone but `owner` in group `gid`:
+/// another account with it as primary group, or another member listed for it.
+#[cfg(unix)]
+fn group_has_no_other_members(gid: u32, owner: u32, passwd: &str, group: &str) -> bool {
+    let accounts = || {
+        passwd.lines().filter_map(|line| {
+            let mut fields = line.split(':');
+            let name = fields.next()?;
+            let uid = fields.nth(1)?.parse::<u32>().ok()?;
+            let primary_gid = fields.next()?.parse::<u32>().ok()?;
+            Some((name, uid, primary_gid))
+        })
+    };
+
+    let own_name = accounts()
+        .find(|(_, uid, _)| *uid == owner)
+        .map(|(name, _, _)| name);
+
+    let another_primary =
+        accounts().any(|(_, uid, primary_gid)| primary_gid == gid && uid != owner);
+
+    let another_listed = group.lines().any(|line| {
+        let mut fields = line.split(':');
+        let listed_gid = fields.nth(2).and_then(|value| value.parse::<u32>().ok());
+        let members = fields.next().unwrap_or_default();
+
+        listed_gid == Some(gid)
+            && members
+                .split(',')
+                .map(str::trim)
+                .filter(|member| !member.is_empty())
+                .any(|member| Some(member) != own_name)
+    });
+
+    !another_primary && !another_listed
 }
 
 /// The XDG spec requires the runtime directory to belong to the user; one

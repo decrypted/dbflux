@@ -54,14 +54,23 @@ A managed host receives the directory DBFlux uses in `DBFLUX_IPC_DIR` and must
 bind `$DBFLUX_IPC_DIR/<name>`. A host you start yourself must resolve the same
 directory; `$DBFLUX_IPC_DIR` is used exactly as given and must be a plain
 absolute path (no trailing `/`, no `.` or `..`) whose parent exists. An empty
-value counts as unset. Links above it are allowed and the path is not
-rewritten. Every directory above it, every link on the way and every link
-target must belong to you or root. None may be writable by others unless it is
-sticky like `/tmp`, and group write is accepted only on your own directories
-whose group id equals your user id: the per-user group of most Linux
-distributions, where umask 002 makes your folders group-writable for you
-alone. A shared group is refused. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (or
-`auth_provider_socket` / `secret_provider_socket`) does both.
+value counts as unset. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
+(or `auth_provider_socket` / `secret_provider_socket`) resolves the directory
+and binds the socket in it.
+
+Links above `$DBFLUX_IPC_DIR` are allowed and the path is not rewritten. DBFlux
+follows the path one entry at a time, as the system does, and checks every
+directory it passes through, every link and everything a link leads to,
+including links inside a link's target. Each must belong to you or root. A link
+is judged by its owner only. A directory that is sticky like `/tmp` is
+accepted. A directory that is not sticky must not be writable by others, and
+group write on it is accepted only if it is yours, its group id equals your
+user id, and `/etc/passwd` and `/etc/group` list no one else in that group:
+the per-user group of most Linux distributions, where umask 002 makes your
+folders group-writable for you alone. This is a heuristic: group members known
+only to a directory service such as LDAP, and write grants in POSIX ACLs, are
+not seen. Refusing all group write instead would break those umask 002 setups,
+so keep `$DBFLUX_IPC_DIR` out of folders that a group or an ACL shares.
 
 The socket file name depends on the service kind:
 

@@ -388,23 +388,118 @@ fn a_missing_parent_of_the_explicit_dir_names_the_variable() {
 fn group_write_above_the_dir_is_trusted_only_for_a_private_group() {
     let me = 1000;
     let other = 1001;
+    let private = |_: u32| true;
 
     // umask 002 with a per-user group: the user's own folders.
-    assert!(ancestor_is_trusted(me, me, 0o40775, false, me));
+    assert!(ancestor_is_trusted(me, me, 0o40775, false, me, private));
+    // The same, but the account files show another member of that group.
+    assert!(!ancestor_is_trusted(me, me, 0o40775, false, me, |_| false));
     // A shared group of the user, a root-owned group-writable dir
     // (`root:staff /usr/local`), another user's dir.
-    assert!(!ancestor_is_trusted(me, 50, 0o42775, false, me));
-    assert!(!ancestor_is_trusted(0, 50, 0o40775, false, me));
-    assert!(!ancestor_is_trusted(other, other, 0o40755, false, me));
+    assert!(!ancestor_is_trusted(me, 50, 0o42775, false, me, private));
+    assert!(!ancestor_is_trusted(0, 50, 0o40775, false, me, private));
+    assert!(!ancestor_is_trusted(
+        other, other, 0o40755, false, me, private
+    ));
     // World write is refused unless sticky, like /tmp.
-    assert!(!ancestor_is_trusted(me, me, 0o40777, false, me));
-    assert!(ancestor_is_trusted(0, 0, 0o41777, false, me));
+    assert!(!ancestor_is_trusted(me, me, 0o40777, false, me, private));
+    assert!(ancestor_is_trusted(0, 0, 0o41777, false, me, private));
     // Plain dirs of the user or root.
-    assert!(ancestor_is_trusted(me, 50, 0o40755, false, me));
-    assert!(ancestor_is_trusted(0, 0, 0o40755, false, me));
+    assert!(ancestor_is_trusted(me, 50, 0o40755, false, me, private));
+    assert!(ancestor_is_trusted(0, 0, 0o40755, false, me, private));
     // A link: only its owner matters, its mode is always 0777.
-    assert!(ancestor_is_trusted(0, 0, 0o120777, true, me));
-    assert!(!ancestor_is_trusted(other, other, 0o120777, true, me));
+    assert!(ancestor_is_trusted(0, 0, 0o120777, true, me, private));
+    assert!(!ancestor_is_trusted(
+        other, other, 0o120777, true, me, private
+    ));
+}
+
+#[test]
+fn a_group_with_another_member_in_the_account_files_is_not_private() {
+    let passwd = "root:x:0:0::/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\nbob:x:1001:1001::/home/bob:/bin/sh\n";
+    let alone = "alice:x:1000:\nbob:x:1001:\n";
+    let shared = "alice:x:1000:bob\nbob:x:1001:\n";
+    let self_listed = "alice:x:1000:alice\n";
+
+    assert!(group_has_no_other_members(1000, 1000, passwd, alone));
+    assert!(group_has_no_other_members(1000, 1000, passwd, self_listed));
+    assert!(!group_has_no_other_members(1000, 1000, passwd, shared));
+
+    let carol_primary = format!("{passwd}carol:x:1002:1000::/home/carol:/bin/sh\n");
+    assert!(!group_has_no_other_members(
+        1000,
+        1000,
+        &carol_primary,
+        alone
+    ));
+
+    // No account files (directory services only): the uid == gid rule alone.
+    assert!(group_has_no_other_members(1000, 1000, "", ""));
+}
+
+/// `alias -> mid/link2 -> real`: `mid` holds the second link but is on
+/// neither the configured nor the resolved path, and must be checked too.
+#[test]
+fn a_link_reached_through_another_link_is_checked_with_its_directory() {
+    let base = scratch_dir();
+    for dir in ["real", "mid"] {
+        std::fs::create_dir(base.join(dir)).expect("dir");
+        std::fs::set_permissions(base.join(dir), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod 0755");
+    }
+    std::os::unix::fs::symlink(base.join("real"), base.join("mid").join("link2"))
+        .expect("second link");
+    std::os::unix::fs::symlink(base.join("mid").join("link2"), base.join("alias"))
+        .expect("first link");
+
+    let configured = base.join("alias").join("ipc");
+    assert_eq!(
+        resolve_ipc_dir(&explicit(configured.clone()), own_uid()).expect("a chain of ours"),
+        configured
+    );
+
+    std::fs::set_permissions(base.join("mid"), std::fs::Permissions::from_mode(0o777))
+        .expect("chmod 0777");
+    let error = resolve_ipc_dir(&explicit(base.join("alias").join("ipc2")), own_uid())
+        .expect_err("another user could repoint link2");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("mid"), "{error}");
+}
+
+/// `alias -> shared`, then `shared/sub -> real`: `shared` is reached only
+/// through the first link and is not on the resolved path.
+#[test]
+fn a_directory_reached_through_a_link_target_is_checked() {
+    let base = scratch_dir();
+    for dir in ["real", "shared"] {
+        std::fs::create_dir(base.join(dir)).expect("dir");
+        std::fs::set_permissions(base.join(dir), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod 0755");
+    }
+    std::os::unix::fs::symlink(base.join("real"), base.join("shared").join("sub"))
+        .expect("inner link");
+    std::os::unix::fs::symlink(base.join("shared"), base.join("alias")).expect("outer link");
+    std::fs::set_permissions(base.join("shared"), std::fs::Permissions::from_mode(0o777))
+        .expect("chmod 0777");
+
+    let error = resolve_ipc_dir(
+        &explicit(base.join("alias").join("sub").join("ipc")),
+        own_uid(),
+    )
+    .expect_err("another user could swap shared/sub");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("shared"), "{error}");
+}
+
+#[test]
+fn a_link_loop_above_the_explicit_dir_is_an_error() {
+    let base = scratch_dir();
+    std::os::unix::fs::symlink(base.join("b"), base.join("a")).expect("a -> b");
+    std::os::unix::fs::symlink(base.join("a"), base.join("b")).expect("b -> a");
+
+    let error = resolve_ipc_dir(&explicit(base.join("a").join("ipc")), own_uid())
+        .expect_err("a loop must end");
+    assert!(error.to_string().contains("symbolic links"), "{error}");
 }
 #[test]
 fn a_listener_of_another_uid_at_the_path_receives_nothing() {

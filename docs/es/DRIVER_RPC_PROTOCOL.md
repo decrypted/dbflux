@@ -67,15 +67,25 @@ Un host gestionado recibe el directorio que usa DBFlux en `DBFLUX_IPC_DIR` y
 debe hacer bind de `$DBFLUX_IPC_DIR/<name>`. Un host que arrancas tú mismo debe
 resolver el mismo directorio; `$DBFLUX_IPC_DIR` se usa tal cual y debe ser una
 ruta absoluta simple (sin `/` final, sin `.` ni `..`) cuyo directorio padre
-exista. Un valor vacío cuenta como no definido. Se permiten enlaces por encima y
-la ruta no se reescribe. Todos los directorios por encima, cada enlace del
-camino y cada destino de enlace deben pertenecerte a ti o a root. Ninguno puede
-ser escribible por otros salvo que sea sticky como `/tmp`, y la escritura de
-grupo solo se acepta en directorios tuyos cuyo id de grupo sea igual a tu id de
-usuario: el grupo por usuario de la mayoría de distribuciones Linux, donde un
-umask 002 deja tus carpetas escribibles por el grupo solo para ti. Un grupo
-compartido se rechaza. En Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
-(o `auth_provider_socket` / `secret_provider_socket`) hace ambas cosas.
+exista. Un valor vacío cuenta como no definido. En Rust,
+`dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (o `auth_provider_socket`
+/ `secret_provider_socket`) resuelve el directorio y hace bind del socket en él.
+
+Se permiten enlaces por encima de `$DBFLUX_IPC_DIR` y la ruta no se reescribe.
+DBFlux recorre la ruta entrada a entrada, como hace el sistema, y comprueba cada
+directorio por el que pasa, cada enlace y todo lo que un enlace alcanza,
+incluidos los enlaces dentro del destino de un enlace. Cada uno debe
+pertenecerte a ti o a root. Un enlace se juzga solo por su dueño. Un directorio
+sticky como `/tmp` se acepta. Un directorio que no es sticky no puede ser
+escribible por otros, y la escritura de grupo en él solo se acepta si es tuyo,
+su id de grupo es igual a tu id de usuario y `/etc/passwd` y `/etc/group` no
+muestran a nadie más en ese grupo: el grupo por usuario de la mayoría de
+distribuciones Linux, donde un umask 002 deja tus carpetas escribibles por el
+grupo solo para ti. Es una heurística: no se ven los miembros de grupo que solo
+conoce un servicio de directorio como LDAP ni los permisos de escritura en ACL
+POSIX. Rechazar toda escritura de grupo rompería esas configuraciones con umask
+002, así que no pongas `$DBFLUX_IPC_DIR` en carpetas que comparte un grupo o
+una ACL.
 
 El nombre del archivo de socket depende del tipo de service:
 

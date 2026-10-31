@@ -50,8 +50,17 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
 
 受管主机通过 `DBFLUX_IPC_DIR` 获得 DBFlux 使用的目录，必须绑定
 `$DBFLUX_IPC_DIR/<name>`。手动启动的主机也必须解析出同一目录；`$DBFLUX_IPC_DIR`
-按原样使用，必须是不带末尾 `/`、不含 `.` 或 `..` 的绝对路径，其父目录必须存在。空值视为未设置。允许其上方存在链接，且路径不会被改写。其上方的每个目录、路径上的每个链接及链接目标都必须属于你或 root。除非像 `/tmp` 一样设置了 sticky 位，否则都不能被其他用户写入；组写权限仅在组 ID 等于你的用户 ID 的自有目录上被接受，即大多数 Linux 发行版为每个用户创建的私有组，umask 002 会让你的文件夹仅对你自己具有组写权限。共享组会被拒绝。在 Rust 中，`dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`
-（或 `auth_provider_socket` / `secret_provider_socket`）会同时处理这两点。
+按原样使用，必须是不带末尾 `/`、不含 `.` 或 `..` 的绝对路径，其父目录必须存在。空值视为未设置。
+在 Rust 中，`dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)`（或
+`auth_provider_socket` / `secret_provider_socket`）会解析该目录并在其中绑定 Socket。
+
+允许 `$DBFLUX_IPC_DIR` 上方存在链接，且路径不会被改写。DBFlux 像系统一样逐项解析路径，
+检查经过的每个目录、每个链接以及链接指向的一切，包括链接目标中的链接。每一项都必须属于你或 root。
+链接只看其所有者。像 `/tmp` 一样设置了 sticky 位的目录会被接受。未设置 sticky 位的目录不能被其他用户写入，
+其组写权限仅在以下情况下被接受：目录属于你、其组 ID 等于你的用户 ID，且 `/etc/passwd` 和 `/etc/group`
+中没有该组的其他成员。这就是大多数 Linux 发行版为每个用户创建的私有组，umask 002 会让你的文件夹仅对你自己具有组写权限。
+这是一种启发式判断：仅存在于 LDAP 等目录服务中的组成员以及 POSIX ACL 中的写权限无法被识别。
+拒绝所有组写权限会破坏这些 umask 002 环境，因此请不要把 `$DBFLUX_IPC_DIR` 放在由组或 ACL 共享的文件夹中。
 
 Socket 文件名取决于服务类型：
 

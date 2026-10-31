@@ -619,8 +619,6 @@ connection_manager:
       hide_passphrase: 隐藏口令
     hint:
       no_native_picker: 此系统没有原生文件选择器 — 请在上方输入或粘贴捆绑包路径。
-      external_refs: 外部值引用将原样保留
-      external_refs_body: SSM、AWS 云密钥管理和环境变量引用将原样导入，并在连接时由本机解析。
       leave_empty_skip: 留空以跳过。
       select_profile_or_skip: 选择一个配置文件或跳过：
     modal_title: 导入
@@ -646,6 +644,32 @@ connection_manager:
         one: "导入后可能有 %{count} 个值需要提供 — 捆绑包中省略的密钥可输入或跳过。"
         many: "导入后可能有 %{count} 个值需要提供 — 捆绑包中省略的密钥可输入或跳过。"
       driver_not_installed_banner: 一个或多个连接引用了本机未安装的驱动，将被跳过。
+    review:
+      intro: "请检查每个连接将在本机上运行和读取的内容："
+      connection: "%{name}（%{host}）"
+      hooks: "Hook"
+      value_sources: "值来源"
+      driver_params: "驱动参数"
+      hook_kind:
+        command: "命令"
+        script: "%{language} 脚本"
+        lua: "Lua 脚本"
+      hook_disabled: "在包中已禁用"
+      hook_cwd: "工作目录：%{path}"
+      hook_env: "设置环境变量：%{names}"
+      lua_process_run: "可以运行其他程序（process.run）"
+      lua_env_read: "可以读取环境变量"
+      value_literal: "%{field}：固定值"
+      value_source: "%{field}：%{source} %{detail}"
+      param: "%{key} = %{value}"
+      param_flagged: "%{key} = %{value}（需要确认）"
+    consent:
+      hooks_title: "Hook 会在本机上运行程序"
+      hooks_body: "上面列出的 Hook 会在其连接每次连接或断开时以你的权限运行。只有勾选下面的复选框才会导入它们。仅当你信任此包的制作者时才勾选。"
+      hooks_checkbox: "导入上面列出的 Hook"
+      values_title: "部分值来源和驱动参数需要你确认"
+      values_body: "高亮的值来源会读取本机上的环境变量、文件或云端密钥，并把值发送到连接的主机。高亮的驱动参数可能削弱密码的发送方式。不勾选时，连接导入时不包含它们，由你自行填写这些值。"
+      values_checkbox: "保留高亮的值来源和驱动参数"
     conflict_kind:
       auth_profile: 认证配置文件
       ssh_tunnel: SSH 隧道
@@ -685,6 +709,18 @@ connection_manager:
       secret_failures:
         one: "%{count} 个密钥无法写入密钥环。请为受影响的连接手动输入。"
         many: "%{count} 个密钥无法写入密钥环。请为每个受影响的连接手动输入。"
+      withheld:
+        one: "%{count} 个连接已导入，但不包含你未确认的项目。如有需要，请在连接编辑器中添加。"
+        many: "%{count} 个连接已导入，但不包含你未确认的项目。如有需要，请在连接编辑器中添加。"
+      withheld_hooks:
+        one: "%{count} 个 Hook"
+        many: "%{count} 个 Hook"
+      withheld_value_refs:
+        one: "%{count} 个值来源"
+        many: "%{count} 个值来源"
+      withheld_driver_params:
+        one: "%{count} 个驱动参数"
+        many: "%{count} 个驱动参数"
     action:
       reuse_existing: 复用现有
       create_new: 新建

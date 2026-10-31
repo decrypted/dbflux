@@ -1,5 +1,6 @@
 pub mod bundle;
 pub mod conflict;
+pub mod consent;
 pub mod error;
 pub mod export;
 pub mod external;
@@ -8,6 +9,10 @@ pub mod import;
 #[cfg(feature = "encryption")]
 pub mod encryption;
 
+pub use consent::{
+    ConnectionReview, DriverParamReview, HookReview, HookReviewKind, ImportConsent, ImportReview,
+    ValueRefReview, ValueSourceKind, WithheldEntries,
+};
 pub use error::PortabilityError;
 
 use std::collections::HashMap;
@@ -336,6 +341,10 @@ pub struct ResolutionChoices {
     /// Auth profile IDs chosen for required auth-profile resolutions,
     /// keyed by `(owner_local_id, field)`. The UUID is the destination ID.
     pub auth_profile_choices: HashMap<(String, String), uuid::Uuid>,
+
+    /// Which hooks, value sources and driver parameters of the bundle to
+    /// keep. The default keeps none of them; see [`consent`].
+    pub consent: ImportConsent,
 }
 
 /// How a conflict should be resolved.
@@ -380,4 +389,8 @@ pub struct ImportActions {
     /// silent topology degradation (e.g. bastion-routed → direct-connect). The app layer
     /// records them in `ImportOutcome::unresolved_refs` (R-INT-3 / M3 / ADR-8).
     pub unresolved_ref_connections: Vec<String>,
+
+    /// Per imported connection, what the consent gate left out, so the user
+    /// can be told to re-enter it.
+    pub withheld: Vec<WithheldEntries>,
 }

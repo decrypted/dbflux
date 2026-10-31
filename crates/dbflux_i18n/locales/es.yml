@@ -619,8 +619,6 @@ connection_manager:
       hide_passphrase: Ocultar frase de contraseña
     hint:
       no_native_picker: No hay selector de archivos nativo en este sistema — escribe o pega la ruta del paquete arriba.
-      external_refs: Las referencias a valores externos se mantienen igual
-      external_refs_body: Las referencias SSM, Secrets Manager y de entorno se importan sin cambios y se resuelven en esta máquina al conectar.
       leave_empty_skip: Déjalo vacío para omitir.
       select_profile_or_skip: "Selecciona un perfil u omítelo:"
     modal_title: Importar
@@ -646,6 +644,32 @@ connection_manager:
         one: "%{count} valor puede ser necesario después de importar — los secretos omitidos del paquete se pueden introducir u omitir."
         many: "%{count} valores pueden ser necesarios después de importar — los secretos omitidos del paquete se pueden introducir u omitir."
       driver_not_installed_banner: Una o más conexiones hacen referencia a un driver no instalado en esta máquina y se omitirán.
+    review:
+      intro: "Revisa qué ejecutaría y leería cada conexión en este equipo:"
+      connection: "%{name} (%{host})"
+      hooks: "Hooks"
+      value_sources: "Fuentes de valores"
+      driver_params: "Parámetros del controlador"
+      hook_kind:
+        command: "Comando"
+        script: "Script de %{language}"
+        lua: "Script de Lua"
+      hook_disabled: "desactivado en el paquete"
+      hook_cwd: "Directorio de trabajo: %{path}"
+      hook_env: "Define variables de entorno: %{names}"
+      lua_process_run: "Puede ejecutar otros programas (process.run)"
+      lua_env_read: "Puede leer variables de entorno"
+      value_literal: "%{field}: valor fijo"
+      value_source: "%{field}: %{source} %{detail}"
+      param: "%{key} = %{value}"
+      param_flagged: "%{key} = %{value} (requiere confirmación)"
+    consent:
+      hooks_title: "Los hooks ejecutan programas en este equipo"
+      hooks_body: "Los hooks de la lista se ejecutan con tus permisos cada vez que su conexión se conecta o se desconecta. Solo se importan si marcas la casilla de abajo. Márcala solo si confías en quien creó este paquete."
+      hooks_checkbox: "Importar los hooks de la lista"
+      values_title: "Algunas fuentes de valores y parámetros del controlador necesitan tu confirmación"
+      values_body: "Las fuentes de valores resaltadas leen variables de entorno, archivos o secretos en la nube de este equipo y envían el valor al host de la conexión. Los parámetros del controlador resaltados pueden debilitar cómo se envía la contraseña. Si no marcas la casilla, las conexiones se importan sin ellos y tú introduces esos valores."
+      values_checkbox: "Conservar las fuentes de valores y los parámetros del controlador resaltados"
     conflict_kind:
       auth_profile: Perfil de autenticación
       ssh_tunnel: Túnel SSH
@@ -685,6 +709,18 @@ connection_manager:
       secret_failures:
         one: "%{count} secreto no se pudo escribir en el llavero. Introdúcelo manualmente para la conexión afectada."
         many: "%{count} secretos no se pudieron escribir en el llavero. Introdúcelos manualmente para cada conexión afectada."
+      withheld:
+        one: "%{count} conexión se importó sin entradas que no confirmaste. Añádelas en el editor de conexiones si las necesitas."
+        many: "%{count} conexiones se importaron sin entradas que no confirmaste. Añádelas en el editor de conexiones si las necesitas."
+      withheld_hooks:
+        one: "%{count} hook"
+        many: "%{count} hooks"
+      withheld_value_refs:
+        one: "%{count} fuente de valor"
+        many: "%{count} fuentes de valores"
+      withheld_driver_params:
+        one: "%{count} parámetro del controlador"
+        many: "%{count} parámetros del controlador"
     action:
       reuse_existing: Reutilizar existente
       create_new: Crear nuevo

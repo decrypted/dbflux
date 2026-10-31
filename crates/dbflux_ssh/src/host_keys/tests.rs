@@ -314,6 +314,8 @@ fn a_matching_known_hosts_key_is_trusted_without_touching_the_store() {
 fn the_global_file_counts_too() {
     let fixture = Fixture::new();
     fs::write(fixture.global(), format!("host.example {ED25519_LINE}\n")).unwrap();
+    #[cfg(unix)]
+    set_mode(&fixture.global(), 0o644);
 
     assert_eq!(
         fixture
@@ -725,10 +727,61 @@ fn pending_keys_are_capped() {
             .verify_presented(&key);
     }
 
-    // Same fingerprint, so the newest refusal is the one offered.
-    let offered = unknown_host_key_in_error(&first).unwrap();
-    assert_ne!(offered.host, "cap-0.example:22");
+    // The oldest refusal was dropped, the newest is still offered.
+    assert!(unknown_host_key_in_error(&first).is_none());
+    let last = fixture
+        .verifier(&format!("cap-{MAX_PENDING}.example"), 22)
+        .verify_presented(&key)
+        .unwrap_err()
+        .to_string();
+    assert!(unknown_host_key_in_error(&last).is_some());
     assert!(pending().len() <= MAX_PENDING);
+}
+
+#[test]
+fn hosts_sharing_a_key_are_each_offered_their_own_refusal() {
+    // Cloned machines, hosts behind one proxy, or one interceptor key for
+    // several hosts: the prompt must name and pin the host that was refused.
+    let fixture = Fixture::new();
+    let (key, _) = synthetic_ed25519(16);
+    let first = fixture
+        .verifier("shared-a.example", 22)
+        .verify_presented(&key)
+        .unwrap_err()
+        .to_string();
+    let second = fixture
+        .verifier("shared-b.example", 22)
+        .verify_presented(&key)
+        .unwrap_err()
+        .to_string();
+
+    let offered = unknown_host_key_in_error(&first).unwrap();
+    assert_eq!(offered.host, "shared-a.example:22");
+    offered.trust().unwrap();
+    assert_eq!(
+        fixture.pins(),
+        format!("shared-a.example\t22\t{}\n", key.fingerprint())
+    );
+    assert_eq!(
+        unknown_host_key_in_error(&second).unwrap().host,
+        "shared-b.example:22"
+    );
+}
+
+#[test]
+fn a_dismissed_key_is_no_longer_offered() {
+    let fixture = Fixture::new();
+    let (key, _) = synthetic_ed25519(17);
+    let message = fixture
+        .verifier("dismissed.example", 22)
+        .verify_presented(&key)
+        .unwrap_err()
+        .to_string();
+
+    unknown_host_key_in_error(&message).unwrap().dismiss();
+
+    assert!(unknown_host_key_in_error(&message).is_none());
+    assert!(!fixture.store().exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -758,4 +811,103 @@ fn known_key_types_are_asked_for_first() {
         host_key_algorithm_preference(&supported, &BTreeSet::new()),
         None
     );
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn known_hosts_files_other_users_can_change_are_not_trusted() {
+    let fixture = Fixture::new();
+    fixture.write_known_hosts(&format!("host.example {ED25519_LINE}\n"));
+    set_mode(&fixture.known_hosts(), 0o666);
+    let verifier = fixture.verifier("host.example", 22);
+    assert!(matches!(
+        verifier.check(&ed25519()).unwrap(),
+        HostKeyStatus::Unknown { .. }
+    ));
+    set_mode(&fixture.known_hosts(), 0o664);
+    assert_eq!(verifier.check(&ed25519()).unwrap(), HostKeyStatus::Trusted);
+
+    // A global file must not even be group-writable.
+    fs::remove_file(fixture.known_hosts()).unwrap();
+    fs::write(fixture.global(), format!("host.example {ED25519_LINE}\n")).unwrap();
+    set_mode(&fixture.global(), 0o664);
+    assert!(matches!(
+        verifier.check(&ed25519()).unwrap(),
+        HostKeyStatus::Unknown { .. }
+    ));
+    set_mode(&fixture.global(), 0o644);
+    assert_eq!(verifier.check(&ed25519()).unwrap(), HostKeyStatus::Trusted);
+}
+
+#[test]
+fn accept_new_still_asks_when_known_hosts_has_another_key_type() {
+    // Offering only a type known_hosts lacks is what an interceptor would do.
+    let fixture = Fixture::new();
+    fixture.write_known_hosts(&format!("typed.example {ECDSA_LINE}\n"));
+    let accept = HostKeyOptions {
+        strict_host_key_checking: Some(StrictHostKeyChecking::AcceptNew),
+        ..HostKeyOptions::default()
+    };
+    let (key, _) = synthetic_ed25519(18);
+
+    let message = fixture
+        .verifier_with("typed.example", 22, &accept)
+        .verify_presented(&key)
+        .unwrap_err()
+        .to_string();
+
+    let offered = unknown_host_key_in_error(&message).expect("offered for confirmation");
+    assert_eq!(
+        offered.other_key_types,
+        vec!["ecdsa-sha2-nistp256".to_string()]
+    );
+    assert!(!fixture.store().exists(), "not pinned unasked");
+
+    // The global setting does not pin it either.
+    let message = HostKeyVerifier::new(
+        "typed.example",
+        22,
+        &HostKeyOptions::default(),
+        &fixture.paths(),
+        true,
+    )
+    .verify_presented(&key)
+    .unwrap_err()
+    .to_string();
+    assert!(unknown_host_key_in_error(&message).is_some());
+    assert!(!fixture.store().exists());
+}
+
+#[test]
+fn the_suggested_ssh_keygen_command_quotes_the_name_for_the_shell() {
+    let fixture = Fixture::new();
+    let name = "evil';touch pwned;'";
+    let alias = HostKeyOptions {
+        host_key_alias: Some(name.to_string()),
+        ..HostKeyOptions::default()
+    };
+    fs::write(
+        fixture.store(),
+        format!("{name}\t22\t{ED25519_FINGERPRINT}\n"),
+    )
+    .unwrap();
+
+    let message = fixture
+        .verifier_with("h.example", 22, &alias)
+        .verify_presented(&ecdsa())
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        message.contains(r#"ssh-keygen -R 'evil'\'';touch pwned;'\'''"#),
+        "{message}"
+    );
+    assert_eq!(shell_quote("a'b"), r#"'a'\''b'"#);
+    assert_eq!(shell_quote("[h]:2222"), "'[h]:2222'");
 }

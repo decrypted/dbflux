@@ -34,8 +34,8 @@ pub enum HostKeyConfirmOutcome {
 
 /// Asks whether to trust an SSH host key seen for the first time.
 ///
-/// Enter does not confirm: trusting a key must be a deliberate click after
-/// comparing the fingerprint. Closing the modal any other way cancels.
+/// Enter is Trust and remember, the keyboard path for the primary button,
+/// as in the other confirmations; Escape or closing the modal cancels.
 pub struct ModalHostKeyConfirm {
     request: Option<HostKeyConfirmRequest>,
     visible: bool,
@@ -191,6 +191,12 @@ impl Render for ModalHostKeyConfirm {
                 let entity = cx.entity().downgrade();
                 move |_, cx| {
                     entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.trust(cx)).log_err();
                 }
             })
             .into_any_element()

@@ -472,6 +472,7 @@ impl SshTunnelsSection {
             return;
         };
         if *outcome != HostKeyConfirmOutcome::Trusted {
+            key.dismiss();
             return;
         }
         match key.trust() {

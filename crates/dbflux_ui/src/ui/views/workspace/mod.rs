@@ -680,10 +680,17 @@ impl Workspace {
                         Err(error) => {
                             this.sidebar
                                 .update(cx, |sidebar, _| sidebar.clear_pending_host_key_trust());
-                            Toast::error(error.to_string()).push(cx);
+                            dbflux_ui_base::user_error::report_error(
+                                dbflux_ui_base::user_error::UserFacingError::new(
+                                    dbflux_ui_base::user_error::ErrorKind::Storage,
+                                    error.to_string(),
+                                ),
+                                cx,
+                            );
                         }
                     },
                     HostKeyConfirmOutcome::Cancelled => {
+                        key.dismiss();
                         this.sidebar
                             .update(cx, |sidebar, _| sidebar.clear_pending_host_key_trust());
                     }

@@ -233,6 +233,7 @@ impl Sidebar {
     ) {
         let session_password = password.clone();
         let host_key_retry_password = password.clone();
+        let driver_connect_retry_password = password.clone();
         let (
             input,
             profile_name,
@@ -724,8 +725,11 @@ impl Sidebar {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             // A remembered password may be the reason the
-                            // connect failed; ask again next time.
-                            state.forget_connection_password(profile_id);
+                            // connect failed; ask again next time. A refused
+                            // host key says nothing about the password.
+                            if dbflux_ssh::unknown_host_key_in_error(&error).is_none() {
+                                state.forget_connection_password(profile_id);
+                            }
                             state.fail_task(task_id, error.clone());
                             state.record_connect_failure(profile_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
@@ -733,10 +737,20 @@ impl Sidebar {
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_toast = Some(PendingToast {
-                                message: error,
-                                is_error: true,
-                            });
+                            // A driver that opens its own SSH tunnel refuses
+                            // an unknown host key at this stage.
+                            if !sidebar.offer_host_key_trust(
+                                profile_id,
+                                &error,
+                                from_startup,
+                                driver_connect_retry_password,
+                                cx,
+                            ) {
+                                sidebar.pending_toast = Some(PendingToast {
+                                    message: error,
+                                    is_error: true,
+                                });
+                            }
                             sidebar.refresh_tree(cx);
                         });
                     });

@@ -4241,6 +4241,7 @@ impl ConnectionManagerWindow {
             return;
         };
         if *outcome != HostKeyConfirmOutcome::Trusted {
+            key.dismiss();
             return;
         }
         if let Err(error) = key.trust() {

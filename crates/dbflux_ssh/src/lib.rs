@@ -655,9 +655,9 @@ fn tofu_known_hosts_path() -> Result<PathBuf, DbError> {
 /// config directory (`~/.config/dbflux/ssh_known_hosts`) into the data directory.
 ///
 /// Runs at most once per process via `Once`. Never blocks startup and never
-/// errors out: any failure leaves the new path absent, which simply triggers a
-/// fresh TOFU acceptance on the next SSH connect (the pre-existing clean-break
-/// behavior). All best-effort failures are logged with `log::warn!`, never
+/// errors out: any failure leaves the new path absent, so hosts known only to
+/// the old file are unknown again and the next connect asks to trust their
+/// keys (or refuses them where it cannot ask). All best-effort failures are logged with `log::warn!`, never
 /// silently dropped via `let _ =`.
 fn migrate_legacy_known_hosts(new_path: &Path) {
     static MIGRATED: std::sync::Once = std::sync::Once::new();
@@ -714,7 +714,7 @@ fn migrate_known_hosts_paths(old_path: &Path, new_path: &Path) {
             Err(copy_err) => {
                 log::warn!(
                     "Could not migrate SSH known_hosts (rename: {rename_err}; copy: {copy_err}); \
-                         a fresh TOFU prompt will occur on next connect"
+                         hosts known only to the old file will need their keys trusted again"
                 );
             }
         },
@@ -1735,7 +1735,7 @@ mod transport_host_key_tests {
         let strip = |text: &'static str| text.split("#[cfg(test)]").next().unwrap_or(text);
         vec![
             ("lib.rs", strip(include_str!("lib.rs"))),
-            ("host_keys.rs", strip(include_str!("host_keys.rs"))),
+            ("host_keys.rs", strip(include_str!("host_keys/mod.rs"))),
             ("proxy_command.rs", strip(include_str!("proxy_command.rs"))),
             ("ssh_config.rs", strip(include_str!("ssh_config.rs"))),
         ]
@@ -1894,8 +1894,8 @@ mod transport_host_key_tests {
             .resolve_with_local_user("h", "alice", dir.path())
             .unwrap();
 
-        // The bad line is reported and skipped; the next one applies, as the
-        // first value OpenSSH could read.
+        // The bad line is reported and claims the slot as `ask`, so the later
+        // `no` (or the global setting) cannot relax checking for this host.
         assert!(
             file.diagnostics()
                 .iter()
@@ -1905,7 +1905,11 @@ mod transport_host_key_tests {
         );
         assert_eq!(
             resolved.host_key.strict_host_key_checking,
-            Some(StrictHostKeyChecking::No)
+            Some(StrictHostKeyChecking::Ask)
+        );
+        assert_eq!(
+            host_keys::unknown_host_key_policy(resolved.host_key.strict_host_key_checking, true),
+            host_keys::UnknownHostKeyPolicy::Confirm
         );
         assert_eq!(StrictHostKeyChecking::parse("maybe"), None);
         assert_eq!(

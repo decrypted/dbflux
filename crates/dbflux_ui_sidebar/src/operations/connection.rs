@@ -2232,4 +2232,38 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(requests.lock().expect("host key requests").len(), 1);
     }
+
+    #[gpui::test]
+    fn a_pipeline_connect_refused_for_its_host_key_asks_too(cx: &mut TestAppContext) {
+        let (fixture, cx) = password_fixture(true, cx);
+        let profile_id = add_saved_profile(&fixture, "unknown-host-key-c", false, cx);
+        fixture.state.update(cx, |state, _| {
+            if let Some(profile) = state
+                .profiles_mut()
+                .iter_mut()
+                .find(|profile| profile.id == profile_id)
+            {
+                // Any access kind routes the connect through the pipeline,
+                // whose driver-connect stage then sees the refusal.
+                profile.access_kind = Some(dbflux_core::access::AccessKind::Direct);
+            }
+        });
+        let requests = host_key_requests(&fixture, cx);
+
+        fixture
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        assert_eq!(
+            *requests.lock().expect("host key requests"),
+            vec![(profile_id, "unknown-host-key-c:22".to_string())]
+        );
+        assert!(
+            !shown_toasts(&fixture, cx)
+                .iter()
+                .any(|toast| toast.contains("Unknown SSH host key")),
+            "the prompt replaces the error toast"
+        );
+    }
 }

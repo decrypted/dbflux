@@ -822,9 +822,16 @@ impl<'a> Parser<'a> {
                     Some(value) => self.directives.push(Directive::Keyword(
                         KnownKeyword::StrictHostKeyChecking(value),
                     )),
-                    // An unreadable value must not silently relax checking: the
-                    // default (ask) applies, and the line is reported.
-                    None => self.diagnostic(number, line, "invalid StrictHostKeyChecking value"),
+                    // An unreadable value must not let a later, weaker line or
+                    // the global setting decide: it claims the slot as `ask`
+                    // (OpenSSH would reject the whole config), and the line is
+                    // reported.
+                    None => {
+                        self.diagnostic(number, line, "invalid StrictHostKeyChecking value");
+                        self.directives.push(Directive::Keyword(
+                            KnownKeyword::StrictHostKeyChecking(StrictHostKeyChecking::Ask),
+                        ));
+                    }
                 }
             }
             "userknownhostsfile" | "globalknownhostsfile" => match split_words(rest) {

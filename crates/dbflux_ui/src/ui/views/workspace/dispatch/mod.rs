@@ -85,14 +85,15 @@ impl Workspace {
             return Some(true);
         }
 
-        // Escape cancels the host key prompt; Enter does nothing, so a key is
-        // only ever trusted by clicking the button after reading it.
+        // The host key prompt resolves like the other confirmations: Enter
+        // is Trust and remember, Escape is Cancel.
         if matches!(cmd, Command::Execute | Command::Cancel)
             && self.modal_host_key.read(cx).is_visible()
         {
-            if cmd == Command::Cancel {
-                self.modal_host_key.update(cx, |modal, cx| modal.cancel(cx));
-            }
+            self.modal_host_key.update(cx, |modal, cx| match cmd {
+                Command::Execute => modal.trust(cx),
+                _ => modal.cancel(cx),
+            });
             return Some(true);
         }
 

@@ -280,15 +280,13 @@ fn default_global_known_hosts_files() -> Vec<PathBuf> {
     ]
 }
 
-/// Win32-OpenSSH keeps the system file under `%ProgramData%\ssh`.
+/// Win32-OpenSSH keeps the system file under `%ProgramData%\ssh`, which on a
+/// machine without the OpenSSH server any local user can create. DBFlux does
+/// not check Windows ACLs, so that default is not read; a
+/// `GlobalKnownHostsFile` the SSH config names still is.
 #[cfg(windows)]
 fn default_global_known_hosts_files() -> Vec<PathBuf> {
-    std::env::var_os("ProgramData")
-        .map(|dir| {
-            let ssh = PathBuf::from(dir).join("ssh");
-            vec![ssh.join("ssh_known_hosts"), ssh.join("ssh_known_hosts2")]
-        })
-        .unwrap_or_default()
+    Vec::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -469,16 +467,37 @@ impl HostKeyVerifier {
     }
 
     fn read_entries(&self) -> Vec<(PathBuf, Vec<KnownHostEntry>)> {
-        self.known_hosts_files()
-            .filter_map(|path| match std::fs::read_to_string(path) {
-                Ok(text) => Some((path.to_path_buf(), parse_known_hosts(&text))),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => {
+        let user = self.user_files.iter().map(|path| (path, false));
+        let global = self.global_files.iter().map(|path| (path, true));
+        user.chain(global)
+            .filter_map(|(path, global)| {
+                let metadata = match std::fs::metadata(path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+                    Err(error) => {
+                        log::warn!(
+                            "[SSH] Skipping known_hosts file {}: {error}",
+                            path.display()
+                        );
+                        return None;
+                    }
+                };
+                if let Err(reason) = known_hosts_file_is_trusted(&metadata, global) {
                     log::warn!(
-                        "[SSH] Skipping known_hosts file {}: {error}",
+                        "[SSH] Skipping known_hosts file {}: {reason}",
                         path.display()
                     );
-                    None
+                    return None;
+                }
+                match std::fs::read_to_string(path) {
+                    Ok(text) => Some((path.clone(), parse_known_hosts(&text))),
+                    Err(error) => {
+                        log::warn!(
+                            "[SSH] Skipping known_hosts file {}: {error}",
+                            path.display()
+                        );
+                        None
+                    }
                 }
             })
             .collect()
@@ -549,7 +568,10 @@ impl HostKeyVerifier {
                 self.changed_message(key, &expected_in),
             )),
             HostKeyStatus::Unknown { other_key_types } => match self.policy {
-                UnknownHostKeyPolicy::AcceptNew => {
+                // known_hosts vouches for this host with another key type, so
+                // a new type is what an interceptor offering only that type
+                // would present: never pin it unasked.
+                UnknownHostKeyPolicy::AcceptNew if other_key_types.is_empty() => {
                     self.pin(key)?;
                     log::warn!(
                         "[SSH] Trusted the new host key of {} ({} {}) without asking, as \
@@ -569,7 +591,7 @@ impl HostKeyVerifier {
                     key.key_type,
                     key.fingerprint()
                 ))),
-                UnknownHostKeyPolicy::Confirm => {
+                UnknownHostKeyPolicy::Confirm | UnknownHostKeyPolicy::AcceptNew => {
                     let unknown = UnknownHostKey {
                         host: self.display.clone(),
                         key_type: key.key_type.clone(),
@@ -594,13 +616,13 @@ impl HostKeyVerifier {
              server presented a {} key with fingerprint {}, which does not match the key \
              recorded in {}. DBFlux did not connect. If the key was changed on purpose, \
              confirm the new fingerprint with the server's administrator, then remove the old \
-             key: `ssh-keygen -R '{}'` for a known_hosts file, or delete the line `{}` (a tab \
+             key: `ssh-keygen -R {}` for a known_hosts file, or delete the line `{}` (a tab \
              between name and port) from {}.",
             self.display,
             key.key_type,
             key.fingerprint(),
             expected_in.join(", "),
-            self.lookup_name,
+            shell_quote(&self.lookup_name),
             self.store_entry_key(),
             self.store
                 .resolve()
@@ -656,6 +678,48 @@ impl HostKeyVerifier {
         self.verify_presented(&key)?;
         Ok(VerifiedSession { session })
     }
+}
+
+/// A file that vouches for host keys must not be one another local user can
+/// change, or that user could plant a key and intercept the tunnel without a
+/// prompt. Any known_hosts file writable by everyone is skipped; a global
+/// file must also be owned by root or by the owner of the home directory and
+/// not be group-writable.
+#[cfg(unix)]
+fn known_hosts_file_is_trusted(metadata: &std::fs::Metadata, global: bool) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mode = metadata.mode();
+    if mode & 0o002 != 0 {
+        return Err("it is writable by every user".to_string());
+    }
+    if !global {
+        return Ok(());
+    }
+    if mode & 0o020 != 0 {
+        return Err("it is writable by its group".to_string());
+    }
+    let owner = metadata.uid();
+    let home_owner = dirs::home_dir()
+        .and_then(|home| std::fs::metadata(home).ok())
+        .map(|home| home.uid());
+    if owner == 0 || Some(owner) == home_owner {
+        Ok(())
+    } else {
+        Err(format!("it is owned by another user (uid {owner})"))
+    }
+}
+
+/// Windows ACLs are not checked; the default `%ProgramData%` file is not read
+/// at all (see `default_global_known_hosts_files`).
+#[cfg(not(unix))]
+fn known_hosts_file_is_trusted(_metadata: &std::fs::Metadata, _global: bool) -> Result<(), String> {
+    Ok(())
+}
+
+/// `name` as one POSIX shell word, for a command the user may paste.
+fn shell_quote(name: &str) -> String {
+    format!("'{}'", name.replace('\'', "'\\''"))
 }
 
 /// The algorithms for `known_types` first, in libssh2's own order, then the
@@ -727,17 +791,25 @@ pub struct UnknownHostKey {
     store_port: u16,
 }
 
-/// The text every unknown-key refusal starts with; the GUI recognises the
-/// refusal by it together with the fingerprint.
+/// The text every unknown-key refusal starts with.
 const UNKNOWN_HOST_KEY_LEAD: &str = "Unknown SSH host key for ";
 
 impl UnknownHostKey {
+    /// Names both the host and the key, so a refusal is matched to the
+    /// pending entry of that host: hosts behind one proxy, cloned machines or
+    /// an interceptor can present the same key for several hosts.
+    fn refusal_header(&self) -> String {
+        format!(
+            "{UNKNOWN_HOST_KEY_LEAD}{} ({} key {})",
+            self.host, self.key_type, self.fingerprint
+        )
+    }
+
     fn refusal_message(&self) -> String {
         format!(
-            "{UNKNOWN_HOST_KEY_LEAD}{} ({} key {}). DBFlux did not connect. Connect to it \
-             once from the DBFlux window to review and trust the key, or add it to your \
-             known_hosts file.",
-            self.host, self.key_type, self.fingerprint
+            "{}. DBFlux did not connect. Connect to it once from the DBFlux window to \
+             review and trust the key, or add it to your known_hosts file.",
+            self.refusal_header()
         )
     }
 
@@ -751,6 +823,11 @@ impl UnknownHostKey {
         )?;
         forget_pending(self);
         Ok(())
+    }
+
+    /// The user declined to trust the key; it is no longer offered.
+    pub fn dismiss(&self) {
+        forget_pending(self);
     }
 }
 
@@ -779,8 +856,8 @@ fn forget_pending(key: &UnknownHostKey) {
 /// The unknown host key a connect error was refused for, if any.
 ///
 /// Errors reach the GUI as text (often through `{:?}`), so the refusal is
-/// matched by its fingerprint against keys this process actually refused;
-/// text that merely looks like a refusal never produces a prompt.
+/// matched by its host and fingerprint against keys this process actually
+/// refused; text that merely looks like a refusal never produces a prompt.
 pub fn unknown_host_key_in_error(message: &str) -> Option<UnknownHostKey> {
     if !message.contains(UNKNOWN_HOST_KEY_LEAD) {
         return None;
@@ -788,7 +865,7 @@ pub fn unknown_host_key_in_error(message: &str) -> Option<UnknownHostKey> {
     pending()
         .iter()
         .rev()
-        .find(|key| message.contains(&key.fingerprint))
+        .find(|key| message.contains(&key.refusal_header()))
         .cloned()
 }
 
@@ -817,5 +894,4 @@ fn pin_fingerprint(
 }
 
 #[cfg(test)]
-#[path = "host_keys_tests.rs"]
 mod tests;

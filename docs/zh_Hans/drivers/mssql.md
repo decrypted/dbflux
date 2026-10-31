@@ -18,6 +18,7 @@ Microsoft SQL Server 关系型数据库。
 - 通过 SQL Server 登录账户（用户名 + 密码）认证；URI 模式接受 ADO、JDBC 以及 `sqlserver://user:pass@host:port/db` 形式的连接串。
 - 把 `Application Name` 上报为 `dbflux/<version>`，除非连接串或 URI 已设置了该值 —— 此时始终以用户提供的值为准；`sqlserver://`/`mssql://` URL 方案可用 `applicationname` 查询参数来设置它。
 - 经由 tiberius 的 `EncryptionLevel` 提供 TLS 加密模式（`off`、`on`、`required`）。表单只暴露一个 **SSL Mode** 下拉框，`TrustServerCertificate` 标志会自动推导：`off` —— 不加密（登录包仍由 TDS 加密）；`on` —— 加密，接受自签名证书，最适合使用其自动生成证书的本地/开发用 SQL Server；`required` —— 加密，校验证书链，适用于持有真实 CA 签名证书的服务器（如 Azure SQL 等）。选择 `required` 时会显示 **CA certificate** 路径；设置后将以该 CA 校验证书链（tiberius `trust_cert_ca`），因此由私有或企业 CA 签发证书的服务器无需信任所有证书即可连接；留空则使用系统信任库；`on` 模式会忽略该路径。在 URI 模式下，如果需要非常规组合（例如 `?encrypt=required&trust=true`），可用 `?trust=true|false` 显式覆盖推导出的值。
+- 新连接默认使用 `on`。未知的模式，或 URI 中未知的 `encrypt=` 值，会导致连接失败，而不是回退到 `on`。通过 SSH 隧道时，`required` 会以配置的主机而不是隧道的本地地址校验证书。
 - 支持可选的 SQL Server 命名实例（`SQLEXPRESS`、`MSSQLSERVER2019` 等），在连接时通过查询 UDP 1434 上的 SQL Browser 解析（由 tiberius 的 `sql-browser-tokio` feature 启用）。表单的 Instance 字段、URI 模式下 SSMS 风格的 `host\instance` 写法，以及 `?instance=` URI 查询参数，设置的都是 tiberius 配置上的同一个 `instance_name`。
 - 支持 SSH 隧道，以便通过堡垒机连接（仅转发 TCP 的隧道无法进行命名实例查找）。
 - 通过 `USE [database]` 支持按标签页切换数据库；会话状态（`SET` 选项、临时表、事务）在同一连接上的多次 `execute()` 调用之间保持。

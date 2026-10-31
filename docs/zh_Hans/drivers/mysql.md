@@ -17,6 +17,7 @@
 - 以 MySQL 存储的精确小数展示 `DECIMAL` 取值。
 - 支持身份认证、SSH 隧道，以及 URI/手动两种连接模式。
 - TLS 支持五种原生 SSL 模式（`DISABLED`、`PREFERRED`、`REQUIRED`、`VERIFY_CA`、`VERIFY_IDENTITY`）：`VERIFY_CA` 会校验证书链但跳过主机名校验，`VERIFY_IDENTITY` 则两者都校验。自定义根 CA 会在校验模式下取代系统信任库；客户端证书 + 私钥可启用双向 TLS。使用 `rustls`/`aws-lc-rs` 后端。
+- 新连接默认使用 `REQUIRED`（加密，但不检查证书）。`PREFERRED` 在已有连接中仍然可用，但不再为新连接提供；TLS 协商失败后，它只对本机上的数据库继续以无 TLS 方式连接，因为没有 TLS 时，`caching_sha2_password` 登录可能把密码暴露给网络路径上的任何人。未知的模式会导致连接失败。通过 SSH 隧道时，除非数据库主机是 `127.0.0.1`，否则会拒绝 `VERIFY_IDENTITY`：客户端库会以隧道的本地地址校验证书，因此在这种情况下请使用 `VERIFY_CA`。URI 模式在连接到回环地址后不再跟随服务器的 `@@socket` 转到本地套接字，除非 URI 设置了 `prefer_socket=true`。
 - 驱动参数（`键 = 值`，Connection Manager 的 Main 选项卡）在所有连接模式下（包括隧道和代理）映射到 `mysql` 客户端的 URL 选项；未知的键和属于表单的键会在连接前被拒绝。Compression 开关（Auto、On、Off）编辑 `compress` 参数；Auto 会压缩经由 SSH 隧道、代理或 SSM 的连接。
 - 通过专用的取消路径（`KILL QUERY` 流程）支持查询取消。
 - 包含面向 CRUD、索引、外键与表 DDL 操作的 SQL/代码生成。
@@ -53,6 +54,7 @@
 
 ## 限制
 
+- 以 `DISABLED` 连接远程主机时，需要完整认证的 `caching_sha2_password` 登录会用服务器发送的 RSA 公钥加密密码，而客户端库会接受收到的任何密钥，因此网络路径上的任何人都能读取密码。对远程服务器请使用 `REQUIRED`、校验模式或 SSH 隧道。
 - 显式语句超时和有界实例指标/检查器请求会在执行前被拒绝；无界请求保持兼容。保留行数上限不限制字节数、服务端工作量、引擎内存分配或运行时间。未验证托管 MariaDB。
 - 仅支持 SQL 的驱动程序；不提供文档型或键值 API。
 - MariaDB 没有 `information_schema.VIEW_TABLE_USAGE`，因此删除表确认会在视图定义中搜索 `` `database`.`table` `` 名称来查找依赖视图；只通过另一个视图读取该表的视图不会被列出。

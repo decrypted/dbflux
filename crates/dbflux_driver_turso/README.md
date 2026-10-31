@@ -14,7 +14,7 @@ Remote Turso / libSQL database over HTTP.
 | Field | Notes |
 |---|---|
 | URL | `libsql://<database>-<org>.turso.io`, or `http://127.0.0.1:8080` for a local `sqld`. Credentials, query strings, fragments, and paths are rejected. |
-| Auth Token | Held in the OS keyring and sent as a bearer token. Optional for unauthenticated local servers. |
+| Auth Token | Held in the OS keyring and sent as a bearer token. Optional for unauthenticated local servers. A token is only sent over `libsql://` or `https://` to a remote host: a plain `http://` URL with a token is refused unless it points at this machine. |
 
 ## Features
 

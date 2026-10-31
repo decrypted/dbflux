@@ -196,13 +196,14 @@ impl TursoDriver {
             ));
         };
         let url = validate_url(url)?;
+        let token = token
+            .map(|token| token.expose_secret().trim())
+            .filter(|token| !token.is_empty());
+        check_token_transport(url, token.is_some())?;
 
         let mut builder = Builder::new_remote(url);
         if let Some(token) = token {
-            let token = token.expose_secret().trim();
-            if !token.is_empty() {
-                builder = builder.with_auth_token(token);
-            }
+            builder = builder.with_auth_token(token);
         }
 
         TursoConnection::open_root(builder)
@@ -273,6 +274,37 @@ impl DbDriver for TursoDriver {
     }
 }
 
+/// Refuses to send an auth token over plain `http://` to a host other than
+/// this machine, the rule the ClickHouse driver applies: anyone on the
+/// network path would read the token from the request. `http://` stays
+/// usable for a local `sqld`, and for a remote one without a token.
+pub(crate) fn check_token_transport(url: &str, has_token: bool) -> Result<(), DbError> {
+    let Some((scheme, rest)) = url.trim().split_once("://") else {
+        return Ok(());
+    };
+    if !has_token || !scheme.eq_ignore_ascii_case("http") {
+        return Ok(());
+    }
+
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+        None => authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host),
+    };
+
+    if dbflux_core::is_loopback_host(host) {
+        return Ok(());
+    }
+
+    Err(DbError::InvalidProfile(
+        "Turso auth tokens are only sent over https:// or libsql:// to a remote host; plain \
+         http:// is accepted for localhost only."
+            .to_string(),
+    ))
+}
+
 /// Accepts `libsql://`, `turso://`, `https://` and plain `http://` (local
 /// `sqld`) URLs with a host and optional port. Credentials, query strings and
 /// fragments are rejected so a token can never be smuggled into the profile.
@@ -327,6 +359,18 @@ mod tests {
                 .capabilities
                 .contains(DriverCapabilities::REQUEST_ROW_LIMIT)
         );
+    }
+
+    #[test]
+    fn tokens_never_go_over_http_to_a_remote_host() {
+        assert!(check_token_transport("http://db.example.com:8080", true).is_err());
+        assert!(check_token_transport("HTTP://db.example.com", true).is_err());
+        assert!(check_token_transport("http://db.example.com:8080", false).is_ok());
+        assert!(check_token_transport("http://127.0.0.1:8080", true).is_ok());
+        assert!(check_token_transport("http://localhost:8080", true).is_ok());
+        assert!(check_token_transport("http://[::1]:8080", true).is_ok());
+        assert!(check_token_transport("https://db-org.turso.io", true).is_ok());
+        assert!(check_token_transport("libsql://db-org.turso.io", true).is_ok());
     }
 
     #[test]

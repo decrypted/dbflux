@@ -761,6 +761,20 @@ connection_manager:
         import_selected:
           one: "导入 %{count} 个连接"
           many: "导入 %{count} 个连接"
+  ssl_mode:
+    option:
+      off: "关闭"
+      off_login_only: "关闭（仅加密登录，不检查证书）"
+      prefer: "优先（可能不加密，不检查证书）"
+      required_unverified: "必需，不检查证书"
+      verify_ca: "验证 CA，不检查主机名"
+      verify_full: "验证 CA 和主机名"
+  ssl_warning:
+    plaintext: "未加密：查询、结果，可能还有密码，都以明文在网络上传输。"
+    may_be_plaintext: "TLS 失败时可能在不提示的情况下继续以未加密方式连接，并且不检查服务器证书。"
+    certificate_not_checked: "已加密，但不检查服务器证书：网络路径上的任何人都可以冒充服务器。"
+    hostname_not_checked: "会检查证书链，但不检查主机名：任何受信任 CA 签发的证书都会被接受。"
+    uri_mode: "在 URI 模式下，TLS 设置来自 URI 自身的参数，而不是此选择器。"
 connections:
   window:
     manager_title: 连接管理器

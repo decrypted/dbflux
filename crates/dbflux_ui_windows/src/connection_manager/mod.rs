@@ -111,10 +111,39 @@ fn ssl_mode_from_config(config: &DbConfig) -> Option<String> {
         DbConfig::Postgres { ssl_mode, .. }
         | DbConfig::MySQL { ssl_mode, .. }
         | DbConfig::MongoDB { ssl_mode, .. }
-        | DbConfig::Redis { ssl_mode, .. }
-        | DbConfig::SqlServer { ssl_mode, .. } => ssl_mode.clone(),
+        | DbConfig::SqlServer { ssl_mode, .. }
+        | DbConfig::Redshift { ssl_mode, .. } => ssl_mode.clone(),
+        // Profiles from before `ssl_mode` carry the legacy `tls` flag, which
+        // the driver reads as `on`.
+        DbConfig::Redis { ssl_mode, tls, .. } => {
+            ssl_mode.clone().or_else(|| tls.then(|| "on".to_string()))
+        }
         _ => None,
     }
+}
+
+/// The SSL mode the form shows for a profile: its stored mode, or the mode
+/// the driver applies when none is stored, so saving the form never changes
+/// what an existing profile connects with.
+fn ssl_mode_for_profile(config: &DbConfig, driver: &dyn DbDriver) -> String {
+    ssl_mode_from_config(config)
+        .or_else(|| {
+            driver
+                .metadata()
+                .unset_ssl_mode()
+                .map(|mode| mode.id.to_string())
+        })
+        .unwrap_or_default()
+}
+
+/// The SSL mode a new connection starts with: the driver's declared default,
+/// never the first listed mode.
+fn ssl_mode_for_new_connection(driver: &dyn DbDriver) -> String {
+    driver
+        .metadata()
+        .default_ssl_mode()
+        .map(|mode| mode.id.to_string())
+        .unwrap_or_default()
 }
 
 /// Focus state for driver selection screen
@@ -1230,17 +1259,8 @@ impl ConnectionManagerWindow {
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
-            // Restore the SSL mode from the saved config; fall back to the driver's first
-            // declared mode if the config doesn't carry one (e.g. URI mode or non-SSL drivers).
             instance.form.selected_ssl_mode =
-                ssl_mode_from_config(&profile.config).unwrap_or_else(|| {
-                    driver
-                        .metadata()
-                        .ssl_modes
-                        .and_then(|modes| modes.first())
-                        .map(|m| m.id.to_string())
-                        .unwrap_or_default()
-                });
+                ssl_mode_for_profile(&profile.config, driver.as_ref());
 
             let form = driver.form_definition();
             instance.create_driver_inputs(form, window, cx);
@@ -1514,13 +1534,7 @@ impl ConnectionManagerWindow {
         self.load_driver_params(Vec::new(), window, cx);
 
         if let Some(driver) = driver {
-            // Initialize SSL mode to the driver's first declared ssl mode option, if any.
-            self.form.selected_ssl_mode = driver
-                .metadata()
-                .ssl_modes
-                .and_then(|modes| modes.first())
-                .map(|m| m.id.to_string())
-                .unwrap_or_default();
+            self.form.selected_ssl_mode = ssl_mode_for_new_connection(driver.as_ref());
 
             self.create_driver_inputs(driver.form_definition(), window, cx);
         }

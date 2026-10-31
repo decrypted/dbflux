@@ -54,11 +54,15 @@ fn fields_config(profile: &ConnectionProfile) -> postgres::Config {
         ssl_mode: &config.ssl_mode,
         tls_files: &tls_files,
         driver_params: &driver_params,
+        tls_server_name: None,
     };
 
-    direct_conn_string(&connect, parse_pg_sslmode(&config.ssl_mode))
-        .parse()
-        .expect("generated connection string parses")
+    direct_conn_string(
+        &connect,
+        parse_pg_sslmode(&config.ssl_mode).expect("known sslmode"),
+    )
+    .parse()
+    .expect("generated connection string parses")
 }
 
 fn error_text(result: Result<PgDriverParams, DbError>) -> String {

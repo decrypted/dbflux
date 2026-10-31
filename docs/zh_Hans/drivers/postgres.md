@@ -16,6 +16,7 @@
 - 支持 schema、表、视图、索引、外键、CHECK 约束、唯一约束与自定义类型。
 - 在 Schema 树中呈现存储例程（函数、存储过程、聚合函数、窗口函数），并提供只读的定义查看器。
 - 支持身份认证、SSL、SSH 隧道，以及 URI/手动两种连接模式。与 libpq 一致，`verify-ca` 只校验证书链，`verify-full` 还会校验主机名。
+- 新连接默认使用 `require`（加密，但不检查证书）；表单提供 `disable`、`require`、`verify-ca` 和 `verify-full`。`allow` 和 `prefer` 在已有连接中仍然可用，表单也会显示其模式，但不再为新连接提供：服务器拒绝 TLS 时，两者都会在没有 TLS 的情况下继续连接。表单或 URI 中未知的 `sslmode` 会导致连接失败，而不是回退到 `prefer`。没有 `sslmode` 的 URI 保持 libpq 的默认值 `prefer`。通过 SSH 隧道时，`verify-full` 会以配置的主机而不是隧道的本地地址来校验证书。
 - TLS 证书文件：Connection Manager 中的根证书、客户端证书和客户端密钥字段，或 libpq URI 参数 `sslrootcert`、`sslcert` 和 `sslkey`（例如 `postgresql://user@host/db?sslmode=verify-full&sslrootcert=/path/ca.pem`）。在 `verify-ca` 和 `verify-full` 下，根证书会加入受信任的根；其他模式不校验证书链，会忽略它。除 `disable` 外，所有模式都会出示客户端证书和密钥以进行双向 TLS。文件为 PEM 格式，客户端密钥必须是 PKCS#8。文件不存在、不可读或无效，或只有客户端证书而没有对应密钥（或相反）时，连接会在任何连接尝试之前失败，错误信息会指明该文件。`sslmode=disable` 时这些文件会被忽略。
 - 驱动参数（`键 = 值`，Connection Manager 的 Main 选项卡），如 `application_name`、`options`、`connect_timeout`、keepalive 设置和 `target_session_attrs`，在所有连接模式下（包括隧道）都会追加到连接字符串末尾，并覆盖 URI 查询选项；未知的键和属于表单的键（主机、凭据、数据库、`ssl*`）会在连接前被拒绝。
 - 通过 PostgreSQL 的取消令牌支持查询取消。

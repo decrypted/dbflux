@@ -4385,6 +4385,70 @@ mod tests {
         );
     }
 
+    /// Guards every registered driver that offers SSL modes: a new driver
+    /// cannot ship with an unencrypted or opportunistic default, an
+    /// ambiguous default, or a legacy mode as its default. Labels come from
+    /// each mode's kind, so a mode that does not verify the server cannot
+    /// carry a label that hides it.
+    #[test]
+    fn every_driver_with_ssl_modes_defaults_to_an_encrypting_mode() {
+        let drivers = AppState::build_builtin_drivers();
+        let mut checked = Vec::new();
+
+        for (id, driver) in &drivers {
+            let metadata = driver.metadata();
+            let Some(modes) = metadata.ssl_modes else {
+                continue;
+            };
+            checked.push(id.clone());
+
+            let defaults: Vec<_> = modes.iter().filter(|mode| mode.default_for_new).collect();
+            assert_eq!(defaults.len(), 1, "{id}: exactly one default_for_new mode");
+            let default = defaults.first().expect("checked above");
+            assert!(
+                default.kind.always_encrypts(),
+                "{id}: the default mode `{}` must always encrypt",
+                default.id
+            );
+            assert!(!default.legacy, "{id}: the default mode cannot be legacy");
+            assert_eq!(
+                metadata.default_ssl_mode().map(|mode| mode.id),
+                Some(default.id)
+            );
+
+            let unset = modes.iter().filter(|mode| mode.when_unset).count();
+            assert_eq!(unset, 1, "{id}: exactly one when_unset mode");
+
+            let mut ids: Vec<_> = modes.iter().map(|mode| mode.id).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), modes.len(), "{id}: mode ids are unique");
+
+            for mode in modes {
+                let label = mode.kind.label_key();
+                if !mode.kind.verifies_hostname() {
+                    assert!(
+                        mode.kind.warning().is_some(),
+                        "{id}: `{}` does not verify the server, so the form must warn",
+                        mode.id
+                    );
+                }
+                assert!(
+                    label.starts_with("connection_manager.ssl_mode.option."),
+                    "{id}: `{}` label key {label}",
+                    mode.id
+                );
+            }
+        }
+
+        #[cfg(feature = "postgres")]
+        assert!(checked.iter().any(|id| id == "postgres"));
+        #[cfg(feature = "mysql")]
+        assert!(checked.iter().any(|id| id == "mysql"));
+        #[cfg(feature = "mssql")]
+        assert!(checked.iter().any(|id| id == "mssql"));
+    }
+
     #[test]
     #[cfg(feature = "influxdb")]
     fn influxdb_registration_present_when_feature_enabled() {

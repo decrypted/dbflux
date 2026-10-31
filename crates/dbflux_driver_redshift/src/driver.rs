@@ -17,7 +17,7 @@ use postgres::Config;
 
 use crate::connection::{
     RedshiftConnectParams, RedshiftConnection, RedshiftSslMode, RedshiftTlsCerts, connect_redshift,
-    connect_with_ssl_mode,
+    connect_with_ssl_mode, through_tunnel,
 };
 use crate::error_formatter::format_redshift_uri_error;
 
@@ -34,6 +34,28 @@ const DEFAULT_URI_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// informational). It does not reuse `DriverCapabilities::RELATIONAL_BASE`
 /// because that constant bundles `INSERT | UPDATE | DELETE | INDEXES |
 /// TRANSACTIONS`.
+/// libpq `allow` and `prefer` stay for stored profiles only: both continue
+/// in plaintext when the server declines TLS, and neither checks the
+/// certificate, so the form offers `require` and the verify modes instead.
+pub(crate) const SSL_MODES: &[dbflux_core::SslModeOption] = &[
+    dbflux_core::SslModeOption::new("disable", dbflux_core::SslModeKind::Off),
+    dbflux_core::SslModeOption::new("allow", dbflux_core::SslModeKind::Prefer).legacy(),
+    dbflux_core::SslModeOption::new("prefer", dbflux_core::SslModeKind::Prefer)
+        .legacy()
+        .when_unset(),
+    dbflux_core::SslModeOption::new("require", dbflux_core::SslModeKind::RequiredUnverified)
+        .default_for_new(),
+    dbflux_core::SslModeOption::new("verify-ca", dbflux_core::SslModeKind::VerifyCa),
+    dbflux_core::SslModeOption::new("verify-full", dbflux_core::SslModeKind::VerifyFull),
+];
+
+/// The mode a new connection starts with.
+pub(crate) const NEW_CONNECTION_SSL_MODE: &str = "require";
+
+/// The mode of a stored profile that carries none, as before modes were
+/// stored. Kept as `prefer` so such profiles connect as they always did.
+pub(crate) const UNSET_SSL_MODE: &str = "prefer";
+
 pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "redshift".into(),
     display_name: "Amazon Redshift".into(),
@@ -123,32 +145,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_deferrable: false,
     }),
     limits: None,
-    ssl_modes: Some(&[
-        dbflux_core::SslModeOption {
-            id: "disable",
-            label: "disable",
-        },
-        dbflux_core::SslModeOption {
-            id: "allow",
-            label: "allow",
-        },
-        dbflux_core::SslModeOption {
-            id: "prefer",
-            label: "prefer",
-        },
-        dbflux_core::SslModeOption {
-            id: "require",
-            label: "require",
-        },
-        dbflux_core::SslModeOption {
-            id: "verify-ca",
-            label: "verify-ca",
-        },
-        dbflux_core::SslModeOption {
-            id: "verify-full",
-            label: "verify-full",
-        },
-    ]),
+    ssl_modes: Some(SSL_MODES),
     ssl_cert_fields: Some(dbflux_core::SslCertFields {
         root_cert: true,
         client_cert: true,
@@ -289,7 +286,7 @@ impl DbDriver for RedshiftDriver {
                 port: 5439,
                 user: String::new(),
                 database: String::new(),
-                ssl_mode: Some("prefer".to_string()),
+                ssl_mode: Some(NEW_CONNECTION_SSL_MODE.to_string()),
                 ssl_root_cert_path,
                 ssl_client_cert_path,
                 ssl_client_key_path,
@@ -331,7 +328,7 @@ impl DbDriver for RedshiftDriver {
             port,
             user,
             database,
-            ssl_mode: Some("prefer".to_string()),
+            ssl_mode: Some(NEW_CONNECTION_SSL_MODE.to_string()),
             ssl_root_cert_path,
             ssl_client_cert_path,
             ssl_client_key_path,
@@ -476,7 +473,9 @@ fn extract_redshift_config(config: &DbConfig) -> Result<ExtractedRedshiftConfig,
             port: *port,
             user: user.clone(),
             database: database.clone(),
-            ssl_mode: ssl_mode.clone().unwrap_or_else(|| "prefer".to_string()),
+            ssl_mode: ssl_mode
+                .clone()
+                .unwrap_or_else(|| UNSET_SSL_MODE.to_string()),
             tls_certs: RedshiftTlsCerts {
                 root_cert_path: ssl_root_cert_path.clone(),
                 client_cert_path: ssl_client_cert_path.clone(),
@@ -501,10 +500,11 @@ fn normalize_redshift_uri_scheme(uri: &str) -> String {
 }
 
 /// Resolves the effective [`RedshiftSslMode`] from a URI's `sslmode` query
-/// parameter, defaulting to `prefer` when the parameter is absent.
-fn redshift_uri_sslmode(uri: &str) -> RedshiftSslMode {
+/// parameter, defaulting to `prefer` (libpq's default) when the parameter is
+/// absent. An unknown value is an error.
+fn redshift_uri_sslmode(uri: &str) -> Result<RedshiftSslMode, DbError> {
     let Some(query_start) = uri.find('?') else {
-        return RedshiftSslMode::Prefer;
+        return Ok(RedshiftSslMode::Prefer);
     };
 
     let query = &uri[query_start + 1..];
@@ -513,7 +513,7 @@ fn redshift_uri_sslmode(uri: &str) -> RedshiftSslMode {
         .split('&')
         .find_map(|pair| pair.split_once('=').filter(|(key, _)| *key == "sslmode"))
         .map(|(_, value)| RedshiftSslMode::parse(value))
-        .unwrap_or(RedshiftSslMode::Prefer)
+        .unwrap_or(Ok(RedshiftSslMode::Prefer))
 }
 
 /// Removes the `sslmode` query parameter from a URI.
@@ -558,7 +558,7 @@ fn build_uri_config(
     let normalized = normalize_redshift_uri_scheme(base_uri);
     let uri = inject_password_into_uri(&normalized, password);
 
-    let ssl_mode = redshift_uri_sslmode(&uri);
+    let ssl_mode = redshift_uri_sslmode(&uri)?;
     let stripped = strip_sslmode_query_param(&uri);
 
     let mut config = stripped
@@ -663,6 +663,7 @@ impl RedshiftDriver {
             database,
             ssl_mode,
             tls_certs,
+            tls_server_name: None,
         })?;
 
         let cancel_token = client.cancel_token();
@@ -693,15 +694,19 @@ impl RedshiftDriver {
             dbflux_ssh::open_tunnel(tunnel_config, ssh_secret, db_host, db_port)?;
         let local_port = tunnel.local_port();
 
-        let client = connect_redshift(&RedshiftConnectParams {
-            host: "127.0.0.1",
-            port: local_port,
-            user: db_user,
-            password: db_password.unwrap_or(""),
-            database,
-            ssl_mode,
-            tls_certs,
-        })?;
+        let client = connect_redshift(&through_tunnel(
+            RedshiftConnectParams {
+                host: db_host,
+                port: db_port,
+                user: db_user,
+                password: db_password.unwrap_or(""),
+                database,
+                ssl_mode,
+                tls_certs,
+                tls_server_name: None,
+            },
+            local_port,
+        ))?;
 
         let cancel_token = client.cancel_token();
 
@@ -717,11 +722,49 @@ impl RedshiftDriver {
 
 #[cfg(test)]
 mod tests {
-    use super::{METADATA, RedshiftDriver};
+    use super::{
+        METADATA, NEW_CONNECTION_SSL_MODE, RedshiftDriver, UNSET_SSL_MODE, extract_redshift_config,
+    };
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, DriverCapabilities, FormValues,
         QueryLanguage, TransferFamily,
     };
+
+    #[test]
+    fn new_connections_require_tls_and_unset_profiles_keep_prefer() {
+        assert_eq!(
+            METADATA.default_ssl_mode().map(|mode| mode.id),
+            Some(NEW_CONNECTION_SSL_MODE)
+        );
+        assert_eq!(NEW_CONNECTION_SSL_MODE, "require");
+        assert_eq!(
+            METADATA.unset_ssl_mode().map(|mode| mode.id),
+            Some(UNSET_SSL_MODE)
+        );
+
+        let mut config = DbConfig::default_redshift();
+        if let DbConfig::Redshift { ssl_mode, .. } = &mut config {
+            *ssl_mode = None;
+        }
+        let extracted = extract_redshift_config(&config).expect("redshift config");
+        assert_eq!(extracted.ssl_mode, UNSET_SSL_MODE);
+
+        let values: FormValues = [
+            ("host", "cluster.example.com"),
+            ("port", "5439"),
+            ("user", "awsuser"),
+            ("database", "dev"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+        let built = RedshiftDriver::new()
+            .build_config(&values)
+            .expect("config builds");
+        assert!(
+            matches!(&built, DbConfig::Redshift { ssl_mode: Some(mode), .. } if mode == "require")
+        );
+    }
 
     #[test]
     fn metadata_declares_request_row_limit_enforcement() {
@@ -997,26 +1040,39 @@ mod tests {
         #[test]
         fn parse_sslmode_defaults_to_prefer_when_absent() {
             assert_eq!(
-                redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev"),
-                RedshiftSslMode::Prefer
+                redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev").ok(),
+                Some(RedshiftSslMode::Prefer)
+            );
+        }
+
+        #[test]
+        fn parse_sslmode_rejects_an_unknown_value() {
+            assert!(
+                redshift_uri_sslmode(
+                    "postgresql://cluster.example.com:5439/dev?sslmode=verify_full"
+                )
+                .is_err()
             );
         }
 
         #[test]
         fn parse_sslmode_reads_query_parameter() {
             assert_eq!(
-                redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev?sslmode=require"),
-                RedshiftSslMode::Require
+                redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev?sslmode=require")
+                    .ok(),
+                Some(RedshiftSslMode::Require)
             );
             assert_eq!(
-                redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev?sslmode=disable"),
-                RedshiftSslMode::Disable
+                redshift_uri_sslmode("postgresql://cluster.example.com:5439/dev?sslmode=disable")
+                    .ok(),
+                Some(RedshiftSslMode::Disable)
             );
             assert_eq!(
                 redshift_uri_sslmode(
                     "postgresql://cluster.example.com:5439/dev?sslmode=verify-full"
-                ),
-                RedshiftSslMode::VerifyFull
+                )
+                .ok(),
+                Some(RedshiftSslMode::VerifyFull)
             );
         }
 

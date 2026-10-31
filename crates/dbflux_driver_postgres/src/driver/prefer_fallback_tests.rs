@@ -87,6 +87,10 @@ fn error_response(code: &str, message: &str) -> Vec<u8> {
 }
 
 fn connect_with_prefer(port: u16) -> String {
+    connect_with_mode(port, "prefer")
+}
+
+fn connect_with_mode(port: u16, ssl_mode: &str) -> String {
     let tls_files = PgTlsFiles::default();
     let params = PostgresConnectParams {
         host: "127.0.0.1",
@@ -94,9 +98,10 @@ fn connect_with_prefer(port: u16) -> String {
         user: "dbflux",
         password: Some("wrong"),
         database: "postgres",
-        ssl_mode: "prefer",
+        ssl_mode,
         tls_files: &tls_files,
         driver_params: &PgDriverParams::default(),
+        tls_server_name: None,
     };
 
     match connect_postgres(&params, &NoticeBuffer::default()) {
@@ -129,4 +134,37 @@ fn prefer_retries_in_plaintext_when_the_tls_handshake_fails() {
         "unexpected error: {error}"
     );
     assert_eq!(connections.load(Ordering::SeqCst), 2);
+}
+
+/// Only `prefer` may retry in plaintext: a required or verifying mode that
+/// fails the handshake must report it, on the one connection it opened.
+#[test]
+fn required_and_verify_modes_never_retry_in_plaintext() {
+    for mode in ["require", "verify-ca", "verify-full"] {
+        let (port, connections) = spawn_server(SslAnswer::AcceptThenBreakHandshake);
+
+        let error = connect_with_mode(port, mode);
+
+        assert!(
+            !error.contains("Authentication failed"),
+            "{mode} reached the plaintext login: {error}"
+        );
+        assert_eq!(connections.load(Ordering::SeqCst), 1, "{mode}");
+    }
+}
+
+/// A server that declines TLS cannot talk a required mode into plaintext.
+#[test]
+fn required_modes_refuse_a_server_without_tls() {
+    for mode in ["require", "verify-ca", "verify-full"] {
+        let (port, connections) = spawn_server(SslAnswer::Refuse);
+
+        let error = connect_with_mode(port, mode);
+
+        assert!(
+            !error.contains("Authentication failed"),
+            "{mode} sent a plaintext login: {error}"
+        );
+        assert_eq!(connections.load(Ordering::SeqCst), 1, "{mode}");
+    }
 }

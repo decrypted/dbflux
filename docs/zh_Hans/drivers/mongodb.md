@@ -17,6 +17,7 @@
 - 连接模式：手动（主机/端口/凭据/数据库）与 URI 模式。URI 模式接受 `mongodb://` 与 `mongodb+srv://` 连接串（会解析 SRV 记录以发现副本集）。
 - 支持多个逻辑数据库（`MULTIPLE_DATABASES`），带集合浏览与文档计数。
 - 支持身份认证（`AUTHENTICATION`）与 TLS/SSL（三种模式：`off`、`on`、`verify`），支持根证书与可选的客户端证书。
+- `on` 会加密但不检查证书，`verify` 会校验证书链和主机名，新连接默认使用 `on`。通过 SSH 隧道时，除非数据库主机是 `127.0.0.1`，否则会拒绝 `verify`，因为驱动会以隧道的本地地址校验证书。
 - 支持 SSH 隧道，以便通过堡垒机访问 MongoDB。
 - 支持 `db.collection.method(...)` 与 `db.method(...)` 形式的 shell 风格查询解析，并保留 JSON 文档回退路径以向后兼容。支持的方法：`find`、`findOne`、`aggregate`、`count`/`countDocuments`、`insertOne`、`insertMany`、`updateOne`、`updateMany`、`deleteOne`、`deleteMany`。解析错误会携带字节偏移位置，供编辑器诊断使用。
 - 聚合管道（`AGGREGATION`）；查询能力声明了 order-by、group-by、having、limit 与 offset。

@@ -354,7 +354,9 @@ fn http_error_to_db_error(e: HttpError) -> DbError {
             let fe = InfluxErrorFormatter::format_http_error(status, body);
             DbError::QueryFailed(fe)
         }
-        HttpError::Transport(msg) | HttpError::Body(msg) => DbError::connection_failed(msg),
+        HttpError::Transport(msg) | HttpError::Body(msg) | HttpError::InsecureEndpoint(msg) => {
+            DbError::connection_failed(msg)
+        }
     }
 }
 

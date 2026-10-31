@@ -1071,7 +1071,9 @@ fn map_http_error(e: HttpError) -> DbError {
                 DbError::ConnectionFailed(fe)
             }
         }
-        HttpError::Transport(msg) | HttpError::Body(msg) => DbError::connection_failed(msg),
+        HttpError::Transport(msg) | HttpError::Body(msg) | HttpError::InsecureEndpoint(msg) => {
+            DbError::connection_failed(msg)
+        }
     }
 }
 

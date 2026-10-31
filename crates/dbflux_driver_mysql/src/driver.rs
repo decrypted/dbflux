@@ -37,6 +37,27 @@ mod params;
 
 use params::{MYSQL_DRIVER_PARAMS, MysqlDriverParams};
 
+/// `PREFERRED` stays for stored profiles only: it continues in plaintext when
+/// TLS fails and never checks the certificate, so the form offers `REQUIRED`
+/// and the verify modes instead.
+pub(crate) const SSL_MODES: &[dbflux_core::SslModeOption] = &[
+    dbflux_core::SslModeOption::new("DISABLED", dbflux_core::SslModeKind::Off),
+    dbflux_core::SslModeOption::new("PREFERRED", dbflux_core::SslModeKind::Prefer)
+        .legacy()
+        .when_unset(),
+    dbflux_core::SslModeOption::new("REQUIRED", dbflux_core::SslModeKind::RequiredUnverified)
+        .default_for_new(),
+    dbflux_core::SslModeOption::new("VERIFY_CA", dbflux_core::SslModeKind::VerifyCa),
+    dbflux_core::SslModeOption::new("VERIFY_IDENTITY", dbflux_core::SslModeKind::VerifyFull),
+];
+
+/// The mode a new connection starts with.
+const NEW_CONNECTION_SSL_MODE: &str = "REQUIRED";
+
+/// The mode of a stored profile that carries none, as before modes were
+/// stored. Kept as `PREFERRED` so such profiles connect as they always did.
+const UNSET_SSL_MODE: &str = "PREFERRED";
+
 /// MySQL driver metadata.
 pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "mysql".into(),
@@ -171,28 +192,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         max_indexes_per_table: 64,
         max_bulk_insert_rows: 0,
     }),
-    ssl_modes: Some(&[
-        dbflux_core::SslModeOption {
-            id: "DISABLED",
-            label: "disabled",
-        },
-        dbflux_core::SslModeOption {
-            id: "PREFERRED",
-            label: "preferred",
-        },
-        dbflux_core::SslModeOption {
-            id: "REQUIRED",
-            label: "required",
-        },
-        dbflux_core::SslModeOption {
-            id: "VERIFY_CA",
-            label: "verify-ca",
-        },
-        dbflux_core::SslModeOption {
-            id: "VERIFY_IDENTITY",
-            label: "verify-identity",
-        },
-    ]),
+    ssl_modes: Some(SSL_MODES),
     ssl_cert_fields: Some(dbflux_core::SslCertFields {
         root_cert: true,
         client_cert: true,
@@ -338,28 +338,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_indexes_per_table: 64,
         max_bulk_insert_rows: 0,
     }),
-    ssl_modes: Some(&[
-        dbflux_core::SslModeOption {
-            id: "DISABLED",
-            label: "disabled",
-        },
-        dbflux_core::SslModeOption {
-            id: "PREFERRED",
-            label: "preferred",
-        },
-        dbflux_core::SslModeOption {
-            id: "REQUIRED",
-            label: "required",
-        },
-        dbflux_core::SslModeOption {
-            id: "VERIFY_CA",
-            label: "verify-ca",
-        },
-        dbflux_core::SslModeOption {
-            id: "VERIFY_IDENTITY",
-            label: "verify-identity",
-        },
-    ]),
+    ssl_modes: Some(SSL_MODES),
     ssl_cert_fields: Some(dbflux_core::SslCertFields {
         root_cert: true,
         client_cert: true,
@@ -930,7 +909,7 @@ impl DbDriver for MysqlDriver {
                 port: 3306,
                 user: String::new(),
                 database: None,
-                ssl_mode: Some("PREFERRED".to_string()),
+                ssl_mode: Some(NEW_CONNECTION_SSL_MODE.to_string()),
                 ssl_root_cert_path: None,
                 ssl_client_cert_path: None,
                 ssl_client_key_path: None,
@@ -967,7 +946,7 @@ impl DbDriver for MysqlDriver {
             port,
             user,
             database,
-            ssl_mode: Some("PREFERRED".to_string()),
+            ssl_mode: Some(NEW_CONNECTION_SSL_MODE.to_string()),
             ssl_root_cert_path: None,
             ssl_client_cert_path: None,
             ssl_client_key_path: None,
@@ -1087,7 +1066,7 @@ struct ExtractedMysqlConfig {
     port: u16,
     user: String,
     database: Option<String>,
-    /// MySQL native ssl-mode identifier (e.g. `"PREFERRED"`, `"VERIFY_CA"`). Defaults to `"PREFERRED"` when absent.
+    /// MySQL native ssl-mode identifier (e.g. `"PREFERRED"`, `"VERIFY_CA"`); `UNSET_SSL_MODE` when absent.
     ssl_mode: String,
     ssl_paths: MysqlSslPaths,
     ssh_tunnel: Option<SshTunnelConfig>,
@@ -1259,7 +1238,9 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
             port: *port,
             user: user.clone(),
             database: database.clone(),
-            ssl_mode: ssl_mode.clone().unwrap_or_else(|| "PREFERRED".to_string()),
+            ssl_mode: ssl_mode
+                .clone()
+                .unwrap_or_else(|| UNSET_SSL_MODE.to_string()),
             ssl_paths: MysqlSslPaths {
                 root_cert: ssl_root_cert_path.clone(),
                 client_cert: ssl_client_cert_path.clone(),
@@ -1294,7 +1275,7 @@ fn build_mysql_opts(
     password: Option<&str>,
     ssl_mode: &str,
     ssl_paths: &MysqlSslPaths,
-) -> Opts {
+) -> Result<Opts, DbError> {
     let host = normalize_mysql_tcp_host(host);
 
     let mut builder = OptsBuilder::new()
@@ -1335,13 +1316,13 @@ fn build_mysql_opts(
             builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
         }
         _ => {
-            // Unknown mode — treat as PREFERRED (accept-invalid, allow fallback).
-            let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
-            builder = builder.ssl_opts(apply_client_identity(ssl_opts, ssl_paths));
+            // Falling back to PREFERRED would turn a mistyped VERIFY_IDENTITY
+            // into a connection that verifies nothing.
+            return Err(dbflux_core::unknown_ssl_mode("MySQL", ssl_mode, SSL_MODES));
         }
     }
 
-    builder.into()
+    Ok(builder.into())
 }
 
 /// Builds the options of a URI-mode connection: the URI's query options
@@ -1356,14 +1337,64 @@ fn build_mysql_uri_opts(
     let opts = Opts::from_url(&uri).map_err(|e| format_mysql_uri_error(&e, base_uri))?;
     // MySQL connection URIs have no program_name/application_name query key,
     // so the identity attr must be applied unconditionally after parsing.
-    let opts: Opts = OptsBuilder::from_opts(opts)
-        .connect_attrs(Some(HashMap::from([(
-            "program_name".to_string(),
-            dbflux_core::client_identity().to_string(),
-        )])))
-        .into();
+    let mut builder = OptsBuilder::from_opts(opts).connect_attrs(Some(HashMap::from([(
+        "program_name".to_string(),
+        dbflux_core::client_identity().to_string(),
+    )])));
 
-    params.apply(opts)
+    // The crate defaults to `prefer_socket=true`: after logging in to a
+    // loopback address it asks the server for `@@socket` and reconnects to
+    // that path on this machine, so a URI aimed at an `ssh -L` port could
+    // land on a local MySQL instead. Only a URI that asks for it keeps it.
+    if !uri_sets_query_key(&uri, "prefer_socket") {
+        builder = builder.prefer_socket(false);
+    }
+
+    params.apply(builder.into())
+}
+
+/// Whether the query string of `uri` names `key`.
+fn uri_sets_query_key(uri: &str, key: &str) -> bool {
+    uri.split_once('?').is_some_and(|(_, query)| {
+        query
+            .split('&')
+            .any(|pair| pair.split('=').next() == Some(key))
+    })
+}
+
+/// Whether a `PREFERRED` connection may continue without TLS after the TLS
+/// negotiation failed. Only for a database on this machine: over a network,
+/// a stripped TLS offer leaves `caching_sha2_password` to encrypt the
+/// password with an RSA key the server sends, and the mysql crate accepts
+/// whatever key arrives, so whoever answers in the path can read it.
+fn preferred_may_fall_back_to_plaintext(db_host: &str) -> bool {
+    dbflux_core::is_loopback_host(db_host)
+}
+
+fn preferred_fallback_refused(error: &mysql::Error, db_host: &str) -> DbError {
+    DbError::ConnectionFailed(
+        format!(
+            "TLS to '{db_host}' failed ({error}). SSL mode PREFERRED continues without TLS only \
+             for a database on this machine, because without TLS the login can expose the \
+             password to anyone in the network path. Fix the server's TLS, or choose DISABLED \
+             to connect unencrypted anyway."
+        )
+        .into(),
+    )
+}
+
+/// Through an SSH tunnel the client connects to `127.0.0.1`, and the mysql
+/// crate checks the certificate against the address it connects to, with no
+/// way to name another host. VERIFY_IDENTITY would then check the wrong
+/// name, so it fails up front unless the database host is that address.
+fn check_tunnel_tls(ssl_mode: &str, db_host: &str) -> Result<(), DbError> {
+    if ssl_mode == "VERIFY_IDENTITY" && normalize_mysql_tcp_host(db_host) != "127.0.0.1" {
+        return Err(dbflux_core::tunnel_hostname_check_unsupported(
+            "MySQL", db_host, ssl_mode,
+        ));
+    }
+
+    Ok(())
 }
 
 fn initial_database_from_opts(opts: &Opts) -> Option<String> {
@@ -1477,7 +1508,7 @@ impl MysqlDriver {
                 password,
                 "PREFERRED",
                 ssl_paths,
-            ))?;
+            )?)?;
             match Conn::new(ssl_opts.clone()) {
                 Ok(c) => {
                     log::info!("[SSL] Catalog connection established with SSL (PREFERRED mode)");
@@ -1486,6 +1517,9 @@ impl MysqlDriver {
                 Err(ssl_err) if !is_tls_negotiation_failure(&ssl_err) => {
                     return Err(format_mysql_error(&ssl_err, host, port));
                 }
+                Err(ssl_err) if !preferred_may_fall_back_to_plaintext(host) => {
+                    return Err(preferred_fallback_refused(&ssl_err, host));
+                }
                 Err(ssl_err) => {
                     log::info!(
                         "[SSL] TLS negotiation failed ({}), falling back to non-SSL",
@@ -1493,7 +1527,7 @@ impl MysqlDriver {
                     );
                     let no_ssl_opts = params.apply(build_mysql_opts(
                         host, port, user, database, password, "DISABLED", ssl_paths,
-                    ))?;
+                    )?)?;
                     let c = Conn::new(no_ssl_opts.clone())
                         .map_err(|e| format_mysql_error(&e, host, port))?;
                     (no_ssl_opts, c)
@@ -1502,7 +1536,7 @@ impl MysqlDriver {
         } else {
             let opts = params.apply(build_mysql_opts(
                 host, port, user, database, password, ssl_mode, ssl_paths,
-            ))?;
+            )?)?;
             let c = Conn::new(opts.clone()).map_err(|e| format_mysql_error(&e, host, port))?;
             (opts, c)
         };
@@ -1557,6 +1591,8 @@ impl MysqlDriver {
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
+        check_tunnel_tls(ssl_mode, db_host)?;
+
         log::info!("[SSH] Starting dual tunnels to {}:{}", db_host, db_port);
 
         // === Tunnel 1: Catalog connection ===
@@ -1580,7 +1616,7 @@ impl MysqlDriver {
                 db_password,
                 "PREFERRED",
                 ssl_paths,
-            ))?;
+            )?)?;
             match Conn::new(ssl_opts) {
                 Ok(c) => {
                     log::info!("[SSL] Catalog connection established with SSL");
@@ -1588,6 +1624,11 @@ impl MysqlDriver {
                 }
                 Err(ssl_err) if !is_tls_negotiation_failure(&ssl_err) => {
                     return Err(format_mysql_error(&ssl_err, "127.0.0.1", local_port1));
+                }
+                // The plaintext hop runs from the tunnel's server to the
+                // database, so the database host decides.
+                Err(ssl_err) if !preferred_may_fall_back_to_plaintext(db_host) => {
+                    return Err(preferred_fallback_refused(&ssl_err, db_host));
                 }
                 Err(ssl_err) => {
                     log::info!(
@@ -1602,7 +1643,7 @@ impl MysqlDriver {
                         db_password,
                         "DISABLED",
                         ssl_paths,
-                    ))?;
+                    )?)?;
                     let c = Conn::new(no_ssl_opts)
                         .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
                     ("DISABLED", c)
@@ -1617,7 +1658,7 @@ impl MysqlDriver {
                 db_password,
                 ssl_mode,
                 ssl_paths,
-            ))?;
+            )?)?;
             let c =
                 Conn::new(opts).map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
             (ssl_mode, c)
@@ -1642,7 +1683,7 @@ impl MysqlDriver {
             db_password,
             working_ssl_mode,
             ssl_paths,
-        ))?;
+        )?)?;
         let mut query_conn = Conn::new(query_opts.clone())
             .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port2))?;
 
@@ -1712,7 +1753,7 @@ If you are using SSM, verify the tunnel target host/port and that the DB user is
             || source.contains("Authentication requires secure connection")
         {
             "Authentication failed. MySQL 8+ requires SSL for initial authentication \
-             with caching_sha2_password. Try changing SSL mode to 'Require' or 'Prefer'."
+             with caching_sha2_password. Choose SSL mode REQUIRED or a verify mode."
                 .to_string()
         } else {
             source.to_string()
@@ -4966,12 +5007,13 @@ fn resolve_write_privilege(
 mod tests {
     use super::rowid_pseudo_columns;
     use super::{
-        GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,
-        MysqlSslPaths, build_mysql_opts, classify_mysql_grant_line, classify_mysql_grants,
-        dependents_from_rows, index_key_part_label, initial_database_from_opts,
-        inject_password_into_mysql_uri, may_open_transaction, mysql_routine_type_to_kind,
-        mysql_text_literal, normalize_mysql_tcp_host, plan_mysql_semantic_request,
-        resolve_write_privilege,
+        GrantLineVerdict, MYSQL_METADATA, MysqlCodeGenerator, MysqlDialect, MysqlDriver,
+        MysqlGrantsVerdict, MysqlSslPaths, NEW_CONNECTION_SSL_MODE, SSL_MODES, UNSET_SSL_MODE,
+        build_mysql_opts, build_mysql_uri_opts, check_tunnel_tls, classify_mysql_grant_line,
+        classify_mysql_grants, dependents_from_rows, extract_mysql_config, index_key_part_label,
+        initial_database_from_opts, inject_password_into_mysql_uri, may_open_transaction,
+        mysql_routine_type_to_kind, mysql_text_literal, normalize_mysql_tcp_host,
+        plan_mysql_semantic_request, preferred_may_fall_back_to_plaintext, resolve_write_privilege,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
@@ -4980,6 +5022,175 @@ mod tests {
         SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value, WritePrivilege,
     };
     use mysql::{Conn, Opts, OptsBuilder};
+
+    fn no_ssl_paths() -> MysqlSslPaths {
+        MysqlSslPaths {
+            root_cert: None,
+            client_cert: None,
+            client_key: None,
+        }
+    }
+
+    fn opts_for_mode(mode: &str) -> Result<Opts, DbError> {
+        build_mysql_opts(
+            "db.example.com",
+            3306,
+            "app",
+            None,
+            None,
+            mode,
+            &no_ssl_paths(),
+        )
+    }
+
+    /// The verify modes must really switch certificate checks on, and every
+    /// mode that does not verify must leave them off, as its label says.
+    #[test]
+    fn every_mode_maps_to_its_declared_verification() {
+        for option in SSL_MODES {
+            let opts = opts_for_mode(option.id).expect("declared modes build");
+            let ssl = opts.get_ssl_opts();
+
+            if option.id == "DISABLED" {
+                assert!(ssl.is_none(), "DISABLED must not set up TLS");
+                continue;
+            }
+
+            let ssl = ssl.unwrap_or_else(|| panic!("{} must set up TLS", option.id));
+            assert_eq!(
+                !ssl.accept_invalid_certs(),
+                option.kind.verifies_certificate(),
+                "{}",
+                option.id
+            );
+            assert_eq!(
+                !ssl.accept_invalid_certs() && !ssl.skip_domain_validation(),
+                option.kind.verifies_hostname(),
+                "{}",
+                option.id
+            );
+        }
+    }
+
+    /// An unknown mode used to become PREFERRED: TLS without any check and
+    /// a plaintext fallback.
+    #[test]
+    fn unknown_ssl_mode_is_an_error_not_preferred() {
+        for mode in ["verify_identity", "VERIFY-IDENTITY", "bogus", ""] {
+            assert!(
+                matches!(opts_for_mode(mode), Err(DbError::InvalidProfile(_))),
+                "{mode:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn new_connections_require_tls_and_unset_profiles_keep_preferred() {
+        for kind in [DbKind::MySQL, DbKind::MariaDB] {
+            let driver = MysqlDriver::new(kind);
+            assert_eq!(
+                driver.metadata().default_ssl_mode().map(|mode| mode.id),
+                Some(NEW_CONNECTION_SSL_MODE),
+                "{kind:?}"
+            );
+            assert_eq!(
+                driver.metadata().unset_ssl_mode().map(|mode| mode.id),
+                Some(UNSET_SSL_MODE),
+                "{kind:?}"
+            );
+        }
+        assert_eq!(NEW_CONNECTION_SSL_MODE, "REQUIRED");
+        assert_eq!(MYSQL_METADATA.ssl_modes, Some(SSL_MODES));
+
+        let mut config = DbConfig::default_mysql();
+        if let DbConfig::MySQL { ssl_mode, .. } = &mut config {
+            *ssl_mode = None;
+        }
+        let extracted = extract_mysql_config(&config).expect("mysql config");
+        assert_eq!(extracted.ssl_mode, UNSET_SSL_MODE);
+    }
+
+    /// The crate's `prefer_socket=true` default would follow the server's
+    /// `@@socket` to a local socket after connecting to a loopback URI.
+    #[test]
+    fn uri_mode_does_not_prefer_a_local_socket() {
+        let params = super::MysqlDriverParams::resolve(&[], false).expect("no params");
+
+        let opts = build_mysql_uri_opts("mysql://root@127.0.0.1:13306/app", None, &params)
+            .expect("uri opts build");
+        assert!(!opts.get_prefer_socket());
+
+        let opts = build_mysql_uri_opts(
+            "mysql://root@127.0.0.1:13306/app?compress=true",
+            None,
+            &params,
+        )
+        .expect("uri opts build");
+        assert!(!opts.get_prefer_socket());
+    }
+
+    #[test]
+    fn uri_mode_keeps_an_explicit_socket_request() {
+        let params = super::MysqlDriverParams::resolve(&[], false).expect("no params");
+
+        let opts = build_mysql_uri_opts(
+            "mysql://root@127.0.0.1:3306/app?prefer_socket=true",
+            None,
+            &params,
+        )
+        .expect("uri opts build");
+        assert!(opts.get_prefer_socket());
+    }
+
+    #[test]
+    fn form_mode_does_not_prefer_a_local_socket() {
+        let opts = build_mysql_opts(
+            "127.0.0.1",
+            3306,
+            "root",
+            None,
+            None,
+            "DISABLED",
+            &no_ssl_paths(),
+        )
+        .expect("opts build");
+        assert!(!opts.get_prefer_socket());
+    }
+
+    /// PREFERRED may continue without TLS only for a database on this
+    /// machine; over a network the login could hand the password to an
+    /// attacker's RSA key.
+    #[test]
+    fn preferred_falls_back_to_plaintext_only_for_a_local_database() {
+        for host in ["localhost", "127.0.0.1", "::1"] {
+            assert!(preferred_may_fall_back_to_plaintext(host), "{host}");
+        }
+        for host in ["db.example.com", "10.0.0.5", "mysql"] {
+            assert!(!preferred_may_fall_back_to_plaintext(host), "{host}");
+        }
+    }
+
+    /// The crate checks the certificate against the address it dials, which
+    /// is the tunnel's local end, so VERIFY_IDENTITY through a tunnel must
+    /// fail clearly instead of checking the wrong name.
+    #[test]
+    fn verify_identity_through_a_tunnel_fails_clearly() {
+        let error = check_tunnel_tls("VERIFY_IDENTITY", "db.internal.example.com")
+            .expect_err("the hostname cannot be checked through the tunnel");
+        assert!(
+            matches!(&error, DbError::InvalidProfile(message) if message.contains("db.internal.example.com")),
+            "{error:?}"
+        );
+
+        for (mode, host) in [
+            ("VERIFY_IDENTITY", "127.0.0.1"),
+            ("VERIFY_IDENTITY", "localhost"),
+            ("VERIFY_CA", "db.internal.example.com"),
+            ("REQUIRED", "db.internal.example.com"),
+        ] {
+            assert!(check_tunnel_tls(mode, host).is_ok(), "{mode} {host}");
+        }
+    }
 
     #[test]
     fn dependents_from_rows_lists_views_then_deduplicated_foreign_key_children() {
@@ -5220,7 +5431,7 @@ mod tests {
     }
 
     #[test]
-    fn build_config_defaults_to_prefer_ssl_mode() {
+    fn build_config_defaults_to_required_ssl_mode() {
         let driver = MysqlDriver::new(DbKind::MySQL);
 
         let mut manual_values = FormValues::new();
@@ -5230,7 +5441,7 @@ mod tests {
 
         let manual_config = driver.build_config(&manual_values).unwrap();
         assert!(
-            matches!(&manual_config, DbConfig::MySQL { ssl_mode: Some(m), .. } if m == "PREFERRED")
+            matches!(&manual_config, DbConfig::MySQL { ssl_mode: Some(m), .. } if m == "REQUIRED")
         );
 
         let mut uri_values = FormValues::new();
@@ -5242,7 +5453,7 @@ mod tests {
 
         let uri_config = driver.build_config(&uri_values).unwrap();
         assert!(
-            matches!(&uri_config, DbConfig::MySQL { ssl_mode: Some(m), .. } if m == "PREFERRED")
+            matches!(&uri_config, DbConfig::MySQL { ssl_mode: Some(m), .. } if m == "REQUIRED")
         );
     }
 
@@ -5296,7 +5507,8 @@ mod tests {
                 client_cert: None,
                 client_key: None,
             },
-        );
+        )
+        .expect("DISABLED is a known mode");
 
         let program_name = opts
             .get_connect_attrs()
@@ -5356,7 +5568,8 @@ mod tests {
                 client_cert: None,
                 client_key: None,
             },
-        );
+        )
+        .expect("DISABLED is a known mode");
         assert_eq!(
             initial_database_from_opts(&opts).as_deref(),
             Some("direct_database")

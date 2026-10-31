@@ -29,6 +29,7 @@ Base de datos relacional open-source popular.
   personalizada reemplaza el trust store del sistema en los modos que verifican,
   y un certificado de cliente + clave habilita mutual TLS. Usa el backend
   `rustls`/`aws-lc-rs`.
+- Las conexiones nuevas empiezan con `REQUIRED` (cifrado, certificado sin comprobar). `PREFERRED` sigue funcionando en las conexiones existentes pero no se ofrece para las nuevas; tras una negociación TLS fallida continúa sin TLS solo para una base de datos en esta máquina, porque sin TLS un inicio de sesión `caching_sha2_password` puede exponer la contraseña a cualquiera en la ruta de red. Un modo desconocido hace fallar la conexión. A través de un túnel SSH se rechaza `VERIFY_IDENTITY` salvo que el host de la base de datos sea `127.0.0.1`: la biblioteca cliente comprueba el certificado contra la dirección local del túnel, así que use `VERIFY_CA` ahí. El modo URI ya no sigue el `@@socket` del servidor hasta un socket local tras conectar a una dirección de loopback, salvo que la URI indique `prefer_socket=true`.
 - Los parámetros del controlador (`clave = valor`, pestaña Main del Connection Manager) se asignan a las opciones de URL del cliente `mysql` en todos los modos de conexión, túneles y proxies incluidos; las claves desconocidas y las que pertenecen al formulario se rechazan antes de conectar. Un selector Compression (Auto, On, Off) edita el parámetro `compress`; Auto comprime las conexiones a través de un túnel SSH, un proxy o SSM.
 - Soporta cancelación de queries a través de un camino de cancelación dedicado
   (flujo `KILL QUERY`).
@@ -92,6 +93,7 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 
 ## Limitaciones
 
+- Con `DISABLED` hacia un host remoto, un inicio de sesión `caching_sha2_password` que necesita autenticación completa cifra la contraseña con una clave pública RSA que envía el servidor, y la biblioteca cliente acepta cualquier clave que llegue, así que cualquiera en la ruta de red puede leer la contraseña. Use `REQUIRED`, un modo de verificación o un túnel SSH para servidores remotos.
 - Los timeouts explícitos de sentencia y las solicitudes acotadas de métricas
   o inspección de instancia se rechazan antes de ejecutarse; las solicitudes
   sin límites mantienen la compatibilidad. El límite de filas retenidas no

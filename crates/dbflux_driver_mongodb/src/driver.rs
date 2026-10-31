@@ -103,6 +103,19 @@ pub static MONGODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDe
     ],
 });
 
+/// `on` encrypts without checking the certificate; `verify` checks the chain
+/// and the hostname.
+pub(crate) const SSL_MODES: &[dbflux_core::SslModeOption] = &[
+    dbflux_core::SslModeOption::new("off", dbflux_core::SslModeKind::Off).when_unset(),
+    dbflux_core::SslModeOption::new("on", dbflux_core::SslModeKind::RequiredUnverified)
+        .default_for_new(),
+    dbflux_core::SslModeOption::new("verify", dbflux_core::SslModeKind::VerifyFull),
+];
+
+/// The mode of a stored profile that carries none: such profiles connected
+/// without TLS, and keep doing so.
+const UNSET_SSL_MODE: &str = "off";
+
 /// MongoDB driver metadata.
 pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "mongodb".into(),
@@ -221,20 +234,7 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_indexes_per_table: 64,
         max_bulk_insert_rows: 0,
     }),
-    ssl_modes: Some(&[
-        dbflux_core::SslModeOption {
-            id: "off",
-            label: "off",
-        },
-        dbflux_core::SslModeOption {
-            id: "on",
-            label: "on",
-        },
-        dbflux_core::SslModeOption {
-            id: "verify",
-            label: "verify",
-        },
-    ]),
+    ssl_modes: Some(SSL_MODES),
     ssl_cert_fields: Some(dbflux_core::SslCertFields {
         root_cert: true,
         client_cert: true,
@@ -585,6 +585,7 @@ impl DbDriver for MongoDriver {
                 schema_settings,
             )
         } else if let Some(tunnel_config) = &config.ssh_tunnel {
+            check_tunnel_tls(config.ssl_mode.as_deref(), &config.host)?;
             self.connect_via_ssh_tunnel(
                 tunnel_config,
                 ssh_secret,
@@ -887,7 +888,7 @@ pub(crate) fn mongo_ssl_mode_to_uri_params(
     root_cert_path: Option<&str>,
     client_cert_or_combined_pem: Option<&str>,
 ) -> Result<String, String> {
-    let mode = mode_id.unwrap_or("off");
+    let mode = mode_id.unwrap_or(UNSET_SSL_MODE);
 
     match mode {
         "" | "off" => Ok(String::new()),
@@ -910,6 +911,21 @@ pub(crate) fn mongo_ssl_mode_to_uri_params(
         }
         other => Err(format!("Unknown MongoDB SSL mode: '{}'", other)),
     }
+}
+
+/// Through an SSH tunnel the client connects to `127.0.0.1`, and the MongoDB
+/// driver checks the certificate against the address it connects to, with
+/// no way to name another host. `verify` would then check the wrong name,
+/// so it fails up front unless the database host is that address.
+fn check_tunnel_tls(mode_id: Option<&str>, db_host: &str) -> Result<(), DbError> {
+    let mode = mode_id.unwrap_or(UNSET_SSL_MODE);
+    if mode == "verify" && db_host.trim() != "127.0.0.1" {
+        return Err(dbflux_core::tunnel_hostname_check_unsupported(
+            "MongoDB", db_host, mode,
+        ));
+    }
+
+    Ok(())
 }
 
 fn non_empty_str(s: &str) -> Option<&str> {
@@ -5270,6 +5286,69 @@ mod tests {
         ClientOptions::parse(&uri)
             .run()
             .expect("SSL mode on should produce a URI the driver accepts");
+    }
+
+    /// Each declared mode must configure the client as its label says:
+    /// `verify` with certificate checks on, `on` with them off, `off`
+    /// without TLS.
+    #[test]
+    fn every_mode_maps_to_its_declared_verification() {
+        for option in SSL_MODES {
+            let params = mongo_ssl_mode_to_uri_params(Some(option.id), None, None)
+                .expect("declared modes map");
+            let uri = build_mongodb_uri("db.example.com", 27017, None, None, None, &params);
+            let options = ClientOptions::parse(&uri).run().expect("uri parses");
+
+            match options.tls {
+                Some(mongodb::options::Tls::Enabled(tls)) => {
+                    assert!(option.kind.always_encrypts(), "{}", option.id);
+                    assert_eq!(
+                        tls.allow_invalid_certificates != Some(true),
+                        option.kind.verifies_certificate(),
+                        "{}",
+                        option.id
+                    );
+                    // With rustls, allowing invalid certificates also skips
+                    // the hostname check.
+                    assert_eq!(
+                        tls.allow_invalid_certificates != Some(true),
+                        option.kind.verifies_hostname(),
+                        "{}",
+                        option.id
+                    );
+                }
+                _ => assert!(!option.kind.always_encrypts(), "{}", option.id),
+            }
+        }
+    }
+
+    #[test]
+    fn new_connections_use_tls_and_unset_profiles_stay_plain() {
+        assert_eq!(
+            MONGODB_METADATA.default_ssl_mode().map(|mode| mode.id),
+            Some("on")
+        );
+        assert_eq!(
+            MONGODB_METADATA.unset_ssl_mode().map(|mode| mode.id),
+            Some(UNSET_SSL_MODE)
+        );
+    }
+
+    /// The driver checks the certificate against the address it dials,
+    /// which is the tunnel's local end, so `verify` through a tunnel must
+    /// fail clearly instead of checking the wrong name.
+    #[test]
+    fn verify_through_a_tunnel_fails_clearly() {
+        let error = check_tunnel_tls(Some("verify"), "mongo.internal.example.com")
+            .expect_err("the hostname cannot be checked through the tunnel");
+        assert!(
+            matches!(&error, DbError::InvalidProfile(message) if message.contains("mongo.internal.example.com")),
+            "{error:?}"
+        );
+
+        assert!(check_tunnel_tls(Some("verify"), "127.0.0.1").is_ok());
+        assert!(check_tunnel_tls(Some("on"), "mongo.internal.example.com").is_ok());
+        assert!(check_tunnel_tls(None, "mongo.internal.example.com").is_ok());
     }
 
     #[test]

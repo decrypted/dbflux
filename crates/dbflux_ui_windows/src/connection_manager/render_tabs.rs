@@ -487,10 +487,12 @@ impl ConnectionManagerWindow {
     ) -> AnyElement {
         let current_ssl_mode = self.form.selected_ssl_mode.clone();
 
-        let ssl_items: Vec<SegmentedItem> = ssl_modes
-            .iter()
-            .map(|m| SegmentedItem::new(m.id, m.label))
-            .collect();
+        let ssl_items: Vec<SegmentedItem> =
+            dbflux_core::visible_ssl_modes(ssl_modes, &current_ssl_mode)
+                .into_iter()
+                .map(|m| SegmentedItem::new(m.id, dbflux_i18n::translate(m.kind.label_key())))
+                .collect();
+        let ssl_note = self.transport_note(ssl_modes, &current_ssl_mode, cx);
 
         let entity = cx.entity().clone();
         let show_focus =
@@ -519,6 +521,16 @@ impl ConnectionManagerWindow {
             .items_center()
             .child(ssl_control)
             .child(div().flex_1());
+        let ssl_control_row = match ssl_note {
+            Some(note) => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(ssl_control_row)
+                .child(note)
+                .into_any_element(),
+            None => ssl_control_row.into_any_element(),
+        };
 
         let ssl_row = Self::field_row_cm(
             dbflux_i18n::t!("connection_manager.field.ssl_mode"),
@@ -581,6 +593,45 @@ impl ConnectionManagerWindow {
         }
 
         section.into_any_element()
+    }
+
+    /// The line under the SSL mode selector: in URI mode a note that the URI
+    /// decides TLS, otherwise the warning for a mode that leaves the
+    /// connection unencrypted or the server unverified.
+    fn transport_note(
+        &self,
+        ssl_modes: &'static [dbflux_core::SslModeOption],
+        current_ssl_mode: &str,
+        cx: &App,
+    ) -> Option<AnyElement> {
+        let uri_mode = self
+            .form
+            .checkbox_states
+            .get("use_uri")
+            .copied()
+            .unwrap_or(false);
+        if uri_mode {
+            return Some(
+                Text::caption(dbflux_i18n::t!("connection_manager.ssl_warning.uri_mode"))
+                    .into_any_element(),
+            );
+        }
+
+        let host = self
+            .form
+            .driver_inputs
+            .get("host")
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+
+        let mode = dbflux_core::find_ssl_mode(ssl_modes, current_ssl_mode)?;
+        let warning = dbflux_core::transport_warning(mode.kind, &host)?;
+
+        Some(
+            Text::caption(dbflux_i18n::translate(warning.message_key()))
+                .warning()
+                .into_any_element(),
+        )
     }
 
     /// Render an SSL cert-path row as a file-picker button (folder icon + filename or

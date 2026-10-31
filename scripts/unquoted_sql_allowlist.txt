@@ -1,0 +1,95 @@
+# Format strings that put their own quotes around a placeholder.
+#
+# Checked by `python3 scripts/lint.py unquoted-sql` over the driver crates and
+# dbflux_core. Names and values in generated SQL go through the dialect's
+# quoting helper (`quote_identifier`, `qualified_table`, `value_to_literal`,
+# or the driver's own helper). A site listed here must be provably safe.
+#
+# Format: `path:function: reason`, one line per format string. `function` is
+# the innermost `fn` around it, so a function with two such strings is listed
+# twice. Reasons:
+#   quoting helper    - the helper itself; it escapes the quote it adds
+#   escaped inline    - the value is escaped for exactly this quote on the line before
+#   constant          - every value comes from a constant or a validated token
+#   generated         - a timestamp, number or already-rendered literal list, never a name
+#   not SQL           - display or error text that is never executed
+
+crates/dbflux_core/src/query/join_condition.rs:parse_join_condition: not SQL (parse error message)
+crates/dbflux_core/src/query/time_macros.rs:substitute_time_macros: generated (RFC 3339 timestamps)
+crates/dbflux_core/src/sql/dialect.rs:quote_double_quoted_identifier: quoting helper
+crates/dbflux_core/src/sql/dialect.rs:value_to_literal: generated (ARRAY[...] of rendered literals)
+
+crates/dbflux_driver_clickhouse/src/dialect.rs:quote_identifier: quoting helper
+crates/dbflux_driver_clickhouse/src/dialect.rs:value_to_literal: generated ([...] of rendered literals)
+crates/dbflux_driver_clickhouse/src/instance_catalog.rs:execute_row_action: constant (query_id checked by validate_query_id: [A-Za-z0-9_-] only)
+crates/dbflux_driver_clickhouse/src/instance_catalog.rs:probe_kill_query_allowed: constant (KILL_QUERY_PROBE_ID)
+crates/dbflux_driver_clickhouse/src/instance_catalog.rs:select_sql: constant (raw_name from METRIC_DEFS)
+crates/dbflux_driver_clickhouse/src/instance_catalog.rs:select_sql: constant (raw_name from METRIC_DEFS)
+crates/dbflux_driver_clickhouse/src/instance_catalog.rs:select_sql: constant (raw_name from METRIC_DEFS)
+
+crates/dbflux_driver_duckdb/src/connection.rs:type_name: not SQL (type label from an Arrow list size)
+crates/dbflux_driver_duckdb/src/dialect.rs:quote_identifier: quoting helper
+crates/dbflux_driver_duckdb/src/dialect.rs:value_to_literal: generated ([...] of rendered literals)
+
+crates/dbflux_driver_dynamodb/src/query_generator.rs:partiql_predicate: generated ([...] of partiql_literal values)
+crates/dbflux_driver_dynamodb/src/query_generator.rs:quote_partiql_identifier: quoting helper
+
+crates/dbflux_driver_influxdb/src/connection.rs:count_collection: escaped inline (escape_flux_string)
+crates/dbflux_driver_influxdb/src/connection.rs:escape_influxql_ident: quoting helper
+crates/dbflux_driver_influxdb/src/injection.rs:build_influxql_time_clause: generated (RFC 3339 timestamps)
+crates/dbflux_driver_influxdb/src/query_generator.rs:browse_measurement_flux: escaped inline (escape_flux_string)
+crates/dbflux_driver_influxdb/src/query_generator.rs:query_measurement_flux: escaped inline (escape_flux_string)
+crates/dbflux_driver_influxdb/src/query_generator.rs:select_all_flux: escaped inline (escape_flux_string)
+
+crates/dbflux_driver_mongodb/src/document_codec.rs:collection_accessor: quoting helper (JSON string)
+crates/dbflux_driver_mongodb/src/driver.rs:value_to_literal: generated (RFC 3339 timestamp)
+crates/dbflux_driver_mongodb/src/driver.rs:value_to_literal: generated ([...] of rendered literals)
+crates/dbflux_driver_mongodb/src/query_generator.rs:collection_accessor: quoting helper (JSON string)
+crates/dbflux_driver_mongodb/src/query_generator.rs:render: generated ([...] of rendered values)
+crates/dbflux_driver_mongodb/src/query_generator.rs:shell_literal: generated ([...] of rendered literals)
+
+crates/dbflux_driver_mssql/src/driver.rs:collect_check_constraints: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:collect_unique_constraints: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:describe_table: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:fetch_columns: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:fetch_custom_types: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:fetch_foreign_keys: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:fetch_indexes: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:fetch_schema_foreign_keys: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:fetch_schema_indexes: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:get_schema_routines: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:mssql_bracket_identifier: quoting helper
+crates/dbflux_driver_mssql/src/driver.rs:table_creation_metadata: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:validate_creation_metadata: not SQL (error message)
+crates/dbflux_driver_mssql/src/driver.rs:validate_creation_metadata: not SQL (error message)
+crates/dbflux_driver_mssql/src/driver.rs:validate_creation_metadata: not SQL (error message)
+crates/dbflux_driver_mssql/src/driver.rs:validate_creation_metadata: not SQL (error message)
+crates/dbflux_driver_mssql/src/driver.rs:view_details: escaped inline (quotes doubled; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/instance_catalog.rs:fetch_performance_counter: escaped inline (escape_mssql_literal)
+crates/dbflux_driver_mssql/src/instance_catalog.rs:fetch_ratio_counter: escaped inline (escape_mssql_literal)
+
+crates/dbflux_driver_mysql/src/driver.rs:mysql_quote_ident: quoting helper
+crates/dbflux_driver_mysql/src/instance_catalog.rs:fetch_global_status_value: constant (var_name from PIVOTED_COUNTERS)
+
+crates/dbflux_driver_postgres/src/driver.rs:format_pg_array_literal: generated (ARRAY[...] of rendered literals)
+crates/dbflux_driver_postgres/src/driver.rs:format_pg_array_literal: generated (ARRAY[...] of rendered literals)
+crates/dbflux_driver_postgres/src/driver.rs:format_pg_array_literal: generated (ARRAY[...] of rendered literals)
+crates/dbflux_driver_postgres/src/driver.rs:format_pgvector_dense: generated ([...] of formatted floats)
+crates/dbflux_driver_postgres/src/driver.rs:pg_quote_ident: quoting helper
+crates/dbflux_driver_postgres/src/driver.rs:set_referential_integrity: constant (origin or replica)
+crates/dbflux_driver_postgres/src/vector.rs:anchor_text: generated ([...] of numbers)
+
+crates/dbflux_driver_redis/src/command_generator.rs:escape_arg: quoting helper
+crates/dbflux_driver_redis/src/driver.rs:redis_value_to_display: not SQL (value preview)
+crates/dbflux_driver_redis/src/driver.rs:redis_value_to_display: not SQL (value preview)
+
+crates/dbflux_driver_redshift/src/dialect.rs:quote_identifier: quoting helper
+crates/dbflux_driver_redshift/src/dialect.rs:value_to_literal: generated ([...] of rendered literals, then quoted as one string)
+
+crates/dbflux_driver_s3/src/error_formatter.rs:detail_fragment: not SQL (error detail)
+
+crates/dbflux_driver_sqlite/src/driver.rs:fetch_dependents: escaped inline (quotes doubled; SQLite has no backslash escapes)
+crates/dbflux_driver_sqlite/src/driver.rs:rowid_pseudo_columns: escaped inline (quotes doubled)
+crates/dbflux_driver_sqlite/src/table_rebuild/syntax.rs:rename_table: escaped inline (quotes doubled)
+
+crates/dbflux_driver_turso/src/connection.rs:pragma: escaped inline (escape_string doubles quotes; SQLite has no backslash escapes)

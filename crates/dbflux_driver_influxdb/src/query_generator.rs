@@ -40,11 +40,14 @@ impl InfluxQueryGenerator {
 
     /// Generate a `SELECT * FROM "<name>" LIMIT <limit>` InfluxQL statement.
     pub fn select_all_influxql(measurement: &str, limit: u32) -> String {
-        format!("SELECT * FROM \"{measurement}\" LIMIT {limit}")
+        let measurement = escape_influxql_ident(measurement);
+        format!("SELECT * FROM {measurement} LIMIT {limit}")
     }
 
     /// Generate a Flux query that selects all fields for a measurement.
     pub fn select_all_flux(bucket: &str, measurement: &str, limit: u32) -> String {
+        let bucket = escape_flux_string(bucket);
+        let measurement = escape_flux_string(measurement);
         format!(
             "from(bucket: \"{bucket}\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"{measurement}\")\n  |> limit(n: {limit})"
         )
@@ -59,10 +62,10 @@ impl InfluxQueryGenerator {
     ///
     /// Format: `SELECT * FROM "<bucket>"."autogen"."<measurement>" WHERE time > now() - 1h LIMIT 100`
     pub fn query_measurement_influxql(bucket: &str, measurement: &str) -> String {
-        let bucket_escaped = bucket.replace('"', "\"\"");
-        let measurement_escaped = measurement.replace('"', "\"\"");
+        let bucket = escape_influxql_ident(bucket);
+        let measurement = escape_influxql_ident(measurement);
         format!(
-            "SELECT * FROM \"{bucket_escaped}\".\"autogen\".\"{measurement_escaped}\" WHERE time > now() - 1h LIMIT 100"
+            "SELECT * FROM {bucket}.\"autogen\".{measurement} WHERE time > now() - 1h LIMIT 100"
         )
     }
 
@@ -70,8 +73,8 @@ impl InfluxQueryGenerator {
     ///
     /// Format: `from(bucket: "<bucket>") |> range(start: -1h) |> filter(...)`
     pub fn query_measurement_flux(bucket: &str, measurement: &str) -> String {
-        let bucket_escaped = bucket.replace('\\', "\\\\").replace('"', "\\\"");
-        let measurement_escaped = measurement.replace('\\', "\\\\").replace('"', "\\\"");
+        let bucket_escaped = escape_flux_string(bucket);
+        let measurement_escaped = escape_flux_string(measurement);
         format!(
             "from(bucket: \"{bucket_escaped}\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"{measurement_escaped}\")"
         )
@@ -227,6 +230,28 @@ mod tests {
         assert!(q.contains("limit(n: 100)"), "must include limit: {q}");
     }
 
+    #[test]
+    fn templates_keep_hostile_measurement_names_inside_their_quotes() {
+        let name = "m\\\"; DROP MEASUREMENT \"x";
+        let escaped_ident = "\"m\\\\\\\"; DROP MEASUREMENT \\\"x\"";
+        assert_eq!(
+            InfluxQueryGenerator::select_all_influxql(name, 10),
+            format!("SELECT * FROM {escaped_ident} LIMIT 10")
+        );
+        assert!(
+            InfluxQueryGenerator::query_measurement_influxql("db", name).starts_with(&format!(
+                "SELECT * FROM \"db\".\"autogen\".{escaped_ident} WHERE"
+            )),
+        );
+
+        let flux = InfluxQueryGenerator::select_all_flux("b\"", "${secrets.get(key: \"k\")}", 10);
+        assert!(flux.contains("from(bucket: \"b\\\"\")"), "{flux}");
+        assert!(
+            flux.contains("r._measurement == \"\\${secrets.get(key: \\\"k\\\")}\""),
+            "{flux}"
+        );
+    }
+
     // C.6.3
     #[test]
     fn show_measurements_returns_expected_query() {
@@ -333,14 +358,14 @@ mod tests {
     #[test]
     fn query_measurement_influxql_escapes_embedded_quotes() {
         let q = InfluxQueryGenerator::query_measurement_influxql("my\"db", "my\"measurement");
-        // Embedded double quotes are escaped by doubling in InfluxQL
+        // InfluxQL escapes a quote inside a quoted identifier with a backslash
         assert!(
-            q.contains("\"my\"\"db\""),
-            "bucket embedded quote must be doubled: {q}"
+            q.contains("\"my\\\"db\""),
+            "bucket embedded quote must be escaped: {q}"
         );
         assert!(
-            q.contains("\"my\"\"measurement\""),
-            "measurement embedded quote must be doubled: {q}"
+            q.contains("\"my\\\"measurement\""),
+            "measurement embedded quote must be escaped: {q}"
         );
     }
 
@@ -398,7 +423,7 @@ mod tests {
         let influxql = InfluxQueryGenerator::browse_measurement_influxql("a\"b", 10, 0);
         let flux = InfluxQueryGenerator::browse_measurement_flux("b\\k", "a\"b", 10, 0);
 
-        assert!(influxql.contains("FROM \"a\"\"b\""), "{influxql}");
+        assert!(influxql.contains("FROM \"a\\\"b\""), "{influxql}");
         assert!(flux.contains("from(bucket: \"b\\\\k\")"), "{flux}");
         assert!(flux.contains("r._measurement == \"a\\\"b\""), "{flux}");
     }

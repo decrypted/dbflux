@@ -3545,25 +3545,7 @@ impl DataGridPanel {
                 _ => return,
             };
 
-            let needs_escape = raw.contains('\\') || raw.contains('%') || raw.contains('_');
-
-            let pattern_value = if needs_escape {
-                let escaped = raw
-                    .replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_");
-                format!("%{}%", escaped)
-            } else {
-                format!("%{}%", raw)
-            };
-
-            let pattern_literal = dialect.value_to_literal(&Value::Text(pattern_value));
-
-            if needs_escape {
-                format!("{} LIKE {} ESCAPE '\\'", comparable_column, pattern_literal)
-            } else {
-                format!("{} LIKE {}", comparable_column, pattern_literal)
-            }
+            like_contains_filter(dialect, &comparable_column, &raw)
         } else if matches!(cell_value, Value::Json(_)) {
             dialect.json_filter_expr(&col_name, op_str, &literal, &col_type_name)
         } else {
@@ -4310,6 +4292,26 @@ impl DataGridPanel {
 
 /// How many rows an export of the loaded result writes, or `None` for a text
 /// or binary payload, which has no rows to count.
+/// `column LIKE '%raw%'` that matches `raw` literally.
+///
+/// The escape character is `!`, not a backslash: `ESCAPE '\\'` is an
+/// unterminated string on MySQL's default `sql_mode` (and on PostgreSQL with
+/// `standard_conforming_strings` off), and a bare backslash in the pattern is
+/// already LIKE's default escape on MySQL and PostgreSQL. Declaring `!` makes
+/// a backslash an ordinary character on every dialect.
+fn like_contains_filter(dialect: &dyn dbflux_core::SqlDialect, column: &str, raw: &str) -> String {
+    let needs_escape = raw.contains(['\\', '!', '%', '_']);
+
+    if !needs_escape {
+        let pattern = dialect.value_to_literal(&Value::Text(format!("%{raw}%")));
+        return format!("{column} LIKE {pattern}");
+    }
+
+    let escaped = raw.replace('!', "!!").replace('%', "!%").replace('_', "!_");
+    let pattern = dialect.value_to_literal(&Value::Text(format!("%{escaped}%")));
+    format!("{column} LIKE {pattern} ESCAPE '!'")
+}
+
 fn loaded_row_count(result: &dbflux_core::QueryResult) -> Option<usize> {
     let is_payload =
         result.rows.is_empty() && (result.text_body.is_some() || result.raw_bytes.is_some());
@@ -4582,9 +4584,29 @@ mod tests {
     use super::DataGridPanel;
     use super::QueryGroupSeparators;
     use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
-    use super::{ExportMenuEntry, step_export_selection};
+    use super::{ExportMenuEntry, like_contains_filter, step_export_selection};
     use dbflux_export::ExportFormat;
     use gpui::{Pixels, Point, Size, px};
+
+    #[test]
+    fn like_filter_escapes_wildcards_without_a_backslash_escape_literal() {
+        let dialect = dbflux_core::DefaultSqlDialect;
+        let filter = like_contains_filter(&dialect, "\"path\"", "50%_a!\\b");
+
+        assert_eq!(filter, "\"path\" LIKE '%50!%!_a!!\\b%' ESCAPE '!'");
+        assert!(!filter.contains("'\\'"), "{filter}");
+
+        // A lone backslash is LIKE's default escape on MySQL and PostgreSQL,
+        // so it also needs the explicit clause to match literally.
+        assert_eq!(
+            like_contains_filter(&dialect, "\"path\"", "a\\b"),
+            "\"path\" LIKE '%a\\b%' ESCAPE '!'"
+        );
+        assert_eq!(
+            like_contains_filter(&dialect, "\"name\"", "bob"),
+            "\"name\" LIKE '%bob%'"
+        );
+    }
 
     /// The binary copy row cannot run, so the menu keys pass over it in both
     /// directions and wrap at the ends.

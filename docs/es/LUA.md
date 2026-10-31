@@ -90,6 +90,8 @@ Solo cuatro librerías estándar de Lua:
 ```rust
 let stdlib = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8;
 let lua = Lua::new_with(stdlib, LuaOptions::default())?;
+lua.set_memory_limit(16 * 1024 * 1024)?;
+remove_unsafe_builtins(&lua)?; // load, loadfile, dofile, collectgarbage, string.dump
 ```
 
 Esto le da a los scripts acceso a:
@@ -102,12 +104,9 @@ Esto le da a los scripts acceso a:
   `math.max`, `math.min`, `math.pi`
 - **utf8**: `utf8.char`, `utf8.codepoint`, `utf8.len`
 
-Más los built-ins de Lua que no requieren cargar librerías: `type()`,
-`tostring()`, `tonumber()`, `pairs()`, `ipairs()`, `next()`, `select()`,
-`pcall()`, `xpcall()`, `error()`, `setmetatable()`, `getmetatable()`,
-`rawget()`, `rawset()`, `rawequal()`, `rawlen()`. Los closures, variables
-locales, metatables, todo el control de flujo — todo lo que hace que Lua sea
-_Lua_ funciona sin problema.
+Más estos built-ins base: `assert()`, `error()`, `type()`, `tostring()`, `tonumber()`, `pairs()`, `ipairs()`, `next()`, `select()`, `pcall()`, `xpcall()`, `setmetatable()`, `getmetatable()`, `rawget()`, `rawset()`, `rawequal()`, `rawlen()`, `print()`, `warn()`, `_G` y `_VERSION`. Los closures, las variables locales, las metatables y todo el control de flujo funcionan como siempre.
+
+`string` tiene todas las funciones de Lua 5.4 salvo `string.dump`, y `math` conserva además las funciones de compatibilidad de Lua 5.3 (`math.pow`, `math.atan2`, `math.log10`, ...).
 
 ### Qué está bloqueado
 
@@ -119,11 +118,19 @@ _Lua_ funciona sin problema.
 | `package`   | `require()` permitiría cargar código arbitrario desde disco, incluidos módulos nativos.                                                                                       |
 | `coroutine` | No es peligrosa en sí misma, pero agrega complejidad al modelo de timeout/cancelación (las coroutines pueden hacer yield más allá del instruction hook).                       |
 
-mlua siempre abre la librería base, así que tras crear la VM se eliminan `load()` (acepta bytecode precompilado, que Lua 5.4 no verifica), `loadfile()` y `dofile()` (leen cualquier archivo que DBFlux pueda leer), `collectgarbage()` y `string.dump()` (también de la metatabla de los strings). El script del hook siempre se compila como texto: uno que empiece con la firma de bytecode de Lua falla con `attempt to load a binary chunk`. Un test de `engine.rs` compara todos los globales y los miembros de `string`, `table`, `math`, `utf8` y `dbflux` con una lista explícita.
+mlua siempre abre la librería base, así que estas funciones suyas se eliminan después de crear la VM:
 
-El sandbox es "allowlist, no blocklist". Solo existen las cuatro librerías
-cargadas explícitamente más las funciones de API registradas. Si no está en la
-lista de arriba, no existe en la VM de Lua.
+| Función            | Por qué se elimina |
+| ------------------ | ------------------ |
+| `load()`           | Acepta bytecode precompilado. Lua 5.4 no verifica el bytecode, así que un chunk manipulado puede corromper la memoria del intérprete y escapar del sandbox. |
+| `loadfile()`       | Lee como Lua cualquier archivo que DBFlux pueda leer; un error de sintaxis copia fragmentos del archivo en la salida del hook. |
+| `dofile()`         | Igual que `loadfile()`, y además lo ejecuta. |
+| `collectgarbage()` | Permite a un script detener o reajustar el recolector de basura de la VM que comparte con los callbacks de DBFlux. |
+| `string.dump()`    | Convierte una función en bytecode. Sin ningún loader no tiene uso. También desaparece de la metatabla de los strings, así que `("").dump` también es `nil`. |
+
+El script del hook siempre se compila como texto fuente: un archivo de script o un script inline que empiece con la firma de bytecode de Lua falla con `attempt to load a binary chunk` en lugar de ejecutarse.
+
+El sandbox es "allowlist, no blocklist". Solo existen las cuatro librerías cargadas explícitamente, los built-ins base listados arriba y las funciones de API registradas. Si no está en la lista de arriba, no existe en la VM de Lua. Un test de `engine.rs` (`sandbox_globals_match_the_allowlist`) enumera todos los globales y todos los miembros de `string`, `table`, `math`, `utf8` y `dbflux` con todas las capabilities activadas, y falla si aparece algo fuera de su lista explícita, por ejemplo tras actualizar mlua.
 
 ### Límite de memoria
 
@@ -255,7 +262,7 @@ hook.ok()
 | `args`       | string[] | no        | Argumentos del comando                                                                                       |
 | `timeout_ms` | integer  | no\*      | Timeout por proceso (ms). El timeout a nivel de hook igual aplica por encima.                                |
 | `cwd`        | string   | no        | Directorio de trabajo                                                                                        |
-| `env`        | table    | no        | Variables de entorno extra para el proceso, `{ NOMBRE = "valor" }`; nombres y valores deben ser strings      |
+| `env`        | table    | no        | Variables de entorno extra para el proceso, `{ NOMBRE = "valor" }`; nombres y valores deben ser strings; ver [Entorno del proceso hijo](#entorno-del-proceso-hijo) |
 | `stream`     | boolean  | no        | Transmite stdout/stderr al caller mientras el proceso sigue en ejecución                                     |
 | `detached`   | boolean  | no        | Entrega el proceso spawneado de vuelta al caller y retorna inmediatamente, en lugar de esperar a que termine |
 
@@ -287,8 +294,6 @@ restricción.
 | `gcloud_cli`  | `gcloud`, `gcloud.cmd`, `gcloud.exe`             |
 | `az_cli`      | `az`, `az.cmd`, `az.exe`                         |
 
-El proceso **no** hereda el entorno de DBFlux. Recibe solo `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `XDG_RUNTIME_DIR`, `DISPLAY`, `WAYLAND_DISPLAY` y, en Windows, `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA` y `PROGRAMDATA`. Todo lo demás (credenciales de AWS, `AWS_PROFILE`, tokens, `SSH_AUTH_SOCK`, proxies) se pasa en `env`, por ejemplo `env = { SSH_AUTH_SOCK = dbflux.env.get("SSH_AUTH_SOCK") }`; `env` se aplica después y gana en caso de conflicto.
-
 `program` debe ser un **nombre de comando plano**. Los nombres calificados con
 ruta se rechazan antes de verificar la allowlist: cualquier programa que
 contenga un `/` o `\`, que esté compuesto de múltiples componentes de ruta, o
@@ -297,6 +302,30 @@ command name (no path separators)"`. Así que `program = "/usr/local/bin/aws"` s
 rechaza directamente — pasa `program = "aws"` en su lugar y deja que se resuelva
 vía `PATH`. La comparación del nombre plano contra la allowlist no distingue
 mayúsculas/minúsculas.
+
+#### Entorno del proceso hijo
+
+El proceso hijo **no** hereda el entorno de DBFlux. Solo recibe estas variables, cuando están definidas:
+
+- en todas partes: `PATH`, `HOME`, `LANG`, `TERM`, `TZ` y las categorías de locale `LC_ALL`, `LC_ADDRESS`, `LC_COLLATE`, `LC_CTYPE`, `LC_IDENTIFICATION`, `LC_MEASUREMENT`, `LC_MESSAGES`, `LC_MONETARY`, `LC_NAME`, `LC_NUMERIC`, `LC_PAPER`, `LC_TELEPHONE`, `LC_TIME`
+- en Linux y macOS: `USER`, `LOGNAME`, `TMPDIR`, y `XDG_RUNTIME_DIR`, `XDG_CURRENT_DESKTOP`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `BROWSER`, para que un CLI todavía pueda abrir un navegador para un login SSO
+- en Windows: `SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `COMSPEC`, `PATHEXT`, `OS`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `ALLUSERSPROFILE`, `PROGRAMFILES`, `PROGRAMFILES(X86)`, `PROGRAMW6432`, `COMMONPROGRAMFILES`, `COMMONPROGRAMFILES(X86)`, `COMMONPROGRAMW6432`, `PROCESSOR_ARCHITECTURE`, `NUMBER_OF_PROCESSORS`
+
+En Windows los nombres se comparan sin distinguir mayúsculas y minúsculas, como hace el propio Windows; en Linux y macOS deben coincidir exactamente, así que `Home` o una variable `LC_*` propia como `LC_DEPLOY_TOKEN` queda fuera. Todo lo demás, como `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, otros tokens, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, la configuración de proxy y los tokens IPC de DBFlux, queda fuera salvo que el script lo pase en `env`. Las variables de `env` se añaden después de las heredadas y ganan en caso de conflicto. Un `PATH` sobrescrito llega al proceso hijo, pero `program` se sigue buscando primero en el `PATH` del propio DBFlux; el sobrescrito solo se usa cuando ahí no se encuentra nada. Para reenviar una variable que tiene el propio DBFlux, léela con `dbflux.env.get` (necesita la capability **Environment read**):
+
+```lua
+local result = dbflux.process.run({
+    program = "ssh",
+    allowlist = "ssh_cli",
+    args = { "-O", "check", "bastion" },
+    timeout_ms = 10000,
+    env = {
+        SSH_AUTH_SOCK = dbflux.env.get("SSH_AUTH_SOCK"),
+    },
+})
+```
+
+Un valor `nil` simplemente deja fuera la variable. Un valor que no sea string, un nombre vacío o que contenga `=`, o un byte `NUL` en cualquiera de los dos hacen fallar la llamada antes de iniciar nada.
 
 Este diseño responde a un caso de uso específico: hooks que necesitan disparar
 herramientas de CLI en la nube (login SSO, configuración de túnel, obtención de
@@ -487,9 +516,7 @@ pub struct LuaVm {
 }
 ```
 
-Agrupa la VM de Lua y el estado compartido para que el executor pueda acceder a
-ambos. Después de que `vm.lua.load(&script).exec()` se completa, el executor lee
-`vm.state.log_buffer` y `vm.state.outcome` para construir el `HookResult`.
+Agrupa la VM de Lua y el estado compartido para que el executor pueda acceder a ambos. Después de ejecutar el script, compilado por `vm.load_script()` solo como texto fuente, el executor lee `vm.state.log_buffer` y `vm.state.outcome` para construir el `HookResult`.
 
 ### El patrón de lazy init de la tabla `dbflux`
 
@@ -628,11 +655,9 @@ Cada ejecución de hook crea una VM nueva. No hay forma de guardar estado entre
 invocaciones. Si necesitas estado persistente, escríbelo a un archivo a través
 de un proceso externo y léelo de vuelta en la siguiente invocación.
 
-### Sin `require()`
+### Sin `require()`, `load()` ni `dofile()`
 
-La librería `package` no se carga, así que `require()` no existe. No puedes
-dividir código Lua en múltiples archivos ni usar librerías de Lua de terceros.
-Toda la lógica del hook debe ser autocontenida en un único script.
+La librería `package` no se carga, así que `require()` no existe, y `load()`, `loadfile()` y `dofile()` se eliminan de la librería base. No puedes dividir código Lua en múltiples archivos, construir código a partir de strings ni usar librerías de Lua de terceros. Toda la lógica del hook debe ser autocontenida en un único script.
 
 ### Sin `os.time()` ni `os.clock()`
 
@@ -730,11 +755,8 @@ La cobertura actualmente abarca:
 - `executor.rs`: outcomes normales, errores de runtime, scripts respaldados por
   archivo, cancelación, timeouts, gating de capabilities, enforcement de
   allowlist, y comportamiento de output de procesos transmitidos
-- `engine.rs`: fase del hook, metadata de conexión, librerías inseguras ocultas,
-  visibilidad opcional de API, y comportamiento de construcción de VM
-- `api/dbflux.rs`: validación de opciones de proceso, manejo de timeout de hook
-  expirado antes de spawnear, formateo de eventos de log en vivo, y
-  stdout/stderr parcial transmitido durante cancelación
+- `engine.rs`: fase del hook, metadata de conexión, librerías inseguras ocultas y loaders eliminados, bytecode rechazado, la guardia de la allowlist de globales, visibilidad opcional de API, y comportamiento de construcción de VM
+- `api/dbflux.rs`: validación de opciones de proceso, la allowlist del entorno del proceso hijo y el `env` por llamada, manejo de timeout de hook expirado antes de spawnear, formateo de eventos de log en vivo, y stdout/stderr parcial transmitido durante cancelación
 
 ### Ejecutar los tests
 

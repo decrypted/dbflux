@@ -257,12 +257,11 @@ hook.ok()
 
 The child does **not** inherit DBFlux's environment. It gets only these variables from it, when they are set:
 
-- `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`
-- `LANG` and every `LC_*` variable, `TERM`
-- `XDG_RUNTIME_DIR`, `DISPLAY`, `WAYLAND_DISPLAY`, so a CLI can still open a browser for an SSO login
-- on Windows: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`
+- everywhere: `PATH`, `HOME`, `LANG`, `TERM`, `TZ` and the locale categories `LC_ALL`, `LC_ADDRESS`, `LC_COLLATE`, `LC_CTYPE`, `LC_IDENTIFICATION`, `LC_MEASUREMENT`, `LC_MESSAGES`, `LC_MONETARY`, `LC_NAME`, `LC_NUMERIC`, `LC_PAPER`, `LC_TELEPHONE`, `LC_TIME`
+- on Linux and macOS: `USER`, `LOGNAME`, `TMPDIR`, and `XDG_RUNTIME_DIR`, `XDG_CURRENT_DESKTOP`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `BROWSER`, so a CLI can still open a browser for an SSO login
+- on Windows: `SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `COMSPEC`, `PATHEXT`, `OS`, `TEMP`, `TMP`, `USERNAME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `ALLUSERSPROFILE`, `PROGRAMFILES`, `PROGRAMFILES(X86)`, `PROGRAMW6432`, `COMMONPROGRAMFILES`, `COMMONPROGRAMFILES(X86)`, `COMMONPROGRAMW6432`, `PROCESSOR_ARCHITECTURE`, `NUMBER_OF_PROCESSORS`
 
-Names match case-insensitively. Everything else, such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, other tokens, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, proxy settings and the DBFlux IPC tokens, stays out unless the script passes it in `env`. Variables in `env` are added after the inherited ones and win on a clash, so `env` can also override `PATH`. To forward a variable DBFlux itself has, read it with `dbflux.env.get` (needs the **Environment read** capability):
+On Windows names match case-insensitively, as Windows itself treats them; on Linux and macOS they must match exactly, so `Home` or a custom `LC_*` variable such as `LC_DEPLOY_TOKEN` stays out. Everything else, such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, other tokens, `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, proxy settings and the DBFlux IPC tokens, stays out unless the script passes it in `env`. Variables in `env` are added after the inherited ones and win on a clash. An overridden `PATH` reaches the child, but `program` is still looked up in DBFlux's own `PATH` first; the overridden one is searched only when that finds nothing. To forward a variable DBFlux itself has, read it with `dbflux.env.get` (needs the **Environment read** capability):
 
 ```lua
 local result = dbflux.process.run({
@@ -423,7 +422,7 @@ pub struct LuaVm {
 }
 ```
 
-Bundles the Lua VM and shared state so the executor can access both. After `vm.lua.load(&script).exec()` completes, the executor reads `vm.state.log_buffer` and `vm.state.outcome` to build the `HookResult`.
+Bundles the Lua VM and shared state so the executor can access both. After the script, compiled by `vm.load_script()` as source text only, has run, the executor reads `vm.state.log_buffer` and `vm.state.outcome` to build the `HookResult`.
 
 ### The `dbflux` Table Lazy Init Pattern
 

@@ -72,6 +72,8 @@ flowchart TD
 ```rust
 let stdlib = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8;
 let lua = Lua::new_with(stdlib, LuaOptions::default())?;
+lua.set_memory_limit(16 * 1024 * 1024)?;
+remove_unsafe_builtins(&lua)?; // load, loadfile, dofile, collectgarbage, string.dump
 ```
 
 这让脚本可以调用：
@@ -81,7 +83,9 @@ let lua = Lua::new_with(stdlib, LuaOptions::default())?;
 - **math**：`math.floor`、`math.ceil`、`math.random`、`math.sqrt`、`math.abs`、`math.max`、`math.min`、`math.pi`
 - **utf8**：`utf8.char`、`utf8.codepoint`、`utf8.len`
 
-此外，还有不需要加载任何库的 Lua 内置函数：`type()`、`tostring()`、`tonumber()`、`pairs()`、`ipairs()`、`next()`、`select()`、`pcall()`、`xpcall()`、`error()`、`setmetatable()`、`getmetatable()`、`rawget()`、`rawset()`、`rawequal()`、`rawlen()`。闭包、局部变量、元表、全部控制流 —— 让 Lua 之所以成为 Lua 的那些东西都能正常使用。
+此外还有这些基础内置函数：`assert()`、`error()`、`type()`、`tostring()`、`tonumber()`、`pairs()`、`ipairs()`、`next()`、`select()`、`pcall()`、`xpcall()`、`setmetatable()`、`getmetatable()`、`rawget()`、`rawset()`、`rawequal()`、`rawlen()`、`print()`、`warn()`、`_G` 和 `_VERSION`。闭包、局部变量、元表以及全部控制流都照常可用。
+
+`string` 包含除 `string.dump` 之外的全部 Lua 5.4 函数，`math` 还保留了 Lua 5.3 的兼容函数（`math.pow`、`math.atan2`、`math.log10` 等）。
 
 ### 屏蔽了什么
 
@@ -93,9 +97,19 @@ let lua = Lua::new_with(stdlib, LuaOptions::default())?;
 | `package` | `require()` 会允许从磁盘加载任意代码，包括原生模块。 |
 | `coroutine` | 本身并不危险，但会让超时/取消模型复杂化（协程可以让出执行权，从而越过指令 Hook）。 |
 
-mlua 总会打开基础库，因此创建 VM 后会移除 `load()`（接受预编译字节码，而 Lua 5.4 不校验字节码）、`loadfile()` 和 `dofile()`（可读取 DBFlux 能读取的任何文件）、`collectgarbage()` 以及 `string.dump()`（字符串元表中也一并移除）。Hook 脚本始终按源码文本编译：以 Lua 字节码签名开头的脚本会以 `attempt to load a binary chunk` 失败。`engine.rs` 中的测试会把所有全局变量以及 `string`、`table`、`math`、`utf8`、`dbflux` 的成员与一份显式清单进行比对。
+mlua 总会打开基础库，因此创建 VM 之后会移除其中的这些函数：
 
-沙箱是「允许列表，而非黑名单」。只有显式加载的四个库，加上注册进来的 API 函数。不在上表中的东西，在 Lua VM 里就不存在。
+| 函数 | 移除原因 |
+| --- | --- |
+| `load()` | 接受预编译字节码。Lua 5.4 不校验字节码，精心构造的代码块可以破坏解释器内存并逃出沙箱。 |
+| `loadfile()` | 把 DBFlux 能读取的任何文件当作 Lua 读入；语法错误会把文件片段带进 Hook 输出。 |
+| `dofile()` | 与 `loadfile()` 相同，并且会执行它。 |
+| `collectgarbage()` | 让脚本停止或调整它与 DBFlux 回调共用的 VM 的垃圾回收器。 |
+| `string.dump()` | 把函数转成字节码。没有加载器之后它已无用处。它也从字符串元表中移除，因此 `("").dump` 同样是 `nil`。 |
+
+Hook 脚本本身始终按源码文本编译：以 Lua 字节码签名开头的脚本文件或内联脚本不会运行，而是以 `attempt to load a binary chunk` 失败。
+
+沙箱是「允许列表，而非黑名单」。只有显式加载的四个库、上面列出的基础内置函数，以及注册进来的 API 函数。不在上表中的东西，在 Lua VM 里就不存在。`engine.rs` 中的测试（`sandbox_globals_match_the_allowlist`）会在启用全部能力的情况下列出所有全局变量以及 `string`、`table`、`math`、`utf8`、`dbflux` 的全部成员，一旦出现显式清单之外的条目（例如升级 mlua 之后）就会失败。
 
 ### 内存限制
 
@@ -209,7 +223,7 @@ hook.ok()
 | `args` | string[] | 否 | 命令参数 |
 | `timeout_ms` | integer | 否\* | 单个进程的超时（毫秒）。在此之上，Hook 级超时仍然生效。 |
 | `cwd` | string | 否 | 工作目录 |
-| `env` | table | 否 | 传给子进程的额外环境变量，`{ NAME = "value" }`；名称和值都必须是字符串 |
+| `env` | table | 否 | 传给子进程的额外环境变量，`{ NAME = "value" }`；名称和值都必须是字符串；见 [子进程环境](#子进程环境) |
 | `stream` | boolean | 否 | 在进程仍在运行时，把 stdout/stderr 流式推送给调用方 |
 | `detached` | boolean | 否 | 把启动的进程交还给调用方并立即返回，而不是等待它退出 |
 
@@ -237,9 +251,31 @@ hook.ok()
 | `gcloud_cli` | `gcloud`、`gcloud.cmd`、`gcloud.exe` |
 | `az_cli` | `az`、`az.cmd`、`az.exe` |
 
-子进程**不会**继承 DBFlux 的环境。它只会得到 `PATH`、`HOME`、`USER`、`LOGNAME`、`TMPDIR`、`LANG`、`LC_*`、`TERM`、`XDG_RUNTIME_DIR`、`DISPLAY`、`WAYLAND_DISPLAY`，以及 Windows 上的 `SYSTEMROOT`、`WINDIR`、`COMSPEC`、`PATHEXT`、`TEMP`、`TMP`、`USERNAME`、`USERPROFILE`、`HOMEDRIVE`、`HOMEPATH`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`。其他变量（AWS 凭据、`AWS_PROFILE`、令牌、`SSH_AUTH_SOCK`、代理设置）需要通过 `env` 传入，例如 `env = { SSH_AUTH_SOCK = dbflux.env.get("SSH_AUTH_SOCK") }`；`env` 在继承变量之后应用，冲突时以它为准。
-
 `program` 必须是**裸命令名**。带路径的写法会在检查允许列表之前就被拒绝：任何包含 `/` 或 `\`、由多个路径片段组成、或以 `~` 开头的程序名，都会以运行时错误 `"Program '...' must be a bare command name (no path separators)"` 失败。因此 `program = "/usr/local/bin/aws"` 会被直接拒绝 —— 应改为传入 `program = "aws"`，让它通过 `PATH` 解析。裸命令名与允许列表的匹配不区分大小写。
+
+#### 子进程环境
+
+子进程**不会**继承 DBFlux 的环境。它只会得到以下变量（若已设置）：
+
+- 所有平台：`PATH`、`HOME`、`LANG`、`TERM`、`TZ` 以及语言区域类别 `LC_ALL`、`LC_ADDRESS`、`LC_COLLATE`、`LC_CTYPE`、`LC_IDENTIFICATION`、`LC_MEASUREMENT`、`LC_MESSAGES`、`LC_MONETARY`、`LC_NAME`、`LC_NUMERIC`、`LC_PAPER`、`LC_TELEPHONE`、`LC_TIME`
+- Linux 和 macOS：`USER`、`LOGNAME`、`TMPDIR`，以及 `XDG_RUNTIME_DIR`、`XDG_CURRENT_DESKTOP`、`DISPLAY`、`WAYLAND_DISPLAY`、`XAUTHORITY`、`BROWSER`，这样 CLI 仍能为 SSO 登录打开浏览器
+- Windows：`SYSTEMROOT`、`SYSTEMDRIVE`、`WINDIR`、`COMSPEC`、`PATHEXT`、`OS`、`TEMP`、`TMP`、`USERNAME`、`USERPROFILE`、`HOMEDRIVE`、`HOMEPATH`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`、`ALLUSERSPROFILE`、`PROGRAMFILES`、`PROGRAMFILES(X86)`、`PROGRAMW6432`、`COMMONPROGRAMFILES`、`COMMONPROGRAMFILES(X86)`、`COMMONPROGRAMW6432`、`PROCESSOR_ARCHITECTURE`、`NUMBER_OF_PROCESSORS`
+
+在 Windows 上变量名不区分大小写，与 Windows 自身一致；在 Linux 和 macOS 上必须完全匹配，因此 `Home` 或 `LC_DEPLOY_TOKEN` 这类自定义 `LC_*` 变量不会传入。其他所有变量，例如 `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`、`AWS_SESSION_TOKEN`、`AWS_PROFILE`、其他令牌、`SSH_AUTH_SOCK`、`DBUS_SESSION_BUS_ADDRESS`、代理设置以及 DBFlux 的 IPC 令牌，除非脚本通过 `env` 传入，否则都不会传给子进程。`env` 中的变量在继承变量之后加入，冲突时以它为准。被覆盖的 `PATH` 会传给子进程，但 `program` 仍然先在 DBFlux 自己的 `PATH` 中查找，只有在那里找不到时才会搜索被覆盖的 `PATH`。要转发 DBFlux 自身拥有的变量，请用 `dbflux.env.get` 读取（需要 **Environment read** 能力）：
+
+```lua
+local result = dbflux.process.run({
+    program = "ssh",
+    allowlist = "ssh_cli",
+    args = { "-O", "check", "bastion" },
+    timeout_ms = 10000,
+    env = {
+        SSH_AUTH_SOCK = dbflux.env.get("SSH_AUTH_SOCK"),
+    },
+})
+```
+
+值为 `nil` 时该变量直接不传。值不是字符串、名称为空或包含 `=`，或者名称或值中含有 `NUL` 字节时，调用会在启动任何进程之前失败。
 
 这一设计服务于一个具体场景：让 Hook 能够触发云厂商 CLI 工具（SSO 登录、隧道搭建、密钥获取），同时又不必打开一个完整的 shell 逃逸口子。程序允许列表是一道易用性与防误用的护栏 —— 它可以防止拼写错误和意外执行非预期的程序。但它**并非**安全隔离边界：掌握 `PATH` 的用户仍然可以用同名程序替换成另一个二进制。这些硬编码的允许列表会随新用例的出现而扩充。
 
@@ -386,7 +422,7 @@ pub struct LuaVm {
 }
 ```
 
-把 Lua VM 与共享状态打包在一起，便于执行器同时访问两者。在 `vm.lua.load(&script).exec()` 执行完毕后，执行器会读取 `vm.state.log_buffer` 与 `vm.state.outcome` 来构造 `HookResult`。
+把 Lua VM 与共享状态打包在一起，便于执行器同时访问两者。脚本由 `vm.load_script()` 仅按源码文本编译并执行完毕后，执行器会读取 `vm.state.log_buffer` 与 `vm.state.outcome` 来构造 `HookResult`。
 
 ### `dbflux` 表的延迟初始化模式
 
@@ -500,9 +536,9 @@ end
 
 每次 Hook 执行都会创建全新的 VM，无法在两次调用之间保存状态。如果需要持久状态，就通过外部进程写入文件，并在下一次调用时读回来。
 
-### 没有 `require()`
+### 没有 `require()`、`load()` 和 `dofile()`
 
-`package` 库未加载，因此 `require()` 并不存在。你无法把 Lua 代码拆分到多个文件，也无法使用第三方 Lua 库。所有 Hook 逻辑都必须自包含在一个脚本中。
+`package` 库未加载，因此 `require()` 并不存在，而 `load()`、`loadfile()` 和 `dofile()` 也已从基础库中移除。你无法把 Lua 代码拆分到多个文件、用字符串构造代码，也无法使用第三方 Lua 库。所有 Hook 逻辑都必须自包含在一个脚本中。
 
 ### 没有 `os.time()` 与 `os.clock()`
 
@@ -571,8 +607,8 @@ pub struct CompositeExecutor {
 所有测试都在 crate 内部（而非单独的 `tests/` 目录）。目前的覆盖范围包括：
 
 - `executor.rs`：正常结果、运行时错误、基于文件的脚本、取消、超时、能力门控、允许列表强制，以及流式进程输出行为
-- `engine.rs`：Hook 阶段、连接元数据、隐藏不安全库、可选 API 的可见性，以及 VM 构造行为
-- `api/dbflux.rs`：进程选项校验、spawn 之前已过期 Hook 超时的处理、实时日志事件格式化，以及取消期间的流式部分 stdout/stderr
+- `engine.rs`：Hook 阶段、连接元数据、隐藏不安全库与已移除的加载器、拒绝字节码、全局允许列表守卫、可选 API 的可见性，以及 VM 构造行为
+- `api/dbflux.rs`：进程选项校验、子进程环境允许列表与每次调用的 `env`、spawn 之前已过期 Hook 超时的处理、实时日志事件格式化，以及取消期间的流式部分 stdout/stderr
 
 ### 运行测试
 

@@ -210,11 +210,9 @@ impl TableRef {
         }
     }
 
+    /// Quote using the default SQL dialect (double quotes).
     pub fn quoted(&self) -> String {
-        match &self.schema {
-            Some(s) => format!("\"{}\".\"{}\"", s, self.name),
-            None => format!("\"{}\"", self.name),
-        }
+        self.quoted_with(&DefaultSqlDialect)
     }
 
     /// Quote using a `SqlDialect`, delegating to `dialect.qualified_table()`.
@@ -707,6 +705,12 @@ mod tests {
         let t2 = TableRef::new("simple");
         assert_eq!(t2.qualified_name(), "simple");
         assert_eq!(t2.quoted(), "\"simple\"");
+    }
+
+    #[test]
+    fn table_ref_quoted_doubles_embedded_quotes() {
+        let t = TableRef::with_schema("a\"b", "t\"; DROP TABLE x; --");
+        assert_eq!(t.quoted(), "\"a\"\"b\".\"t\"\"; DROP TABLE x; --\"");
     }
 
     #[test]

@@ -450,7 +450,7 @@ impl CodeGenerator for PostgresCodeGenerator {
 
                 let vals = values
                     .iter()
-                    .map(|v| format!("'{}'", POSTGRES_DIALECT.escape_string(v)))
+                    .map(|v| pg_quote_string(v))
                     .collect::<Vec<_>>()
                     .join(", ");
 
@@ -499,8 +499,9 @@ impl CodeGenerator for PostgresCodeGenerator {
     fn generate_add_enum_value(&self, req: &AddEnumValueRequest) -> Option<String> {
         let type_name = self.qualified(req.schema_name, req.type_name);
         Some(format!(
-            "ALTER TYPE {} ADD VALUE '{}';",
-            type_name, req.new_value
+            "ALTER TYPE {} ADD VALUE {};",
+            type_name,
+            pg_quote_string(req.new_value)
         ))
     }
 
@@ -1692,8 +1693,8 @@ impl Drop for ActiveQueryGuard<'_> {
 
 fn plan_postgres_describe(request: &DescribeRequest) -> SemanticPlan {
     let schema = request.table.schema.as_deref().unwrap_or("public");
-    let escaped_schema = schema.replace('\'', "''");
-    let escaped_table = request.table.name.replace('\'', "''");
+    let schema_literal = pg_quote_string(schema);
+    let table_literal = pg_quote_string(&request.table.name);
 
     let sql = format!(
         "SELECT \
@@ -1710,12 +1711,12 @@ fn plan_postgres_describe(request: &DescribeRequest) -> SemanticPlan {
             JOIN pg_namespace n ON n.oid = c.relnamespace \
             JOIN pg_type t ON t.oid = a.atttypid \
             LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
-            WHERE n.nspname = '{}' \
-              AND c.relname = '{}' \
+            WHERE n.nspname = {} \
+              AND c.relname = {} \
               AND a.attnum > 0 \
               AND NOT a.attisdropped \
             ORDER BY a.attnum",
-        escaped_schema, escaped_table
+        schema_literal, table_literal
     );
 
     SemanticPlan::single_query(
@@ -2682,8 +2683,8 @@ impl Connection for PostgresConnection {
 
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
         let schema = request.table.schema.as_deref().unwrap_or("public");
-        let escaped_schema = schema.replace('\'', "''");
-        let escaped_table = request.table.name.replace('\'', "''");
+        let schema_literal = pg_quote_string(schema);
+        let table_literal = pg_quote_string(&request.table.name);
 
         let sql = format!(
             "SELECT \
@@ -2700,12 +2701,12 @@ impl Connection for PostgresConnection {
             JOIN pg_namespace n ON n.oid = c.relnamespace \
             JOIN pg_type t ON t.oid = a.atttypid \
             LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
-            WHERE n.nspname = '{}' \
-              AND c.relname = '{}' \
+            WHERE n.nspname = {} \
+              AND c.relname = {} \
               AND a.attnum > 0 \
               AND NOT a.attisdropped \
             ORDER BY a.attnum",
-            escaped_schema, escaped_table
+            schema_literal, table_literal
         );
 
         self.execute(&QueryRequest::new(sql))
@@ -3616,7 +3617,7 @@ pub(crate) fn value_to_pg_literal(value: &Value) -> String {
                 format!("{}::float8", f)
             }
         }
-        Value::Decimal(s) => format!("'{}'::numeric", pg_escape_string(s)),
+        Value::Decimal(s) => format!("{}::numeric", pg_quote_string(s)),
         Value::Text(s) => pg_quote_string(s),
         Value::Json(s) => format!("{}::jsonb", pg_quote_string(s)),
         Value::Bytes(b) => format!("'\\x{}'::bytea", hex::encode(b)),
@@ -3636,14 +3637,17 @@ pub(crate) fn value_to_pg_literal(value: &Value) -> String {
     }
 }
 
-/// Escape a string for use inside a PostgreSQL single-quoted literal.
+/// Escape a string for use inside a plain `'...'` PostgreSQL literal, as the
+/// `SqlDialect` contract asks. That form depends on
+/// `standard_conforming_strings`, so the driver itself quotes through
+/// `pg_quote_string`.
 fn pg_escape_string(s: &str) -> String {
     s.replace('\'', "''")
 }
 
 /// Quote a string as a PostgreSQL literal.
 pub(crate) fn pg_quote_string(s: &str) -> String {
-    format!("'{}'", pg_escape_string(s))
+    dbflux_core::quote_postgres_string_literal(s)
 }
 
 /// Wrapper that decodes textual PostgreSQL values.
@@ -8831,3 +8835,82 @@ mod notice_buffer_tests {
 
 #[cfg(test)]
 mod prefer_fallback_tests;
+
+#[cfg(test)]
+mod literal_quoting_tests {
+    use super::*;
+    use dbflux_core::{AddEnumValueRequest, CreateTypeRequest, TableRef, TypeDefinition};
+
+    // With standard_conforming_strings off, `\'` ends a plain literal, so a
+    // name or value with a backslash must come out in the E'' form.
+    const BREAKOUT: &str = "x\\' OR 1=1 --";
+    const BREAKOUT_LITERAL: &str = "E'x\\\\'' OR 1=1 --'";
+
+    #[test]
+    fn describe_plan_quotes_schema_and_table_for_either_backslash_mode() {
+        let request = DescribeRequest::new(TableRef::with_schema("s\\", BREAKOUT));
+        let plan = plan_postgres_describe(&request);
+        let sql = &plan.queries[0].text;
+
+        assert!(sql.contains("n.nspname = E's\\\\'"), "{sql}");
+        assert!(
+            sql.contains(&format!("c.relname = {BREAKOUT_LITERAL}")),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn add_enum_value_quotes_the_new_value() {
+        let request = AddEnumValueRequest {
+            type_name: "mood",
+            schema_name: None,
+            new_value: "it's",
+        };
+        assert_eq!(
+            POSTGRES_CODE_GENERATOR.generate_add_enum_value(&request),
+            Some("ALTER TYPE \"mood\" ADD VALUE 'it''s';".to_string())
+        );
+
+        let request = AddEnumValueRequest {
+            new_value: BREAKOUT,
+            ..request
+        };
+        assert_eq!(
+            POSTGRES_CODE_GENERATOR.generate_add_enum_value(&request),
+            Some(format!("ALTER TYPE \"mood\" ADD VALUE {BREAKOUT_LITERAL};"))
+        );
+    }
+
+    #[test]
+    fn create_enum_type_quotes_values_for_either_backslash_mode() {
+        let request = CreateTypeRequest {
+            type_name: "mood",
+            schema_name: None,
+            definition: TypeDefinition::Enum {
+                values: vec!["ok".to_string(), BREAKOUT.to_string()],
+            },
+        };
+        assert_eq!(
+            POSTGRES_CODE_GENERATOR.generate_create_type(&request),
+            Some(format!(
+                "CREATE TYPE \"mood\" AS ENUM ('ok', {BREAKOUT_LITERAL});"
+            ))
+        );
+    }
+
+    #[test]
+    fn text_and_decimal_literals_survive_backslash_escapes() {
+        assert_eq!(
+            value_to_pg_literal(&Value::Text(BREAKOUT.to_string())),
+            BREAKOUT_LITERAL
+        );
+        assert_eq!(
+            value_to_pg_literal(&Value::Decimal(BREAKOUT.to_string())),
+            format!("{BREAKOUT_LITERAL}::numeric")
+        );
+        assert_eq!(
+            value_to_pg_literal(&Value::Decimal("12.50".to_string())),
+            "'12.50'::numeric"
+        );
+    }
+}

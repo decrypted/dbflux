@@ -724,31 +724,6 @@ fn load_tofu_known_hosts(path: &Path) -> Result<BTreeMap<String, String>, DbErro
     Ok(entries)
 }
 
-fn save_tofu_known_hosts(path: &Path, entries: &BTreeMap<String, String>) -> Result<(), DbError> {
-    let mut output = String::new();
-
-    for (key, fingerprint) in entries {
-        let mut parts = key.splitn(2, '\t');
-        let Some(host) = parts.next() else {
-            continue;
-        };
-        let Some(port) = parts.next() else {
-            continue;
-        };
-
-        output.push_str(host);
-        output.push('\t');
-        output.push_str(port);
-        output.push('\t');
-        output.push_str(fingerprint);
-        output.push('\n');
-    }
-
-    write_private_file_atomically(path, output.as_bytes()).map_err(|error| {
-        DbError::connection_failed(format!("Failed to write SSH known hosts: {}", error))
-    })
-}
-
 /// Write access to the pin file is the power to pre-trust a key, so it is
 /// written 0600 through a temp file and renamed into place: a reader never
 /// sees half a file and the mode never depends on the umask.

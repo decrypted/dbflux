@@ -75,7 +75,7 @@ El directorio de datos contiene:
   sin guardar.
 - **`ipc_auth_token`** — el token de auth de IPC/MCP (ver [más
   abajo](#token-de-auth-de-ipcmcp)).
-- **`ssh_known_hosts`**: claves de host SSH en las que elegiste confiar.
+- **`ssh_known_hosts_v2`** y **`ssh_known_hosts`**: claves de host SSH en las que elegiste confiar; la segunda es la lista de versiones anteriores, que se lee pero ya no se escribe.
 
 DBFlux ya no usa el directorio de configuración. Versiones antiguas almacenaban
 ahí el token de auth de IPC y los known-hosts de SSH; pueden quedar archivos

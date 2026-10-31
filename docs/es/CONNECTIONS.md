@@ -207,7 +207,10 @@ Antes de iniciar sesión en un servidor SSH, directamente o a través de un
 de OpenSSH (`~/.ssh/known_hosts`, `/etc/ssh/ssh_known_hosts`, o los que
 indiquen `UserKnownHostsFile` y `GlobalKnownHostsFile`; `HostKeyAlias`,
 `[host]:puerto`, entradas cifradas y `@revoked` funcionan como en OpenSSH) y
-en su propia lista, `ssh_known_hosts` en su directorio de datos. En Linux y
+en su propia lista en su directorio de datos: `ssh_known_hosts_v2` guarda las
+claves de confianza con su tipo, una por línea, y `ssh_known_hosts`, la lista de
+versiones anteriores de DBFlux, se lee pero ya no se escribe, así que una
+versión estable y una nightly que comparten el directorio siguen funcionando. En Linux y
 macOS se ignora un archivo de otro usuario (salvo root) o que cualquier
 usuario puede escribir, y también un archivo global con escritura para el
 grupo; en Windows no se comprueban los permisos y no se lee el archivo
@@ -219,19 +222,20 @@ registra la clave y ninguna registra otra clave del mismo tipo para el host.
 Si alguna registra otra clave del mismo tipo (aunque otra fuente coincida), o
 la clave está marcada `@revoked`, la conexión falla con un aviso que muestra
 la huella SHA256 nueva y cada entrada que no coincide, con cómo eliminarla:
-`ssh-keygen -f <archivo> -R <host>` (como root para un archivo del sistema),
-editar a mano una línea con patrones o varios hosts, o borrar la línea de la
+`ssh-keygen -f <archivo> -R <host>` (como root para un archivo del sistema)
+cuando es la única línea del host en ese archivo (si hay más, `-R` también
+borraría la clave actual, así que se indica la línea para borrarla a mano),
+editar a mano una línea con patrones o varios hosts, o la línea exacta de la
 lista de DBFlux. El aviso no permite aceptar la clave. Las claves de otros
-tipos nunca entran en conflicto; un pin guardado por una versión anterior de
-DBFlux no tiene tipo y solo cuenta como conflicto cuando nada más respalda la
-clave presentada.
+tipos nunca entran en conflicto; una clave de `ssh_known_hosts` guardada sin
+tipo solo cuenta como conflicto cuando nada más respalda la clave presentada.
 
 Una clave que nadie conoce abre **Clave de host SSH desconocida** con el
 servidor, el tipo y la huella: **Confiar y recordar** la guarda en la lista de
 DBFlux (nunca en `~/.ssh/known_hosts`) y vuelve a conectar. El diálogo abre con
 **Cancelar** enfocado, así que Enter cancela. **Confiar y recordar** queda
-desactivado un segundo desde que el diálogo se muestra en la ventana activa
-(y de nuevo si cambias de ventana); después llega a él con `Tab` y pulsa Enter
+desactivado hasta que el diálogo lleva un segundo visible en la ventana activa,
+y de nuevo un segundo cada vez que vuelves a la ventana; después llega a él con `Tab` y pulsa Enter
 o Espacio, o pulsa `Alt+T` (`Option+T` en macOS). `Escape` cancela en cualquier
 momento. Las conexiones de la barra lateral rechazadas con el diálogo abierto
 esperan y se preguntan una tras otra; un **Test SSH** o **Test connection**
@@ -244,8 +248,8 @@ delante, como Conectar al iniciar y el servidor MCP, rechazan la clave.
 no entiende cuenta como `yes`), y **Ajustes → General → Confiar en claves de
 host SSH nuevas sin preguntar** (desactivado, no recomendado) equivale a
 `accept-new` para los hosts sin `StrictHostKeyChecking` propio, que tiene
-prioridad (incluido `ask`). Ninguno de los dos confía sin preguntar cuando ya
-hay una clave de otro tipo registrada para el host, y el servidor MCP lee el
+prioridad (incluido `ask`). Ninguno de los dos confía sin preguntar cuando known_hosts
+o la lista de DBFlux ya tienen una clave de otro tipo para el host, y el servidor MCP lee el
 ajuste al arrancar. Detalles en la versión en inglés de esta página.
 
 ### Dónde viven los secretos SSH

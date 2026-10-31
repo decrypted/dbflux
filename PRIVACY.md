@@ -72,7 +72,7 @@ The data directory holds:
 - **`sessions/`** — scratch and shadow files for open editor tabs: untitled
   content, plus a recovery copy of unsaved edits.
 - **`ipc_auth_token`** — the IPC/MCP auth token (see [below](#ipcmcp-auth-token)).
-- **`ssh_known_hosts`**: SSH host keys you chose to trust (see [Host keys](docs/CONNECTIONS.md#host-keys)).
+- **`ssh_known_hosts_v2`** and **`ssh_known_hosts`**: SSH host keys you chose to trust; the second is the list older builds use, read but no longer written (see [Host keys](docs/CONNECTIONS.md#host-keys)).
 
 DBFlux no longer uses the config directory. Older versions stored the IPC auth
 token and SSH known-hosts there; leftover files may remain after upgrading and

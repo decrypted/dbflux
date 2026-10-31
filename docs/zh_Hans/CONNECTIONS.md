@@ -106,13 +106,13 @@ SSH 隧道有两种用法：
 
 ### 主机密钥
 
-DBFlux 在登录 SSH 服务器之前（无论直接连接还是通过 `ProxyCommand`），会在你的 OpenSSH known_hosts 文件（`~/.ssh/known_hosts`、`/etc/ssh/ssh_known_hosts`，或 `UserKnownHostsFile`/`GlobalKnownHostsFile` 指定的文件；`HostKeyAlias`、`[host]:port`、哈希条目和 `@revoked` 的处理与 OpenSSH 相同）以及数据目录中自己的列表 `ssh_known_hosts` 中查找服务器的主机密钥。在 Linux 和 macOS 上，属于其他用户（root 除外）或所有用户都可写的文件会被跳过，组可写的全局文件也会被跳过；Windows 上不检查文件权限，也不读取默认的 `%ProgramData%\ssh\ssh_known_hosts`，只读取 SSH 配置中的 `GlobalKnownHostsFile`。
+DBFlux 在登录 SSH 服务器之前（无论直接连接还是通过 `ProxyCommand`），会在你的 OpenSSH known_hosts 文件（`~/.ssh/known_hosts`、`/etc/ssh/ssh_known_hosts`，或 `UserKnownHostsFile`/`GlobalKnownHostsFile` 指定的文件；`HostKeyAlias`、`[host]:port`、哈希条目和 `@revoked` 的处理与 OpenSSH 相同）以及数据目录中自己的列表中查找服务器的主机密钥：`ssh_known_hosts_v2` 按行保存已信任的密钥及其类型，旧版本 DBFlux 使用的 `ssh_known_hosts` 只读取、不再写入，因此共用该目录的稳定版和 nightly 版都能正常使用。在 Linux 和 macOS 上，属于其他用户（root 除外）或所有用户都可写的文件会被跳过，组可写的全局文件也会被跳过；Windows 上不检查文件权限，也不读取默认的 `%ProgramData%\ssh\ssh_known_hosts`，只读取 SSH 配置中的 `GlobalKnownHostsFile`。
 
-所有来源必须一致：至少一个来源记录了该密钥，且没有来源记录该主机同类型的不同密钥时才连接。只要任一来源记录了同类型的不同密钥（即使另一个来源匹配），或密钥被标记为 `@revoked`，连接就会失败，警告会显示新的 SHA256 指纹以及每个不一致的条目和删除方法：`ssh-keygen -f <文件> -R <主机>`（系统文件需以 root 身份运行），含模式或多个主机的行需手动编辑，DBFlux 列表中的条目则删除给出的那一行。警告中无法接受该密钥。其他类型的密钥不会冲突；旧版本 DBFlux 保存的固定条目没有记录类型，只有在没有其他来源为所提供的密钥作保时才算冲突。
+所有来源必须一致：至少一个来源记录了该密钥，且没有来源记录该主机同类型的不同密钥时才连接。只要任一来源记录了同类型的不同密钥（即使另一个来源匹配），或密钥被标记为 `@revoked`，连接就会失败，警告会显示新的 SHA256 指纹以及每个不一致的条目和删除方法：当该文件中只有这一行属于该主机时使用 `ssh-keygen -f <文件> -R <主机>`（系统文件需以 root 身份运行），否则 `-R` 会连当前密钥一起删除，因此给出要手动删除的行；含模式或多个主机的行需手动编辑；DBFlux 列表则给出确切的那一行。警告中无法接受该密钥。其他类型的密钥不会冲突；`ssh_known_hosts` 中未记录类型的密钥只有在没有其他来源为所提供的密钥作保时才算冲突。
 
-无人认识的密钥会打开 **未知的 SSH 主机密钥** 对话框，显示服务器、密钥类型和指纹；选择 **信任并记住** 会把密钥保存到 DBFlux 自己的列表（从不写入 `~/.ssh/known_hosts`）并重新连接。对话框打开时焦点在 **取消** 上，因此按 Enter 会取消。**信任并记住** 在对话框显示在活动窗口后的一秒内处于禁用状态（切换到其他窗口后会重新计时）；之后用 `Tab` 移到该按钮并按 Enter 或空格，或按 `Alt+T`（macOS 上为 `Option+T`）。`Escape` 随时可以取消。对话框打开期间被拒绝的侧边栏连接会排队，依次询问；窗口中已显示对话框时被拒绝的 **Test SSH** 或 **Test connection** 会把错误留在横幅中，回答后请重新运行测试。无人值守的连接（例如启动时连接和 MCP 服务器）会拒绝这样的密钥。
+无人认识的密钥会打开 **未知的 SSH 主机密钥** 对话框，显示服务器、密钥类型和指纹；选择 **信任并记住** 会把密钥保存到 DBFlux 自己的列表（从不写入 `~/.ssh/known_hosts`）并重新连接。对话框打开时焦点在 **取消** 上，因此按 Enter 会取消。**信任并记住** 在对话框于活动窗口中显示满一秒之前处于禁用状态，每次回到该窗口后也会再禁用一秒；之后用 `Tab` 移到该按钮并按 Enter 或空格，或按 `Alt+T`（macOS 上为 `Option+T`）。`Escape` 随时可以取消。对话框打开期间被拒绝的侧边栏连接会排队，依次询问；窗口中已显示对话框时被拒绝的 **Test SSH** 或 **Test connection** 会把错误留在横幅中，回答后请重新运行测试。无人值守的连接（例如启动时连接和 MCP 服务器）会拒绝这样的密钥。
 
-DBFlux 遵循 SSH 配置中的 `StrictHostKeyChecking`（`yes` 拒绝，`accept-new` 和 `no` 不询问直接信任，`ask` 询问，无法识别的值按 `yes` 处理）。**设置 → 通用 → 不询问直接信任新的 SSH 主机密钥**（默认关闭，不推荐）对未设置 `StrictHostKeyChecking` 的主机等同于 `accept-new`，显式设置的值（包括 `ask`）优先。当该主机已记录其他类型的密钥时，两者都不会不经询问就信任；MCP 服务器在启动时读取该设置。详情请参阅本页英文版。
+DBFlux 遵循 SSH 配置中的 `StrictHostKeyChecking`（`yes` 拒绝，`accept-new` 和 `no` 不询问直接信任，`ask` 询问，无法识别的值按 `yes` 处理）。**设置 → 通用 → 不询问直接信任新的 SSH 主机密钥**（默认关闭，不推荐）对未设置 `StrictHostKeyChecking` 的主机等同于 `accept-new`，显式设置的值（包括 `ask`）优先。当 known_hosts 或 DBFlux 列表中已有该主机其他类型的密钥时，两者都不会不经询问就信任；MCP 服务器在启动时读取该设置。详情请参阅本页英文版。
 
 ### SSH 密钥保存在哪里
 

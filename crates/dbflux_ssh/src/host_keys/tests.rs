@@ -95,7 +95,17 @@ impl Fixture {
         HostKeyVerifier::new(host, port, options, &self.paths(), false)
     }
 
+    /// The typed pin file this build writes.
+    fn typed(&self) -> PathBuf {
+        typed_pins_path(&self.store())
+    }
+
     fn pins(&self) -> String {
+        fs::read_to_string(self.typed()).unwrap_or_default()
+    }
+
+    /// The legacy pin file older builds share; never written here.
+    fn legacy(&self) -> String {
         fs::read_to_string(self.store()).unwrap_or_default()
     }
 }
@@ -307,7 +317,7 @@ fn a_matching_known_hosts_key_is_trusted_without_touching_the_store() {
         .verify_presented(&ed25519())
         .unwrap();
 
-    assert!(!fixture.store().exists());
+    assert!(!fixture.typed().exists());
 }
 
 #[test]
@@ -350,7 +360,7 @@ fn a_different_key_of_the_same_type_is_a_change_with_the_fingerprint() {
         "{message}"
     );
     assert!(unknown_host_key_in_error(&message).is_none());
-    assert!(!fixture.store().exists(), "a changed key is never pinned");
+    assert!(!fixture.typed().exists(), "a changed key is never pinned");
 }
 
 #[test]
@@ -435,7 +445,7 @@ fn a_cert_authority_line_never_vouches_for_a_host_key() {
 fn the_store_decides_when_known_hosts_is_silent() {
     let fixture = Fixture::new();
     fs::write(
-        fixture.store(),
+        fixture.typed(),
         format!("host.example\t2222\t{ED25519_FINGERPRINT}\tssh-ed25519\n"),
     )
     .unwrap();
@@ -446,7 +456,7 @@ fn the_store_decides_when_known_hosts_is_silent() {
     assert_eq!(
         verifier.check(&other).unwrap(),
         HostKeyStatus::Changed {
-            expected_in: vec![fixture.store().display().to_string()]
+            expected_in: vec![fixture.typed().display().to_string()]
         }
     );
     let message = verifier.verify_presented(&other).unwrap_err().to_string();
@@ -461,7 +471,7 @@ fn a_pin_of_another_key_type_is_not_a_conflict() {
     let fixture = Fixture::new();
     fixture.write_known_hosts(&format!("host.example {ED25519_LINE}\n"));
     fs::write(
-        fixture.store(),
+        fixture.typed(),
         format!("host.example\t22\t{ECDSA_FINGERPRINT}\tecdsa-sha2-nistp256\n"),
     )
     .unwrap();
@@ -510,10 +520,7 @@ fn an_untyped_old_pin_still_fails_a_key_nothing_else_vouches_for() {
         .unwrap_err()
         .to_string();
     assert!(message.contains("HAS CHANGED"), "{message}");
-    assert!(
-        message.contains("key type DBFlux did not record"),
-        "{message}"
-    );
+    assert!(message.contains("key type was not recorded"), "{message}");
 
     // A matching untyped pin connects and is given its type.
     assert_eq!(verifier.check(&ecdsa()).unwrap(), HostKeyStatus::Trusted);
@@ -582,17 +589,22 @@ fn a_refused_connect_does_not_rewrite_the_store() {
             .unwrap(),
         HostKeyStatus::Changed { .. }
     ));
-    assert_eq!(fixture.pins(), legacy);
+    assert_eq!(fixture.legacy(), legacy);
+    assert!(!fixture.typed().exists());
     let _ = other;
 }
 
 #[test]
-fn pins_round_trip_with_their_types() {
-    let pins = parse_pins("SHA256:a\tssh-ed25519\tSHA256:b\t-");
-    assert_eq!(pins.len(), 2);
-    assert_eq!(pins[0].key_type.as_deref(), Some("ssh-ed25519"));
-    assert_eq!(pins[1].key_type, None);
-    assert_eq!(format_pins(&pins), "SHA256:a\tssh-ed25519\tSHA256:b\t-");
+fn legacy_pin_values_are_read_with_their_type_when_known() {
+    let source = Path::new("legacy");
+    let untyped = parse_legacy_pin(ED25519_FINGERPRINT, source);
+    assert_eq!(untyped.key_type, None);
+    let hex = parse_legacy_pin(&crate::hex_encode(&ecdsa().blob), source);
+    assert_eq!(hex.fingerprint, ECDSA_FINGERPRINT);
+    assert_eq!(hex.key_type.as_deref(), Some("ecdsa-sha2-nistp256"));
+    let damaged = parse_legacy_pin("SHA256:a\tSHA256:b", source);
+    assert_eq!(damaged.key_type, None);
+    assert_eq!(damaged.fingerprint, "SHA256:a\tSHA256:b");
 }
 
 #[test]
@@ -647,7 +659,7 @@ fn known_hosts_and_the_store_must_agree() {
     let verifier = fixture.verifier("host.example", 22);
     let pin = |fingerprint: &str| {
         fs::write(
-            fixture.store(),
+            fixture.typed(),
             format!("host.example\t22\t{fingerprint}\tssh-ed25519\n"),
         )
         .unwrap();
@@ -660,7 +672,7 @@ fn known_hosts_and_the_store_must_agree() {
     assert_eq!(
         verifier.check(&ed25519()).unwrap(),
         HostKeyStatus::Changed {
-            expected_in: vec![fixture.store().display().to_string()]
+            expected_in: vec![fixture.typed().display().to_string()]
         }
     );
     let message = verifier
@@ -757,7 +769,7 @@ fn an_unknown_key_is_refused_without_writing_anything_and_says_how_to_trust_it()
         !crate::is_passphrase_required_error_str(&message),
         "must not be mistaken for a passphrase prompt: {message}"
     );
-    assert!(!fixture.store().exists(), "nothing is trusted silently");
+    assert!(!fixture.typed().exists(), "nothing is trusted silently");
 }
 
 #[test]
@@ -775,7 +787,7 @@ fn the_prompt_path_trusts_on_confirm_and_keeps_refusing_on_cancel() {
     // Cancel: nothing happens, so the next attempt is refused again.
     let again = verifier.verify_presented(&key).unwrap_err().to_string();
     assert!(unknown_host_key_in_error(&again).is_some());
-    assert!(!fixture.store().exists());
+    assert!(!fixture.typed().exists());
 
     // Trust and remember: the key is pinned in DBFlux's store only.
     pending.trust().unwrap();
@@ -822,7 +834,7 @@ fn trusting_never_replaces_an_existing_pin() {
     let pending = unknown_host_key_in_error(&message).unwrap();
     let (raced, _) = synthetic_ed25519(19);
     let pinned = format!("raced.example\t22\t{}\tssh-ed25519\n", raced.fingerprint());
-    fs::write(fixture.store(), &pinned).unwrap();
+    fs::write(fixture.typed(), &pinned).unwrap();
 
     assert!(pending.trust().is_err());
     assert_eq!(fixture.pins(), pinned);
@@ -939,7 +951,7 @@ fn the_pin_file_is_written_private() {
         .verify_presented(&ed25519())
         .unwrap();
 
-    let mode = fs::metadata(fixture.store()).unwrap().permissions().mode();
+    let mode = fs::metadata(fixture.typed()).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600, "{mode:o}");
 }
 
@@ -1015,7 +1027,7 @@ fn a_dismissed_key_is_no_longer_offered() {
 
     assert!(!offered.is_pending());
     assert!(unknown_host_key_in_error(&message).is_none());
-    assert!(!fixture.store().exists());
+    assert!(!fixture.typed().exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -1101,7 +1113,7 @@ fn accept_new_still_asks_when_known_hosts_has_another_key_type() {
         offered.other_key_types,
         vec!["ecdsa-sha2-nistp256".to_string()]
     );
-    assert!(!fixture.store().exists(), "not pinned unasked");
+    assert!(!fixture.typed().exists(), "not pinned unasked");
 
     // The global setting does not pin it either.
     let message = HostKeyVerifier::new(
@@ -1115,7 +1127,7 @@ fn accept_new_still_asks_when_known_hosts_has_another_key_type() {
     .unwrap_err()
     .to_string();
     assert!(unknown_host_key_in_error(&message).is_some());
-    assert!(!fixture.store().exists());
+    assert!(!fixture.typed().exists());
 }
 
 #[cfg(unix)]
@@ -1158,4 +1170,178 @@ fn the_windows_hint_never_suggests_a_command_it_cannot_quote() {
         keygen_remove_command(Path::new("/k h"), "a'b", true),
         r#"run `ssh-keygen -f '/k h' -R 'a'\''b'`"#
     );
+}
+
+// ---------------------------------------------------------------------------
+// Compatibility with older builds sharing the data directory
+// ---------------------------------------------------------------------------
+
+/// The pin check of DBFlux before this change, reduced to its parsing and
+/// comparison: `host\tport\tvalue` lines split with `splitn(3, '\t')`, the
+/// whole value compared with the SHA256 fingerprint or the key's hex.
+/// `None` when it has no pin for the host (it would then pin anew).
+fn older_build_accepts(store: &Path, host: &str, port: u16, key: &PresentedKey) -> Option<bool> {
+    let content = fs::read_to_string(store).ok()?;
+    let mut entries = std::collections::BTreeMap::new();
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let mut parts = line.splitn(3, '\t');
+        let (Some(host), Some(port), Some(value)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        entries.insert(format!("{host}\t{port}"), value.to_string());
+    }
+    let existing = entries.get(&format!("{host}\t{port}"))?;
+    Some(
+        existing == &key.fingerprint()
+            || (!existing.starts_with("SHA256:") && existing == &crate::hex_encode(&key.blob)),
+    )
+}
+
+/// Stable next to a nightly, or a downgrade: everything this build does
+/// leaves the file older builds read byte for byte as it was, so they keep
+/// accepting their pins and never see a typed line.
+#[test]
+fn older_builds_sharing_the_data_directory_keep_accepting_their_pins() {
+    let fixture = Fixture::new();
+    let legacy = format!(
+        "a.example\t22\t{ECDSA_FINGERPRINT}\nb.example\t22\t{}\n",
+        crate::hex_encode(&ed25519().blob)
+    );
+    fs::write(fixture.store(), &legacy).unwrap();
+
+    // Matching legacy pins (untyped and hex) connect and gain their type.
+    fixture
+        .verifier("a.example", 22)
+        .verify_presented(&ecdsa())
+        .unwrap();
+    fixture
+        .verifier("b.example", 22)
+        .verify_presented(&ed25519())
+        .unwrap();
+    // A new key is trusted from the prompt, another accepted unasked.
+    let message = fixture
+        .verifier("c.example", 22)
+        .verify_presented(&ed25519())
+        .unwrap_err()
+        .to_string();
+    unknown_host_key_in_error(&message)
+        .unwrap()
+        .trust()
+        .unwrap();
+    let accept = HostKeyOptions {
+        strict_host_key_checking: Some(StrictHostKeyChecking::AcceptNew),
+        ..HostKeyOptions::default()
+    };
+    fixture
+        .verifier_with("d.example", 22, &accept)
+        .verify_presented(&ecdsa())
+        .unwrap();
+
+    assert_eq!(fixture.legacy(), legacy, "the shared file is never written");
+    assert_eq!(
+        older_build_accepts(&fixture.store(), "a.example", 22, &ecdsa()),
+        Some(true)
+    );
+    assert_eq!(
+        older_build_accepts(&fixture.store(), "b.example", 22, &ed25519()),
+        Some(true)
+    );
+    assert_eq!(
+        older_build_accepts(&fixture.store(), "c.example", 22, &ed25519()),
+        None
+    );
+    assert_eq!(
+        fixture.pins(),
+        format!(
+            "a.example\t22\t{ECDSA_FINGERPRINT}\tecdsa-sha2-nistp256\n\
+             b.example\t22\t{ED25519_FINGERPRINT}\tssh-ed25519\n\
+             c.example\t22\t{ED25519_FINGERPRINT}\tssh-ed25519\n\
+             d.example\t22\t{ECDSA_FINGERPRINT}\tecdsa-sha2-nistp256\n"
+        )
+    );
+    // And this build still trusts them all on the next connect.
+    for (host, key) in [
+        ("a.example", ecdsa()),
+        ("b.example", ed25519()),
+        ("c.example", ed25519()),
+    ] {
+        assert_eq!(
+            fixture.verifier(host, 22).check(&key).unwrap(),
+            HostKeyStatus::Trusted,
+            "{host}"
+        );
+    }
+}
+
+/// An untyped legacy pin next to the host's matching typed pin is another
+/// key, not a conflict, even with nothing in known_hosts.
+#[test]
+fn an_untyped_pin_does_not_fail_a_key_a_typed_pin_vouches_for() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.store(),
+        format!("host.example\t22\t{ECDSA_FINGERPRINT}\n"),
+    )
+    .unwrap();
+    fs::write(
+        fixture.typed(),
+        format!("host.example\t22\t{ED25519_FINGERPRINT}\tssh-ed25519\n"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        fixture
+            .verifier("host.example", 22)
+            .check(&ed25519())
+            .unwrap(),
+        HostKeyStatus::Trusted
+    );
+}
+
+/// A damaged pin line fails closed: it is kept as a key of unknown type
+/// that never matches, never read as a key type, and never dropped.
+#[test]
+fn a_damaged_pin_line_fails_closed() {
+    let fixture = Fixture::new();
+    let damaged = format!("host.example\t22\t{ED25519_FINGERPRINT}\tSHA256:other\n");
+    fs::write(fixture.typed(), &damaged).unwrap();
+    let verifier = fixture.verifier("host.example", 22);
+
+    let (other, _) = other_ed25519();
+    assert!(matches!(
+        verifier.check(&other).unwrap(),
+        HostKeyStatus::Changed { .. }
+    ));
+    assert_eq!(fixture.pins(), damaged);
+}
+
+/// `ssh-keygen -R` removes every line for the name, so next to the current
+/// key's line it is not suggested.
+#[test]
+fn a_stale_line_next_to_the_current_one_is_named_for_editing_by_hand() {
+    let fixture = Fixture::new();
+    let (_, old_line) = other_ed25519();
+    fixture.write_known_hosts(&format!(
+        "host.example {old_line}\nhost.example {ED25519_LINE}\n"
+    ));
+
+    let message = fixture
+        .verifier("host.example", 22)
+        .verify_presented(&ed25519())
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        message.contains(&format!(
+            "delete line {}:1 by hand",
+            fixture.known_hosts().display()
+        )),
+        "{message}"
+    );
+    assert!(!message.contains("ssh-keygen -f"), "{message}");
 }

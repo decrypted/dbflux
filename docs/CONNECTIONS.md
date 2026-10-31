@@ -203,7 +203,10 @@ it checks the server's host key in two places:
    Windows file permissions are not checked. On Windows the default
    `%ProgramData%\ssh\ssh_known_hosts` is not read, only a
    `GlobalKnownHostsFile` your SSH config names.
-2. DBFlux's own list, `ssh_known_hosts` in its data directory.
+2. DBFlux's own list in its data directory: `ssh_known_hosts_v2` holds the
+   keys DBFlux trusts, with their type, one per line. `ssh_known_hosts`, the
+   list older DBFlux builds use, is still read but never written, so a
+   stable and a nightly build sharing the directory both keep working.
 
 Every source has to agree. What happens next:
 
@@ -215,26 +218,30 @@ Every source has to agree. What happens next:
   fingerprint and every entry that disagrees. A stale line next to the
   current one in known_hosts, or a DBFlux pin of the same type that differs
   from known_hosts, therefore fails too. Keys of other types never conflict.
-  Pins saved by DBFlux before this version record no key type: such a pin
-  that differs counts as a conflict only when nothing else vouches for the
-  presented key, and it gets its type the next time it matches. The warning
+  A key in `ssh_known_hosts` is stored as a bare fingerprint without a type
+  (unless it holds the whole key): such a key that differs counts as a
+  conflict only when nothing else vouches for the presented key. The warning
   cannot accept the key. If the key was changed on purpose, check the new
   fingerprint with the server's administrator, remove each entry the warning
   names and connect again. The warning gives the command for each file
-  (`ssh-keygen -f <file> -R <host>`, as root for a system-wide file), says
-  which lines with patterns or several hosts to edit by hand, and names the
-  pin line to delete from DBFlux's file.
+  (`ssh-keygen -f <file> -R <host>`, as root for a system-wide file) when the
+  line is the only one for the host there, and otherwise the line to delete
+  by hand, since `-R` would also remove the current key and keys of other
+  types; lines with patterns or several hosts are named for editing too. For
+  DBFlux's list it names the exact line, one key per line in
+  `ssh_known_hosts_v2`; a line in `ssh_known_hosts` holds that file's only key
+  for the host.
 - **A key nobody knows yet**: **Unknown SSH host key** shows the server, the key
   type and the SHA256 fingerprint. Compare it with the server's own, for
   example `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the
   server, before you choose **Trust and remember**: DBFlux then adds the key to
   its own list (never to `~/.ssh/known_hosts`) and connects again. **Cancel**
   leaves the connection closed. The dialog opens with **Cancel** focused, so
-  Enter cancels. **Trust and remember** stays disabled for a second after the
-  dialog opens, so keys typed for something else cannot reach it; then reach
-  it with `Tab` and press Enter or Space, or press `Alt+T` (`Option+T` on
-  macOS). `Escape` cancels at any time. The delay starts once the dialog is
-  shown in the active window and starts again after you switch away. The
+  Enter cancels. **Trust and remember** is disabled until the dialog has been
+  shown for a second in the active window, and again for a second each time
+  you come back to the window, so keys typed for something else cannot reach
+  it; then reach it with `Tab` and press Enter or Space, or press `Alt+T`
+  (`Option+T` on macOS). `Escape` cancels at any time. The
   dialog opens when you connect from the sidebar and for **Test SSH** and
   **Test connection**. Sidebar connects refused while the dialog is open wait
   and are asked about one after another. A **Test SSH** or **Test connection**
@@ -250,8 +257,8 @@ value DBFlux cannot read counts as `yes` for that host.
 **Settings → General → Trust new SSH host keys without asking** does what
 `accept-new` does for every tunnel whose host sets no `StrictHostKeyChecking`.
 It is off by default and not recommended. Neither `accept-new` nor the
-setting trusts a key unasked when known_hosts already holds a key of another
-type for the host: that asks (or refuses where it cannot ask). The MCP server
+setting trusts a key unasked when known_hosts or DBFlux's list already holds a
+key of another type for the host: that asks (or refuses where it cannot ask). The MCP server
 reads the setting when it starts.
 
 ### Where SSH secrets live

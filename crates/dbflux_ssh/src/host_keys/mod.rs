@@ -25,9 +25,7 @@ use sha1::Sha1;
 use ssh2::{MethodType, Session};
 
 use crate::ssh_config::{HostKeyOptions, StrictHostKeyChecking, glob_matches};
-use crate::{
-    load_tofu_known_hosts, save_tofu_known_hosts, sha256_base64_fingerprint, tofu_known_hosts_path,
-};
+use crate::{load_tofu_known_hosts, sha256_base64_fingerprint, tofu_known_hosts_path};
 
 /// known_hosts writers pad their base64; hand-edited files sometimes do not.
 const KNOWN_HOSTS_BASE64: GeneralPurpose = GeneralPurpose::new(
@@ -386,6 +384,10 @@ impl Findings {
         name: &str,
         key: &PresentedKey,
     ) {
+        let lines_for_host = entries
+            .iter()
+            .filter(|entry| entry.matches_host(name))
+            .count();
         for entry in entries.iter().filter(|entry| entry.matches_host(name)) {
             let location = format!("{}:{}", path.display(), entry.line);
             match entry.marker {
@@ -406,7 +408,14 @@ impl Findings {
                     } else if entry.key == key.blob {
                         self.matched = true;
                     } else {
-                        let removal = known_hosts_removal(entry, path, &location, global, name);
+                        let removal = known_hosts_removal(
+                            entry,
+                            path,
+                            &location,
+                            global,
+                            name,
+                            lines_for_host == 1,
+                        );
                         self.mismatched.push(Conflict { location, removal });
                     }
                 }
@@ -536,61 +545,54 @@ impl HostKeyVerifier {
         }
 
         let store_path = self.store.resolve()?;
-        let mut all_pins = load_tofu_known_hosts(&store_path)?;
-        let entry_key = self.store_entry_key();
-        let mut pins = all_pins
-            .get(&entry_key)
-            .map(|value| parse_pins(value))
-            .unwrap_or_default();
-        let mut store_matched = false;
-        let mut store_conflict = None;
-        let mut rewrite_pins = false;
-        for pin in &mut pins {
-            if pin.fingerprint == key.fingerprint() {
-                store_matched = true;
-                // A legacy pin (hex, or no type) is rewritten with its type.
-                if pin.legacy_hex || pin.key_type.is_none() {
-                    pin.legacy_hex = false;
-                    pin.key_type = Some(key.key_type.clone());
-                    rewrite_pins = true;
-                }
-                continue;
-            }
+        let typed_path = typed_pins_path(&store_path);
+        let pins = load_pins(&store_path, &typed_path, &self.store_host, self.store_port)?;
+        let typed_fingerprints: Vec<(String, String)> = pins
+            .iter()
+            .filter_map(|pin| Some((pin.fingerprint.clone(), pin.key_type.clone()?)))
+            .collect();
+        let store_matched = pins.iter().any(|pin| pin.fingerprint == key.fingerprint());
+        let mut store_conflicts = Vec::new();
+        for pin in pins
+            .iter()
+            .filter(|pin| pin.fingerprint != key.fingerprint())
+        {
+            // An untyped legacy pin takes the type recorded for the same key
+            // in known_hosts or in a typed pin.
             let pin_type = pin.key_type.clone().or_else(|| {
                 findings
                     .recorded
                     .iter()
+                    .chain(&typed_fingerprints)
                     .find(|(fingerprint, _)| fingerprint == &pin.fingerprint)
                     .map(|(_, key_type)| key_type.clone())
             });
             match pin_type {
-                Some(pin_type) if pin_type == key.key_type => {
-                    store_conflict = Some(false);
-                }
+                Some(pin_type) if pin_type == key.key_type => store_conflicts.push(pin),
                 Some(pin_type) => {
                     findings.other_types.insert(pin_type);
                 }
-                // An older pin records no key type. When known_hosts vouches
+                // A legacy pin of unknown type: when another source vouches
                 // for the presented key it is taken as a key of another type
                 // (libssh2 used to pick ECDSA first); otherwise it is the
                 // only record and may be this type, so it still fails.
-                None if findings.matched => {
+                None if findings.matched || store_matched => {
                     log::warn!(
-                        "[SSH] Ignoring a DBFlux pin of unknown key type for {}: known_hosts \
-                         vouches for the presented {} key",
+                        "[SSH] Ignoring a DBFlux pin of unknown key type for {}: another \
+                         source vouches for the presented {} key",
                         self.display,
                         key.key_type
                     );
                 }
-                None => store_conflict = Some(true),
+                None => store_conflicts.push(pin),
             }
         }
 
         let mut conflicts = findings.mismatched;
-        if let Some(untyped) = store_conflict {
+        for pin in store_conflicts {
             conflicts.push(Conflict {
-                location: store_path.display().to_string(),
-                removal: self.store_removal(&store_path, untyped),
+                location: pin.source.display().to_string(),
+                removal: self.store_removal(pin),
             });
         }
         if !conflicts.is_empty() {
@@ -606,9 +608,20 @@ impl HostKeyVerifier {
             ));
         }
 
-        if store_matched && rewrite_pins {
-            all_pins.insert(entry_key, format_pins(&pins));
-            save_tofu_known_hosts(&store_path, &all_pins)?;
+        // A matching legacy pin gains its type in the typed file only, after
+        // the conflict check, so a refused connect writes nothing and the
+        // legacy file stays as older builds wrote it.
+        let typed_match = pins
+            .iter()
+            .any(|pin| pin.typed_file && pin.fingerprint == key.fingerprint());
+        if store_matched && !typed_match {
+            add_typed_pin(
+                &typed_path,
+                &self.store_host,
+                self.store_port,
+                &key.fingerprint(),
+                &key.key_type,
+            )?;
         }
         if findings.matched || store_matched {
             return Ok((HostKeyStatus::Trusted, Vec::new()));
@@ -621,18 +634,28 @@ impl HostKeyVerifier {
         ))
     }
 
-    fn store_removal(&self, store_path: &Path, untyped: bool) -> String {
-        let note = if untyped {
-            " (an older pin whose key type DBFlux did not record)"
+    fn store_removal(&self, pin: &Pin) -> String {
+        if pin.typed_file {
+            format!(
+                "delete DBFlux's pin, the line `{}\t{}\t{}`, from {}",
+                self.store_entry_key(),
+                pin.fingerprint,
+                pin.key_type.as_deref().unwrap_or(UNKNOWN_PIN_TYPE),
+                pin.source.display()
+            )
         } else {
-            ""
-        };
-        format!(
-            "delete DBFlux's pin{note}, the line starting with `{}` (a tab between name \
-             and port), from {}",
-            self.store_entry_key(),
-            store_path.display()
-        )
+            format!(
+                "delete DBFlux's older pin{}, the line starting with `{}` (a tab between \
+                 name and port), from {} (older DBFlux builds read that file too)",
+                if pin.key_type.is_none() {
+                    ", whose key type was not recorded"
+                } else {
+                    ""
+                },
+                self.store_entry_key(),
+                pin.source.display()
+            )
+        }
     }
 
     /// Applies [`Self::check`] and the unknown-key policy.
@@ -840,14 +863,18 @@ fn shell_quote(name: &str) -> String {
 
 /// How to remove a known_hosts entry that disagrees. `ssh-keygen -R`
 /// without `-f` only edits `~/.ssh/known_hosts`, so the command names the
-/// file; a line with patterns or several names cannot be removed by name
-/// without touching other hosts, so it is named for editing by hand.
+/// file. `-R` removes every line for the name in that file, so it is
+/// suggested only when the disagreeing line is the only one there for the
+/// host; a line next to others for the host (the current key, keys of other
+/// types), or one with patterns or several names, is named for editing by
+/// hand.
 fn known_hosts_removal(
     entry: &KnownHostEntry,
     path: &Path,
     location: &str,
     global: bool,
     name: &str,
+    only_line_for_host: bool,
 ) -> String {
     let by_name = match &entry.hosts {
         HostField::Hashed { .. } => true,
@@ -860,6 +887,12 @@ fn known_hosts_removal(
     };
     if !by_name {
         return format!("edit {location} by hand (a pattern or several hosts on one line)");
+    }
+    if !only_line_for_host {
+        return format!(
+            "delete line {location} by hand (the file has other lines for this host that \
+             `ssh-keygen -R` would remove too)"
+        );
     }
     let command = keygen_remove_command(path, name, cfg!(unix));
     if global {
@@ -897,69 +930,132 @@ fn keygen_remove_command(path: &Path, name: &str, posix: bool) -> String {
     }
 }
 
-/// One key DBFlux pinned for a host. Pins written by this version carry the
-/// key type; older ones are a bare `SHA256:` fingerprint (type unknown) or
-/// the hex of the whole key blob (type read from the blob).
+/// One key DBFlux pinned for a host.
+///
+/// `ssh_known_hosts` is the file older DBFlux builds read and write, one
+/// `host\tport\tvalue` line per host, the value a bare `SHA256:` fingerprint
+/// (type unknown) or the hex of the whole key blob (type read from the blob).
+/// It is only ever read here: older builds compare the whole value, so any
+/// other content would look like a changed key to them. Typed pins go to a
+/// separate file next to it (see [`typed_pins_path`]), one
+/// `host\tport\tfingerprint\ttype` line per key, which older builds never
+/// open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Pin {
     fingerprint: String,
     key_type: Option<String>,
-    legacy_hex: bool,
+    source: PathBuf,
+    typed_file: bool,
 }
 
-/// Placeholder written for a pin whose key type is not known.
+/// Shown for a typed-file line whose type field is missing.
 const UNKNOWN_PIN_TYPE: &str = "-";
 
-/// Parses the value of a pin line: `fingerprint\ttype` pairs, or a single
-/// legacy fingerprint or hex blob.
-fn parse_pins(value: &str) -> Vec<Pin> {
-    let fields: Vec<&str> = value.split('\t').collect();
-    if let [single] = fields.as_slice() {
-        if single.starts_with("SHA256:") {
-            return vec![Pin {
-                fingerprint: (*single).to_string(),
-                key_type: None,
-                legacy_hex: false,
-            }];
-        }
-        return match hex_decode(single) {
-            Some(blob) => vec![Pin {
-                fingerprint: sha256_base64_fingerprint(&blob),
-                key_type: key_blob_type(&blob),
-                legacy_hex: true,
-            }],
-            // Unreadable: kept, never matches, type unknown.
-            None => vec![Pin {
-                fingerprint: (*single).to_string(),
-                key_type: None,
-                legacy_hex: false,
-            }],
-        };
-    }
-    fields
-        .chunks(2)
-        .filter_map(|pair| match pair {
-            [fingerprint, key_type] => Some(Pin {
-                fingerprint: (*fingerprint).to_string(),
-                key_type: (*key_type != UNKNOWN_PIN_TYPE).then(|| (*key_type).to_string()),
-                legacy_hex: false,
-            }),
-            _ => None,
-        })
-        .collect()
+/// The typed pin file next to the legacy one.
+fn typed_pins_path(legacy: &Path) -> PathBuf {
+    let mut name = legacy
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push("_v2");
+    legacy.with_file_name(name)
 }
 
-fn format_pins(pins: &[Pin]) -> String {
-    pins.iter()
-        .map(|pin| {
-            format!(
-                "{}\t{}",
-                pin.fingerprint,
-                pin.key_type.as_deref().unwrap_or(UNKNOWN_PIN_TYPE)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\t")
+/// Every pin for `host`/`port`: typed ones first, then legacy ones. A
+/// value that cannot be read becomes a pin of unknown type that never
+/// matches, so a damaged line fails closed instead of disappearing.
+fn load_pins(legacy: &Path, typed: &Path, host: &str, port: u16) -> Result<Vec<Pin>, DbError> {
+    let mut pins = Vec::new();
+    let prefix = format!("{host}\t{port}\t");
+    if let Some(text) = read_pin_file(typed)? {
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            let Some(rest) = line.strip_prefix(&prefix) else {
+                continue;
+            };
+            let fields: Vec<&str> = rest.split('\t').collect();
+            let (fingerprint, key_type) = match fields.as_slice() {
+                [fingerprint, key_type]
+                    if fingerprint.starts_with("SHA256:")
+                        && !key_type.is_empty()
+                        && !key_type.starts_with("SHA256:") =>
+                {
+                    ((*fingerprint).to_string(), Some((*key_type).to_string()))
+                }
+                _ => {
+                    log::warn!(
+                        "[SSH] Unreadable pin line for {host}:{port} in {}; it counts as a \
+                         key of unknown type",
+                        typed.display()
+                    );
+                    (rest.to_string(), None)
+                }
+            };
+            pins.push(Pin {
+                fingerprint,
+                key_type,
+                source: typed.to_path_buf(),
+                typed_file: true,
+            });
+        }
+    }
+    if let Some(value) = load_tofu_known_hosts(legacy)?.get(&format!("{host}\t{port}")) {
+        pins.push(parse_legacy_pin(value, legacy));
+    }
+    Ok(pins)
+}
+
+fn read_pin_file(path: &Path) -> Result<Option<String>, DbError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(DbError::connection_failed(format!(
+            "Failed to read SSH host key pins {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+/// A legacy value: a bare fingerprint, or the hex of the key blob. Anything
+/// else is kept as an unreadable pin of unknown type.
+fn parse_legacy_pin(value: &str, source: &Path) -> Pin {
+    let (fingerprint, key_type) = if value.starts_with("SHA256:") && !value.contains('\t') {
+        (value.to_string(), None)
+    } else if let Some(blob) = hex_decode(value) {
+        (sha256_base64_fingerprint(&blob), key_blob_type(&blob))
+    } else {
+        log::warn!(
+            "[SSH] Unreadable pin in {}; it counts as a key of unknown type",
+            source.display()
+        );
+        (value.to_string(), None)
+    };
+    Pin {
+        fingerprint,
+        key_type,
+        source: source.to_path_buf(),
+        typed_file: false,
+    }
+}
+
+/// Appends one typed pin, written atomically and readable only by the user.
+fn add_typed_pin(
+    typed: &Path,
+    host: &str,
+    port: u16,
+    fingerprint: &str,
+    key_type: &str,
+) -> Result<(), DbError> {
+    let mut text = read_pin_file(typed)?.unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!("{host}\t{port}\t{fingerprint}\t{key_type}\n"));
+    crate::write_private_file_atomically(typed, text.as_bytes()).map_err(|error| {
+        DbError::connection_failed(format!(
+            "Failed to write SSH host key pins {}: {error}",
+            typed.display()
+        ))
+    })
 }
 
 fn hex_decode(text: &str) -> Option<Vec<u8>> {
@@ -1137,34 +1233,27 @@ fn pin_fingerprint(
     key_type: &str,
 ) -> Result<(), DbError> {
     let path = store.resolve()?;
-    let mut all_pins = load_tofu_known_hosts(&path)?;
-    let entry_key = format!("{host}\t{port}");
-    let mut pins = all_pins
-        .get(&entry_key)
-        .map(|value| parse_pins(value))
-        .unwrap_or_default();
-    if pins.iter().any(|pin| pin.fingerprint == fingerprint) {
-        return Ok(());
-    }
+    let typed = typed_pins_path(&path);
+    let pins = load_pins(&path, &typed, host, port)?;
     if pins
         .iter()
-        .any(|pin| pin.key_type.as_deref() == Some(key_type))
+        .any(|pin| pin.typed_file && pin.fingerprint == fingerprint)
+    {
+        return Ok(());
+    }
+    if let Some(existing) = pins
+        .iter()
+        .find(|pin| pin.fingerprint != fingerprint && pin.key_type.as_deref() == Some(key_type))
     {
         // Trusting never replaces a pin of the same type: a changed key goes
         // through the mismatch error and a deliberate removal.
         return Err(DbError::connection_failed(format!(
             "DBFlux already has a different {key_type} host key recorded for {host}:{port} in \
              {}; remove that pin first if the key was changed on purpose.",
-            path.display()
+            existing.source.display()
         )));
     }
-    pins.push(Pin {
-        fingerprint: fingerprint.to_string(),
-        key_type: Some(key_type.to_string()),
-        legacy_hex: false,
-    });
-    all_pins.insert(entry_key, format_pins(&pins));
-    save_tofu_known_hosts(&path, &all_pins)
+    add_typed_pin(&typed, host, port, fingerprint, key_type)
 }
 
 #[cfg(test)]

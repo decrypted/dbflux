@@ -28,6 +28,7 @@ crates/dbflux_driver_mongodb/src/driver.rs:create: constant (uuid name for the c
 crates/dbflux_mcp_server/src/tools/scripts.rs:create_script_impl: sanitized (validate_script_file_name, then ensure_resolves_inside_root)
 crates/dbflux_spreadsheet/src/test_support.rs:fixture: test support
 crates/dbflux_spreadsheet/src/test_support.rs:fixture_path: test support
+crates/dbflux_ssh/src/host_keys/mod.rs:typed_pins_path: own path (the pin file's own name plus a fixed suffix)
 crates/dbflux_storage/src/bootstrap.rs:in_memory: constant (unique test runtime directory)
 crates/dbflux_storage/src/paths.rs:dbflux_db_path: constant (database file of the release channel)
 crates/dbflux_transfer/src/export.rs:run_export: sanitized (FileSink::with_file_name takes a SafeFileName)

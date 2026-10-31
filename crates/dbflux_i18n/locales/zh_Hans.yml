@@ -4357,7 +4357,7 @@ settings:
       hint: "复制（Ctrl+C，macOS 上为 Cmd+C）和复制为 CSV 会在以 =、+、-、@、制表符或回车开头的单元格前加上 '，使粘贴到的电子表格将其显示为文本，而不是作为公式执行。数字不变。关闭时按原样复制单元格。"
     ssh_accept_new_host_keys:
       label: "不询问直接信任新的 SSH 主机密钥"
-      hint: "不推荐。连接到主机密钥既不在 ~/.ssh/known_hosts 中、DBFlux 也不认识的服务器时，SSH 隧道会直接连接并记住该密钥，而不是先请你核对指纹。这也适用于无法询问的连接，例如启动时连接和 MCP 服务器。已更改的密钥始终会被拒绝。对于 SSH 配置中设置了 StrictHostKeyChecking 的主机，以该设置为准。当 known_hosts 中已有该主机其他类型的密钥时不适用（仍会询问），MCP 服务器只在启动时读取此设置。"
+      hint: "不推荐。连接到主机密钥既不在 ~/.ssh/known_hosts 中、DBFlux 也不认识的服务器时，SSH 隧道会直接连接并记住该密钥，而不是先请你核对指纹。这也适用于无法询问的连接，例如启动时连接和 MCP 服务器。已更改的密钥始终会被拒绝。对于 SSH 配置中设置了 StrictHostKeyChecking 的主机，以该设置为准。当 known_hosts 或 DBFlux 中已有该主机其他类型的密钥时不适用（仍会询问），MCP 服务器只在启动时读取此设置。"
     grid_header_click_sorts:
       label: "点击列标题时对该列排序"
       hint: "关：点击列标题选择整列，标题右侧的箭头用于排序。开：点击即对该列排序；Shift+单击和 Ctrl+单击仍然选择列。"

@@ -193,7 +193,10 @@ pub(crate) fn write_refreshed_cache_entry(
 
 /// Replaces `path` through a temporary file in the same directory, so a
 /// concurrent reader (the CLI, the SDK or another connect) never sees a
-/// truncated cache file, and keeps the permissions of the file it replaces.
+/// truncated cache file. The result keeps the owner bits of the file it
+/// replaces but never group or other access: it holds the new access token
+/// and the rotated refresh token, so a cache file left 0644 by some other
+/// tool must not stay readable by everyone.
 fn replace_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let invalid_path = || {
         std::io::Error::new(
@@ -207,7 +210,7 @@ fn replace_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> 
         .and_then(|name| name.to_str())
         .ok_or_else(invalid_path)?;
 
-    let permissions = std::fs::metadata(path)?.permissions();
+    let permissions = private_permissions(std::fs::metadata(path)?.permissions());
 
     // The `.tmp` extension keeps the file out of the `.json` cache scans.
     let temp_path = dir.join(format!(
@@ -223,6 +226,17 @@ fn replace_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> 
     result
 }
 
+#[cfg(unix)]
+fn private_permissions(original: std::fs::Permissions) -> std::fs::Permissions {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::Permissions::from_mode(original.mode() & 0o600)
+}
+
+#[cfg(not(unix))]
+fn private_permissions(original: std::fs::Permissions) -> std::fs::Permissions {
+    original
+}
+
 fn write_then_rename(
     temp_path: &Path,
     target: &Path,
@@ -233,7 +247,7 @@ fn write_then_rename(
     options.write(true).create_new(true);
 
     // The file holds tokens: it must not be readable by others even before
-    // the original permissions are copied onto it.
+    // its final permissions are set.
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

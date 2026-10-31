@@ -42,10 +42,13 @@ const SENSITIVE_JSON_KEYS: &[&str] = &[
 
 /// Regex patterns for detecting sensitive values in strings.
 /// These patterns match common credential formats. Credentials embedded in
-/// URLs are handled separately by `dbflux_core::redact_uri_credentials`.
+/// URLs and `key=value` connection strings are handled separately by
+/// `dbflux_core::redact_connection_credentials`.
 const SENSITIVE_PATTERNS: &[(&str, &str); 6] = &[
-    // AWS access key ID (AKIA...)
-    ("aws_access_key", r"(?i)AKIA[0-9A-Z]{16}"),
+    // AWS access key ID: long-term (AKIA...) or temporary STS (ASIA...)
+    // Real ids are upper case and stand alone; case-insensitive matching
+    // would eat words such as `AsiaPacific...`.
+    ("aws_access_key", r"\bA[KS]IA[0-9A-Z]{16}\b"),
     // AWS secret access key (40 hex chars)
     ("aws_secret_key", r"(?i)[0-9a-f]{40}"),
     // Generic API key pattern (long hex or base64 strings)
@@ -178,15 +181,17 @@ fn redact_string_values(input: &str, count: &mut usize) -> (String, usize) {
     (result, redaction_count)
 }
 
-/// Redacts URL credentials first, then every value matching `SENSITIVE_PATTERNS`.
+/// Redacts URL and connection-string credentials first, then every value
+/// matching `SENSITIVE_PATTERNS`.
 fn redact_sensitive_text(input: &str) -> (String, usize) {
-    let (mut result, mut redaction_count) = dbflux_core::redact_uri_credentials(input, REDACTED);
+    let (mut result, mut redaction_count) =
+        dbflux_core::redact_connection_credentials(input, REDACTED);
 
-    for (_, pattern) in SENSITIVE_PATTERNS {
-        let matches = count_regex_matches(&result, pattern);
+    for (_, pattern) in sensitive_patterns() {
+        let matches = pattern.find_iter(&result).count();
         if matches > 0 {
             redaction_count += matches;
-            result = regex_replace(&result, pattern, REDACTED);
+            result = pattern.replace_all(&result, REDACTED).into_owned();
         }
     }
 
@@ -226,23 +231,128 @@ pub fn redact_error_message(input: &str, redact_sensitive: bool) -> RedactionRes
     }
 }
 
-/// Count the number of regex matches in a string.
-fn count_regex_matches(input: &str, pattern: &str) -> usize {
-    regex::Regex::new(pattern)
-        .map(|re| re.find_iter(input).count())
-        .unwrap_or(0)
+/// Patterns that only match token formats, never ordinary text such as a
+/// path, so they are safe to run over log lines.
+const TOKEN_PATTERN_NAMES: &[&str] = &["aws_access_key", "jwt_token"];
+
+type CompiledPattern = (&'static str, regex::Regex);
+
+/// `SENSITIVE_PATTERNS`, compiled once: every audited event runs through
+/// them, and compiling per call made redaction the cost of each record.
+fn sensitive_patterns() -> &'static [CompiledPattern] {
+    static COMPILED: std::sync::LazyLock<Vec<CompiledPattern>> = std::sync::LazyLock::new(|| {
+        SENSITIVE_PATTERNS
+            .iter()
+            // The patterns are constants; `every_sensitive_pattern_compiles`
+            // keeps a broken one from being skipped silently.
+            .filter_map(|(name, pattern)| {
+                regex::Regex::new(pattern)
+                    .ok()
+                    .map(|compiled| (*name, compiled))
+            })
+            .collect()
+    });
+    &COMPILED
 }
 
-/// Replace all regex matches in a string with a replacement.
-fn regex_replace(input: &str, pattern: &str, replacement: &str) -> String {
-    regex::Regex::new(pattern)
-        .map(|re| re.replace_all(input, replacement).to_string())
-        .unwrap_or_else(|_| input.to_string())
+/// Redacts credentials from a captured log line: URL and connection-string
+/// credentials, AWS access key ids and JWTs. The entropy patterns are left
+/// out because they also match ordinary paths and identifiers.
+pub fn redact_log_line(input: &str) -> RedactionResult {
+    let (mut result, mut redaction_count) =
+        dbflux_core::redact_connection_credentials(input, REDACTED);
+
+    for (_, pattern) in sensitive_patterns()
+        .iter()
+        .filter(|(name, _)| TOKEN_PATTERN_NAMES.contains(name))
+    {
+        let matches = pattern.find_iter(&result).count();
+        if matches > 0 {
+            redaction_count += matches;
+            result = pattern.replace_all(&result, REDACTED).into_owned();
+        }
+    }
+
+    RedactionResult {
+        redacted: result,
+        redaction_count,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_sensitive_pattern_compiles() {
+        assert_eq!(sensitive_patterns().len(), SENSITIVE_PATTERNS.len());
+        for name in TOKEN_PATTERN_NAMES {
+            assert!(
+                sensitive_patterns()
+                    .iter()
+                    .any(|(compiled, _)| compiled == name)
+            );
+        }
+    }
+
+    #[test]
+    fn log_lines_lose_tokens_but_keep_paths() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+        let line = format!(
+            "using key AKIAIOSFODNN7EXAMPLE and ASIAIOSFODNN7EXAMPLE; Authorization: Bearer {jwt} for /home/alice/Projects/analytics/warehouse/queries/x.sql"
+        );
+
+        let result = redact_log_line(&line);
+
+        assert!(
+            !result.redacted.contains("AKIAIOSFODNN7EXAMPLE"),
+            "{}",
+            result.redacted
+        );
+        assert!(
+            !result.redacted.contains("ASIAIOSFODNN7EXAMPLE"),
+            "{}",
+            result.redacted
+        );
+        assert!(!result.redacted.contains("eyJhbGci"), "{}", result.redacted);
+        assert!(
+            result
+                .redacted
+                .contains("/home/alice/Projects/analytics/warehouse/queries/x.sql"),
+            "{}",
+            result.redacted
+        );
+        assert_eq!(result.redaction_count, 3);
+    }
+
+    #[test]
+    fn words_that_start_with_asia_are_not_key_ids() {
+        for line in [
+            r#"relation "AsiaPacificCustomerOrders" does not exist"#,
+            "Opened /data/asiapacificwarehouse/q.sql",
+            "table ASIAPACIFICORDERS2024XYZ_old",
+        ] {
+            let result = redact_log_line(line);
+            assert_eq!(result.redacted, line);
+            assert!(
+                !redact_error_message(line, true)
+                    .redacted
+                    .contains("[REDACTED]"),
+                "{line}"
+            );
+        }
+    }
+
+    /// Error messages get the same connection-string redaction as `sanitize_uri`.
+    #[test]
+    fn error_messages_lose_key_value_passwords() {
+        let result = redact_error_message(
+            "PostgreSQL URI connection failed: host=db password = hunter2 dbname=app",
+            true,
+        );
+
+        assert!(!result.redacted.contains("hunter2"), "{}", result.redacted);
+    }
 
     #[test]
     fn test_redact_json_object_with_password() {

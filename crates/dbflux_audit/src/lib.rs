@@ -18,7 +18,7 @@ use thiserror::Error;
 use crate::export::{AuditExportFormat, export_entries};
 use crate::purge::{PurgeStats, purge_old_events};
 use crate::query::AuditQueryFilter;
-use crate::redaction::{redact_error_message, redact_json};
+use crate::redaction::{redact_error_message, redact_json, redact_log_line};
 use crate::store::sqlite::SqliteAuditStore;
 
 pub use crate::query::{AuditAggregateParams, AuditGroupColumn};
@@ -628,8 +628,16 @@ impl AuditService {
         }
     }
 
-    /// Applies redaction for sensitive values in details_json and error_message.
+    /// Applies redaction for sensitive values in summary, details_json and
+    /// error_message.
     fn apply_redaction(&self, mut event: EventRecord) -> EventRecord {
+        // Captured log lines become events with the log message as summary,
+        // so a connection string or token in a log line lands here too.
+        let result = redact_log_line(&event.summary);
+        if result.redaction_count > 0 {
+            event.summary = result.redacted;
+        }
+
         // Redact sensitive values in details_json
         if let Some(ref details) = event.details_json {
             let result = redact_json(details, true);

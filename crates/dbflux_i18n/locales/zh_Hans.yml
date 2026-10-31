@@ -4843,6 +4843,7 @@ settings:
     auth_profile_label: 认证配置文件
     editor_subtitle: 用于访问与值解析的可复用认证配置文件
     changed_on_disk: 配置文件已在磁盘上更改
+    save_failed: 配置文件未保存
     reload: 重新加载
     name_label: 名称
     provider_label: 提供程序
@@ -4858,6 +4859,8 @@ settings:
     mirror_label_fallback: 只读 — 由外部管理
     conflict_message: "此配置文件在您打开后已在磁盘上被修改（%{label}）。请先重新加载查看当前值再保存。"
     partial_saved_message: "%{written_label} 已成功保存，但 %{conflicted_label} 在您打开表单后已在磁盘上被修改。请重新加载以刷新并重新应用您的更改。"
+    write_failed_message: "无法保存 %{label}：%{reason}"
+    partial_write_failed_message: "%{written_label} 已保存，但无法保存 %{failed_label}：%{reason}"
     login_required_hint: 需要登录 — 点击 登录 加载下拉选项。
     session_expired_hint: 会话已过期 — 请重新登录以重新加载选项
     session_expired_click_hint: 会话已过期 — 点击 登录 刷新下拉选项。

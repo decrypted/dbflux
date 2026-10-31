@@ -787,6 +787,76 @@ fn panic_report_redacts_secrets_in_the_message() {
     );
 }
 
+/// Captured log lines are stored with the log message as summary.
+#[test]
+fn summary_is_redacted_like_the_error_message() {
+    let service = service_for_test("dbflux-audit-summary-redaction.sqlite");
+    service.set_redact_sensitive(true);
+
+    let stored = service
+        .record(
+            EventRecord::new(
+                1000,
+                EventSeverity::Info,
+                EventCategory::System,
+                EventOutcome::Success,
+            )
+            .with_typed_action(SYSTEM_STARTUP)
+            .with_summary(
+                "Connecting via postgres://admin:hunter2@db.internal/app?sslmode=require&token=tok-s3cr3t",
+            ),
+        )
+        .expect("event should record");
+
+    assert!(!stored.summary.contains("hunter2"), "{}", stored.summary);
+    assert!(!stored.summary.contains("tok-s3cr3t"), "{}", stored.summary);
+    assert!(stored.summary.contains("db.internal"), "{}", stored.summary);
+}
+
+/// Connection strings that are not URLs are redacted in the summary, and
+/// ordinary log text such as a long path is kept.
+#[test]
+fn summary_redaction_covers_key_value_strings_and_keeps_paths() {
+    let service = service_for_test("dbflux-audit-summary-key-value.sqlite");
+    service.set_redact_sensitive(true);
+
+    let record = |summary: &str| {
+        service
+            .record(
+                EventRecord::new(
+                    1000,
+                    EventSeverity::Info,
+                    EventCategory::System,
+                    EventOutcome::Success,
+                )
+                .with_typed_action(SYSTEM_STARTUP)
+                .with_summary(summary),
+            )
+            .expect("event should record")
+            .summary
+    };
+
+    let ado = record(
+        "Connecting to SQL Server via URI Server=h;User Id=sa;Password=hunter2;Encrypt=true",
+    );
+    assert!(!ado.contains("hunter2"), "{ado}");
+    assert!(ado.contains("Server=h;User Id=sa;"), "{ado}");
+
+    let libpq = record("PostgreSQL URI connection failed: host=db password = hunter2 dbname=app");
+    assert!(!libpq.contains("hunter2"), "{libpq}");
+
+    let path = "Opened /home/alice/Projects/analytics/warehouse/queries/x.sql";
+    assert_eq!(record(path), path);
+
+    let key = record("using key AKIAIOSFODNN7EXAMPLE for the upload");
+    assert!(!key.contains("AKIAIOSFODNN7EXAMPLE"), "{key}");
+
+    let jwt = record(
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    );
+    assert!(!jwt.contains("eyJhbGci"), "{jwt}");
+}
+
 #[test]
 fn connection_lifecycle_events_record_correctly() {
     let service = service_for_test("dbflux-audit-conn-lifecycle.sqlite");

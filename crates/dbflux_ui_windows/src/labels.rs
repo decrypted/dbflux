@@ -299,6 +299,30 @@ pub(crate) fn auth_profiles_partial_saved_message(
     )
 }
 
+/// Builds the user-visible message for a `Failed` save outcome.
+pub(crate) fn auth_profiles_write_failed_message(label: &str, reason: &str) -> String {
+    dbflux_i18n::t!(
+        "settings.auth_profiles.write_failed_message",
+        label = label,
+        reason = reason
+    )
+}
+
+/// Builds the user-visible message for a `Failed` save outcome of a
+/// two-file edit whose first file was written.
+pub(crate) fn auth_profiles_partial_write_failed_message(
+    written_label: &str,
+    failed_label: &str,
+    reason: &str,
+) -> String {
+    dbflux_i18n::t!(
+        "settings.auth_profiles.partial_write_failed_message",
+        written_label = written_label,
+        failed_label = failed_label,
+        reason = reason
+    )
+}
+
 /// Formats the status message shown while the Settings-window auth-profile
 /// login is starting.
 pub(crate) fn auth_profiles_starting_login(name: &str) -> String {
@@ -1166,24 +1190,26 @@ mod tests {
         access_proxy_disabled_label, audit_save_failed_copy, auth_login_failed,
         auth_login_starting, auth_profiles_conflict_message, auth_profiles_login_completed,
         auth_profiles_login_failed, auth_profiles_partial_saved_message,
-        auth_profiles_starting_login, auth_provider_unavailable, auth_session_status_valid_expires,
-        hooks_create_dir_failed, hooks_delete_message, hooks_delete_unreadable_message,
-        hooks_duplicate_id, hooks_env_pair_invalid, hooks_form_interpreter_hint,
-        hooks_interpreter_auto_label, hooks_interpreter_missing, hooks_open_script_failed,
-        hooks_write_script_failed, import_action_map_to, import_action_use_profile,
-        import_conflict_kind_label, import_conflicts_row_label, import_error_cannot_read_file,
-        import_error_decryption_error, import_error_import_failed, import_error_parse_error,
-        import_error_secret_failures_toast, import_external_action_import_selected,
-        import_external_host_summary, import_external_review_skips_intro,
-        import_outcome_config_failures, import_outcome_needs_driver,
-        import_outcome_secret_failures, import_outcome_succeeded, import_outcome_unresolved_refs,
-        import_outcome_withheld_line, import_preview_conflicts_banner,
-        import_preview_count_auth_profiles, import_preview_count_connections,
-        import_preview_count_proxies, import_preview_count_ssh_tunnels,
-        import_preview_required_banner, import_required_auth_profile_ref_label,
-        import_required_aws_reference_label, import_required_secret_label, import_review_value_ref,
-        import_status_imported_toast, proxies_delete_body, rpc_services_delete_body,
-        ssh_private_key_with_path, ssh_tunnels_delete_body,
+        auth_profiles_partial_write_failed_message, auth_profiles_starting_login,
+        auth_profiles_write_failed_message, auth_provider_unavailable,
+        auth_session_status_valid_expires, hooks_create_dir_failed, hooks_delete_message,
+        hooks_delete_unreadable_message, hooks_duplicate_id, hooks_env_pair_invalid,
+        hooks_form_interpreter_hint, hooks_interpreter_auto_label, hooks_interpreter_missing,
+        hooks_open_script_failed, hooks_write_script_failed, import_action_map_to,
+        import_action_use_profile, import_conflict_kind_label, import_conflicts_row_label,
+        import_error_cannot_read_file, import_error_decryption_error, import_error_import_failed,
+        import_error_parse_error, import_error_secret_failures_toast,
+        import_external_action_import_selected, import_external_host_summary,
+        import_external_review_skips_intro, import_outcome_config_failures,
+        import_outcome_needs_driver, import_outcome_secret_failures, import_outcome_succeeded,
+        import_outcome_unresolved_refs, import_outcome_withheld_line,
+        import_preview_conflicts_banner, import_preview_count_auth_profiles,
+        import_preview_count_connections, import_preview_count_proxies,
+        import_preview_count_ssh_tunnels, import_preview_required_banner,
+        import_required_auth_profile_ref_label, import_required_aws_reference_label,
+        import_required_secret_label, import_review_value_ref, import_status_imported_toast,
+        proxies_delete_body, rpc_services_delete_body, ssh_private_key_with_path,
+        ssh_tunnels_delete_body,
     };
     use super::{
         connection_manager_window_title_edit, connection_manager_window_title_new,
@@ -1576,6 +1602,23 @@ mod tests {
 
         assert!(message.contains("FAKE_TARGET_A"));
         assert!(message.contains("FAKE_TARGET_B"));
+    }
+
+    #[test]
+    fn auth_profiles_write_failed_messages_name_files_and_reason() {
+        let single = auth_profiles_write_failed_message("FAKE_TARGET_A", "FAKE_REASON");
+        assert!(single.contains("FAKE_TARGET_A") && single.contains("FAKE_REASON"));
+        assert!(!single.contains("settings.auth_profiles"));
+
+        let partial = auth_profiles_partial_write_failed_message(
+            "FAKE_TARGET_A",
+            "FAKE_TARGET_B",
+            "FAKE_REASON",
+        );
+        assert!(partial.contains("FAKE_TARGET_A"));
+        assert!(partial.contains("FAKE_TARGET_B"));
+        assert!(partial.contains("FAKE_REASON"));
+        assert!(!partial.contains("settings.auth_profiles"));
     }
 
     #[test]

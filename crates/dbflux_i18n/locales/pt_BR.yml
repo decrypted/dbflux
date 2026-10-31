@@ -4843,6 +4843,7 @@ settings:
     auth_profile_label: Perfil de autenticação
     editor_subtitle: Perfil de autenticação reutilizável para acesso e resolução de valores
     changed_on_disk: Perfil alterado em disco
+    save_failed: Perfil não salvo
     reload: Recarregar
     name_label: Nome
     provider_label: Provedor
@@ -4858,6 +4859,8 @@ settings:
     mirror_label_fallback: Somente leitura — gerenciado externamente
     conflict_message: "Este perfil foi modificado em disco (%{label}) desde que você o abriu. Recarregue para ver os valores atuais antes de salvar."
     partial_saved_message: "%{written_label} foi salvo com sucesso, mas %{conflicted_label} foi modificado em disco desde que você abriu o formulário. Recarregue para atualizar e reaplicar suas alterações."
+    write_failed_message: "Não foi possível salvar %{label}: %{reason}"
+    partial_write_failed_message: "%{written_label} foi salvo, mas não foi possível salvar %{failed_label}: %{reason}"
     login_required_hint: "Login necessário — clique em Entrar para carregar as opções da lista."
     session_expired_hint: Sessão expirada — entre novamente para recarregar as opções
     session_expired_click_hint: "Sessão expirada — clique em Entrar para atualizar as opções da lista."

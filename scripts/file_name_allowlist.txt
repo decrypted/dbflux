@@ -17,7 +17,6 @@
 #   test support   - only used by tests
 
 crates/dbflux/build.rs:main: constant (icon file of the release channel)
-crates/dbflux_aws/src/config.rs:create_backup_for_path: constant (timestamped backup name)
 crates/dbflux_core/src/config/scripts_directory.rs:create_file: local (script name typed by the user)
 crates/dbflux_core/src/config/scripts_directory.rs:create_folder: local (folder name typed by the user)
 crates/dbflux_core/src/config/scripts_directory.rs:rename: local (new name typed by the user)

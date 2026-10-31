@@ -305,9 +305,188 @@ impl ConnectionErrorFormatter for DefaultErrorFormatter {
 ///
 /// Returns a safe-to-display version of the URI with the userinfo password and
 /// credential-bearing parameters replaced by `***`. See
-/// [`redact_uri_credentials`] for the exact rules.
+/// [`redact_connection_credentials`] for the exact rules.
 pub fn sanitize_uri(uri: &str) -> String {
-    redact_uri_credentials(uri, "***").0
+    redact_connection_credentials(uri, "***").0
+}
+
+/// Redacts credentials from URLs ([`redact_uri_credentials`]) and from
+/// `key=value` connection strings anywhere in `text`: an ADO string such as
+/// `Server=h;User Id=u;Password=p` or a libpq `host=h password=p` string is
+/// accepted wherever drivers take a URI.
+///
+/// The libpq pass (pairs end at whitespace) runs first; the ADO pass (pairs
+/// end at `;`) follows when the text contains a `;`. Either kind may contain
+/// the other's separator inside a value, so neither is picked alone. Each
+/// only replaces values of credential keys, so the worst case is redacting
+/// too much.
+///
+/// Returns the redacted text and the number of values replaced.
+pub fn redact_connection_credentials(text: &str, replacement: &str) -> (String, usize) {
+    let (urls, url_count) = redact_uri_credentials(text, replacement);
+    let (libpq, libpq_count) =
+        redact_key_value_credentials(&urls, replacement, KeyValueSyntax::Libpq);
+    // Without a `;` the whole text would be one ADO pair, and a sentence
+    // that merely ends in `password=` would lose everything after it.
+    if !libpq.contains(';') {
+        return (libpq, url_count + libpq_count);
+    }
+    let (ado, ado_count) = redact_key_value_credentials(&libpq, replacement, KeyValueSyntax::Ado);
+    (ado, url_count + libpq_count + ado_count)
+}
+
+fn is_exact_credential_key(key: &str) -> bool {
+    SENSITIVE_URI_PARAMETERS
+        .iter()
+        .any(|name| key.eq_ignore_ascii_case(name))
+}
+
+/// Words that make the text before an `=` SQL rather than a key.
+const SQL_WORDS: &[&str] = &[
+    "select", "update", "insert", "delete", "set", "where", "values", "from", "into", "and", "or",
+    "not", "join", "on", "alter", "create", "table", "when", "then", "case", "having",
+];
+
+fn is_sensitive_connection_key(key: &str) -> bool {
+    // `sslpassword`, `User Password`, `Jet OLEDB:Database Password`, ... but
+    // not SQL such as `UPDATE users SET password = $1; ...` in an error
+    // message, whose text before `=` is a statement, not a key.
+    let lower = key.to_ascii_lowercase();
+    let is_sql = lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|word| SQL_WORDS.contains(&word));
+    is_exact_credential_key(key) || (lower.ends_with("password") && !is_sql)
+}
+
+/// A flag such as `save_password=true` in a log line is not a secret. Only
+/// compound keys get this exemption: `Password=true` is a password.
+fn is_flag_value(value: &str) -> bool {
+    let value = value.trim().trim_end_matches([',', '.', ')']);
+    value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false")
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeyValueSyntax {
+    /// Pairs end at whitespace; whitespace around `=` is allowed.
+    Libpq,
+    /// Pairs end at `;`; keys may contain spaces.
+    Ado,
+}
+
+impl KeyValueSyntax {
+    fn is_pair_separator(self, c: char) -> bool {
+        match self {
+            Self::Libpq => c.is_whitespace(),
+            Self::Ado => c == ';',
+        }
+    }
+}
+
+/// Replaces the values of credential keys in `key=value` pairs.
+///
+/// A quoted value (`"..."`, `'...'`, `{...}`) runs to its closing quote, so a
+/// separator inside a password does not cut the redaction short; an
+/// unterminated quote redacts to the end.
+fn redact_key_value_credentials(
+    text: &str,
+    replacement: &str,
+    syntax: KeyValueSyntax,
+) -> (String, usize) {
+    let is_pair_separator = |c: char| syntax.is_pair_separator(c);
+
+    let mut output = String::with_capacity(text.len());
+    let mut redaction_count = 0;
+    let mut cursor = 0;
+
+    while cursor < text.len() {
+        let rest = &text[cursor..];
+        let pair_start = rest
+            .find(|c: char| !is_pair_separator(c))
+            .unwrap_or(rest.len());
+        output.push_str(&rest[..pair_start]);
+        cursor += pair_start;
+
+        let rest = &text[cursor..];
+        if rest.is_empty() {
+            break;
+        }
+
+        let key_end = rest
+            .find(|c: char| c == '=' || is_pair_separator(c))
+            .unwrap_or(rest.len());
+
+        // libpq allows `password = secret`: the key ends at whitespace, but
+        // the pair continues at the `=` after it.
+        let equals = if rest[key_end..].starts_with('=') {
+            Some(key_end)
+        } else if syntax == KeyValueSyntax::Libpq && key_end > 0 {
+            let after_key = &rest[key_end..];
+            let gap = after_key.len() - after_key.trim_start().len();
+            after_key[gap..].starts_with('=').then_some(key_end + gap)
+        } else {
+            None
+        };
+
+        let Some(equals) = equals else {
+            output.push_str(&rest[..key_end]);
+            cursor += key_end;
+            continue;
+        };
+
+        let key = &rest[..key_end];
+        let value_start = equals + 1;
+        let value_end =
+            value_start + connection_value_length(&rest[value_start..], is_pair_separator);
+        let value = &rest[value_start..value_end];
+
+        let key = key.trim();
+        if is_sensitive_connection_key(key)
+            && !value.trim().is_empty()
+            && (is_exact_credential_key(key) || !is_flag_value(value))
+        {
+            let leading = value.len() - value.trim_start().len();
+            output.push_str(&rest[..value_start + leading]);
+            output.push_str(replacement);
+            redaction_count += 1;
+        } else {
+            output.push_str(&rest[..value_end]);
+        }
+        cursor += value_end;
+    }
+
+    (output, redaction_count)
+}
+
+/// Length in bytes of the value at the start of `value` (after its `=`).
+fn connection_value_length(value: &str, is_pair_separator: impl Fn(char) -> bool) -> usize {
+    let leading = value.len() - value.trim_start().len();
+    let body = &value[leading..];
+
+    let closing = match body.chars().next() {
+        Some('"') => '"',
+        Some('\'') => '\'',
+        Some('{') => '}',
+        _ => {
+            return leading + body.find(&is_pair_separator).unwrap_or(body.len());
+        }
+    };
+
+    let mut chars = body.char_indices().skip(1).peekable();
+    while let Some((index, c)) = chars.next() {
+        if c == '\\' {
+            // libpq escapes with a backslash.
+            chars.next();
+        } else if c == closing {
+            // ADO escapes a quote by doubling it.
+            if chars.peek().is_some_and(|&(_, next)| next == closing) {
+                chars.next();
+            } else {
+                return leading + index + c.len_utf8();
+            }
+        }
+    }
+
+    value.len()
 }
 
 /// Parameter names whose values are credentials when they appear in the query
@@ -706,6 +885,135 @@ mod tests {
         assert_eq!(
             redact("jdbc:sqlserver://h:1433;user=sa;password=pw;databaseName=app"),
             "jdbc:sqlserver://h:1433;user=sa;password=***;databaseName=app"
+        );
+    }
+
+    #[test]
+    fn sanitize_uri_redacts_ado_connection_strings() {
+        assert_eq!(
+            sanitize_uri("Server=tcp:h,1433;User Id=sa;Password=hunter2;Encrypt=true"),
+            "Server=tcp:h,1433;User Id=sa;Password=***;Encrypt=true"
+        );
+        assert_eq!(
+            sanitize_uri("server=h;pwd = hunter2 ;database=app"),
+            "server=h;pwd = ***;database=app"
+        );
+        // Quoted values may hold the separator; doubled quotes are escapes.
+        assert_eq!(
+            sanitize_uri("Server=h;Password=\"hun;ter\"\"2\";Database=app"),
+            "Server=h;Password=***;Database=app"
+        );
+        assert_eq!(
+            sanitize_uri("Server=h;Password={hun;ter2};Database=app"),
+            "Server=h;Password=***;Database=app"
+        );
+        assert_eq!(
+            sanitize_uri("Server=h;Password='unterminated;Database=app"),
+            "Server=h;Password=***"
+        );
+        assert_eq!(
+            sanitize_uri("Server=h;User Id=sa;Database=app"),
+            "Server=h;User Id=sa;Database=app"
+        );
+    }
+
+    #[test]
+    fn sanitize_uri_redacts_libpq_connection_strings() {
+        assert_eq!(
+            sanitize_uri("host=db user=app password=hunter2 dbname=app"),
+            "host=db user=app password=*** dbname=app"
+        );
+        assert_eq!(
+            sanitize_uri("host=db password='hun ter\\'2' sslpassword=k sslmode=require"),
+            "host=db password=*** sslpassword=*** sslmode=require"
+        );
+        assert_eq!(sanitize_uri("host=db dbname=app"), "host=db dbname=app");
+    }
+
+    /// One `;` must not switch a libpq string to ADO rules for every pair.
+    #[test]
+    fn sanitize_uri_redacts_libpq_values_that_contain_a_semicolon() {
+        assert_eq!(
+            sanitize_uri("host=db password=hun;ter2 dbname=app"),
+            "host=db password=*** dbname=app"
+        );
+        assert_eq!(
+            sanitize_uri("host=db password='hun;ter2' dbname=app"),
+            "host=db password=*** dbname=app"
+        );
+    }
+
+    #[test]
+    fn sanitize_uri_redacts_libpq_values_with_spaces_around_the_equals_sign() {
+        assert_eq!(
+            sanitize_uri("host=db password = hunter2 dbname=app"),
+            "host=db password = *** dbname=app"
+        );
+        assert_eq!(
+            sanitize_uri("host=db password =hunter2"),
+            "host=db password =***"
+        );
+    }
+
+    #[test]
+    fn credential_flags_in_log_lines_are_kept() {
+        let (redacted, count) = redact_connection_credentials(
+            "Saving profile: save_password=true, has_password=false",
+            "[REDACTED]",
+        );
+        assert_eq!(
+            redacted,
+            "Saving profile: save_password=true, has_password=false"
+        );
+        assert_eq!(count, 0);
+    }
+
+    /// A credential key of several words still loses its whole value, up to
+    /// the `;` that ends it, spaces included.
+    #[test]
+    fn long_credential_keys_lose_their_whole_value() {
+        let (jet, _) = redact_connection_credentials(
+            "Provider=x;Data Source=a.accdb;Jet OLEDB:Database Password=correct horse battery;",
+            "***",
+        );
+        assert_eq!(
+            jet,
+            "Provider=x;Data Source=a.accdb;Jet OLEDB:Database Password=***;"
+        );
+
+        let (log, _) = redact_connection_credentials(
+            "invalid connection string: Password=correct horse battery;Server=db",
+            "***",
+        );
+        assert!(!log.contains("horse") && !log.contains("battery"), "{log}");
+        assert!(log.ends_with(";Server=db"), "{log}");
+    }
+
+    /// SQL in an error message is not an ADO string: the text between two
+    /// `;` that merely ends in `password` keeps everything after its `=`.
+    #[test]
+    fn sql_text_is_not_cut_at_a_password_column() {
+        let (redacted, _) = redact_connection_credentials(
+            "UPDATE users SET password = $1 WHERE id = $2; SELECT 1",
+            "[REDACTED]",
+        );
+
+        assert!(redacted.contains("WHERE id = $2; SELECT 1"), "{redacted}");
+        assert!(
+            redacted.starts_with("UPDATE users SET password = "),
+            "{redacted}"
+        );
+    }
+
+    #[test]
+    fn a_password_that_is_literally_true_or_false_is_still_redacted() {
+        assert_eq!(
+            sanitize_uri("Server=h;User Id=sa;Password=False;"),
+            "Server=h;User Id=sa;Password=***;"
+        );
+        assert_eq!(
+            sanitize_uri("host=db password=true"),
+            "host=db password=***"
         );
     }
 

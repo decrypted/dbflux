@@ -177,10 +177,17 @@ and `%%` are expanded; any other token fails the connection before the command
 runs. So does a value for `%h`, `%n` or `%r` that contains whitespace or a
 character the shell would interpret (quotes, `$`, backticks, `;`, `|` and the
 like) or that starts with `-`, so a host alias cannot inject shell commands.
-The command's error output appears in the log, which is where an access proxy
-prints its login URL. The log names only the program the command runs; the
-full command line, which can carry an access token, is logged at debug level
-only.
+The command's error output, where an access proxy prints its login URL, is
+logged at debug level only, so one-time URLs and tokens stay out of the audit
+log; run DBFlux with `RUST_LOG=debug` to see it. When the SSH handshake
+through the command fails, the error shows its last three lines, shortened,
+with credentials replaced by `***` and then URLs cut to their host: any URL
+with a scheme, and a URL without one whose host is a dotted name, an IPv4
+address or `localhost` (user info, a port, a leading bracket or `key=` are
+allowed). Other query strings are dropped; a URL in any other form is kept as
+printed. The log names only the program the
+command runs; the full command line, which can carry an access token, is
+logged at debug level only.
 
 A host whose config needs `ProxyJump`, or `ProxyCommand` on Windows, is listed
 and marked: DBFlux cannot reach it, and connecting fails with that reason
@@ -265,7 +272,8 @@ The access token that `aws sso login` caches lives about an hour, while the
 refresh token cached with it for a profile that uses an `sso_session` lives much
 longer. When the access token has expired, DBFlux first renews it with that
 refresh token, as the AWS CLI and SDKs do, and writes it back to the same file
-in `~/.aws/sso/cache` (other entries and the file permissions are kept), so no
+in `~/.aws/sso/cache` (other entries are kept, and the file stays readable
+only by you), so no
 browser opens. A login is needed only when there is no cached session, the
 refresh token or the client registration has expired or was revoked, or the
 renewal fails; and every time the access token expires for a profile that sets

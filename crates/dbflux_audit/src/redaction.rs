@@ -46,7 +46,9 @@ const SENSITIVE_JSON_KEYS: &[&str] = &[
 /// `dbflux_core::redact_connection_credentials`.
 const SENSITIVE_PATTERNS: &[(&str, &str); 6] = &[
     // AWS access key ID: long-term (AKIA...) or temporary STS (ASIA...)
-    ("aws_access_key", r"(?i)A[KS]IA[0-9A-Z]{16}"),
+    // Real ids are upper case and stand alone; case-insensitive matching
+    // would eat words such as `AsiaPacific...`.
+    ("aws_access_key", r"\bA[KS]IA[0-9A-Z]{16}\b"),
     // AWS secret access key (40 hex chars)
     ("aws_secret_key", r"(?i)[0-9a-f]{40}"),
     // Generic API key pattern (long hex or base64 strings)
@@ -321,6 +323,24 @@ mod tests {
             result.redacted
         );
         assert_eq!(result.redaction_count, 3);
+    }
+
+    #[test]
+    fn words_that_start_with_asia_are_not_key_ids() {
+        for line in [
+            r#"relation "AsiaPacificCustomerOrders" does not exist"#,
+            "Opened /data/asiapacificwarehouse/q.sql",
+            "table ASIAPACIFICORDERS2024XYZ_old",
+        ] {
+            let result = redact_log_line(line);
+            assert_eq!(result.redacted, line);
+            assert!(
+                !redact_error_message(line, true)
+                    .redacted
+                    .contains("[REDACTED]"),
+                "{line}"
+            );
+        }
     }
 
     /// Error messages get the same connection-string redaction as `sanitize_uri`.

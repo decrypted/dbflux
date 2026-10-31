@@ -112,9 +112,14 @@ fn is_word_separator(c: char) -> bool {
     c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>')
 }
 
-/// Per word: a URL without a scheme (`login.example.com/activate/CODE`,
-/// `10.0.0.1:8080?code=...`) keeps only its host, and any other word drops
-/// what follows a `?` that starts a query (`x?code=...`).
+/// Per word: a URL without a scheme keeps only its host, and any other word
+/// drops what follows a `?` that starts a query (`x?code=...`).
+///
+/// A word counts as such a URL when, after leading brackets or separators
+/// (`(`, `[`, `{`, `=`, `,`, `:`) or a `key=` prefix and any `user[:pass]@`,
+/// its host is a dotted name, an IPv4 address or `localhost`, optionally with
+/// a port, and something follows it (`/`, `?` or `#`). An IPv4 network such
+/// as `10.0.0.0/8` is kept.
 fn reduce_bare_urls(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut rest = text;
@@ -136,16 +141,64 @@ fn reduce_bare_urls(text: &str) -> String {
 }
 
 fn reduce_bare_url_word(word: &str) -> String {
-    let host_end = word.find(['/', '?', '#']).unwrap_or(word.len());
-    let (host, location) = word.split_at(host_end);
-    if !location.is_empty() && is_host_name(host) {
-        return format!("{host}/…");
+    let lead = word.len()
+        - word
+            .trim_start_matches(['(', '[', '{', '=', ',', ':'])
+            .len();
+    let (prefix, core) = word.split_at(lead);
+    if let Some(reduced) = reduce_bare_url(core) {
+        return format!("{prefix}{reduced}");
+    }
+    // `url=login.example.com/...`
+    if let Some((key, value)) = core.split_once('=')
+        && let Some(reduced) = reduce_bare_url(value)
+    {
+        return format!("{prefix}{key}={reduced}");
     }
 
     match word.split_once('?') {
         Some((before, query)) if query.contains('=') => format!("{before}?…"),
         _ => word.to_string(),
     }
+}
+
+/// `host/…` for a scheme-less URL, without its user info, or `None`.
+fn reduce_bare_url(candidate: &str) -> Option<String> {
+    let host_end = candidate.find(['/', '?', '#']).unwrap_or(candidate.len());
+    let (authority, location) = candidate.split_at(host_end);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let has_user_info = host.len() != authority.len();
+
+    if !(is_host_name(host) || is_localhost(host)) {
+        return None;
+    }
+    if location.is_empty() {
+        // Only the user info needs to go.
+        return has_user_info.then(|| host.to_string());
+    }
+    if is_ipv4_network(host, location) {
+        return None;
+    }
+    Some(format!("{host}/…"))
+}
+
+fn is_localhost(candidate: &str) -> bool {
+    let name = candidate
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(candidate, |(name, _)| name);
+    name.eq_ignore_ascii_case("localhost")
+}
+
+/// `10.0.0.0/8`: an address with a prefix length, not a URL.
+fn is_ipv4_network(host: &str, location: &str) -> bool {
+    host.split('.').count() == 4
+        && host.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && location.strip_prefix('/').is_some_and(|mask| {
+            (1..=2).contains(&mask.len()) && mask.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 /// `example.com`, `login.example.com:8443` or `10.0.0.1`: dot-separated
@@ -515,6 +568,48 @@ mod tests {
             tail_line("read /home/alice/x.sql and v1.2/notes, error #42"),
             "read /home/alice/x.sql and v1.2/notes, error #42"
         );
+    }
+
+    /// Brackets, `key=` prefixes, user info and `localhost` do not hide a URL.
+    #[test]
+    fn bare_urls_in_common_wrappings_keep_only_their_host() {
+        assert_eq!(
+            tail_line("(login.example.com/activate/WDJB-MJHT)"),
+            "(login.example.com/…"
+        );
+        assert_eq!(
+            tail_line("[login.example.com/x/WDJB]"),
+            "[login.example.com/…"
+        );
+        assert_eq!(
+            tail_line("url=login.example.com/device/WDJB-MJHT"),
+            "url=login.example.com/…"
+        );
+        assert_eq!(
+            tail_line("open alice@login.example.com/activate/WDJB-MJHT"),
+            "open login.example.com/…"
+        );
+        assert_eq!(
+            tail_line("dial alice:hunter2@db.example.com:5432/app"),
+            "dial db.example.com:5432/…"
+        );
+        assert_eq!(
+            tail_line("as alice:hunter2@db.example.com"),
+            "as db.example.com"
+        );
+        assert_eq!(
+            tail_line("localhost:8080/device/WDJB-MJHT"),
+            "localhost:8080/…"
+        );
+        assert_eq!(
+            tail_line("localhost:8080/activate?WDJB-MJHT"),
+            "localhost:8080/…"
+        );
+        assert_eq!(
+            tail_line("localhost:8080/cb#access_token=XYZ"),
+            "localhost:8080/…"
+        );
+        assert_eq!(tail_line("allow 10.0.0.0/8 only"), "allow 10.0.0.0/8 only");
     }
 
     /// Redaction runs before the cut, so a secret past the cut point cannot

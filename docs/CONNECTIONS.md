@@ -181,8 +181,11 @@ The command's error output, where an access proxy prints its login URL, is
 logged at debug level only, so one-time URLs and tokens stay out of the audit
 log; run DBFlux with `RUST_LOG=debug` to see it. When the SSH handshake
 through the command fails, the error shows its last three lines, shortened,
-with credentials replaced by `***` and then URLs, with or without a scheme,
-cut to their host (other query strings dropped). The log names only the program the
+with credentials replaced by `***` and then URLs cut to their host: any URL
+with a scheme, and a URL without one whose host is a dotted name, an IPv4
+address or `localhost` (user info, a port, a leading bracket or `key=` are
+allowed). Other query strings are dropped; a URL in any other form is kept as
+printed. The log names only the program the
 command runs; the full command line, which can carry an access token, is
 logged at debug level only.
 

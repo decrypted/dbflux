@@ -341,12 +341,21 @@ fn is_exact_credential_key(key: &str) -> bool {
         .any(|name| key.eq_ignore_ascii_case(name))
 }
 
+/// Words that make the text before an `=` SQL rather than a key.
+const SQL_WORDS: &[&str] = &[
+    "select", "update", "insert", "delete", "set", "where", "values", "from", "into", "and", "or",
+    "not", "join", "on", "alter", "create", "table", "when", "then", "case", "having",
+];
+
 fn is_sensitive_connection_key(key: &str) -> bool {
-    // `sslpassword`, `User Password`, ... A longer run of words before `=`
-    // is free text, such as `UPDATE users SET password = $1; ...` in an
-    // error message, not a connection-string key.
-    is_exact_credential_key(key)
-        || (key.split_whitespace().count() <= 2 && key.to_ascii_lowercase().ends_with("password"))
+    // `sslpassword`, `User Password`, `Jet OLEDB:Database Password`, ... but
+    // not SQL such as `UPDATE users SET password = $1; ...` in an error
+    // message, whose text before `=` is a statement, not a key.
+    let lower = key.to_ascii_lowercase();
+    let is_sql = lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|word| SQL_WORDS.contains(&word));
+    is_exact_credential_key(key) || (lower.ends_with("password") && !is_sql)
 }
 
 /// A flag such as `save_password=true` in a log line is not a secret. Only
@@ -957,6 +966,27 @@ mod tests {
             "Saving profile: save_password=true, has_password=false"
         );
         assert_eq!(count, 0);
+    }
+
+    /// A credential key of several words still loses its whole value, up to
+    /// the `;` that ends it, spaces included.
+    #[test]
+    fn long_credential_keys_lose_their_whole_value() {
+        let (jet, _) = redact_connection_credentials(
+            "Provider=x;Data Source=a.accdb;Jet OLEDB:Database Password=correct horse battery;",
+            "***",
+        );
+        assert_eq!(
+            jet,
+            "Provider=x;Data Source=a.accdb;Jet OLEDB:Database Password=***;"
+        );
+
+        let (log, _) = redact_connection_credentials(
+            "invalid connection string: Password=correct horse battery;Server=db",
+            "***",
+        );
+        assert!(!log.contains("horse") && !log.contains("battery"), "{log}");
+        assert!(log.ends_with(";Server=db"), "{log}");
     }
 
     /// SQL in an error message is not an ADO string: the text between two

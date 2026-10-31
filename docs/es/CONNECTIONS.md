@@ -196,7 +196,11 @@ se registra en el nivel debug, para que las URL de un solo uso y los tokens no
 acaben en el log de auditoría; ejecuta DBFlux con `RUST_LOG=debug` para verla.
 Si el handshake SSH a través del comando falla, el error muestra sus tres
 últimas líneas, acortadas, con las credenciales sustituidas por `***` y después las
-URL, con o sin esquema, reducidas a su host (y otras query strings eliminadas). El log solo nombra el programa que ejecuta el comando; la
+URL reducidas a su host: cualquier URL con esquema, y una URL sin esquema cuyo
+host sea un nombre con puntos, una dirección IPv4 o `localhost` (se admiten
+información de usuario, un puerto, un corchete inicial o un prefijo `clave=`).
+Las demás query strings se eliminan; una URL de otra forma se conserva tal
+cual. El log solo nombra el programa que ejecuta el comando; la
 línea de comando completa, que puede llevar un token de acceso, solo se
 registra en el nivel debug.
 

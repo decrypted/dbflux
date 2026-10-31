@@ -884,6 +884,7 @@ fn accept_new_still_asks_when_known_hosts_has_another_key_type() {
     assert!(!fixture.store().exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn the_suggested_ssh_keygen_command_quotes_the_name_for_the_shell() {
     let fixture = Fixture::new();
@@ -910,4 +911,18 @@ fn the_suggested_ssh_keygen_command_quotes_the_name_for_the_shell() {
     );
     assert_eq!(shell_quote("a'b"), r#"'a'\''b'"#);
     assert_eq!(shell_quote("[h]:2222"), "'[h]:2222'");
+}
+
+#[test]
+fn the_windows_hint_never_suggests_a_command_it_cannot_quote() {
+    assert_eq!(
+        keygen_remove_hint("[h.example]:2222", false),
+        "`ssh-keygen -R [h.example]:2222`"
+    );
+    let hint = keygen_remove_hint("evil';touch pwned;'", false);
+    assert!(!hint.contains("pwned"), "{hint}");
+    assert_eq!(
+        keygen_remove_hint("a'b", true),
+        r#"`ssh-keygen -R 'a'\''b'`"#
+    );
 }

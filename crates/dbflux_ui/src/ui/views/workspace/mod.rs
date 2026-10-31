@@ -1401,6 +1401,11 @@ impl Workspace {
                     });
                 }
                 SidebarEvent::RequestHostKeyTrust { profile_id, key } => {
+                    // Never swap the key under a prompt the user is reading;
+                    // the second connect stays failed and asks on its retry.
+                    if this.modal_host_key.read(cx).is_visible() {
+                        return;
+                    }
                     let request = dbflux_ui_windows::ssh_shared::host_key_confirm_request(key);
                     this.pending_host_key = Some((*profile_id, key.clone()));
                     this.modal_host_key

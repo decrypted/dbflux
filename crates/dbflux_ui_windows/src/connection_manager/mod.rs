@@ -4187,7 +4187,7 @@ impl ConnectionManagerWindow {
         let task = cx.background_executor().spawn(async move {
             match dbflux_ssh::establish_session(&ssh_config, ssh_secret.as_deref()) {
                 Ok(_session) => Ok(()),
-                Err(e) => Err(format!("{:?}", e)),
+                Err(e) => Err(e.to_string()),
             }
         });
 

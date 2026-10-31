@@ -208,15 +208,24 @@ known_hosts de OpenSSH (`~/.ssh/known_hosts`, `/etc/ssh/ssh_known_hosts`, o los
 que indiquen `UserKnownHostsFile` y `GlobalKnownHostsFile`, con `HostKeyAlias`,
 `[host]:puerto`, entradas cifradas y `@revoked` como en OpenSSH) y después en su
 propia lista, `ssh_known_hosts` en su directorio de datos. Una clave conocida
-conecta. Una clave distinta o marcada `@revoked` falla con un aviso que muestra
+conecta. Se ignora un archivo de otro usuario (salvo root) o que cualquier
+usuario puede escribir, y también un archivo global con escritura para el
+grupo; en Windows no se lee el archivo predeterminado
+`%ProgramData%\ssh\ssh_known_hosts`, solo un `GlobalKnownHostsFile` de tu
+configuración SSH. Una clave distinta o marcada `@revoked` falla con un aviso que muestra
 la huella SHA256 nueva y no se puede aceptar desde el aviso. Una clave que nadie
 conoce abre **Clave de host SSH desconocida** con el servidor, el tipo y la
 huella: **Confiar y recordar** la guarda en la lista de DBFlux (nunca en
-`~/.ssh/known_hosts`) y vuelve a conectar. Las conexiones sin nadie delante,
+`~/.ssh/known_hosts`) y vuelve a conectar. El diálogo abre con **Cancelar**
+enfocado, así que Enter cancela; llega a **Confiar y recordar** con `Tab` y
+pulsa Enter o Espacio, o pulsa `Alt+T`. Las conexiones sin nadie delante,
 como Conectar al iniciar y el servidor MCP, la rechazan. `StrictHostKeyChecking`
 de tu configuración SSH se respeta, y **Ajustes → General → Confiar en claves de
 host SSH nuevas sin preguntar** (desactivado, no recomendado) equivale a
-`accept-new`. Detalles en la versión en inglés de esta página.
+`accept-new`; ni uno ni otro confía sin preguntar cuando known_hosts ya tiene
+una clave de otro tipo para el host, y el servidor MCP lee el ajuste al
+arrancar. Un valor de `StrictHostKeyChecking` que DBFlux no entiende cuenta
+como `yes`. Detalles en la versión en inglés de esta página.
 
 ### Dónde viven los secretos SSH
 

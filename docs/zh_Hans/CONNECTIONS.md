@@ -106,7 +106,7 @@ SSH 隧道有两种用法：
 
 ### 主机密钥
 
-DBFlux 在登录 SSH 服务器之前（无论直接连接还是通过 `ProxyCommand`），先在你的 OpenSSH known_hosts 文件中查找服务器的主机密钥（`~/.ssh/known_hosts`、`/etc/ssh/ssh_known_hosts`，或 `UserKnownHostsFile`/`GlobalKnownHostsFile` 指定的文件；`HostKeyAlias`、`[host]:port`、哈希条目和 `@revoked` 的处理与 OpenSSH 相同），然后在数据目录中自己的列表 `ssh_known_hosts` 中查找。已知的密钥直接连接。不同的密钥或标记为 `@revoked` 的密钥会失败，并显示新的 SHA256 指纹，警告中无法接受该密钥。无人认识的密钥会打开 **未知的 SSH 主机密钥** 对话框，显示服务器、密钥类型和指纹；选择 **信任并记住** 会把密钥保存到 DBFlux 自己的列表（从不写入 `~/.ssh/known_hosts`）并重新连接。无人值守的连接（例如启动时连接和 MCP 服务器）会拒绝这样的密钥。DBFlux 遵循 SSH 配置中的 `StrictHostKeyChecking`；**设置 → 通用 → 不询问直接信任新的 SSH 主机密钥**（默认关闭，不推荐）等同于 `accept-new`。详情请参阅本页英文版。
+DBFlux 在登录 SSH 服务器之前（无论直接连接还是通过 `ProxyCommand`），先在你的 OpenSSH known_hosts 文件中查找服务器的主机密钥（`~/.ssh/known_hosts`、`/etc/ssh/ssh_known_hosts`，或 `UserKnownHostsFile`/`GlobalKnownHostsFile` 指定的文件；`HostKeyAlias`、`[host]:port`、哈希条目和 `@revoked` 的处理与 OpenSSH 相同），然后在数据目录中自己的列表 `ssh_known_hosts` 中查找。属于其他用户（root 除外）或所有用户都可写的文件会被跳过，组可写的全局文件也会被跳过；在 Windows 上不读取默认的 `%ProgramData%\ssh\ssh_known_hosts`，只读取 SSH 配置中的 `GlobalKnownHostsFile`。已知的密钥直接连接。不同的密钥或标记为 `@revoked` 的密钥会失败，并显示新的 SHA256 指纹，警告中无法接受该密钥。无人认识的密钥会打开 **未知的 SSH 主机密钥** 对话框，显示服务器、密钥类型和指纹；选择 **信任并记住** 会把密钥保存到 DBFlux 自己的列表（从不写入 `~/.ssh/known_hosts`）并重新连接。对话框打开时焦点在 **取消** 上，因此按 Enter 会取消；用 `Tab` 移到 **信任并记住** 后按 Enter 或空格，或按 `Alt+T`。无人值守的连接（例如启动时连接和 MCP 服务器）会拒绝这样的密钥。DBFlux 遵循 SSH 配置中的 `StrictHostKeyChecking`；**设置 → 通用 → 不询问直接信任新的 SSH 主机密钥**（默认关闭，不推荐）等同于 `accept-new`；当 known_hosts 中已有该主机其他类型的密钥时，两者都不会不经询问就信任，MCP 服务器在启动时读取该设置。DBFlux 无法识别的 `StrictHostKeyChecking` 值按 `yes` 处理。详情请参阅本页英文版。
 
 ### SSH 密钥保存在哪里
 

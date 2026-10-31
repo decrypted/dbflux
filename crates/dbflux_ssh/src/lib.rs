@@ -657,8 +657,8 @@ fn tofu_known_hosts_path() -> Result<PathBuf, DbError> {
 /// Runs at most once per process via `Once`. Never blocks startup and never
 /// errors out: any failure leaves the new path absent, so hosts known only to
 /// the old file are unknown again and the next connect asks to trust their
-/// keys (or refuses them where it cannot ask). All best-effort failures are logged with `log::warn!`, never
-/// silently dropped via `let _ =`.
+/// keys (or refuses them where it cannot ask). All best-effort failures are
+/// logged with `log::warn!`, never silently dropped via `let _ =`.
 fn migrate_legacy_known_hosts(new_path: &Path) {
     static MIGRATED: std::sync::Once = std::sync::Once::new();
     MIGRATED.call_once(|| {
@@ -1894,8 +1894,8 @@ mod transport_host_key_tests {
             .resolve_with_local_user("h", "alice", dir.path())
             .unwrap();
 
-        // The bad line is reported and claims the slot as `ask`, so the later
-        // `no` (or the global setting) cannot relax checking for this host.
+        // The bad line is reported and claims the slot as `yes`, so neither the
+        // later `no` nor the global setting decides for this host.
         assert!(
             file.diagnostics()
                 .iter()
@@ -1905,11 +1905,25 @@ mod transport_host_key_tests {
         );
         assert_eq!(
             resolved.host_key.strict_host_key_checking,
-            Some(StrictHostKeyChecking::Ask)
+            Some(StrictHostKeyChecking::Yes)
         );
         assert_eq!(
             host_keys::unknown_host_key_policy(resolved.host_key.strict_host_key_checking, true),
-            host_keys::UnknownHostKeyPolicy::Confirm
+            host_keys::UnknownHostKeyPolicy::Refuse
+        );
+
+        // A later `yes` is not weakened to a prompt either.
+        let file = SshConfigFile::parse(
+            "Host h\n  StrictHostKeyChecking yess\nHost *\n  StrictHostKeyChecking yes\n",
+            dir.path(),
+            dir.path(),
+        );
+        let resolved = file
+            .resolve_with_local_user("h", "alice", dir.path())
+            .unwrap();
+        assert_eq!(
+            resolved.host_key.strict_host_key_checking,
+            Some(StrictHostKeyChecking::Yes)
         );
         assert_eq!(StrictHostKeyChecking::parse("maybe"), None);
         assert_eq!(

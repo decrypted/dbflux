@@ -6,7 +6,7 @@ use crate::primitives::{BannerBlock, BannerVariant, SurfaceRole, surface};
 use crate::tokens::{FontSizes, Spacing};
 use dbflux_core::LogErr;
 use gpui::prelude::*;
-use gpui::{Context, EventEmitter, Window, div, px};
+use gpui::{Context, EventEmitter, FocusHandle, KeyDownEvent, Window, div, px};
 use gpui_component::ActiveTheme;
 
 /// Debug selector of the fingerprint box, for tests.
@@ -32,14 +32,22 @@ pub enum HostKeyConfirmOutcome {
     Cancelled,
 }
 
+/// The shortcut for Trust and remember, as the button's keycap shows it.
+pub const HOST_KEY_TRUST_SHORTCUT: &str = "Alt+T";
+
 /// Asks whether to trust an SSH host key seen for the first time.
 ///
-/// Enter is Trust and remember, the keyboard path for the primary button,
-/// as in the other confirmations; Escape or closing the modal cancels.
+/// The prompt opens when a connect is refused, often while the user is still
+/// pressing keys meant for something else, so Enter must never trust: focus
+/// starts on Cancel, and Enter or Space activate the focused button. Trust is
+/// reached with Tab, or with Alt+T. Escape cancels.
 pub struct ModalHostKeyConfirm {
     request: Option<HostKeyConfirmRequest>,
     visible: bool,
     focus: ModalFocus,
+    cancel_focus: FocusHandle,
+    trust_focus: FocusHandle,
+    focus_cancel_on_render: bool,
 }
 
 impl ModalHostKeyConfirm {
@@ -48,6 +56,9 @@ impl ModalHostKeyConfirm {
             request: None,
             visible: false,
             focus: ModalFocus::new(cx),
+            cancel_focus: cx.focus_handle(),
+            trust_focus: cx.focus_handle(),
+            focus_cancel_on_render: false,
         }
     }
 
@@ -62,7 +73,7 @@ impl ModalHostKeyConfirm {
     pub fn open(&mut self, request: HostKeyConfirmRequest, cx: &mut Context<Self>) {
         self.request = Some(request);
         self.visible = true;
-        self.focus.focus_on_next_render();
+        self.focus_cancel_on_render = true;
         cx.notify();
     }
 
@@ -86,6 +97,18 @@ impl ModalHostKeyConfirm {
 
 impl EventEmitter<HostKeyConfirmOutcome> for ModalHostKeyConfirm {}
 
+/// Alt+T, pressed once (a held key does not repeat into a trust).
+fn is_trust_shortcut(event: &KeyDownEvent) -> bool {
+    let modifiers = &event.keystroke.modifiers;
+    !event.is_held
+        && event.keystroke.key == "t"
+        && modifiers.alt
+        && !modifiers.control
+        && !modifiers.platform
+        && !modifiers.shift
+        && !modifiers.function
+}
+
 /// The warning shown when known_hosts has keys of other types for the host.
 pub fn host_key_other_types_warning(types: &[String]) -> String {
     dbflux_i18n::t!(
@@ -100,7 +123,9 @@ impl Render for ModalHostKeyConfirm {
             return div().into_any_element();
         }
 
-        self.focus.apply_pending(window, cx);
+        if std::mem::take(&mut self.focus_cancel_on_render) {
+            self.focus.focus(Some(&self.cancel_focus), window, cx);
+        }
 
         let Some(request) = self.request.clone() else {
             return div().into_any_element();
@@ -164,11 +189,18 @@ impl Render for ModalHostKeyConfirm {
             .flex()
             .items_center()
             .gap(Spacing::SM)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if is_trust_shortcut(event) {
+                    cx.stop_propagation();
+                    this.trust(cx);
+                }
+            }))
             .child(
                 Button::new(
                     "host-key-cancel",
                     dbflux_i18n::t!("modals.host_key_confirm.cancel"),
                 )
+                .focus_handle(&self.cancel_focus)
                 .on_click(on_cancel),
             )
             .child(
@@ -176,7 +208,9 @@ impl Render for ModalHostKeyConfirm {
                     "host-key-trust",
                     dbflux_i18n::t!("modals.host_key_confirm.trust"),
                 )
+                .kbd(HOST_KEY_TRUST_SHORTCUT)
                 .danger()
+                .focus_handle(&self.trust_focus)
                 .on_click(on_trust),
             );
 
@@ -193,12 +227,9 @@ impl Render for ModalHostKeyConfirm {
                     entity.update(cx, |this, cx| this.cancel(cx)).log_err();
                 }
             })
-            .on_confirm({
-                let entity = cx.entity().downgrade();
-                move |_, cx| {
-                    entity.update(cx, |this, cx| this.trust(cx)).log_err();
-                }
-            })
+            // Enter that no focused button takes stops here instead of
+            // reaching the window behind; it never trusts.
+            .on_confirm(|_, _| {})
             .into_any_element()
     }
 }
@@ -233,5 +264,148 @@ mod tests {
             "ssh-rsa".to_string(),
         ]);
         assert!(text.contains("ssh-ed25519, ssh-rsa"), "{text}");
+    }
+
+    use super::{HostKeyConfirmOutcome, HostKeyConfirmRequest, ModalHostKeyConfirm};
+    use gpui::{AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _};
+    use gpui::{TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct Host {
+        modal: Entity<ModalHostKeyConfirm>,
+    }
+
+    impl Render for Host {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            gpui::div().size_full().child(self.modal.clone())
+        }
+    }
+
+    type Outcomes = Rc<RefCell<Vec<HostKeyConfirmOutcome>>>;
+
+    /// A full key press: a focused button activates on the release.
+    fn press(window: &mut VisualTestContext, key: &str) {
+        let keystroke = gpui::Keystroke::parse(key).expect("valid keystroke");
+        window.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        window.simulate_event(gpui::KeyUpEvent { keystroke });
+        window.run_until_parked();
+    }
+
+    fn open(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ModalHostKeyConfirm>,
+        Outcomes,
+        &mut VisualTestContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::init(cx);
+        });
+        crate::modals::modal::bind_modal_keys_for_tests(cx);
+
+        let outcomes: Outcomes = Rc::default();
+        // Root carries GPUI-component's Tab navigation, as in the app.
+        let slot: Rc<RefCell<Option<Entity<ModalHostKeyConfirm>>>> = Rc::default();
+        let (_, window) = cx.add_window_view({
+            let slot = slot.clone();
+            move |window, cx| {
+                let modal = cx.new(ModalHostKeyConfirm::new);
+                slot.replace(Some(modal.clone()));
+                let host = cx.new(|_| Host { modal });
+                gpui_component::Root::new(host, window, cx)
+            }
+        });
+        let modal = slot.borrow().clone().expect("modal built");
+        window.update(|_, cx| {
+            let outcomes = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &HostKeyConfirmOutcome, _| {
+                outcomes.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    HostKeyConfirmRequest {
+                        host: "bastion.example:22".to_string(),
+                        key_type: "ssh-ed25519".to_string(),
+                        fingerprint: "SHA256:abc".to_string(),
+                        other_key_types: Vec::new(),
+                    },
+                    cx,
+                );
+            });
+        });
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+        (modal, outcomes, window)
+    }
+
+    /// The prompt can open under a key press meant for something else (a
+    /// second Enter to retry a connect, a newline in an editor): Enter right
+    /// after opening must cancel, never trust.
+    #[gpui::test]
+    fn a_bare_enter_on_open_never_trusts(cx: &mut TestAppContext) {
+        let (modal, outcomes, window) = open(cx);
+
+        press(window, "enter");
+
+        assert_eq!(*outcomes.borrow(), vec![HostKeyConfirmOutcome::Cancelled]);
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    /// Enter that reaches the dialog itself (focus on no button, for example
+    /// after a click on its text) does nothing and goes nowhere else.
+    #[gpui::test]
+    fn enter_on_the_dialog_itself_does_nothing(cx: &mut TestAppContext) {
+        let (modal, outcomes, window) = open(cx);
+        window.update(|window, cx| {
+            let handle = modal.read(cx).focus.handle().clone();
+            handle.focus(window, cx);
+        });
+        window.run_until_parked();
+
+        press(window, "enter");
+
+        assert!(outcomes.borrow().is_empty());
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn tab_then_enter_trusts(cx: &mut TestAppContext) {
+        let (_, outcomes, window) = open(cx);
+
+        press(window, "tab");
+        press(window, "enter");
+
+        assert_eq!(*outcomes.borrow(), vec![HostKeyConfirmOutcome::Trusted]);
+    }
+
+    #[gpui::test]
+    fn alt_t_trusts(cx: &mut TestAppContext) {
+        let (_, outcomes, window) = open(cx);
+
+        window.simulate_keystrokes("alt-t");
+        window.run_until_parked();
+
+        assert_eq!(*outcomes.borrow(), vec![HostKeyConfirmOutcome::Trusted]);
+    }
+
+    #[gpui::test]
+    fn escape_cancels(cx: &mut TestAppContext) {
+        let (_, outcomes, window) = open(cx);
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        assert_eq!(*outcomes.borrow(), vec![HostKeyConfirmOutcome::Cancelled]);
     }
 }

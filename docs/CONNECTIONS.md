@@ -198,8 +198,8 @@ it checks the server's host key in two places:
    otherwise under the host name, as `[host]:port` for a port other than 22.
    Hashed entries, wildcards and `@revoked` work as in OpenSSH. `@cert-authority`
    lines are ignored, since DBFlux does not check host certificates. A file
-   every user can write is skipped, and so is a global file that is
-   group-writable or owned by another user. On Windows the default
+   owned by another user (other than root) or writable by every user is
+   skipped, and so is a global file that is group-writable. On Windows the default
    `%ProgramData%\ssh\ssh_known_hosts` is not read, only a
    `GlobalKnownHostsFile` your SSH config names.
 2. DBFlux's own list, `ssh_known_hosts` in its data directory. It counts only
@@ -219,14 +219,17 @@ What happens next:
   example `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the
   server, before you choose **Trust and remember**: DBFlux then adds the key to
   its own list (never to `~/.ssh/known_hosts`) and connects again. **Cancel**
-  leaves the connection closed. The dialog opens when you connect from the
+  leaves the connection closed. The dialog opens with **Cancel** focused, so
+  Enter cancels; reach **Trust and remember** with `Tab` and press Enter or
+  Space, or press `Alt+T`. `Escape` cancels. The dialog opens when you connect from the
   sidebar and for **Test SSH** and **Test connection**. Connects nobody is
   watching, such as **Connect on startup** and the MCP server, refuse an
   unknown key instead, with a message to connect once by hand.
 
 `StrictHostKeyChecking` on a host from your SSH config is honoured: `yes`
 refuses an unknown key without asking, `accept-new` and `no` trust it without
-asking (a changed key still fails, unlike OpenSSH's `no`), and `ask` asks.
+asking (a changed key still fails, unlike OpenSSH's `no`), and `ask` asks. A
+value DBFlux cannot read counts as `yes` for that host.
 **Settings → General → Trust new SSH host keys without asking** does what
 `accept-new` does for every tunnel whose host sets no `StrictHostKeyChecking`.
 It is off by default and not recommended. Neither `accept-new` nor the

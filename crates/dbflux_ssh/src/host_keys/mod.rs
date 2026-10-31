@@ -5,7 +5,8 @@
 //! yet is never accepted silently: the connect fails with an error the GUI
 //! turns into a "Trust and remember" prompt, unless the user opted into
 //! accepting new keys (`StrictHostKeyChecking accept-new`/`no`, or the global
-//! setting). A changed or revoked key always fails.
+//! setting) and known_hosts holds no key of another type for the host. A
+//! changed or revoked key always fails.
 //!
 //! The user's known_hosts files are only ever read; accepted keys go to
 //! DBFlux's own store.
@@ -310,7 +311,8 @@ pub(crate) fn accept_new_host_keys() -> bool {
 pub enum UnknownHostKeyPolicy {
     /// Refuse, and let the GUI ask the user to trust it.
     Confirm,
-    /// Pin it in DBFlux's store and connect.
+    /// Pin it in DBFlux's store and connect, unless known_hosts holds a key
+    /// of another type for the host: then it is handled as `Confirm`.
     AcceptNew,
     /// `StrictHostKeyChecking yes`: refuse without offering to trust it.
     Refuse,
@@ -470,36 +472,19 @@ impl HostKeyVerifier {
         let user = self.user_files.iter().map(|path| (path, false));
         let global = self.global_files.iter().map(|path| (path, true));
         user.chain(global)
-            .filter_map(|(path, global)| {
-                let metadata = match std::fs::metadata(path) {
-                    Ok(metadata) => metadata,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-                    Err(error) => {
+            .filter_map(
+                |(path, global)| match read_trusted_known_hosts(path, global) {
+                    Ok(Some(text)) => Some((path.clone(), parse_known_hosts(&text))),
+                    Ok(None) => None,
+                    Err(reason) => {
                         log::warn!(
-                            "[SSH] Skipping known_hosts file {}: {error}",
-                            path.display()
-                        );
-                        return None;
-                    }
-                };
-                if let Err(reason) = known_hosts_file_is_trusted(&metadata, global) {
-                    log::warn!(
-                        "[SSH] Skipping known_hosts file {}: {reason}",
-                        path.display()
-                    );
-                    return None;
-                }
-                match std::fs::read_to_string(path) {
-                    Ok(text) => Some((path.clone(), parse_known_hosts(&text))),
-                    Err(error) => {
-                        log::warn!(
-                            "[SSH] Skipping known_hosts file {}: {error}",
+                            "[SSH] Skipping known_hosts file {}: {reason}",
                             path.display()
                         );
                         None
                     }
-                }
-            })
+                },
+            )
             .collect()
     }
 
@@ -584,7 +569,8 @@ impl HostKeyVerifier {
                 }
                 UnknownHostKeyPolicy::Refuse => Err(DbError::connection_failed(format!(
                     "The SSH host key of {} is not known ({} key {}) and the SSH config sets \
-                     StrictHostKeyChecking yes for it, so DBFlux did not connect. Add the key \
+                     StrictHostKeyChecking yes for it (or a value DBFlux could not read, which \
+                     counts as yes), so DBFlux did not connect. Add the key \
                      to your known_hosts file, for example by connecting once with ssh, and \
                      try again.",
                     self.display,
@@ -616,13 +602,13 @@ impl HostKeyVerifier {
              server presented a {} key with fingerprint {}, which does not match the key \
              recorded in {}. DBFlux did not connect. If the key was changed on purpose, \
              confirm the new fingerprint with the server's administrator, then remove the old \
-             key: `ssh-keygen -R {}` for a known_hosts file, or delete the line `{}` (a tab \
+             key: {} for a known_hosts file, or delete the line `{}` (a tab \
              between name and port) from {}.",
             self.display,
             key.key_type,
             key.fingerprint(),
             expected_in.join(", "),
-            shell_quote(&self.lookup_name),
+            keygen_remove_hint(&self.lookup_name, cfg!(unix)),
             self.store_entry_key(),
             self.store
                 .resolve()
@@ -680,23 +666,51 @@ impl HostKeyVerifier {
     }
 }
 
+/// Reads a known_hosts file that may vouch for host keys: `None` when it does
+/// not exist. The checks run on the opened handle, so the file read is the
+/// file checked.
+fn read_trusted_known_hosts(path: &Path, global: bool) -> Result<Option<String>, String> {
+    use std::io::Read as _;
+
+    // Opening a FIFO for reading blocks, so only a regular file is opened;
+    // the authoritative checks below then run on the opened handle.
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Err("it is not a regular file".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    }
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    known_hosts_file_is_trusted(&metadata, global)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|error| error.to_string())?;
+    Ok(Some(text))
+}
+
 /// A file that vouches for host keys must not be one another local user can
 /// change, or that user could plant a key and intercept the tunnel without a
-/// prompt. Any known_hosts file writable by everyone is skipped; a global
-/// file must also be owned by root or by the owner of the home directory and
-/// not be group-writable.
+/// prompt. Every known_hosts file must be owned by root or by the owner of the
+/// home directory (the user DBFlux runs for) and not be writable by everyone.
+/// A global file must not be group-writable either; a user file may be, since
+/// a umask of 002 with a group per user makes that common and harmless.
 #[cfg(unix)]
 fn known_hosts_file_is_trusted(metadata: &std::fs::Metadata, global: bool) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
+    if !metadata.is_file() {
+        return Err("it is not a regular file".to_string());
+    }
     let mode = metadata.mode();
     if mode & 0o002 != 0 {
         return Err("it is writable by every user".to_string());
     }
-    if !global {
-        return Ok(());
-    }
-    if mode & 0o020 != 0 {
+    if global && mode & 0o020 != 0 {
         return Err("it is writable by its group".to_string());
     }
     let owner = metadata.uid();
@@ -713,13 +727,36 @@ fn known_hosts_file_is_trusted(metadata: &std::fs::Metadata, global: bool) -> Re
 /// Windows ACLs are not checked; the default `%ProgramData%` file is not read
 /// at all (see `default_global_known_hosts_files`).
 #[cfg(not(unix))]
-fn known_hosts_file_is_trusted(_metadata: &std::fs::Metadata, _global: bool) -> Result<(), String> {
-    Ok(())
+fn known_hosts_file_is_trusted(metadata: &std::fs::Metadata, _global: bool) -> Result<(), String> {
+    if metadata.is_file() {
+        Ok(())
+    } else {
+        Err("it is not a regular file".to_string())
+    }
 }
 
 /// `name` as one POSIX shell word, for a command the user may paste.
 fn shell_quote(name: &str) -> String {
     format!("'{}'", name.replace('\'', "'\\''"))
+}
+
+/// The `ssh-keygen -R` command to suggest. A POSIX shell gets the name
+/// quoted. Windows shells quote differently (cmd.exe passes `'` through), so
+/// there the command is spelled out only for a name that needs no quoting,
+/// and otherwise named without a ready-to-paste line.
+fn keygen_remove_hint(name: &str, posix: bool) -> String {
+    if posix {
+        return format!("`ssh-keygen -R {}`", shell_quote(name));
+    }
+    let plain = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']'));
+    if plain {
+        format!("`ssh-keygen -R {name}`")
+    } else {
+        "`ssh-keygen -R` with the entry's name".to_string()
+    }
 }
 
 /// The algorithms for `known_types` first, in libssh2's own order, then the

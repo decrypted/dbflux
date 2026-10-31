@@ -172,8 +172,9 @@ files nor DBFlux knows, and remember the key, instead of asking you to compare
 its fingerprint first. It also covers connects that cannot ask, such as
 **Connect on startup** and the MCP server, which otherwise refuse such a key. A
 changed key is always refused, and a host whose SSH config sets
-`StrictHostKeyChecking` follows that instead. See
-[Host keys](CONNECTIONS.md#host-keys).
+`StrictHostKeyChecking` follows that instead. It does not apply when
+known_hosts already holds a key of another type for the host, and the MCP
+server reads it only when it starts. See [Host keys](CONNECTIONS.md#host-keys).
 
 **Editor row limit** (default 10,000) caps how many rows a query run from the
 query editor returns. It is a separate execution-safety setting, not one of the

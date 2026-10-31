@@ -822,14 +822,15 @@ impl<'a> Parser<'a> {
                     Some(value) => self.directives.push(Directive::Keyword(
                         KnownKeyword::StrictHostKeyChecking(value),
                     )),
-                    // An unreadable value must not let a later, weaker line or
-                    // the global setting decide: it claims the slot as `ask`
-                    // (OpenSSH would reject the whole config), and the line is
-                    // reported.
+                    // OpenSSH rejects a config with an unreadable value. The
+                    // closest DBFlux can do without failing every host is to
+                    // claim the slot as `yes`, the strictest value: neither a
+                    // later line nor the global setting can then decide for
+                    // this host, and the line is reported.
                     None => {
                         self.diagnostic(number, line, "invalid StrictHostKeyChecking value");
                         self.directives.push(Directive::Keyword(
-                            KnownKeyword::StrictHostKeyChecking(StrictHostKeyChecking::Ask),
+                            KnownKeyword::StrictHostKeyChecking(StrictHostKeyChecking::Yes),
                         ));
                     }
                 }

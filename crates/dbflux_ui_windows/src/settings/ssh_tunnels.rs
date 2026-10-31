@@ -424,7 +424,7 @@ impl SshTunnelsSection {
         let task = cx.background_executor().spawn(async move {
             match dbflux_ssh::establish_session(&config, secret.as_deref()) {
                 Ok(_session) => Ok(()),
-                Err(error) => Err(format!("{:?}", error)),
+                Err(error) => Err(error.to_string()),
             }
         });
 

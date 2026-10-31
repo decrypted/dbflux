@@ -159,7 +159,9 @@ recomendado) deja que un túnel SSH conecte a un servidor cuya clave de host no
 conocen ni tus archivos known_hosts ni DBFlux y la recuerde, en lugar de pedirte
 que compares antes su huella. También cubre las conexiones que no pueden
 preguntar, como Conectar al iniciar y el servidor MCP. Una clave cambiada
-siempre se rechaza. Ver [Claves de host](CONNECTIONS.md#claves-de-host).
+siempre se rechaza. No se aplica cuando known_hosts ya tiene una clave de otro
+tipo para el host, y el servidor MCP solo lo lee al arrancar. Ver
+[Claves de host](CONNECTIONS.md#claves-de-host).
 
 **Editor row limit** (límite de filas del editor, 10.000 por defecto) limita
 cuántas filas devuelve una query ejecutada desde el editor. Es una opción de

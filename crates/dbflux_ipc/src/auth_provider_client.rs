@@ -11,7 +11,7 @@ use dbflux_core::auth::{
     AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthSession, AuthSessionState,
     DynAuthProvider, ResolvedCredentials, UrlCallback,
 };
-use interprocess::local_socket::{Stream as IpcStream, prelude::*};
+use interprocess::local_socket::Stream as IpcStream;
 
 use crate::audit::{ExternalAuditEmitter, ExternalAuditSource};
 use crate::auth::{AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, process_auth_token};
@@ -22,7 +22,7 @@ use crate::auth_provider_protocol::{
 };
 use crate::envelope::{AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_V1_2, ProtocolVersion};
 use crate::framing;
-use crate::socket::auth_provider_socket_name;
+use crate::socket::{auth_provider_socket, pass_ipc_dir_to};
 use crate::{RpcApiFamily, auth_provider_rpc_supported_versions, negotiate_highest_mutual_version};
 
 const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 5_000;
@@ -174,10 +174,9 @@ impl RpcAuthProvider {
     fn connect_stream(&self) -> Result<IpcStream, DbError> {
         ensure_host_running_for(&self.socket_id, self.launch.as_ref())?;
 
-        let name = auth_provider_socket_name(&self.socket_id)
-            .map_err(|error| DbError::connection_failed(error.to_string()))?;
-
-        IpcStream::connect(name).map_err(|error| DbError::connection_failed(error.to_string()))
+        auth_provider_socket(&self.socket_id)
+            .and_then(|socket| socket.connect())
+            .map_err(|error| DbError::connection_failed(error.to_string()))
     }
 
     #[allow(clippy::result_large_err)]
@@ -187,10 +186,8 @@ impl RpcAuthProvider {
     ) -> Result<NormalizedAuthProviderHelloResponse, DbError> {
         ensure_host_running_for(socket_id, launch)?;
 
-        let name = auth_provider_socket_name(socket_id)
-            .map_err(|error| DbError::connection_failed(error.to_string()))?;
-
-        let mut stream = IpcStream::connect(name)
+        let mut stream = auth_provider_socket(socket_id)
+            .and_then(|socket| socket.connect())
             .map_err(|error| DbError::connection_failed(error.to_string()))?;
 
         // The process-global store is the primary source; the caller-supplied
@@ -640,9 +637,7 @@ fn validate_socket_id(socket_id: &str) -> Result<(), DbError> {
         )));
     }
 
-    auth_provider_socket_name(socket_id)
-        .map(|_| ())
-        .map_err(|error| DbError::connection_failed(error.to_string()))
+    Ok(())
 }
 
 #[allow(clippy::result_large_err)]
@@ -766,13 +761,17 @@ pub fn shutdown_managed_auth_provider_hosts() -> usize {
 
 #[allow(clippy::result_large_err)]
 fn socket_is_live_for(socket_id: &str) -> Result<bool, DbError> {
-    let name = auth_provider_socket_name(socket_id)
+    let socket = auth_provider_socket(socket_id)
         .map_err(|error| DbError::connection_failed(error.to_string()))?;
 
-    match IpcStream::connect(name) {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
-    }
+    Ok(socket.is_listening())
+}
+
+/// The legacy-host hint for an error about `socket_id`, empty when none applies.
+fn legacy_hint(socket_id: &str) -> String {
+    auth_provider_socket(socket_id)
+        .map(|socket| socket.legacy_hint())
+        .unwrap_or_default()
 }
 
 #[allow(clippy::result_large_err)]
@@ -861,8 +860,9 @@ fn ensure_host_running_for(
 
     let Some(launch) = launch else {
         return Err(DbError::connection_failed(format!(
-            "Auth-provider socket '{}' is not available",
-            socket_id
+            "Auth-provider socket '{}' is not available{}",
+            socket_id,
+            legacy_hint(socket_id)
         )));
     };
 
@@ -875,6 +875,8 @@ fn ensure_host_running_for(
     if let Some(token) = process_auth_token() {
         command.env(AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, token);
     }
+
+    pass_ipc_dir_to(&mut command).map_err(|error| DbError::connection_failed(error.to_string()))?;
 
     let child = command.spawn().map_err(DbError::IoError)?;
     register_managed_host(socket_id, child)?;
@@ -896,9 +898,10 @@ fn ensure_host_running_for(
     }
 
     Err(DbError::connection_failed(format!(
-        "Managed auth-provider host for '{}' did not become ready within {} ms",
+        "Managed auth-provider host for '{}' did not become ready within {} ms{}",
         socket_id,
-        launch.startup_timeout.as_millis()
+        launch.startup_timeout.as_millis(),
+        legacy_hint(socket_id)
     )))
 }
 

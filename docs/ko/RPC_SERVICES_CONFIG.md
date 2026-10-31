@@ -94,7 +94,7 @@ CREATE TABLE cfg_service_env (
 - `socket_id` (필수): DBFlux와 서비스가 사용하는 로컬 소켓 이름입니다.
   - 허용되는 문자: ASCII 영문자, 숫자, `.`, `_`, `-`
   - 경로 구분자, 공백, 기타 문장 부호는 거부됩니다.
-  - 이 값은 플랫폼 소켓 네임스페이스에 그대로 전달되므로 짧고 안정적인 값으로 유지해야 합니다.
+  - 이 값은 비공개 IPC 디렉터리 안의 소켓 파일 이름이 됩니다([Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md#전송) 참고). 전체 경로가 플랫폼 한도(Linux 107바이트, macOS 103바이트)를 넘으면 안 되므로 짧고 안정적인 값으로 유지해야 합니다.
 - `command` (선택): DBFlux가 서비스를 시작해야 할 때 실행하는 실행 파일입니다.
   - 생략되고 `args`도 비어 있으면 DBFlux는 서비스가 이미 실행 중인 것으로 간주하고 아무것도 생성하지 않습니다.
   - `driver`의 경우 생략되고 `args`가 비어 있지 않으면 DBFlux는 `dbflux-driver-host`를 실행합니다.

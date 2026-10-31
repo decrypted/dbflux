@@ -54,9 +54,21 @@ Comportamiento importante:
 
 DBFlux usa sockets locales vía `interprocess`:
 
-- **Linux**: sockets Unix de namespace abstracto (`\0name`)
-- **macOS**: sockets Unix en `/tmp/`
-- **Windows**: named pipes (`\\.\pipe\...`)
+- **Linux y macOS**: un archivo de socket Unix con el nombre del socket ID,
+  dentro de un directorio privado: `$DBFLUX_IPC_DIR` si está definido; si no,
+  `$XDG_RUNTIME_DIR/dbflux/` (en Linux, `/run/user/<uid>/dbflux/` si la variable
+  no está definida); si no, `dbflux-ipc/` en el directorio de caché del
+  usuario (`~/.cache` en Linux, `~/Library/Caches` en macOS). DBFlux crea el
+  directorio con modo `0700` y rechaza uno que sea un enlace simbólico,
+  pertenezca a otro usuario o que otros puedan escribir.
+- **Windows**: named pipes (`\\.\pipe\<name>`)
+
+Un host gestionado recibe el directorio en `DBFLUX_IPC_DIR` y debe enlazar
+`$DBFLUX_IPC_DIR/<name>`. Ambos extremos comprueban al otro: DBFlux rechaza un
+servidor que corre como otro usuario antes de enviar `Hello` (que lleva el token
+de autenticación), y `dbflux-driver-host` descarta clientes de otros usuarios.
+Un host de una versión anterior escucha en el nombre abstracto de Linux o en
+`/tmp/<name>`, donde esta versión ya no se conecta; en Linux el error lo indica.
 
 Los mensajes se enmarcan como:
 
@@ -65,8 +77,9 @@ Los mensajes se enmarcan como:
 
 Tamaño máximo de mensaje: `16 MiB`.
 
-La limpieza de sockets es automática al salir/soltar el proceso (provista por
-`interprocess`).
+Un host elimina su archivo de socket al cerrarse. Un archivo de socket del mismo
+usuario que dejó un host caído se reemplaza en el siguiente bind; nunca se
+elimina un socket activo ni un archivo que no sea un socket.
 
 ## Configuración en runtime
 

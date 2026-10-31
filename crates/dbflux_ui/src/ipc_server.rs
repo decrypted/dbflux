@@ -2,16 +2,21 @@ use crate::ui::views::workspace::Workspace;
 use dbflux_ipc::{
     APP_CONTROL_VERSION, framing,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
+    tokens_match,
 };
 use gpui::*;
 use interprocess::local_socket::{
-    Listener as IpcListener, Stream as IpcStream, traits::Listener as _,
+    Listener as IpcListener, Stream as IpcStream, traits::Listener as _, traits::Stream as _,
 };
 use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
+
+/// Accepts are served one at a time, so a client that connects and goes
+/// silent must not hold the channel for longer than this.
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct IpcServer;
 
@@ -45,6 +50,11 @@ fn accept_loop(listener: IpcListener, cmd_tx: Sender<IpcCommand>, auth_token: St
     loop {
         match listener.accept() {
             Ok(stream) => {
+                if let Err(e) = dbflux_ipc::verify_peer(&stream) {
+                    log::warn!("IPC client rejected: {}", e);
+                    continue;
+                }
+
                 if let Err(e) = handle_connection(stream, &cmd_tx, &auth_token) {
                     log::warn!("IPC connection error: {}", e);
                 }
@@ -65,6 +75,8 @@ fn handle_connection(
     cmd_tx: &Sender<IpcCommand>,
     expected_auth_token: &str,
 ) -> io::Result<()> {
+    // Best effort: Windows named pipes have no timeouts and report an error.
+    let _ = stream.set_recv_timeout(Some(REQUEST_READ_TIMEOUT));
     let request: AppControlRequest = framing::recv_msg(&mut stream)?;
     let request_id = request.request_id;
 
@@ -82,7 +94,7 @@ fn handle_connection(
         return Ok(());
     }
 
-    if request.auth_token.as_deref() != Some(expected_auth_token) {
+    if !tokens_match(request.auth_token.as_deref(), expected_auth_token) {
         let response = AppControlResponse::ok(
             request_id,
             IpcResponse::Error {

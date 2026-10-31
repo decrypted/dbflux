@@ -125,8 +125,10 @@ Notas:
 - `socket_id` (requerido): nombre de socket local usado por DBFlux y el service.
   - Caracteres permitidos: letras ASCII, números, `.`, `_`, `-`
   - Los separadores de ruta, espacios, y otra puntuación se rechazan.
-  - El valor se pasa tal cual al namespace de socket de la plataforma, así que
-    mantenlo corto y estable.
+  - El valor se convierte en el nombre del archivo de socket dentro del
+    directorio IPC privado (ver [Driver RPC Protocol](DRIVER_RPC_PROTOCOL.md#transporte));
+    la ruta completa no puede superar el límite de la plataforma (107 bytes en
+    Linux, 103 en macOS), así que mantenlo corto y estable.
 - `command` (opcional): ejecutable a correr cuando DBFlux necesita arrancar el
   service.
   - Si se omite y `args` también está vacío, DBFlux trata el service como ya

@@ -16,7 +16,7 @@ pub use audit::{
 pub use auth::{
     APP_CONTROL_AUTH_TOKEN_ENV, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_AUTH_TOKEN_ENV,
     SECRET_PROVIDER_RPC_AUTH_TOKEN_ENV, app_control_token_path, init_process_auth_tokens,
-    process_auth_token, read_app_control_token, write_app_control_token,
+    process_auth_token, read_app_control_token, tokens_match, write_app_control_token,
 };
 pub use auth_provider_client::{
     IpcServiceLaunchConfig, RpcAuthProvider, build_fetch_dependencies, hash_dependencies,
@@ -60,5 +60,6 @@ pub use secret_provider::{
     negotiate_secret_provider_version, shutdown_managed_secret_provider_hosts, validate_manifest,
 };
 pub use socket::{
-    auth_provider_socket_name, driver_socket_name, secret_provider_socket_name, socket_name,
+    IPC_DIR_ENV, IpcSocket, app_control_socket, auth_provider_socket, driver_socket, ipc_dir,
+    rpc_driver_socket, secret_provider_socket, verify_peer,
 };

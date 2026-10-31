@@ -16,9 +16,7 @@ use dbflux_ipc::{
     DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ProtocolVersion, driver_rpc_supported_versions,
     framing, negotiate_highest_mutual_version,
 };
-use interprocess::local_socket::{
-    GenericNamespaced, ListenerNonblockingMode::Neither, ListenerOptions, prelude::*,
-};
+use interprocess::local_socket::{ListenerNonblockingMode::Neither, Stream, prelude::*};
 use session::SessionManager;
 use uuid::Uuid;
 
@@ -47,28 +45,29 @@ fn main() {
     let driver = create_driver(&args.driver)
         .unwrap_or_else(|e| fatal(&format!("Failed to create driver '{}': {e}", args.driver)));
 
-    let socket_display = args.socket.clone();
-    let name = args
-        .socket
-        .to_ns_name::<GenericNamespaced>()
-        .unwrap_or_else(|e| fatal(&format!("Invalid socket name '{socket_display}': {e}")));
+    let socket = dbflux_ipc::rpc_driver_socket(&args.socket)
+        .unwrap_or_else(|e| fatal(&format!("Invalid socket name '{}': {e}", args.socket)));
 
-    let listener = ListenerOptions::new()
-        .name(name)
-        .nonblocking(Neither)
-        .create_sync()
-        .unwrap_or_else(|e| fatal(&format!("Failed to bind socket '{socket_display}': {e}")));
+    let listener = socket
+        .listen(Neither)
+        .unwrap_or_else(|e| fatal(&format!("Failed to bind socket '{socket}': {e}")));
 
     log::info!(
-        "Driver host started: driver={}, socket={socket_display}",
-        args.driver,
+        "Driver host started: driver={}, socket={socket}",
+        args.driver
     );
+
+    let own_uid = dbflux_ipc::socket::own_uid();
 
     // Accept loop — one connection at a time (the parent DBFlux process holds a
     // single connection per driver-host instance).
     loop {
         match listener.accept() {
             Ok(stream) => {
+                if !admit_client(&stream, own_uid) {
+                    continue;
+                }
+
                 log::info!("Client connected");
                 handle_connection(stream, driver.as_ref(), auth_token.as_deref());
                 log::info!("Client disconnected");
@@ -91,8 +90,20 @@ fn main() {
 /// exercised in tests that validate the reject path without a live socket.
 fn is_hello_authorized(client_token: Option<&str>, expected_auth_token: Option<&str>) -> bool {
     match expected_auth_token {
-        Some(expected) => client_token == Some(expected),
+        Some(expected) => dbflux_ipc::tokens_match(client_token, expected),
         None => false,
+    }
+}
+
+/// A client of another user is dropped before its first frame is parsed; the
+/// token check alone would still let it probe the Hello handling.
+fn admit_client(stream: &Stream, expected_uid: u32) -> bool {
+    match dbflux_ipc::socket::verify_peer_as(stream, expected_uid) {
+        Ok(()) => true,
+        Err(error) => {
+            log::warn!("Rejected a client: {error}");
+            false
+        }
     }
 }
 
@@ -535,8 +546,9 @@ fn fatal(message: &str) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_negotiated_driver_version, create_driver, hello_version_error_response,
-        is_hello_authorized, negotiate_hello_version, validate_negotiated_request_version,
+        admit_client, choose_negotiated_driver_version, create_driver,
+        hello_version_error_response, is_hello_authorized, negotiate_hello_version,
+        validate_negotiated_request_version,
     };
     use dbflux_ipc::{
         ProtocolVersion,
@@ -631,6 +643,36 @@ mod tests {
     #[test]
     fn hello_auth_accepts_matching_token() {
         assert!(is_hello_authorized(Some("secret"), Some("secret")));
+    }
+
+    #[test]
+    fn hello_auth_rejects_a_prefix_or_an_extension_of_the_token() {
+        assert!(!is_hello_authorized(Some("secre"), Some("secret")));
+        assert!(!is_hello_authorized(Some("secrets"), Some("secret")));
+        assert!(!is_hello_authorized(Some(""), Some("")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_client_of_another_uid_is_not_admitted() {
+        use interprocess::local_socket::{ListenerNonblockingMode::Neither, prelude::*};
+
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests().expect("private test ipc dir");
+        let socket =
+            dbflux_ipc::rpc_driver_socket(&format!("host-peer-{}", uuid::Uuid::new_v4().simple()))
+                .expect("socket");
+        let listener = socket.listen(Neither).expect("listen");
+
+        let client = std::thread::spawn({
+            let socket = socket.clone();
+            move || socket.connect().expect("connect")
+        });
+        let accepted = listener.accept().expect("accept");
+        let _client = client.join().expect("client thread");
+
+        let own_uid = dbflux_ipc::socket::own_uid();
+        assert!(admit_client(&accepted, own_uid));
+        assert!(!admit_client(&accepted, own_uid.wrapping_add(1)));
     }
 
     #[test]

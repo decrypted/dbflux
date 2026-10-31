@@ -15,10 +15,10 @@ use dbflux_core::observability::tracing_bridge::{
 use dbflux_core::observability::{EventCategory, EventOutcome, EventRecord, EventSeverity};
 use dbflux_driver_ipc::shutdown_managed_hosts;
 use dbflux_ipc::{
-    APP_CONTROL_VERSION, framing, init_process_auth_tokens,
+    APP_CONTROL_VERSION, app_control_socket, framing, init_process_auth_tokens,
     protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse},
     read_app_control_token, shutdown_managed_auth_provider_hosts,
-    shutdown_managed_secret_provider_hosts, socket_name,
+    shutdown_managed_secret_provider_hosts,
 };
 use dbflux_ui::AppStateEntity;
 use dbflux_ui::assets::Assets;
@@ -34,10 +34,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async}
 use dbflux_ui_base::window_state::{self, WindowGeometry};
 use gpui::*;
 use gpui_component::Root;
-use interprocess::local_socket::{
-    Listener as IpcListener, ListenerNonblockingMode, ListenerOptions, Stream as IpcStream,
-    prelude::*,
-};
+use interprocess::local_socket::{Listener as IpcListener, ListenerNonblockingMode, prelude::*};
 use log::info;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -45,6 +42,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// How long a launch waits for a running instance to answer a focus request.
+const APP_CONTROL_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Global holder for the audit service, used by the panic hook.
 static AUDIT_SERVICE_FOR_PANIC: Mutex<Option<AuditService>> = Mutex::new(None);
@@ -283,10 +283,7 @@ fn main() {
     }
 
     if args.len() == 1 {
-        if let Ok(name) = socket_name()
-            && let Ok(mut stream) = IpcStream::connect(name)
-            && send_focus_request(&mut stream, 1).is_ok()
-        {
+        if focus_running_instance() {
             return;
         }
 
@@ -297,29 +294,33 @@ fn main() {
     std::process::exit(cli::run(&args));
 }
 
+/// Asks an already running GUI to come to the front. Uses the token file of
+/// that instance, so it must run before this process writes its own token.
+fn focus_running_instance() -> bool {
+    let Ok(socket) = app_control_socket() else {
+        return false;
+    };
+
+    // A peer that is not this user is refused before the token is sent.
+    let Ok(mut stream) = socket.connect() else {
+        return false;
+    };
+
+    // A peer that accepts but never answers must not hang the launch. Best
+    // effort: Windows named pipes have no timeouts and report an error.
+    let _ = stream.set_recv_timeout(Some(APP_CONTROL_REPLY_TIMEOUT));
+
+    send_focus_request(&mut stream, 1).is_ok()
+}
+
 fn bind_ipc_socket() -> Result<IpcListener, ()> {
-    let connect_name = socket_name().map_err(|e| {
-        eprintln!("Failed to create socket name: {}", e);
+    let socket = app_control_socket().map_err(|e| {
+        eprintln!("Failed to resolve the IPC socket: {}", e);
     })?;
 
-    if let Ok(mut stream) = IpcStream::connect(connect_name)
-        && send_focus_request(&mut stream, 1).is_ok()
-    {
-        std::process::exit(0);
-    }
-
-    let bind_name = socket_name().map_err(|e| {
-        eprintln!("Failed to create socket name: {}", e);
-    })?;
-
-    ListenerOptions::new()
-        .name(bind_name)
-        .nonblocking(ListenerNonblockingMode::Accept)
-        .try_overwrite(true)
-        .create_sync()
-        .map_err(|e| {
-            eprintln!("Failed to bind IPC socket: {}", e);
-        })
+    socket.listen(ListenerNonblockingMode::Accept).map_err(|e| {
+        eprintln!("Failed to bind IPC socket {}: {}", socket, e);
+    })
 }
 
 fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::Result<()> {
@@ -389,6 +390,12 @@ fn run_gui() {
 
     #[cfg(unix)]
     shell_path_import.log();
+
+    // Before the token is rewritten: the running instance only accepts the
+    // token it wrote itself.
+    if focus_running_instance() {
+        std::process::exit(0);
+    }
 
     let auth_token = match init_process_auth_tokens() {
         Ok(token) => token,

@@ -12,6 +12,7 @@ Usage:
     scripts/lint.py mouse-down
     scripts/lint.py unquoted-sql
     scripts/lint.py file-names
+    scripts/lint.py abstract-sockets
 
 Arguments given to `clippy` are passed to cargo verbatim before `--`, for
 example `--locked --features "sqlite,postgres"` or `--tests`.
@@ -37,6 +38,13 @@ called like a name (`name`, `table`, `schema`, `key`, `file`, `title`,
 table, collection or object name comes from the server, and `join` with an
 absolute or `..` name writes outside the directory; such names become
 `dbflux_core::local_files::SafeFileName` and are placed with `confined_join`.
+
+`abstract-sockets` fails on every namespaced local-socket name built anywhere
+under `crates/` or `examples/`, tests included, outside `crates/dbflux_ipc/src/socket.rs`.
+A Linux abstract socket (and the `/tmp` file `interprocess` uses for such a
+name on macOS) has no owner, so another local user can bind it first and
+receive the token and secrets sent to it; every socket comes from the
+`dbflux_ipc::socket` helpers, which place it in the private IPC directory.
 """
 
 import argparse
@@ -52,6 +60,11 @@ MOUSE_DOWN_ALLOWLIST = ROOT / "scripts" / "mouse_down_allowlist.txt"
 UNQUOTED_SQL_ALLOWLIST = ROOT / "scripts" / "unquoted_sql_allowlist.txt"
 FILE_NAME_ALLOWLIST = ROOT / "scripts" / "file_name_allowlist.txt"
 FILE_NAME_EXEMPT = ("crates/dbflux_core/src/local_files/",)
+ABSTRACT_SOCKET_HELPER = "crates/dbflux_ipc/src/socket.rs"
+ABSTRACT_SOCKET_NAME = re.compile(
+    r"\b(?:GenericNamespaced|AbstractNsUdSocket|SpecialDirUdSocket|NamespacedNameType|ToNsName"
+    r"|to_ns_name|from_abstract_name|from_abstract_namespace)\b"
+)
 NAME_TO_PATH = re.compile(
     r"\.(?:join|with_file_name|set_file_name)\(\s*&?(?:[A-Za-z_][\w.]*\.)?\w*"
     r"(?:name|table|schema|key|file|title|object)\w*(?:\(\))?\s*\)"
@@ -485,6 +498,46 @@ def check_file_names() -> int:
     return 0
 
 
+def abstract_socket_sites(root: Path = ROOT) -> list[tuple[str, int]]:
+    """Find every namespaced socket name outside the IPC socket helper as (path, line).
+
+    Test code counts too: a test that binds an abstract name can collide with,
+    or be answered by, a process of another user.
+    """
+    sites = []
+
+    paths = sorted((root / "crates").rglob("*.rs")) + sorted((root / "examples").rglob("*.rs"))
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        if relative == ABSTRACT_SOCKET_HELPER:
+            continue
+
+        for line_index, line in enumerate(path.read_text(encoding="utf-8").split("\n")):
+            code = line.split("//", 1)[0]
+            if ABSTRACT_SOCKET_NAME.search(code):
+                sites.append((relative, line_index + 1))
+
+    return sites
+
+
+def check_abstract_sockets() -> int:
+    """Fail on namespaced socket names built outside `dbflux_ipc::socket`."""
+    sites = abstract_socket_sites()
+
+    if sites:
+        for relative, line in sites:
+            print(
+                f"{relative}:{line}: namespaced socket name; use the dbflux_ipc::socket helpers, "
+                "which bind in the private IPC directory",
+                file=sys.stderr,
+            )
+        print(f"abstract-sockets: {len(sites)} site(s) outside {ABSTRACT_SOCKET_HELPER}", file=sys.stderr)
+        return 1
+
+    print(f"abstract-sockets: no namespaced socket names outside {ABSTRACT_SOCKET_HELPER}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run rustfmt, clippy, or static checks on first-party crates only (never vendor/)."
@@ -515,9 +568,14 @@ def main() -> int:
         help="Fail on paths built from names missing from scripts/file_name_allowlist.txt",
     )
 
+    subcommands.add_parser(
+        "abstract-sockets",
+        help="Fail on namespaced local-socket names outside crates/dbflux_ipc/src/socket.rs",
+    )
+
     arguments, extra = parser.parse_known_args()
 
-    if arguments.command in ("fmt", "mouse-down", "unquoted-sql", "file-names") and extra:
+    if arguments.command in ("fmt", "mouse-down", "unquoted-sql", "file-names", "abstract-sockets") and extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
     if arguments.command == "mouse-down":
@@ -528,6 +586,9 @@ def main() -> int:
 
     if arguments.command == "file-names":
         return check_file_names()
+
+    if arguments.command == "abstract-sockets":
+        return check_abstract_sockets()
 
     packages = package_arguments(first_party_packages())
 

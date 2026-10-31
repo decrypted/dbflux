@@ -41,9 +41,29 @@ Important behavior:
 
 DBFlux uses local sockets via `interprocess`:
 
-- **Linux**: abstract namespace Unix sockets (`\0name`)
-- **macOS**: Unix sockets in `/tmp/`
-- **Windows**: named pipes (`\\.\pipe\...`)
+- **Linux and macOS**: a Unix socket file named after the socket ID, inside a
+  private directory: `$DBFLUX_IPC_DIR` when set, otherwise
+  `$XDG_RUNTIME_DIR/dbflux/` (`/run/user/<uid>/dbflux/` on Linux when the
+  variable is unset), otherwise `dbflux-ipc/` in the user cache
+  directory (`~/.cache` on Linux, `~/Library/Caches` on macOS). DBFlux creates
+  the directory with mode `0700` and refuses one that is a symbolic link,
+  belongs to another user or can be written by others.
+- **Windows**: named pipes (`\\.\pipe\<name>`)
+
+A managed host receives the directory DBFlux uses in `DBFLUX_IPC_DIR` and must
+bind `$DBFLUX_IPC_DIR/<name>`. A host you start yourself must resolve the same
+directory. In Rust, `dbflux_ipc::rpc_driver_socket(socket_id)?.listen(..)` (or
+`auth_provider_socket` / `secret_provider_socket`) does both.
+
+Both ends check who is on the other side. DBFlux refuses a server that runs as
+another user before it sends `Hello`, which carries the auth token, and
+`dbflux-driver-host` drops clients of other users before reading a frame. A
+host should do the same: `SO_PEERCRED` on Linux, `getpeereid` on macOS, or
+`dbflux_ipc::verify_peer` in Rust.
+
+A host built for an older DBFlux binds the Linux abstract name or `/tmp/<name>`,
+which this version no longer connects to. When DBFlux sees such a host on
+Linux, the error says that a host is listening on the old socket name.
 
 Messages are framed as:
 
@@ -52,7 +72,9 @@ Messages are framed as:
 
 Maximum message size: `16 MiB`.
 
-Socket cleanup is automatic on process exit/drop (provided by `interprocess`).
+A host removes its socket file when it shuts down cleanly. A socket file of the
+same user that a crashed host left behind is replaced on the next bind; a live
+socket or a file that is not a socket is never removed.
 
 ## Runtime configuration
 
@@ -414,7 +436,7 @@ If a managed host exits early or times out before the socket is ready, DBFlux re
 
 Your service should:
 
-1. bind socket via `interprocess`
+1. bind the socket in the private IPC directory (see [Transport](#transport)) and refuse peers of other users
 2. handle `Hello` and return metadata/kind
 3. return a form definition in `Hello`
 4. handle `OpenSession`/`CloseSession`

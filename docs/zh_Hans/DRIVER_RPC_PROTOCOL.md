@@ -41,9 +41,17 @@ DBFlux 将启动配置存放在基于 SQLite 的服务配置中。RPC 服务在 
 
 DBFlux 通过 `interprocess` 使用本地 Socket：
 
-- **Linux**：抽象命名空间 Unix Socket（`\0name`）
-- **macOS**：位于 `/tmp/` 的 Unix Socket
-- **Windows**：命名管道（`\\.\pipe\...`）
+- **Linux 和 macOS**：私有目录中以 socket ID 命名的 Unix Socket 文件。目录依次为
+  `$DBFLUX_IPC_DIR`（如已设置）、`$XDG_RUNTIME_DIR/dbflux/`（Linux 上未设置该变量时为
+  `/run/user/<uid>/dbflux/`）、用户缓存目录中的
+  `dbflux-ipc/`（Linux 为 `~/.cache`，macOS 为 `~/Library/Caches`）。DBFlux 以
+  `0700` 权限创建该目录，并拒绝符号链接、属于其他用户或其他用户可写的目录。
+- **Windows**：命名管道（`\\.\pipe\<name>`）
+
+受管主机通过 `DBFLUX_IPC_DIR` 获得该目录，必须绑定 `$DBFLUX_IPC_DIR/<name>`。
+双方都会校验对端：DBFlux 在发送携带认证令牌的 `Hello` 之前拒绝以其他用户身份运行的服务端，
+`dbflux-driver-host` 会断开其他用户的客户端。为旧版本构建的主机监听 Linux 抽象名称或
+`/tmp/<name>`，本版本不再连接；在 Linux 上错误信息会指出这一点。
 
 消息帧格式如下：
 
@@ -52,7 +60,8 @@ DBFlux 通过 `interprocess` 使用本地 Socket：
 
 最大消息大小：`16 MiB`。
 
-进程退出或 Socket 被 drop 时会自动清理（由 `interprocess` 提供）。
+主机正常退出时会删除其 Socket 文件。崩溃的主机遗留的同一用户的 Socket 文件会在下次绑定时被替换；
+正在使用的 Socket 或非 Socket 文件永远不会被删除。
 
 ## 运行时配置
 

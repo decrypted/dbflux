@@ -13,7 +13,7 @@ use dbflux_ipc::{
         DriverCapability, DriverHelloResponse, DriverRequestBody, DriverRequestEnvelope,
         DriverResponseBody, DriverResponseEnvelope,
     },
-    driver_socket_name, framing,
+    driver_socket, framing,
 };
 
 /// Protocol version the fake advertises in `Hello` and stamps on every frame,
@@ -26,7 +26,7 @@ use dbflux_ipc::{
 /// claim a feature set the fake does not implement.
 const FAKE_DRIVER_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 3);
 
-use interprocess::local_socket::{ListenerNonblockingMode::Neither, ListenerOptions};
+use interprocess::local_socket::ListenerNonblockingMode::Neither;
 
 /// Script of actions for the fake driver server to perform on each connection.
 #[derive(Clone, Debug)]
@@ -114,11 +114,9 @@ pub struct FakeDriverRpcServer {
 
 impl FakeDriverRpcServer {
     pub fn start(config: FakeDriverRpcConfig) -> io::Result<Self> {
-        let socket_name = driver_socket_name(&config.socket_id)?;
-        let listener = ListenerOptions::new()
-            .name(socket_name.borrow())
-            .nonblocking(Neither)
-            .create_sync()?;
+        // Never the sockets of a DBFlux that runs on this machine.
+        dbflux_ipc::socket::isolate_ipc_dir_for_tests()?;
+        let listener = driver_socket(&config.socket_id)?.listen(Neither)?;
 
         let received_requests = Arc::clone(&config.received_requests);
         let join_handle = thread::spawn(move || run_server(listener, config));

@@ -16,7 +16,7 @@ pub use file_name::{
 };
 #[cfg(unix)]
 pub use private_dir::effective_uid;
-pub use private_dir::{create_private_file, private_dir_in};
+pub use private_dir::{create_private_file, private_dir_in, private_dir_in_owned_by};
 
 #[cfg(test)]
 mod tests;

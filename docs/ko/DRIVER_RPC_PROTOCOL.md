@@ -41,9 +41,19 @@ DBFlux는 실행 구성을 SQLite 기반의 서비스 구성에 저장합니다.
 
 DBFlux는 `interprocess`를 통해 로컬 소켓을 사용합니다:
 
-- **Linux**: 추상 네임스페이스 Unix 소켓 (`\0name`)
-- **macOS**: `/tmp/` 아래의 Unix 소켓
-- **Windows**: 네임드 파이프 (`\\.\pipe\...`)
+- **Linux 및 macOS**: 비공개 디렉터리 안에 socket ID 이름으로 만든 Unix 소켓 파일.
+  `$DBFLUX_IPC_DIR`가 있으면 그 디렉터리, 없으면 `$XDG_RUNTIME_DIR/dbflux/`
+  (Linux에서 변수가 없으면 `/run/user/<uid>/dbflux/`),
+  그것도 없으면 사용자 캐시 디렉터리의 `dbflux-ipc/`(Linux는 `~/.cache`,
+  macOS는 `~/Library/Caches`)입니다. DBFlux는 디렉터리를 `0700` 모드로 만들고,
+  심볼릭 링크이거나 다른 사용자 소유이거나 다른 사용자가 쓸 수 있는 디렉터리는 거부합니다.
+- **Windows**: 네임드 파이프 (`\\.\pipe\<name>`)
+
+관리형 호스트는 `DBFLUX_IPC_DIR`로 디렉터리를 전달받으며 `$DBFLUX_IPC_DIR/<name>`에
+바인드해야 합니다. 양쪽 모두 상대를 확인합니다. DBFlux는 인증 토큰이 담긴 `Hello`를
+보내기 전에 다른 사용자로 실행 중인 서버를 거부하고, `dbflux-driver-host`는 다른
+사용자의 클라이언트를 끊습니다. 이전 버전용 호스트는 Linux 추상 이름이나
+`/tmp/<name>`에서 대기하므로 이 버전은 연결하지 않으며, Linux에서는 오류 메시지가 이를 알려 줍니다.
 
 메시지는 다음처럼 프레이밍됩니다:
 
@@ -52,7 +62,8 @@ DBFlux는 `interprocess`를 통해 로컬 소켓을 사용합니다:
 
 최대 메시지 크기: `16 MiB`.
 
-소켓 정리는 프로세스 종료/drop 시 자동으로 이루어집니다(`interprocess`가 제공합니다).
+호스트는 정상 종료 시 소켓 파일을 삭제합니다. 비정상 종료한 호스트가 남긴 같은 사용자의
+소켓 파일은 다음 바인드 때 교체되며, 사용 중인 소켓이나 소켓이 아닌 파일은 삭제하지 않습니다.
 
 ## 런타임 구성
 

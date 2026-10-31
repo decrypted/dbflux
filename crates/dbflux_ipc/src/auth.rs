@@ -1,5 +1,5 @@
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -51,8 +51,20 @@ pub fn write_app_control_token(token: &str) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    fs::write(&path, token)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
 
+    // Created owner-only, so the token is never readable under the umask mode
+    // for the moment before the chmod below.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    options.open(&path)?.write_all(token.as_bytes())?;
+
+    // The creation mode does not apply to a file that already exists.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -65,6 +77,17 @@ pub fn write_app_control_token(token: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Compares a presented IPC token with the expected one in constant time, so
+/// response timing does not reveal how many leading bytes were right. An empty
+/// expected token never matches: it means none was provisioned.
+pub fn tokens_match(presented: Option<&str>, expected: &str) -> bool {
+    use subtle::ConstantTimeEq;
+
+    !expected.is_empty()
+        && presented
+            .is_some_and(|presented| bool::from(presented.as_bytes().ct_eq(expected.as_bytes())))
+}
+
 pub fn app_control_token_path() -> io::Result<PathBuf> {
     let dir = dbflux_storage::paths::data_dir().map_err(|e| io::Error::other(e.to_string()))?;
     Ok(dir.join(AUTH_TOKEN_FILE))
@@ -73,6 +96,29 @@ pub fn app_control_token_path() -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tokens_match_only_the_exact_token() {
+        let expected = "3f2b8c1e-0d4a-4e6f-9b7a-1c2d3e4f5a6b";
+
+        assert!(tokens_match(Some(expected), expected));
+        assert!(!tokens_match(None, expected));
+        assert!(!tokens_match(Some(""), expected));
+        // Same length, one byte off at each end.
+        assert!(!tokens_match(
+            Some("4f2b8c1e-0d4a-4e6f-9b7a-1c2d3e4f5a6b"),
+            expected
+        ));
+        assert!(!tokens_match(
+            Some("3f2b8c1e-0d4a-4e6f-9b7a-1c2d3e4f5a6c"),
+            expected
+        ));
+        // A prefix or an extension must not pass, the classic zip-compare bug.
+        assert!(!tokens_match(Some(&expected[..10]), expected));
+        assert!(!tokens_match(Some(&format!("{expected}x")), expected));
+        assert!(!tokens_match(Some(expected), ""));
+        assert!(!tokens_match(Some(""), ""));
+    }
 
     #[test]
     fn app_control_token_path_is_under_data_dir() {

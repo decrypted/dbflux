@@ -1,7 +1,9 @@
 //! OpenSSH config resolution for DBFlux SSH tunnels.
 //!
 //! This module resolves an alias from an OpenSSH `config` file into concrete
-//! connection parameters (`HostName`, `User`, `Port`, `IdentityFile`), following
+//! connection parameters (`HostName`, `User`, `Port`, `IdentityFile`, and the
+//! host key directives `HostKeyAlias`, `StrictHostKeyChecking`,
+//! `UserKnownHostsFile`, `GlobalKnownHostsFile`), following
 //! OpenSSH's own algorithm: `Host` glob patterns with first-match-wins,
 //! `Include` directives, `Match` blocks (`all` / `host` / `user`), and
 //! `%h` / `%r` / `%d` tokens inside `IdentityFile`.
@@ -118,6 +120,49 @@ pub struct ResolvedHost {
     pub identity_file: Option<PathBuf>,
     /// Effective `ProxyCommand` as written, tokens not expanded.
     pub proxy_command: Option<String>,
+    /// Host key checking options; see [`HostKeyOptions`].
+    pub host_key: HostKeyOptions,
+}
+
+/// The host key directives a referenced host resolved to. `None` means the
+/// directive did not apply, so OpenSSH's default holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostKeyOptions {
+    /// `HostKeyAlias`: the name known_hosts entries are looked up under,
+    /// instead of `[HostName]:Port`.
+    pub host_key_alias: Option<String>,
+    pub strict_host_key_checking: Option<StrictHostKeyChecking>,
+    /// `UserKnownHostsFile`, `~` and tokens expanded; empty for `none`.
+    pub user_known_hosts_files: Option<Vec<PathBuf>>,
+    /// `GlobalKnownHostsFile`, `~` and tokens expanded; empty for `none`.
+    pub global_known_hosts_files: Option<Vec<PathBuf>>,
+}
+
+/// `StrictHostKeyChecking` values as OpenSSH reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrictHostKeyChecking {
+    /// `yes`: never add a key; an unknown host is refused.
+    Yes,
+    /// `ask` (the default): an unknown host needs confirmation.
+    Ask,
+    /// `accept-new`: an unknown host is accepted and remembered.
+    AcceptNew,
+    /// `no` / `off`. DBFlux treats it like `accept-new`: a changed key still
+    /// fails, unlike OpenSSH, which would connect with some features off.
+    No,
+}
+
+impl StrictHostKeyChecking {
+    /// `None` for a value OpenSSH would reject.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "yes" | "true" => Some(Self::Yes),
+            "ask" => Some(Self::Ask),
+            "accept-new" => Some(Self::AcceptNew),
+            "no" | "false" | "off" => Some(Self::No),
+            _ => None,
+        }
+    }
 }
 
 /// Errors produced when resolving a host from an SSH config.
@@ -373,6 +418,10 @@ impl SshConfigFile {
             proxy_decided: false,
             proxy_command: None,
             unsupported: None,
+            host_key_alias: None,
+            strict_host_key_checking: None,
+            user_known_hosts_files: None,
+            global_known_hosts_files: None,
         };
         // OpenSSH's `read_config_file` starts with the block state active:
         // top-level directives before the first `Host`/`Match` apply to every
@@ -532,6 +581,26 @@ impl SshConfigFile {
                 walk.state
                     .apply_proxy(value, UnsupportedDirective::ProxyCommand);
             }
+            KnownKeyword::HostKeyAlias(value) => {
+                if walk.state.host_key_alias.is_none() {
+                    walk.state.host_key_alias = Some(value.clone());
+                }
+            }
+            KnownKeyword::StrictHostKeyChecking(value) => {
+                if walk.state.strict_host_key_checking.is_none() {
+                    walk.state.strict_host_key_checking = Some(*value);
+                }
+            }
+            KnownKeyword::UserKnownHostsFile(files) => {
+                if walk.state.user_known_hosts_files.is_none() {
+                    walk.state.user_known_hosts_files = Some(files.clone());
+                }
+            }
+            KnownKeyword::GlobalKnownHostsFile(files) => {
+                if walk.state.global_known_hosts_files.is_none() {
+                    walk.state.global_known_hosts_files = Some(files.clone());
+                }
+            }
         }
     }
 
@@ -548,12 +617,32 @@ impl SshConfigFile {
             .identity_file
             .as_deref()
             .map(|raw| expand_identity_file(raw, &host_name, user_for_tokens, home));
+        let port = state.port.unwrap_or(DEFAULT_PORT);
+        let expand_files = |files: Option<Vec<String>>| {
+            files.map(|files| {
+                // `UserKnownHostsFile none` reads no file at all.
+                if files.iter().any(|file| file.eq_ignore_ascii_case("none")) {
+                    return Vec::new();
+                }
+                files
+                    .iter()
+                    .map(|raw| expand_identity_file(raw, &host_name, user_for_tokens, home))
+                    .collect()
+            })
+        };
+        let host_key = HostKeyOptions {
+            host_key_alias: state.host_key_alias,
+            strict_host_key_checking: state.strict_host_key_checking,
+            user_known_hosts_files: expand_files(state.user_known_hosts_files),
+            global_known_hosts_files: expand_files(state.global_known_hosts_files),
+        };
         ResolvedHost {
             host_name,
             user: state.user,
-            port: state.port.unwrap_or(DEFAULT_PORT),
+            port,
             identity_file,
             proxy_command: state.proxy_command,
+            host_key,
         }
     }
 }
@@ -589,6 +678,11 @@ enum KnownKeyword {
     IdentityFile(String),
     ProxyJump(String),
     ProxyCommand(String),
+    HostKeyAlias(String),
+    StrictHostKeyChecking(StrictHostKeyChecking),
+    /// One or more file names as written, `none` included.
+    UserKnownHostsFile(Vec<String>),
+    GlobalKnownHostsFile(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -615,6 +709,10 @@ struct Resolution {
     proxy_decided: bool,
     proxy_command: Option<String>,
     unsupported: Option<UnsupportedDirective>,
+    host_key_alias: Option<String>,
+    strict_host_key_checking: Option<StrictHostKeyChecking>,
+    user_known_hosts_files: Option<Vec<String>>,
+    global_known_hosts_files: Option<Vec<String>>,
 }
 
 /// Mutable state carried through one sequential resolution pass.
@@ -713,6 +811,42 @@ impl<'a> Parser<'a> {
             }
             "proxyjump" => self.push_line_keyword(rest, KnownKeyword::ProxyJump),
             "proxycommand" => self.push_line_keyword(rest, KnownKeyword::ProxyCommand),
+            "hostkeyalias" => {
+                self.push_token_keyword(rest, number, line, KnownKeyword::HostKeyAlias);
+            }
+            "stricthostkeychecking" => {
+                match first_token(rest)
+                    .ok()
+                    .and_then(|value| StrictHostKeyChecking::parse(&value))
+                {
+                    Some(value) => self.directives.push(Directive::Keyword(
+                        KnownKeyword::StrictHostKeyChecking(value),
+                    )),
+                    // OpenSSH rejects a config with an unreadable value. The
+                    // closest DBFlux can do without failing every host is to
+                    // claim the slot as `yes`, the strictest value: neither a
+                    // later line nor the global setting can then decide for
+                    // this host, and the line is reported.
+                    None => {
+                        self.diagnostic(number, line, "invalid StrictHostKeyChecking value");
+                        self.directives.push(Directive::Keyword(
+                            KnownKeyword::StrictHostKeyChecking(StrictHostKeyChecking::Yes),
+                        ));
+                    }
+                }
+            }
+            "userknownhostsfile" | "globalknownhostsfile" => match split_words(rest) {
+                Ok(files) if !files.is_empty() => {
+                    let keyword = if keyword.eq_ignore_ascii_case("userknownhostsfile") {
+                        KnownKeyword::UserKnownHostsFile(files)
+                    } else {
+                        KnownKeyword::GlobalKnownHostsFile(files)
+                    };
+                    self.directives.push(Directive::Keyword(keyword));
+                }
+                Ok(_) => self.diagnostic(number, line, &format!("missing value for {keyword}")),
+                Err(()) => self.diagnostic(number, line, "unterminated quote"),
+            },
             "port" => {
                 // First token only: a trailing comment is not part of the port.
                 match first_token(rest).and_then(|value| value.parse::<u16>().map_err(|_| ())) {
@@ -1132,7 +1266,7 @@ fn host_patterns_match(patterns: &[String], candidate: &str) -> bool {
     has_positive
 }
 
-fn glob_matches(pattern: &str, text: &str) -> bool {
+pub(crate) fn glob_matches(pattern: &str, text: &str) -> bool {
     let pattern_chars: Vec<char> = pattern.chars().collect();
     let text_chars: Vec<char> = text.chars().collect();
     glob_match_chars(&pattern_chars, &text_chars)

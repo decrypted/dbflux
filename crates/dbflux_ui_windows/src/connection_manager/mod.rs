@@ -36,6 +36,7 @@ use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChange
 use dbflux_components::components::value_source_selector::ValueSourceSelector;
 use dbflux_components::controls::{Dropdown, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::modals::{HostKeyConfirmOutcome, ModalHostKeyConfirm};
 use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
@@ -319,6 +320,13 @@ pub(super) enum SslCertSlot {
     ClientKey,
 }
 
+/// Which test runs again once its SSH host key was trusted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HostKeyRetry {
+    SshTest,
+    ConnectionTest,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum TestStatus {
     None,
@@ -557,6 +565,10 @@ pub struct ConnectionManagerWindow {
     test_result: Option<dbflux_core::TestConnectionResult>,
     ssh_test_status: TestStatus,
     ssh_test_error: Option<String>,
+    /// Asks whether to trust an SSH host key a test was refused for.
+    host_key_modal: Entity<ModalHostKeyConfirm>,
+    /// The refused test and its key while `host_key_modal` is open.
+    pending_host_key: Option<(HostKeyRetry, dbflux_ssh::UnknownHostKey)>,
 
     // Keyboard navigation state
     focus_handle: FocusHandle,
@@ -1016,9 +1028,19 @@ impl ConnectionManagerWindow {
             },
         );
 
+        let host_key_modal = cx.new(ModalHostKeyConfirm::new);
+        let host_key_sub = cx.subscribe_in(
+            &host_key_modal,
+            window,
+            |this, _, outcome: &HostKeyConfirmOutcome, window, cx| {
+                this.resolve_host_key(outcome, window, cx);
+            },
+        );
+
         #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
         let mut subscriptions = vec![
             import_panel_sub,
+            host_key_sub,
             driver_filter_focus_sub,
             dropdown_subscription,
             ssh_config_host_picker_sub,
@@ -1078,6 +1100,8 @@ impl ConnectionManagerWindow {
             test_result: None,
             ssh_test_status: TestStatus::None,
             ssh_test_error: None,
+            host_key_modal,
+            pending_host_key: None,
             focus_handle,
             driver_focus: DriverFocus::First,
             form_focus: FormFocus::Name,
@@ -4163,7 +4187,7 @@ impl ConnectionManagerWindow {
         let task = cx.background_executor().spawn(async move {
             match dbflux_ssh::establish_session(&ssh_config, ssh_secret.as_deref()) {
                 Ok(_session) => Ok(()),
-                Err(e) => Err(format!("{:?}", e)),
+                Err(e) => Err(e.to_string()),
             }
         });
 
@@ -4178,6 +4202,7 @@ impl ConnectionManagerWindow {
                             this.ssh_test_error = None;
                         }
                         Err(e) => {
+                            this.offer_host_key_trust(&e, HostKeyRetry::SshTest, cx);
                             this.ssh_test_status = TestStatus::Failed;
                             this.ssh_test_error = Some(e);
                         }
@@ -4187,6 +4212,56 @@ impl ConnectionManagerWindow {
             });
         })
         .detach();
+    }
+
+    /// Asks to trust the SSH host key `error` refused, if it is such a
+    /// refusal; trusting runs `retry` again.
+    pub(super) fn offer_host_key_trust(
+        &mut self,
+        error: &str,
+        retry: HostKeyRetry,
+        cx: &mut Context<Self>,
+    ) {
+        // Never swap the key under an open prompt; this test's error stays
+        // in its banner.
+        if self.host_key_modal.read(cx).is_visible() {
+            return;
+        }
+        let Some(key) = dbflux_ssh::unknown_host_key_in_error(error) else {
+            return;
+        };
+        let request = crate::ssh_shared::host_key_confirm_request(&key);
+        self.pending_host_key = Some((retry, key));
+        self.host_key_modal
+            .update(cx, |modal, cx| modal.open(request, cx));
+    }
+
+    fn resolve_host_key(
+        &mut self,
+        outcome: &HostKeyConfirmOutcome,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((retry, key)) = self.pending_host_key.take() else {
+            return;
+        };
+        if *outcome != HostKeyConfirmOutcome::Trusted {
+            key.dismiss();
+            return;
+        }
+        if let Err(error) = key.trust() {
+            let error = error.to_string();
+            match retry {
+                HostKeyRetry::SshTest => self.ssh_test_error = Some(error),
+                HostKeyRetry::ConnectionTest => self.test_error = Some(error),
+            }
+            cx.notify();
+            return;
+        }
+        match retry {
+            HostKeyRetry::SshTest => self.test_ssh_connection(window, cx),
+            HostKeyRetry::ConnectionTest => self.test_connection(window, cx),
+        }
     }
 
     pub(super) fn browse_ssh_key(&mut self, _window: &mut Window, cx: &mut Context<Self>) {

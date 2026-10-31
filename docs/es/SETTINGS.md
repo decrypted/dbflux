@@ -154,6 +154,15 @@ las mismas reglas aplican a `DELETE`/`DROP`/`TRUNCATE` de SQL,
 | **Require WHERE for DELETE/UPDATE**              | On      | Trata un `DELETE`/`UPDATE` sin `WHERE` como peligroso.                                                      |
 | **Always require preview (ignore suppressions)** | Off     | Fuerza el modal de confirmación/preview incluso para queries que anteriormente elegiste dejar de confirmar. |
 
+**Confiar en claves de host SSH nuevas sin preguntar** (desactivado, no
+recomendado) deja que un túnel SSH conecte a un servidor cuya clave de host no
+conocen ni tus archivos known_hosts ni DBFlux y la recuerde, en lugar de pedirte
+que compares antes su huella. También cubre las conexiones que no pueden
+preguntar, como Conectar al iniciar y el servidor MCP. Una clave cambiada
+siempre se rechaza. No se aplica cuando known_hosts o DBFlux ya tienen una clave de
+otro tipo para el host, y el servidor MCP solo lo lee al arrancar. Ver
+[Claves de host](CONNECTIONS.md#claves-de-host).
+
 **Editor row limit** (límite de filas del editor, 10.000 por defecto) limita
 cuántas filas devuelve una query ejecutada desde el editor. Es una opción de
 seguridad independiente de los tres controles de queries peligrosas de arriba.

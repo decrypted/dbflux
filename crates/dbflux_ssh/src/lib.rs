@@ -26,13 +26,19 @@ use uuid::Uuid;
 // OpenSSH config resolution
 // ---------------------------------------------------------------------------
 
+pub mod host_keys;
 pub mod ssh_config;
 
 #[cfg(unix)]
 mod proxy_command;
 
+pub use host_keys::{
+    HostKeyPaths, HostKeyVerifier, UnknownHostKey, VerifiedSession, set_accept_new_host_keys,
+    unknown_host_key_in_error,
+};
 pub use ssh_config::{
-    ResolvedHost, SshConfigError, SshConfigFile, SshConfigHost, UnsupportedDirective,
+    HostKeyOptions, ResolvedHost, SshConfigError, SshConfigFile, SshConfigHost,
+    StrictHostKeyChecking, UnsupportedDirective,
 };
 
 /// Where and how to dial an SSH server, after SSH config resolution.
@@ -45,6 +51,9 @@ pub struct DialTarget {
     /// `ProxyCommand` with its tokens expanded. When set, the session runs
     /// over this command's stdin/stdout and `host`/`port` are never dialled.
     pub proxy_command: Option<String>,
+    /// Host key directives from the SSH config; OpenSSH's defaults for a
+    /// tunnel without an alias.
+    pub host_key: HostKeyOptions,
 }
 
 impl DialTarget {
@@ -55,6 +64,17 @@ impl DialTarget {
             user: config.user.clone(),
             auth_method: config.auth_method.clone(),
             proxy_command: None,
+            host_key: HostKeyOptions::default(),
+        }
+    }
+
+    fn transport(&self) -> Transport<'_> {
+        match &self.proxy_command {
+            Some(command) => Transport::ProxyCommand(command),
+            None => Transport::Tcp {
+                host: &self.host,
+                port: self.port,
+            },
         }
     }
 }
@@ -140,6 +160,7 @@ pub fn resolve_for_dial_in(
         user,
         auth_method: resolve_auth_method(&config.auth_method, resolved.identity_file),
         proxy_command,
+        host_key: resolved.host_key,
     })
 }
 
@@ -268,8 +289,14 @@ impl SshTunnel {
     ///
     /// Returns a tunnel that listens on a random local port. Use `local_port()`
     /// to get the assigned port number.
-    pub fn start(session: Session, remote_host: String, remote_port: u16) -> Result<Self, DbError> {
-        let connector = SshConnector { session };
+    pub fn start(
+        session: VerifiedSession,
+        remote_host: String,
+        remote_port: u16,
+    ) -> Result<Self, DbError> {
+        let connector = SshConnector {
+            session: session.into_session(),
+        };
         let inner = Tunnel::start(connector, remote_host, remote_port, "SSH")?;
         Ok(Self { inner })
     }
@@ -373,15 +400,16 @@ impl TunnelConnector for SshConnector {
 
 /// Establish an SSH session using the provided configuration.
 ///
-/// This handles TCP connection, handshake, and authentication.
+/// This handles the transport, handshake, host key verification and
+/// authentication.
 pub fn establish_session(
     config: &SshTunnelConfig,
     secret: Option<&str>,
-) -> Result<Session, DbError> {
-    // Resolve the SSH config alias first: every dial below —
-    // TCP connect or ProxyCommand, handshake, TOFU host-key step (keyed on
-    // the resolved host and port, A1) and authentication — uses the
-    // resolved target.
+) -> Result<VerifiedSession, DbError> {
+    // Resolve the SSH config alias first: every dial step below (the
+    // TCP connect or ProxyCommand, handshake, host key check (keyed on
+    // the resolved host and port or the HostKeyAlias, A1) and
+    // authentication) uses the resolved target.
     let target = resolve_for_dial(config)?;
     establish_resolved_session(&target, secret)
 }
@@ -396,52 +424,45 @@ const SSH_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 fn establish_resolved_session(
     config: &DialTarget,
     secret: Option<&str>,
-) -> Result<Session, DbError> {
+) -> Result<VerifiedSession, DbError> {
+    establish_resolved_session_with(
+        config,
+        secret,
+        &HostKeyPaths::system(),
+        host_keys::accept_new_host_keys(),
+    )
+}
+
+/// How the SSH byte stream reaches the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Transport<'a> {
+    Tcp {
+        host: &'a str,
+        port: u16,
+    },
+    /// `ProxyCommand` with its tokens expanded; the target is never dialled.
+    ProxyCommand(&'a str),
+}
+
+fn establish_resolved_session_with(
+    config: &DialTarget,
+    secret: Option<&str>,
+    paths: &HostKeyPaths,
+    accept_new_host_keys: bool,
+) -> Result<VerifiedSession, DbError> {
     let total_start = std::time::Instant::now();
 
-    let mut session = Session::new()
-        .map_err(|e| DbError::connection_failed(format!("Failed to create SSH session: {}", e)))?;
-
-    let phase_start = std::time::Instant::now();
-    let mut proxy_stderr = None;
-    match &config.proxy_command {
-        Some(command) => {
-            log::info!("[SSH] Phase 1/3: ProxyCommand transport");
-            proxy_stderr = Some(attach_proxy_command(&mut session, command)?);
-        }
-        None => {
-            log::info!(
-                "[SSH] Phase 1/3: TCP connect to {}:{}",
-                config.host,
-                config.port
-            );
-            session.set_tcp_stream(connect_tcp(&config.host, config.port)?);
-        }
-    }
-    log::info!(
-        "[SSH] Phase 1/3: Transport ready in {:.2}ms",
-        phase_start.elapsed().as_secs_f64() * 1000.0
+    // Keyed on the target as configured, for both transports: through a
+    // ProxyCommand the `HostName`/`Port` (or `HostKeyAlias`) name the host
+    // whose key is checked, as in OpenSSH.
+    let verifier = HostKeyVerifier::new(
+        &config.host,
+        config.port,
+        &config.host_key,
+        paths,
+        accept_new_host_keys,
     );
-
-    log::info!("[SSH] Phase 2/3: SSH handshake");
-    let phase_start = std::time::Instant::now();
-
-    session.set_timeout(SSH_IO_TIMEOUT.as_millis() as u32);
-
-    session.handshake().map_err(|e| {
-        let message = format!("SSH handshake failed: {}", e);
-        match proxy_stderr.as_ref().and_then(|tail| tail()) {
-            Some(tail) => DbError::connection_failed(format!("{message}. {tail}")),
-            None => DbError::connection_failed(message),
-        }
-    })?;
-
-    verify_or_store_host_key(&session, &config.host, config.port)?;
-
-    log::info!(
-        "[SSH] Phase 2/3: Handshake completed in {:.2}ms",
-        phase_start.elapsed().as_secs_f64() * 1000.0
-    );
+    let session = open_verified_session(config.transport(), &verifier)?;
 
     log::info!("[SSH] Phase 3/3: Authenticating as {}", config.user);
     let phase_start = std::time::Instant::now();
@@ -455,6 +476,7 @@ fn establish_resolved_session(
                 DbError::connection_failed("SSH password required but not provided".to_string())
             })?;
             session
+                .session()
                 .userauth_password(&config.user, password)
                 .map_err(|e| {
                     DbError::connection_failed(format!("SSH password authentication failed: {}", e))
@@ -462,7 +484,7 @@ fn establish_resolved_session(
         }
     }
 
-    if !session.authenticated() {
+    if !session.session().authenticated() {
         return Err(DbError::connection_failed(
             "SSH authentication failed".to_string(),
         ));
@@ -479,6 +501,57 @@ fn establish_resolved_session(
     );
 
     Ok(session)
+}
+
+/// Transport, handshake and host key check: the only place a `Session` is
+/// created or handshaken (enforced by a test), so every transport reaches
+/// authentication only as a [`VerifiedSession`].
+fn open_verified_session(
+    transport: Transport<'_>,
+    verifier: &HostKeyVerifier,
+) -> Result<VerifiedSession, DbError> {
+    let mut session = Session::new()
+        .map_err(|e| DbError::connection_failed(format!("Failed to create SSH session: {}", e)))?;
+
+    let phase_start = std::time::Instant::now();
+    let mut proxy_stderr = None;
+    match transport {
+        Transport::ProxyCommand(command) => {
+            log::info!("[SSH] Phase 1/3: ProxyCommand transport");
+            proxy_stderr = Some(attach_proxy_command(&mut session, command)?);
+        }
+        Transport::Tcp { host, port } => {
+            log::info!("[SSH] Phase 1/3: TCP connect to {}:{}", host, port);
+            session.set_tcp_stream(connect_tcp(host, port)?);
+        }
+    }
+    log::info!(
+        "[SSH] Phase 1/3: Transport ready in {:.2}ms",
+        phase_start.elapsed().as_secs_f64() * 1000.0
+    );
+
+    log::info!("[SSH] Phase 2/3: SSH handshake");
+    let phase_start = std::time::Instant::now();
+
+    session.set_timeout(SSH_IO_TIMEOUT.as_millis() as u32);
+    verifier.prefer_known_key_types(&session);
+
+    session.handshake().map_err(|e| {
+        let message = format!("SSH handshake failed: {}", e);
+        match proxy_stderr.as_ref().and_then(|tail| tail()) {
+            Some(tail) => DbError::connection_failed(format!("{message}. {tail}")),
+            None => DbError::connection_failed(message),
+        }
+    })?;
+
+    let verified = verifier.verify_session(session)?;
+
+    log::info!(
+        "[SSH] Phase 2/3: Handshake and host key check completed in {:.2}ms",
+        phase_start.elapsed().as_secs_f64() * 1000.0
+    );
+
+    Ok(verified)
 }
 
 fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, DbError> {
@@ -538,89 +611,10 @@ fn expand_tilde(path: &Path) -> std::path::PathBuf {
 // Host-key fingerprint helpers
 // ---------------------------------------------------------------------------
 
-/// Outcome of comparing a stored known-hosts entry against the server's current key.
-#[derive(Debug, PartialEq, Eq)]
-enum HostKeyMatch {
-    /// Stored entry is already in `SHA256:<base64-nopad>` format and matches.
-    NewFormat,
-    /// Stored entry is the legacy lowercase-hex encoding of the same key bytes.
-    /// The caller should migrate the entry to `NewFormat` in place.
-    LegacyHex,
-    /// Neither format matches — the key has changed or is unknown.
-    Mismatch,
-}
-
 /// Returns the `SHA256:<base64-nopad>` fingerprint of `key`, byte-identical to
 /// `ssh-keygen -lf` output for the same raw key bytes.
 fn sha256_base64_fingerprint(key: &[u8]) -> String {
     format!("SHA256:{}", STANDARD_NO_PAD.encode(Sha256::digest(key)))
-}
-
-/// Compares `stored` (a line from `ssh_known_hosts`) against the server's current
-/// `key` bytes and classifies the relationship.
-///
-/// Migration invariant: `LegacyHex` is returned ONLY when re-deriving the legacy
-/// hex from the SAME `key` bytes via `hex_encode` equals `stored`. This guarantees
-/// migration never widens acceptance — a stored legacy-hex entry that would have been
-/// rejected under the old comparison (because the key changed) still yields `Mismatch`.
-fn host_key_matches_stored(stored: &str, key: &[u8]) -> HostKeyMatch {
-    if stored == sha256_base64_fingerprint(key) {
-        return HostKeyMatch::NewFormat;
-    }
-
-    if !stored.starts_with("SHA256:") && stored == hex_encode(key) {
-        return HostKeyMatch::LegacyHex;
-    }
-
-    HostKeyMatch::Mismatch
-}
-
-fn verify_or_store_host_key(session: &Session, host: &str, port: u16) -> Result<(), DbError> {
-    let (key, _) = session.host_key().ok_or_else(|| {
-        DbError::connection_failed("SSH server did not present a host key".to_string())
-    })?;
-
-    let fingerprint = current_host_key_fingerprint(session)?;
-
-    let known_hosts_path = tofu_known_hosts_path()?;
-    let mut entries = load_tofu_known_hosts(&known_hosts_path)?;
-    let entry_key = format!("{}\t{}", host, port);
-
-    if let Some(existing) = entries.get(&entry_key) {
-        match host_key_matches_stored(existing, key) {
-            HostKeyMatch::NewFormat => return Ok(()),
-            HostKeyMatch::LegacyHex => {
-                entries.insert(entry_key, fingerprint);
-                save_tofu_known_hosts(&known_hosts_path, &entries)?;
-                return Ok(());
-            }
-            HostKeyMatch::Mismatch => {
-                return Err(DbError::connection_failed(format!(
-                    "SSH host key mismatch for {}:{} (possible MITM attack)",
-                    host, port
-                )));
-            }
-        }
-    }
-
-    entries.insert(entry_key, fingerprint);
-    save_tofu_known_hosts(&known_hosts_path, &entries)?;
-
-    log::warn!(
-        "[SSH] First connection to {}:{} -- storing host key (TOFU)",
-        host,
-        port
-    );
-
-    Ok(())
-}
-
-fn current_host_key_fingerprint(session: &Session) -> Result<String, DbError> {
-    let (key, _) = session.host_key().ok_or_else(|| {
-        DbError::connection_failed("SSH server did not present a host key".to_string())
-    })?;
-
-    Ok(sha256_base64_fingerprint(key))
 }
 
 const KNOWN_HOSTS_FILE: &str = "ssh_known_hosts";
@@ -640,10 +634,10 @@ fn tofu_known_hosts_path() -> Result<PathBuf, DbError> {
 /// config directory (`~/.config/dbflux/ssh_known_hosts`) into the data directory.
 ///
 /// Runs at most once per process via `Once`. Never blocks startup and never
-/// errors out: any failure leaves the new path absent, which simply triggers a
-/// fresh TOFU acceptance on the next SSH connect (the pre-existing clean-break
-/// behavior). All best-effort failures are logged with `log::warn!`, never
-/// silently dropped via `let _ =`.
+/// errors out: any failure leaves the new path absent, so hosts known only to
+/// the old file are unknown again and the next connect asks to trust their
+/// keys (or refuses them where it cannot ask). All best-effort failures are
+/// logged with `log::warn!`, never silently dropped via `let _ =`.
 fn migrate_legacy_known_hosts(new_path: &Path) {
     static MIGRATED: std::sync::Once = std::sync::Once::new();
     MIGRATED.call_once(|| {
@@ -699,7 +693,7 @@ fn migrate_known_hosts_paths(old_path: &Path, new_path: &Path) {
             Err(copy_err) => {
                 log::warn!(
                     "Could not migrate SSH known_hosts (rename: {rename_err}; copy: {copy_err}); \
-                         a fresh TOFU prompt will occur on next connect"
+                         hosts known only to the old file will need their keys trusted again"
                 );
             }
         },
@@ -740,59 +734,51 @@ fn load_tofu_known_hosts(path: &Path) -> Result<BTreeMap<String, String>, DbErro
     Ok(entries)
 }
 
-fn save_tofu_known_hosts(path: &Path, entries: &BTreeMap<String, String>) -> Result<(), DbError> {
-    let mut output = String::new();
-
-    for (key, fingerprint) in entries {
-        let mut parts = key.splitn(2, '\t');
-        let Some(host) = parts.next() else {
-            continue;
-        };
-        let Some(port) = parts.next() else {
-            continue;
-        };
-
-        output.push_str(host);
-        output.push('\t');
-        output.push_str(port);
-        output.push('\t');
-        output.push_str(fingerprint);
-        output.push('\n');
+/// Write access to the pin file is the power to pre-trust a key, so it is
+/// written 0600 through a temp file and renamed into place: a reader never
+/// sees half a file and the mode never depends on the umask.
+fn write_private_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(dir)?;
+    temp.write_all(contents)?;
+    temp.as_file().sync_all()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        temp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-
-    std::fs::write(path, output).map_err(|error| {
-        DbError::connection_failed(format!("Failed to write SSH known hosts: {}", error))
-    })
+    temp.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
+/// The legacy pin encoding, kept to build old-format pins in tests.
+#[cfg(test)]
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
 
-    // `byte >> 4` and `byte & 0x0f` are always in 0..=15, so each index is
-    // within the 16-byte HEX alphabet.
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "byte >> 4 and byte & 0x0f are always in 0..=15, within the 16-byte HEX alphabet"
-    )]
     for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
+        for nibble in [byte >> 4, byte & 0x0f] {
+            if let Some(digit) = HEX.get(usize::from(nibble)) {
+                output.push(char::from(*digit));
+            }
+        }
     }
 
     output
 }
 
 fn authenticate_with_key(
-    session: &Session,
+    session: &VerifiedSession,
     user: &str,
     key_path: Option<&Path>,
     passphrase: Option<&str>,
 ) -> Result<(), DbError> {
     if key_path.is_none() {
         log::info!("[SSH] No key path specified, trying SSH agent authentication...");
-        match session.userauth_agent(user) {
-            Ok(()) if session.authenticated() => {
+        match session.session().userauth_agent(user) {
+            Ok(()) if session.session().authenticated() => {
                 log::info!("[SSH] Authenticated via SSH agent");
                 return Ok(());
             }
@@ -845,7 +831,7 @@ fn authenticate_with_key(
         let result = authenticate_with_key_file(session, user, path, passphrase);
 
         match result {
-            Ok(()) if session.authenticated() => {
+            Ok(()) if session.session().authenticated() => {
                 log::info!("[SSH] Authenticated with key: {}", path.display());
                 return Ok(());
             }
@@ -872,7 +858,7 @@ fn authenticate_with_key(
 
 #[cfg(windows)]
 fn authenticate_with_key_file(
-    session: &Session,
+    session: &VerifiedSession,
     user: &str,
     path: &Path,
     passphrase: Option<&str>,
@@ -886,18 +872,20 @@ fn authenticate_with_key_file(
     })?);
 
     session
+        .session()
         .userauth_pubkey_memory(user, None, private_key.expose_secret(), passphrase)
         .map_err(|error| error.to_string())
 }
 
 #[cfg(not(windows))]
 fn authenticate_with_key_file(
-    session: &Session,
+    session: &VerifiedSession,
     user: &str,
     path: &Path,
     passphrase: Option<&str>,
 ) -> Result<(), String> {
     session
+        .session()
         .userauth_pubkey_file(user, None, path, passphrase)
         .map_err(|error| error.to_string())
 }
@@ -1012,6 +1000,16 @@ mod resolve_for_dial_tests {
             let path = self.dir.path().join(".ssh").join("config");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, content).unwrap();
+        }
+
+        /// Host key files inside the fixture, so a dial never reads the real
+        /// `~/.ssh` or the data directory.
+        fn isolated_host_key_paths(&self) -> HostKeyPaths {
+            HostKeyPaths {
+                default_user_files: vec![self.dir.path().join(".ssh").join("known_hosts")],
+                default_global_files: Vec::new(),
+                store: host_keys::StoreLocation::At(self.dir.path().join("pins")),
+            }
         }
     }
 
@@ -1189,7 +1187,12 @@ mod resolve_for_dial_tests {
 
             match resolve_for_dial_in(&config, "alice", &fixture.home()) {
                 Ok(target) => {
-                    let _ = establish_resolved_session(&target, None);
+                    let _ = establish_resolved_session_with(
+                        &target,
+                        None,
+                        &fixture.isolated_host_key_paths(),
+                        false,
+                    );
                     panic!(
                         "alias {alias:?} resolved to {:?}; payload ran: {}",
                         target.proxy_command,
@@ -1223,7 +1226,12 @@ mod resolve_for_dial_tests {
         let target =
             resolve_for_dial_in(&aliased_tunnel("viacmd", None), "alice", &fixture.home()).unwrap();
 
-        let message = match establish_resolved_session(&target, None) {
+        let message = match establish_resolved_session_with(
+            &target,
+            None,
+            &fixture.isolated_host_key_paths(),
+            false,
+        ) {
             Ok(_) => panic!("a command that exits cannot carry an SSH session"),
             Err(error) => error.to_string(),
         };
@@ -1532,44 +1540,6 @@ mod tests {
         assert_eq!(fp, "SHA256:3z9hmASpL9tAVxktxD3XSOp3itxSvEmM6AUkwBS4ERk");
     }
 
-    #[test]
-    fn legacy_hex_entry_is_recognized_and_upgraded() {
-        const KEY: &[u8] = b"test-key-bytes";
-        let legacy = hex_encode(KEY);
-        let new_fp = sha256_base64_fingerprint(KEY);
-
-        assert_eq!(
-            host_key_matches_stored(&legacy, KEY),
-            HostKeyMatch::LegacyHex,
-            "stored legacy-hex of same key must be LegacyHex"
-        );
-        assert_eq!(
-            host_key_matches_stored(&new_fp, KEY),
-            HostKeyMatch::NewFormat,
-            "stored SHA256: of same key must be NewFormat"
-        );
-    }
-
-    #[test]
-    fn genuine_key_change_is_mismatch() {
-        const KEY_A: &[u8] = b"key-a";
-        const KEY_B: &[u8] = b"key-b";
-
-        let legacy_a = hex_encode(KEY_A);
-        let new_a = sha256_base64_fingerprint(KEY_A);
-
-        assert_eq!(
-            host_key_matches_stored(&legacy_a, KEY_B),
-            HostKeyMatch::Mismatch,
-            "legacy hex of key_A must not match key_B"
-        );
-        assert_eq!(
-            host_key_matches_stored(&new_a, KEY_B),
-            HostKeyMatch::Mismatch,
-            "SHA256 fingerprint of key_A must not match key_B"
-        );
-    }
-
     // ---------------------------------------------------------------------------
     // Known-hosts path + migration tests
     // ---------------------------------------------------------------------------
@@ -1681,5 +1651,427 @@ mod tests {
             !new_path.exists(),
             "new file must not exist after a failed migration"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: every transport goes through the host key check
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod transport_host_key_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )]
+
+    use super::*;
+
+    /// Non-test source of the crate, so a new transport, session or
+    /// handshake anywhere in it is seen.
+    fn crate_sources() -> Vec<(&'static str, &'static str)> {
+        let strip = |text: &'static str| text.split("#[cfg(test)]").next().unwrap_or(text);
+        vec![
+            ("lib.rs", strip(include_str!("lib.rs"))),
+            ("host_keys.rs", strip(include_str!("host_keys/mod.rs"))),
+            ("proxy_command.rs", strip(include_str!("proxy_command.rs"))),
+            ("ssh_config.rs", strip(include_str!("ssh_config.rs"))),
+        ]
+    }
+
+    /// Structural guard: authentication and tunnels only accept a
+    /// `VerifiedSession`, whose only constructor is the host key check, and a
+    /// `Session` is created and handshaken in exactly one function, which
+    /// hands it to that check. A transport added elsewhere fails this test.
+    #[test]
+    fn sessions_are_created_and_handshaken_only_where_the_host_key_is_checked() {
+        let places = |needle: &str| -> Vec<(&str, usize)> {
+            crate_sources()
+                .into_iter()
+                .map(|(name, source)| (name, source.matches(needle).count()))
+                .filter(|(_, count)| *count > 0)
+                .collect()
+        };
+        assert_eq!(places("Session::new()"), vec![("lib.rs", 1)]);
+        assert_eq!(places(".handshake()"), vec![("lib.rs", 1)]);
+        assert_eq!(
+            places("VerifiedSession { session }"),
+            vec![("host_keys.rs", 1)]
+        );
+
+        let host_keys = crate_sources()
+            .into_iter()
+            .find(|(name, _)| *name == "host_keys.rs")
+            .unwrap()
+            .1;
+        let verify = host_keys
+            .split("fn verify_session(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .unwrap();
+        let checked = verify.find("self.verify_presented(&key)?").unwrap();
+        let built = verify.find("VerifiedSession { session }").unwrap();
+        assert!(
+            checked < built,
+            "the key is checked before the session is handed out"
+        );
+
+        let lib = crate_sources()[0].1;
+        let open = lib
+            .split("fn open_verified_session(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .unwrap();
+        let created = open.find("Session::new()").unwrap();
+        let handshake = open.find(".handshake()").unwrap();
+        let verified = open.find("verifier.verify_session(session)?").unwrap();
+        assert!(created < handshake && handshake < verified, "{open}");
+    }
+
+    /// Every `Transport` variant, by an exhaustive match: a new variant does
+    /// not compile until it is listed here, and so tested below.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    fn every_transport_kind() -> [TransportKind; 2] {
+        fn kind(transport: Transport<'_>) -> TransportKind {
+            match transport {
+                Transport::Tcp { .. } => TransportKind::Tcp,
+                Transport::ProxyCommand(_) => TransportKind::ProxyCommand,
+            }
+        }
+        [
+            kind(Transport::Tcp {
+                host: "h",
+                port: 22,
+            }),
+            kind(Transport::ProxyCommand("c")),
+        ]
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[cfg_attr(not(unix), allow(dead_code))]
+    enum TransportKind {
+        Tcp,
+        ProxyCommand,
+    }
+
+    #[test]
+    fn a_proxy_command_target_is_checked_under_its_host_name_or_host_key_alias() {
+        let paths = HostKeyPaths {
+            default_user_files: Vec::new(),
+            default_global_files: Vec::new(),
+            store: host_keys::StoreLocation::At(PathBuf::from("/nonexistent/pins")),
+        };
+        let mut target = DialTarget {
+            host: "Backend.Internal".to_string(),
+            port: 2200,
+            user: "u".to_string(),
+            auth_method: SshAuthMethod::Password,
+            proxy_command: Some("nc %h %p".to_string()),
+            host_key: HostKeyOptions::default(),
+        };
+        assert_eq!(target.transport(), Transport::ProxyCommand("nc %h %p"));
+        let verifier =
+            HostKeyVerifier::new(&target.host, target.port, &target.host_key, &paths, false);
+        assert_eq!(verifier.lookup_name(), "[backend.internal]:2200");
+
+        target.host_key.host_key_alias = Some("backend-a".to_string());
+        let verifier =
+            HostKeyVerifier::new(&target.host, target.port, &target.host_key, &paths, false);
+        assert_eq!(verifier.lookup_name(), "backend-a");
+    }
+
+    #[test]
+    fn host_key_directives_from_the_ssh_config_reach_the_dial_target() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ssh = dir.path().join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            "Host behind\n  HostName 10.0.0.9\n  Port 2200\n  HostKeyAlias backend-a\n  \
+             StrictHostKeyChecking accept-new\n  UserKnownHostsFile ~/.ssh/kh_%h other_kh\n  \
+             GlobalKnownHostsFile none\n  ProxyCommand nc %h %p\n\
+             Host plain\n  HostName plain.example\n",
+        )
+        .unwrap();
+        let tunnel = |alias: &str| SshTunnelConfig {
+            host: String::new(),
+            port: 22,
+            user: String::new(),
+            auth_method: SshAuthMethod::Password,
+            ssh_config_host: Some(alias.to_string()),
+        };
+
+        let target = resolve_for_dial_in(&tunnel("behind"), "alice", dir.path()).unwrap();
+        assert_eq!(
+            target.host_key,
+            HostKeyOptions {
+                host_key_alias: Some("backend-a".to_string()),
+                strict_host_key_checking: Some(StrictHostKeyChecking::AcceptNew),
+                user_known_hosts_files: Some(vec![
+                    ssh.join("kh_10.0.0.9"),
+                    PathBuf::from("other_kh")
+                ]),
+                global_known_hosts_files: Some(Vec::new()),
+            }
+        );
+
+        let target = resolve_for_dial_in(&tunnel("plain"), "alice", dir.path()).unwrap();
+        assert_eq!(target.host_key, HostKeyOptions::default());
+    }
+
+    #[test]
+    fn an_invalid_strict_host_key_checking_value_does_not_relax_checking() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = SshConfigFile::parse(
+            "Host h\n  StrictHostKeyChecking maybe\n  StrictHostKeyChecking no\n",
+            dir.path(),
+            dir.path(),
+        );
+
+        let resolved = file
+            .resolve_with_local_user("h", "alice", dir.path())
+            .unwrap();
+
+        // The bad line is reported and claims the slot as `yes`, so neither the
+        // later `no` nor the global setting decides for this host.
+        assert!(
+            file.diagnostics()
+                .iter()
+                .any(|line| line.contains("StrictHostKeyChecking")),
+            "{:?}",
+            file.diagnostics()
+        );
+        assert_eq!(
+            resolved.host_key.strict_host_key_checking,
+            Some(StrictHostKeyChecking::Yes)
+        );
+        assert_eq!(
+            host_keys::unknown_host_key_policy(resolved.host_key.strict_host_key_checking, true),
+            host_keys::UnknownHostKeyPolicy::Refuse
+        );
+
+        // A later `yes` is not weakened to a prompt either.
+        let file = SshConfigFile::parse(
+            "Host h\n  StrictHostKeyChecking yess\nHost *\n  StrictHostKeyChecking yes\n",
+            dir.path(),
+            dir.path(),
+        );
+        let resolved = file
+            .resolve_with_local_user("h", "alice", dir.path())
+            .unwrap();
+        assert_eq!(
+            resolved.host_key.strict_host_key_checking,
+            Some(StrictHostKeyChecking::Yes)
+        );
+        assert_eq!(StrictHostKeyChecking::parse("maybe"), None);
+        assert_eq!(
+            StrictHostKeyChecking::parse("Accept-New"),
+            Some(StrictHostKeyChecking::AcceptNew)
+        );
+    }
+
+    /// End-to-end over each transport against a local `sshd -i` (OpenSSH's
+    /// inetd mode, speaking SSH on stdin/stdout): no network, no real host.
+    #[cfg(unix)]
+    mod with_sshd {
+        use super::*;
+        use std::os::fd::OwnedFd;
+        use std::process::{Command, Stdio};
+
+        const SSHD: &str = "/usr/sbin/sshd";
+
+        struct FakeServer {
+            dir: tempfile::TempDir,
+            host_keys: Vec<(PathBuf, String)>,
+        }
+
+        impl FakeServer {
+            /// `None` (and a note) where OpenSSH's server is not installed.
+            fn start(key_types: &[&str]) -> Option<Self> {
+                if !Path::new(SSHD).exists() {
+                    eprintln!("skipping: {SSHD} is not installed");
+                    return None;
+                }
+                let dir = tempfile::TempDir::new().unwrap();
+                let host_keys = key_types
+                    .iter()
+                    .map(|key_type| {
+                        let path = dir.path().join(format!("host_{key_type}"));
+                        let status = Command::new("ssh-keygen")
+                            .args(["-q", "-t", key_type, "-N", "", "-f"])
+                            .arg(&path)
+                            .status()
+                            .unwrap();
+                        assert!(status.success());
+                        let public = std::fs::read_to_string(path.with_extension("pub")).unwrap();
+                        let line = public.split_whitespace().take(2).collect::<Vec<_>>();
+                        (path, line.join(" "))
+                    })
+                    .collect();
+                Some(Self { dir, host_keys })
+            }
+
+            fn sshd_args(&self) -> Vec<String> {
+                let mut args = vec!["-i".to_string(), "-f".to_string(), "/dev/null".to_string()];
+                for (path, _) in &self.host_keys {
+                    args.push("-h".to_string());
+                    args.push(path.display().to_string());
+                }
+                for option in ["PidFile=none", "StrictModes=no"] {
+                    args.push("-o".to_string());
+                    args.push(option.to_string());
+                }
+                args
+            }
+
+            fn public_line(&self, index: usize) -> &str {
+                &self.host_keys.get(index).unwrap().1
+            }
+
+            fn fingerprint(&self, index: usize) -> String {
+                let blob = base64::engine::general_purpose::STANDARD
+                    .decode(self.public_line(index).split_whitespace().nth(1).unwrap())
+                    .unwrap();
+                sha256_base64_fingerprint(&blob)
+            }
+
+            fn known_hosts(&self) -> PathBuf {
+                self.dir.path().join("known_hosts")
+            }
+
+            fn paths(&self) -> HostKeyPaths {
+                HostKeyPaths {
+                    default_user_files: vec![self.known_hosts()],
+                    default_global_files: Vec::new(),
+                    store: host_keys::StoreLocation::At(self.dir.path().join("pins")),
+                }
+            }
+
+            /// Serves one TCP connection with `sshd -i`. The accept thread is
+            /// left behind if nothing connects; it ends with the test process.
+            fn serve_one_tcp_connection(&self) -> u16 {
+                let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let args = self.sshd_args();
+                std::thread::spawn(move || {
+                    let Ok((stream, _)) = listener.accept() else {
+                        return;
+                    };
+                    let input = OwnedFd::from(stream);
+                    let output = input.try_clone().unwrap();
+                    let _ = Command::new(SSHD)
+                        .args(&args)
+                        .stdin(Stdio::from(input))
+                        .stdout(Stdio::from(output))
+                        .stderr(Stdio::null())
+                        .status();
+                });
+                port
+            }
+
+            /// A dial target for `kind` and the name its key is looked up under.
+            fn target(&self, kind: TransportKind) -> (DialTarget, String) {
+                match kind {
+                    TransportKind::Tcp => {
+                        let port = self.serve_one_tcp_connection();
+                        let target = DialTarget {
+                            host: "127.0.0.1".to_string(),
+                            port,
+                            user: "nobody".to_string(),
+                            auth_method: SshAuthMethod::Password,
+                            proxy_command: None,
+                            host_key: HostKeyOptions::default(),
+                        };
+                        (target, format!("[127.0.0.1]:{port}"))
+                    }
+                    TransportKind::ProxyCommand => {
+                        let target = DialTarget {
+                            host: "backend.internal".to_string(),
+                            port: 2200,
+                            user: "nobody".to_string(),
+                            auth_method: SshAuthMethod::Password,
+                            proxy_command: Some(format!("{SSHD} {}", self.sshd_args().join(" "))),
+                            host_key: HostKeyOptions {
+                                host_key_alias: Some("backend-a".to_string()),
+                                ..HostKeyOptions::default()
+                            },
+                        };
+                        (target, "backend-a".to_string())
+                    }
+                }
+            }
+
+            fn dial(&self, kind: TransportKind, known_hosts: &str) -> String {
+                let (target, name) = self.target(kind);
+                std::fs::write(self.known_hosts(), known_hosts.replace("{name}", &name)).unwrap();
+                match establish_resolved_session_with(&target, None, &self.paths(), false) {
+                    Ok(_) => panic!("{kind:?}: no password was given, so auth cannot succeed"),
+                    Err(error) => error.to_string(),
+                }
+            }
+        }
+
+        /// The password error comes after the host key check, so seeing it
+        /// proves the check passed.
+        const PAST_THE_HOST_KEY_CHECK: &str = "SSH password required but not provided";
+
+        #[test]
+        fn every_transport_refuses_an_unknown_key_and_offers_it_for_confirmation() {
+            let Some(server) = FakeServer::start(&["ed25519"]) else {
+                return;
+            };
+            for kind in every_transport_kind() {
+                let message = server.dial(kind, "");
+                let offered = unknown_host_key_in_error(&message)
+                    .unwrap_or_else(|| panic!("{kind:?}: {message}"));
+                assert_eq!(offered.fingerprint, server.fingerprint(0), "{kind:?}");
+                assert!(!server.dir.path().join("pins").exists(), "{kind:?}");
+            }
+        }
+
+        #[test]
+        fn every_transport_accepts_a_key_known_hosts_lists_and_rejects_a_changed_one() {
+            let Some(server) = FakeServer::start(&["ed25519"]) else {
+                return;
+            };
+            let Some(impostor) = FakeServer::start(&["ed25519"]) else {
+                return;
+            };
+            for kind in every_transport_kind() {
+                let known = format!("{{name}} {}\n", server.public_line(0));
+                let message = server.dial(kind, &known);
+                assert!(
+                    message.contains(PAST_THE_HOST_KEY_CHECK),
+                    "{kind:?}: {message}"
+                );
+
+                let message = impostor.dial(kind, &known);
+                assert!(message.contains("HAS CHANGED"), "{kind:?}: {message}");
+                assert!(
+                    message.contains(&impostor.fingerprint(0)),
+                    "{kind:?}: {message}"
+                );
+            }
+        }
+
+        /// The server has two key types; known_hosts lists one. Whichever
+        /// libssh2 would pick by default, one of the two cases needs the
+        /// known type to be asked for first.
+        #[test]
+        fn the_key_type_known_hosts_lists_is_negotiated() {
+            let Some(server) = FakeServer::start(&["ed25519", "ecdsa"]) else {
+                return;
+            };
+            for index in [0, 1] {
+                let known = format!("{{name}} {}\n", server.public_line(index));
+                let message = server.dial(TransportKind::Tcp, &known);
+                assert!(
+                    message.contains(PAST_THE_HOST_KEY_CHECK),
+                    "key {index}: {message}"
+                );
+            }
+        }
     }
 }

@@ -1,6 +1,7 @@
 pub mod active_query;
 pub mod delete_connection;
 pub mod drop_table;
+pub mod host_key_confirm;
 pub mod import_dashboard;
 pub mod schema_drift;
 pub mod tunnel_auth;
@@ -13,6 +14,7 @@ pub use delete_connection::{
     DeleteConnectionOutcome, DeleteConnectionRequest, ModalDeleteConnection,
 };
 pub use drop_table::{DropTableOutcome, DropTableRequest, ModalDropTable};
+pub use host_key_confirm::{HostKeyConfirmOutcome, HostKeyConfirmRequest, ModalHostKeyConfirm};
 pub use import_dashboard::{
     ImportDashboardCancelled, ImportDashboardConfirmed, ModalImportDashboard,
 };

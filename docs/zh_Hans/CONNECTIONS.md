@@ -102,7 +102,17 @@ SSH 隧道有两种用法：
 
 在 Linux 和 macOS 上，带有 `ProxyCommand` 的主机与在终端中的行为一致：DBFlux 通过你的 `$SHELL` 运行该命令，并经由它的标准输入和标准输出进行 SSH 通信，因此 `cloudflared access ssh --hostname %h` 这类访问代理可以正常使用。`%h`、`%p`、`%r`、`%n` 和 `%%` 标记会被展开；出现其他任何标记时，连接会在命令运行之前失败。如果要代入 `%h`、`%n` 或 `%r` 的值包含空白字符或会被 shell 解释的字符（引号、`$`、反引号、`;`、`|` 等），或以 `-` 开头，连接同样会在命令运行之前失败，因此主机别名无法注入 shell 命令。访问代理会在命令的错误输出中打印登录 URL，这些输出只在 debug 级别记录，因此一次性 URL 和令牌不会进入审计日志；如需查看，请用 `RUST_LOG=debug` 运行 DBFlux。通过该命令进行的 SSH 握手失败时，错误信息会显示最后三行，行会被截短，凭据先替换为 `***`，然后 URL 只保留主机：包括所有带协议前缀的 URL，以及不带协议前缀但主机为点分名称、IPv4 地址或 `localhost` 的 URL（允许用户信息、端口、前置括号或 `key=` 前缀）。其他查询字符串会被去掉；其他形式的 URL 按原样保留。日志中只记录该命令运行的程序名；可能包含访问令牌的完整命令行只在 debug 级别记录。
 
-配置中需要 `ProxyJump` 的主机，或在 Windows 上需要 `ProxyCommand` 的主机，会被列出并标记：DBFlux 无法连接它，连接会带着该原因失败，而不会直接连接跳板机。主机密钥仍按 DBFlux 数据目录中的自有存储校验，而不是你的 `~/.ssh/known_hosts`，因此即使你多年来一直从终端访问某台主机，首次连接时仍会要求确认其密钥。
+配置中需要 `ProxyJump` 的主机，或在 Windows 上需要 `ProxyCommand` 的主机，会被列出并标记：DBFlux 无法连接它，连接会带着该原因失败，而不会直接连接跳板机。
+
+### 主机密钥
+
+DBFlux 在登录 SSH 服务器之前（无论直接连接还是通过 `ProxyCommand`），会在你的 OpenSSH known_hosts 文件（`~/.ssh/known_hosts`、`/etc/ssh/ssh_known_hosts`，或 `UserKnownHostsFile`/`GlobalKnownHostsFile` 指定的文件；`HostKeyAlias`、`[host]:port`、哈希条目和 `@revoked` 的处理与 OpenSSH 相同）以及数据目录中自己的列表中查找服务器的主机密钥：`ssh_known_hosts_v2` 按行保存已信任的密钥及其类型，旧版本 DBFlux 使用的 `ssh_known_hosts` 只读取、不再写入，因此共用该目录的稳定版和 nightly 版都能正常使用。在 Linux 和 macOS 上，属于其他用户（root 除外）或所有用户都可写的文件会被跳过，组可写的全局文件也会被跳过；Windows 上不检查文件权限，也不读取默认的 `%ProgramData%\ssh\ssh_known_hosts`，只读取 SSH 配置中的 `GlobalKnownHostsFile`。
+
+所有来源必须一致：至少一个来源记录了该密钥，且没有来源记录该主机同类型的不同密钥时才连接。只要任一来源记录了同类型的不同密钥（即使另一个来源匹配），或密钥被标记为 `@revoked`，连接就会失败，警告会显示新的 SHA256 指纹以及每个不一致的条目和删除方法：当该文件中只有这一行属于该主机时使用 `ssh-keygen -f <文件> -R <主机>`（系统文件需以 root 身份运行），否则 `-R` 会连当前密钥一起删除，因此给出要手动删除的行；含模式或多个主机的行需手动编辑；DBFlux 列表则给出确切的那一行。警告中无法接受该密钥。其他类型的密钥不会冲突；`ssh_known_hosts` 中未记录类型的密钥只有在没有其他来源为所提供的密钥作保时才算冲突。
+
+无人认识的密钥会打开 **未知的 SSH 主机密钥** 对话框，显示服务器、密钥类型和指纹；选择 **信任并记住** 会把密钥保存到 DBFlux 自己的列表（从不写入 `~/.ssh/known_hosts`）并重新连接。对话框打开时焦点在 **取消** 上，因此按 Enter 会取消。**信任并记住** 在对话框于活动窗口中显示满一秒之前处于禁用状态，每次回到该窗口后也会再禁用一秒；之后用 `Tab` 移到该按钮并按 Enter 或空格，或按 `Alt+T`（macOS 上为 `Option+T`）。`Escape` 随时可以取消。对话框打开期间被拒绝的侧边栏连接会排队，依次询问；窗口中已显示对话框时被拒绝的 **Test SSH** 或 **Test connection** 会把错误留在横幅中，回答后请重新运行测试。无人值守的连接（例如启动时连接和 MCP 服务器）会拒绝这样的密钥。
+
+DBFlux 遵循 SSH 配置中的 `StrictHostKeyChecking`（`yes` 拒绝，`accept-new` 和 `no` 不询问直接信任，`ask` 询问，无法识别的值按 `yes` 处理）。**设置 → 通用 → 不询问直接信任新的 SSH 主机密钥**（默认关闭，不推荐）对未设置 `StrictHostKeyChecking` 的主机等同于 `accept-new`，显式设置的值（包括 `ask`）优先。当 known_hosts 或 DBFlux 列表中已有该主机其他类型的密钥时，两者都不会不经询问就信任；MCP 服务器在启动时读取该设置。详情请参阅本页英文版。
 
 ### SSH 密钥保存在哪里
 

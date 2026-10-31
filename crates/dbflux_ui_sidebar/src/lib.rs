@@ -74,6 +74,22 @@ impl SidebarTab {
     }
 }
 
+/// A connect refused for an unknown SSH host key, with the password the
+/// refused attempt had so its retry does not ask again.
+pub(crate) struct HostKeyPrompt {
+    pub(crate) profile_id: Uuid,
+    pub(crate) key: dbflux_ssh::UnknownHostKey,
+    pub(crate) password: Option<dbflux_core::secrecy::SecretString>,
+}
+
+/// One host key prompt is shown at a time; refusals that arrive meanwhile
+/// wait here, one per profile, instead of being dropped.
+#[derive(Default)]
+pub(crate) struct HostKeyPrompts {
+    pub(crate) current: Option<HostKeyPrompt>,
+    pub(crate) queued: std::collections::VecDeque<HostKeyPrompt>,
+}
+
 pub enum SidebarEvent {
     GenerateSql(String),
     RequestFocus,
@@ -318,6 +334,14 @@ pub enum SidebarEvent {
         user: String,
         /// True when a previous passphrase attempt for this profile already failed.
         last_attempt_failed: bool,
+    },
+
+    /// A connect was refused because its SSH host key is not known yet; the
+    /// host asks whether to trust the key and connects `profile_id` again.
+    /// Never emitted for connects that run unattended (Connect on startup).
+    RequestHostKeyTrust {
+        profile_id: Uuid,
+        key: dbflux_ssh::UnknownHostKey,
     },
 
     /// Request to open the Settings window.
@@ -1169,6 +1193,9 @@ pub struct Sidebar {
     /// Connection password of the attempt waiting for the SSH passphrase, so
     /// the retry does not ask for it again.
     pub(crate) pending_tunnel_auth_password: Option<dbflux_core::secrecy::SecretString>,
+    /// Connects refused for an unknown SSH host key: the one the host is
+    /// asking about and the ones waiting behind it.
+    pub(crate) host_key_prompts: HostKeyPrompts,
     /// Profiles whose next connect was started by "Connect on startup".
     /// Nobody asked for those connects, so a tunnel passphrase they turn out
     /// to need is reported instead of opening the single-profile modal.
@@ -1507,6 +1534,7 @@ impl Sidebar {
             hovered_item_id: None,
             pending_tunnel_auth_profile_id: None,
             pending_tunnel_auth_password: None,
+            host_key_prompts: HostKeyPrompts::default(),
             startup_connects: HashSet::new(),
             pending_metric_namespace_fetches: HashMap::new(),
             pending_metric_fetches: HashMap::new(),

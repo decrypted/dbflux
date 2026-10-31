@@ -228,6 +228,7 @@ impl AppState {
         let mut history_manager =
             crate::history_manager_sqlite::HistoryManager::new(&storage_runtime);
         history_manager.set_max_entries(general_settings.max_history_entries);
+        dbflux_ssh::set_accept_new_host_keys(general_settings.ssh_accept_new_host_keys);
 
         #[cfg(feature = "mcp")]
         let mcp_runtime = Self::init_mcp_runtime(&audit_service, &storage_runtime);

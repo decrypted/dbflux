@@ -166,6 +166,16 @@ apply to SQL `DELETE`/`DROP`/`TRUNCATE`, MongoDB `deleteMany`/`drop`, Redis
 | **Require WHERE for DELETE/UPDATE** | On by default; treat a `DELETE`/`UPDATE` with no `WHERE` as dangerous. |
 | **Always require preview (ignore suppressions)** | Off by default; force the confirm/preview modal even for queries you previously chose to stop confirming. |
 
+**Trust new SSH host keys without asking** (off by default, not recommended)
+lets an SSH tunnel connect to a server whose host key neither your known_hosts
+files nor DBFlux knows, and remember the key, instead of asking you to compare
+its fingerprint first. It also covers connects that cannot ask, such as
+**Connect on startup** and the MCP server, which otherwise refuse such a key. A
+changed key is always refused, and a host whose SSH config sets
+`StrictHostKeyChecking` follows that instead. It does not apply when
+known_hosts or DBFlux's list already holds a key of another type for the host, and the MCP
+server reads it only when it starts. See [Host keys](CONNECTIONS.md#host-keys).
+
 **Editor row limit** (default 10,000) caps how many rows a query run from the
 query editor returns. It is a separate execution-safety setting, not one of the
 three dangerous-query controls above. It accepts any whole number from 1 upward

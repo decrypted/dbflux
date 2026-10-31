@@ -452,6 +452,12 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub grid_copy_protect_formulas: bool,
 
+    /// SSH tunnels pin a host key seen for the first time without asking.
+    /// Off by default: an unknown key is shown for confirmation, and
+    /// connects that cannot ask (startup, MCP) refuse it.
+    #[serde(default)]
+    pub ssh_accept_new_host_keys: bool,
+
     /// Insert a pair of quotes, with the caret between them, after a
     /// comparison typed in the data grid's WHERE filter on a string or
     /// date/time column. Off by default.
@@ -594,6 +600,7 @@ impl Default for GeneralSettings {
             grid_copy_column_names: false,
             grid_header_click_sorts: false,
             grid_copy_protect_formulas: false,
+            ssh_accept_new_host_keys: false,
             grid_filter_autoquote: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
@@ -626,6 +633,7 @@ mod font_settings_tests {
         assert!(!legacy.grid_copy_column_names);
         assert!(!legacy.grid_header_click_sorts);
         assert!(!legacy.grid_copy_protect_formulas);
+        assert!(!legacy.ssh_accept_new_host_keys);
         assert!(!legacy.grid_filter_autoquote);
         assert_eq!(legacy.max_concurrent_queries, 8);
         assert_eq!(legacy.max_queued_queries, 50);

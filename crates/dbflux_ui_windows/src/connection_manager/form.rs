@@ -16,7 +16,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use super::mcp_bindings;
-use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
+use super::{ConnectionManagerWindow, DismissEvent, HostKeyRetry, TestStatus};
 
 const PRIMARY_PASSWORD_SAVE_ERROR: &str =
     "Unable to save the connection password to the system keyring. Unlock it and try again.";
@@ -896,6 +896,7 @@ impl ConnectionManagerWindow {
                         }
                         Err(error) => {
                             info!("Test connection failed: {}", error);
+                            this.offer_host_key_trust(&error, HostKeyRetry::ConnectionTest, cx);
                             this.test_status = TestStatus::Failed;
                             this.test_error =
                                 Some(normalize_aws_credentials_error(&profile_name, &error));

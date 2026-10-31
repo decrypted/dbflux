@@ -85,6 +85,18 @@ impl Workspace {
             return Some(true);
         }
 
+        // Escape cancels the host key prompt. Enter is swallowed and never
+        // trusts: the prompt opens while the user may still be pressing keys
+        // meant for something else. Trust is its focused button or Alt+T.
+        if matches!(cmd, Command::Execute | Command::Cancel)
+            && self.modal_host_key.read(cx).is_visible()
+        {
+            if cmd == Command::Cancel {
+                self.modal_host_key.update(cx, |modal, cx| modal.cancel(cx));
+            }
+            return Some(true);
+        }
+
         // The sidebar's inline delete confirmation, drawn by the workspace,
         // resolves the same way when focus is outside it.
         if matches!(cmd, Command::Execute | Command::Cancel)

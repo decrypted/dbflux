@@ -3997,6 +3997,15 @@ modals:
       materialized_view: MatView
       foreign_key: FK
       trigger: Trigger
+  host_key_confirm:
+    title: "Unknown SSH host key"
+    lead: "Neither DBFlux nor your known_hosts file has seen this server's host key before. Trust it only if the fingerprint matches the one you got from the server's administrator. If it does not, someone may be intercepting the connection."
+    host: "Server"
+    fingerprint: "Host key fingerprint"
+    other_types_warning: "known_hosts or DBFlux already holds a %{types} key for this server, but the server offered a different key type. A server upgrade can cause this, but so can an attacker."
+    hint: "To see the fingerprint on the server, run ssh-keygen -lf on its host key, for example /etc/ssh/ssh_host_ed25519_key.pub. DBFlux keeps a trusted key in its own list and never writes ~/.ssh/known_hosts."
+    cancel: "Cancel"
+    trust: "Trust and remember"
   import_dashboard:
     title: Import Dashboard from JSON
     name_label: Dashboard name
@@ -4346,6 +4355,9 @@ settings:
     grid_copy_protect_formulas:
       label: "Protect copied cells against spreadsheet formulas"
       hint: "Copy (Ctrl+C, Cmd+C on macOS) and Copy as CSV put a ' before a cell that starts with =, +, -, @, a tab or a carriage return, so a spreadsheet you paste into shows it as text instead of running it as a formula. Numbers are not changed. Off: cells are copied exactly."
+    ssh_accept_new_host_keys:
+      label: "Trust new SSH host keys without asking"
+      hint: "Not recommended. An SSH tunnel to a server whose host key neither ~/.ssh/known_hosts nor DBFlux knows then connects and remembers the key, instead of asking you to compare its fingerprint first. This also applies to connects that cannot ask, such as Connect on startup and the MCP server. A changed key is always refused. StrictHostKeyChecking in your SSH config takes precedence for the hosts it applies to. It does not apply when known_hosts or DBFlux already holds a key of another type for the host (that still asks), and the MCP server reads it only when it starts."
     grid_header_click_sorts:
       label: "Clicking a column header sorts the column"
       hint: "Off: a click on a column header selects the whole column and the arrow at its right edge sorts. On: the click sorts the column; Shift+click and Ctrl+click still select columns."

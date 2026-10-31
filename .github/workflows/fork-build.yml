@@ -1,6 +1,11 @@
 # Fork-only: packages the integration branch (`local/build`) of decrypted/dbflux with upstream's
-# reusable build workflow, so every push yields an AppImage, .deb, .rpm, tarball and macOS DMGs as
-# run artifacts. Not meant for upstream; it never publishes a release (fork-release.yml does, on tags).
+# reusable build workflow, so every push yields an AppImage, .deb, .rpm, tarball, macOS DMGs and the
+# Windows packages as run artifacts. Not meant for upstream; it never publishes a release
+# (fork-release.yml does, on tags).
+#
+# Push builds are unsigned dev builds: they get no secrets at all, so the release signing key is
+# never in a job that runs build scripts. Each file still has a `.sha256`. Only fork-release.yml
+# signs, in its own job behind the `release` environment.
 name: Fork build
 
 on:
@@ -29,6 +34,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Compute version string
         id: fork
@@ -41,9 +48,36 @@ jobs:
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "version=${CARGO_VERSION}+fork.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
+  checks:
+    name: Lockfile and CI contracts
+    if: github.repository == 'decrypted/dbflux'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check Cargo.lock against the manifests
+        # The build jobs stamp the version into Cargo.toml and so cannot build with --locked.
+        # This fails when the committed lock does not match the committed manifests, so a merge
+        # that adds or loosens a dependency without updating Cargo.lock never resolves a fresh
+        # crate version inside a build. It downloads crates but runs no build script.
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Check the CI security contracts
+        # The workflow contracts in scripts/test_workflow_security.py, so an upstream merge that
+        # brings the key back into a build job, unpins an action or drops a guard fails here.
+        env:
+          DBFLUX_REQUIRE_YAML: "1"
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update && sudo apt-get install -y python3-yaml; }
+          python3 scripts/test_workflow_security.py
+
   build:
     name: Build
-    needs: compute-version
+    needs: [compute-version, checks]
     uses: ./.github/workflows/build.yml
     permissions:
       contents: read
@@ -56,10 +90,13 @@ jobs:
       # SignPath, which only upstream has, so the fork builds Windows unsigned.
       windows: true
       windows_signing: false
+      # No GPG key in a job that compiles: push builds stay unsigned (see the header).
+      sign_in_build: false
       channel: rc
       prerelease: true
       cache: true
       # Fork versions never match an upstream release, so an update check
       # could only report false updates.
       extra_features: no-update-check
-    secrets: inherit
+    # No secrets: the build jobs run every crate's build script and proc macros. Without
+    # MACOS_CERTIFICATE_P12 the macOS bundle is signed ad-hoc, as it is today.

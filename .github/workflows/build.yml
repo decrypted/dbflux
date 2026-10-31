@@ -31,6 +31,23 @@ on:
         required: false
         type: boolean
         default: true
+      sign_in_build:
+        # Fork-only (decrypted/dbflux): the GPG key must never be in a job that
+        # runs build scripts and proc macros. The fork turns this off, passes
+        # no GPG secrets, and signs the uploaded artifacts in a separate job
+        # of fork-release.yml; upstream's callers keep the default.
+        description: 'Import the GPG key in the build jobs and sign the packages there'
+        required: false
+        type: boolean
+        default: true
+      windows_cache:
+        # Fork-only (decrypted/dbflux): upstream's releases restore the Windows
+        # cache that the nightly saves on main. The fork's releases turn it off
+        # so every release builds cold on all platforms.
+        description: 'Restore the Windows rust cache'
+        required: false
+        type: boolean
+        default: true
       cache:
         # Off for upstream's release and nightly runs, which build Linux and
         # macOS cold to stay inside the 10 GB cache limit (see the Windows
@@ -49,10 +66,13 @@ on:
         type: string
         default: ''
     secrets:
+      # Needed when sign_in_build is on (the default); the import step fails
+      # without them. Optional so a caller with sign_in_build off can leave
+      # them out.
       GPG_PRIVATE_KEY:
-        required: true
+        required: false
       GPG_PASSPHRASE:
-        required: true
+        required: false
       # Optional. Without them the macOS bundle is signed ad-hoc, which builds
       # and runs but gives every release a new signature, so the keychain asks
       # the user to re-authorise the saved passwords after each update.
@@ -75,6 +95,15 @@ jobs:
     name: Build Linux ${{ matrix.arch }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 90
+    # Read from env in run: steps instead of interpolated into the script, so a
+    # caller passing a crafted version or channel cannot inject shell.
+    env:
+      BUILD_VERSION: ${{ inputs.version }}
+      BUILD_CHANNEL: ${{ inputs.channel }}
+      # The compile and verify container, pinned by the digest of the multi-arch
+      # index so a re-pushed tag cannot change what builds or checks the binary.
+      # New digest: docker buildx imagetools inspect ubuntu:22.04
+      BUILD_CONTAINER: ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11
 
     strategy:
       fail-fast: false
@@ -94,10 +123,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Resolve channel identity
         run: |
-          if [ "${{ inputs.channel }}" = "nightly" ]; then
+          if [ "$BUILD_CHANNEL" = "nightly" ]; then
             echo "APP_ID=dbflux-nightly"            >> "$GITHUB_ENV"
             echo "APP_NAME=DBFlux Nightly"          >> "$GITHUB_ENV"
             echo "PKG_NAME=dbflux-nightly"          >> "$GITHUB_ENV"
@@ -108,7 +139,7 @@ jobs:
             echo "PKG_NAME=dbflux"          >> "$GITHUB_ENV"
             echo "BUNDLE_ID=dev.iperez.dbflux" >> "$GITHUB_ENV"
           fi
-          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          BRAND_DIR="resources/branding/$BUILD_CHANNEL"
           [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
           echo "BRAND_DIR=$BRAND_DIR" >> "$GITHUB_ENV"
 
@@ -222,7 +253,7 @@ jobs:
             -v "$PWD:/work" -w /work \
             -v "$HOME/.cargo:/rust/cargo" -v "$HOME/.rustup:/rust/rustup" \
             -e CARGO_HOME=/rust/cargo -e RUSTUP_HOME=/rust/rustup -e FEATURES \
-            ubuntu:22.04 bash scripts/appimage-build.sh ${{ matrix.target }}
+            "$BUILD_CONTAINER" bash scripts/appimage-build.sh ${{ matrix.target }}
           sudo chown -R "$(id -u):$(id -g)" target AppDir "$HOME/.cargo" "$HOME/.rustup"
 
           kill "$SAMPLER_PID"
@@ -244,7 +275,7 @@ jobs:
 
       - name: Create package
         run: |
-          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          BRAND_DIR="resources/branding/$BUILD_CHANNEL"
           [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
 
           mkdir -p pkg/resources/branding/stable
@@ -296,8 +327,8 @@ jobs:
 
       - name: Create AppImage
         run: |
-          VERSION="${{ inputs.version }}"
-          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          VERSION="$BUILD_VERSION"
+          BRAND_DIR="resources/branding/$BUILD_CHANNEL"
           [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
 
           mkdir -p AppDir/usr/bin
@@ -327,7 +358,7 @@ jobs:
           # source; RC releases embed nothing and stay manual. appimagetool has
           # no UPDATE_INFORMATION env support, so the info is passed as an
           # argument, and only when non-empty (a bare -u '' is not accepted).
-          UPDATE_INFO=$(bash scripts/appimage-update-info.sh "${{ inputs.channel }}" "${{ matrix.rpm_arch }}")
+          UPDATE_INFO=$(bash scripts/appimage-update-info.sh "$BUILD_CHANNEL" "${{ matrix.rpm_arch }}")
           tool_args=(AppDir "dbflux-${{ matrix.rpm_arch }}.AppImage")
           if [ -n "$UPDATE_INFO" ]; then
             tool_args=(-u "$UPDATE_INFO" "${tool_args[@]}")
@@ -345,14 +376,14 @@ jobs:
           set -euo pipefail
           IMAGE="dbflux-${{ matrix.rpm_arch }}.AppImage"
           ZSYNC="${IMAGE}.zsync"
-          INFO=$(bash scripts/appimage-update-info.sh "${{ inputs.channel }}" "${{ matrix.rpm_arch }}")
+          INFO=$(bash scripts/appimage-update-info.sh "$BUILD_CHANNEL" "${{ matrix.rpm_arch }}")
 
           # The image's own runtime prints the embedded string; the flag is
           # handled before any payload launch. Querying the appimagetool
           # runtime instead would report the tool, not this image.
           EMBEDDED=$(./"$IMAGE" --appimage-updateinformation)
 
-          if [ "${{ inputs.channel }}" = "rc" ]; then
+          if [ "$BUILD_CHANNEL" = "rc" ]; then
             if [ -n "$EMBEDDED" ]; then
               echo "::error::RC AppImage must not embed update information, found: $EMBEDDED"
               exit 1
@@ -393,12 +424,12 @@ jobs:
 
       - name: Verify produced AppImage on Ubuntu 22.04
         run: |
-          docker run --rm -v "$PWD:/work:ro" -w /work ubuntu:22.04 \
+          docker run --rm -v "$PWD:/work:ro" -w /work "$BUILD_CONTAINER" \
             bash scripts/appimage-verify.sh /work/dbflux-${{ matrix.rpm_arch }}.AppImage
 
       - name: Generate PNG icons
         run: |
-          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          BRAND_DIR="resources/branding/$BUILD_CHANNEL"
           [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
 
           mkdir -p packaging/icons/256x256/apps
@@ -418,7 +449,9 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
-          go-version: stable
+          # An exact release, not `stable`: the Go toolchain that builds nfpm
+          # changes only with this line.
+          go-version: '1.27.3'
 
       - name: Install nfpm
         # Pinned: @latest would silently pull a new nfpm into the signing job.
@@ -426,7 +459,7 @@ jobs:
 
       - name: Generate packages
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="$BUILD_VERSION"
 
           export VERSION
           export ARCH=${{ matrix.deb_arch }}
@@ -436,21 +469,25 @@ jobs:
           sed -i -e "s|@APP_NAME@|$APP_NAME|g" -e "s|@APP_ID@|$APP_ID|g" packaging/dbflux.desktop
 
           envsubst < packaging/nfpm.deb.yaml > nfpm.deb.yaml
-          ~/go/bin/nfpm package --packager deb --config nfpm.deb.yaml --target ${PKG_NAME}_${VERSION}_linux_${{ matrix.deb_arch }}.deb
+          ~/go/bin/nfpm package --packager deb --config nfpm.deb.yaml --target "${PKG_NAME}_${VERSION}_linux_${{ matrix.deb_arch }}.deb"
           export ARCH=${{ matrix.rpm_arch }}
           envsubst < packaging/nfpm.rpm.yaml > nfpm.rpm.yaml
-          ~/go/bin/nfpm package --packager rpm --config nfpm.rpm.yaml --target ${PKG_NAME}-${VERSION}-1.${{ matrix.rpm_arch }}.rpm
+          ~/go/bin/nfpm package --packager rpm --config nfpm.rpm.yaml --target "${PKG_NAME}-${VERSION}-1.${{ matrix.rpm_arch }}.rpm"
 
       - name: Install signing tools
+        # Off in the fork, which signs in a separate job (see the sign_in_build input).
+        if: inputs.sign_in_build
         run: sudo apt-get install -y rpm debsigs
 
       - name: Import GPG key
+        if: inputs.sign_in_build
         uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd  # v7.0.0
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Sign .deb packages
+        if: inputs.sign_in_build
         run: |
           GPG_KEY_ID=$(gpg --list-keys --keyid-format long | grep -A1 'pub' | tail -1 | awk '{print $1}')
           for deb in *.deb; do
@@ -458,6 +495,7 @@ jobs:
           done
 
       - name: Configure RPM signing
+        if: inputs.sign_in_build
         run: |
           GPG_KEY_ID=$(gpg --list-keys --keyid-format long | grep -A1 'pub' | tail -1 | awk '{print $1}')
           {
@@ -467,6 +505,7 @@ jobs:
           } > ~/.rpmmacros
 
       - name: Sign .rpm packages
+        if: inputs.sign_in_build
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
@@ -475,6 +514,7 @@ jobs:
           done
 
       - name: Sign artifacts
+        if: inputs.sign_in_build
         run: |
           gpg --armor --detach-sign dbflux-linux-${{ matrix.arch }}.tar.gz
           gpg --armor --detach-sign dbflux-${{ matrix.rpm_arch }}.AppImage
@@ -494,7 +534,10 @@ jobs:
         # byte-identical copies under fixed names, which docs/INSTALL.md links
         # to. They are made after signing and checksumming so the versioned
         # packages' .sha256 files keep a single entry; the detached signature
-        # does not depend on the file name, so it is copied as is.
+        # does not depend on the file name, so it is copied as is (when the
+        # packages were signed in this job, see sign_in_build).
+        env:
+          SIGNED_IN_BUILD: ${{ inputs.sign_in_build }}
         run: |
           for extension in deb rpm; do
             packages=(*."$extension")
@@ -505,7 +548,9 @@ jobs:
 
             stable_name="dbflux-linux-${{ matrix.arch }}.$extension"
             cp "${packages[0]}" "$stable_name"
-            cp "${packages[0]}.asc" "$stable_name.asc"
+            if [ "$SIGNED_IN_BUILD" = "true" ]; then
+              cp "${packages[0]}.asc" "$stable_name.asc"
+            fi
             sha256sum "$stable_name" > "$stable_name.sha256"
           done
 
@@ -544,7 +589,7 @@ jobs:
           cp dbflux-${{ matrix.rpm_arch }}.AppImage.asc /tmp/artifacts/linux-${{ matrix.arch }}/
           # RC ships no sidecar; stable/nightly sidecars are fail-closed by the
           # verify step, so this conditional cannot mask a missing output.
-          if [ "${{ inputs.channel }}" != "rc" ]; then
+          if [ "$BUILD_CHANNEL" != "rc" ]; then
             cp dbflux-${{ matrix.rpm_arch }}.AppImage.zsync /tmp/artifacts/linux-${{ matrix.arch }}/
           fi
           cp *.deb /tmp/artifacts/linux-${{ matrix.arch }}/
@@ -560,6 +605,11 @@ jobs:
     name: Build macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 90
+    # Read from env in run: steps instead of interpolated into the script, so a
+    # caller passing a crafted version or channel cannot inject shell.
+    env:
+      BUILD_VERSION: ${{ inputs.version }}
+      BUILD_CHANNEL: ${{ inputs.channel }}
 
     strategy:
       fail-fast: false
@@ -579,10 +629,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Resolve channel identity
         run: |
-          if [ "${{ inputs.channel }}" = "nightly" ]; then
+          if [ "$BUILD_CHANNEL" = "nightly" ]; then
             echo "APP_ID=dbflux-nightly"            >> "$GITHUB_ENV"
             echo "APP_NAME=DBFlux Nightly"          >> "$GITHUB_ENV"
             echo "PKG_NAME=dbflux-nightly"          >> "$GITHUB_ENV"
@@ -593,7 +645,7 @@ jobs:
             echo "PKG_NAME=dbflux"          >> "$GITHUB_ENV"
             echo "BUNDLE_ID=dev.iperez.dbflux" >> "$GITHUB_ENV"
           fi
-          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          BRAND_DIR="resources/branding/$BUILD_CHANNEL"
           [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
           echo "BRAND_DIR=$BRAND_DIR" >> "$GITHUB_ENV"
 
@@ -703,8 +755,8 @@ jobs:
 
       - name: Create app bundle
         run: |
-          VERSION="${{ inputs.version }}"
-          BRAND_DIR="resources/branding/${{ inputs.channel }}"
+          VERSION="$BUILD_VERSION"
+          BRAND_DIR="resources/branding/$BUILD_CHANNEL"
           [ -d "$BRAND_DIR" ] || BRAND_DIR="resources/branding/stable"
           APP_BUNDLE="$APP_NAME.app"
 
@@ -720,7 +772,7 @@ jobs:
           # under that name. Without it the Dock and Finder show the generic
           # application icon.
           ICNS="packaging/icons/dbflux.icns"
-          [ "${{ inputs.channel }}" = "nightly" ] && ICNS="packaging/icons/dbflux-nightly.icns"
+          [ "$BUILD_CHANNEL" = "nightly" ] && ICNS="packaging/icons/dbflux-nightly.icns"
           cp "$ICNS" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 
           sed -e "s/\${VERSION}/$VERSION/g" -e "s/\${APP_NAME}/$APP_NAME/g" -e "s/\${BUNDLE_ID}/$BUNDLE_ID/g" resources/macos/Info.plist > "$APP_BUNDLE/Contents/Info.plist"
@@ -785,11 +837,25 @@ jobs:
           [ -f "$KEYCHAIN" ] && security delete-keychain "$KEYCHAIN" || true
 
       - name: Install create-dmg
-        run: brew install create-dmg
+        # A pinned release checked against its sha256 (the same tarball and hash
+        # as Homebrew's formula), not whatever `brew install` resolves today.
+        env:
+          CREATE_DMG_VERSION: "1.3.0"
+          CREATE_DMG_SHA256: "c50d2bc97c3d6292642bac55f530d247eaf4bf65ee605f26b4caf339383e381c"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/create-dmg.tar.gz" \
+            "https://github.com/create-dmg/create-dmg/archive/refs/tags/v${CREATE_DMG_VERSION}.tar.gz"
+          echo "${CREATE_DMG_SHA256}  $RUNNER_TEMP/create-dmg.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/create-dmg-src"
+          tar -xzf "$RUNNER_TEMP/create-dmg.tar.gz" -C "$RUNNER_TEMP/create-dmg-src" --strip-components 1
+          make -C "$RUNNER_TEMP/create-dmg-src" install prefix="$RUNNER_TEMP/create-dmg"
+          echo "$RUNNER_TEMP/create-dmg/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/create-dmg/bin/create-dmg" --version
 
       - name: Create DMG
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="$BUILD_VERSION"
           APP_BUNDLE="$APP_NAME.app"
 
           create-dmg \
@@ -806,12 +872,14 @@ jobs:
             "$APP_BUNDLE"
 
       - name: Import GPG key
+        if: inputs.sign_in_build
         uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd  # v7.0.0
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Sign artifacts
+        if: inputs.sign_in_build
         run: |
           gpg --armor --detach-sign dbflux-macos-${{ matrix.arch }}.dmg
 
@@ -852,6 +920,8 @@ jobs:
       # release-signing once SignPath Foundation imports the production
       # certificate into that policy.
       SIGNPATH_SIGNING_POLICY: test-signing
+      # See the Linux job: read from env in run: steps, not interpolated.
+      BUILD_CHANNEL: ${{ inputs.channel }}
 
     steps:
       - name: Checkout repository
@@ -886,7 +956,7 @@ jobs:
       - name: Resolve channel identity
         shell: pwsh
         run: |
-          if ("${{ inputs.channel }}" -eq "nightly") {
+          if ($env:BUILD_CHANNEL -eq "nightly") {
             "APP_NAME=DBFlux Nightly"   | Out-File -FilePath $env:GITHUB_ENV -Append
             "MY_APP_ID={{7F1C2A3B-4D5E-6F70-8192-A3B4C5D6E7F8}" | Out-File -FilePath $env:GITHUB_ENV -Append
           } else {
@@ -901,6 +971,9 @@ jobs:
           components: rust-src
 
       - name: Setup Rust cache
+        # Fork-only gate: the fork's releases pass windows_cache: false and
+        # build Windows cold like Linux and macOS (see the windows_cache input).
+        if: inputs.windows_cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
           prefix-key: "v0-rust"
@@ -992,7 +1065,7 @@ jobs:
       - name: Select channel icon
         run: |
           $Ico = "packaging/icons/dbflux.ico"
-          if ("${{ inputs.channel }}" -eq "nightly") { $Ico = "packaging/icons/dbflux-nightly.ico" }
+          if ($env:BUILD_CHANNEL -eq "nightly") { $Ico = "packaging/icons/dbflux-nightly.ico" }
           Copy-Item $Ico dbflux.ico
 
       - name: Create portable package
@@ -1064,12 +1137,14 @@ jobs:
           Copy-Item signed-installer/dbflux-windows-amd64-setup.exe dbflux-windows-amd64-setup.exe -Force
 
       - name: Import GPG key
+        if: inputs.sign_in_build
         uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd  # v7.0.0
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Sign artifacts
+        if: inputs.sign_in_build
         run: |
           gpg --armor --detach-sign dbflux-windows-amd64.zip
           gpg --armor --detach-sign dbflux-windows-amd64-setup.exe

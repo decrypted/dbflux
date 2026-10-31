@@ -21,6 +21,11 @@ concurrency:
 jobs:
   classify:
     name: Classify release
+    # Fork guard (decrypted/dbflux): this workflow publishes upstream's release and Homebrew
+    # tap, and its `v*.*.*` trigger also matches the fork's `v*-d.*` tags. Every other job
+    # depends on this one, so the whole workflow skips outside upstream, even when it is
+    # enabled in a fork or merged in anew.
+    if: github.repository == '0xErwin1/dbflux'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:

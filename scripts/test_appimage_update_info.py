@@ -169,7 +169,9 @@ class VerifyStepExecutionTests(unittest.TestCase):
             # GitHub's default shell for run: steps is bash -e.
             return subprocess.run(
                 ["bash", "-e", str(script)], cwd=root, capture_output=True,
-                text=True, env=dict(os.environ, FAKE_UPDATE_INFO=info),
+                text=True,
+                # build.yml routes the channel through the job env, not the script.
+                env=dict(os.environ, FAKE_UPDATE_INFO=info, BUILD_CHANNEL=channel),
             )
 
     @staticmethod

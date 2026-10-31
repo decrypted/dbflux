@@ -26,6 +26,9 @@ concurrency:
 jobs:
   build:
     name: Production ${{ matrix.mode }}
+    # Fork guard (decrypted/dbflux): builds upstream's site and docs, which the fork has no
+    # use for, so it never runs outside upstream.
+    if: github.repository == '0xErwin1/dbflux'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -34,13 +37,13 @@ jobs:
         mode: [site, docs]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           # The site reads each published version's docs out of its own git ref,
           # so a shallow clone cannot build anything but the current branch.
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4
         with:
           version: 11
 
@@ -48,7 +51,7 @@ jobs:
       # near-identical ~170 MB entry that pushes the repository past its 10 GB
       # cache limit and evicts the Rust build caches. A frozen install from the
       # registry takes seconds.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: 24
 

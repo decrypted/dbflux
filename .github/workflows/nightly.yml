@@ -16,6 +16,11 @@ concurrency:
 jobs:
   guard:
     name: Guard — canonical repo and new commits
+    # Fork guard (decrypted/dbflux): this job-level check keeps the nightly from even
+    # starting a runner in a fork; the check below stays for upstream. Every other job
+    # depends on this one, so the whole workflow skips outside upstream, even when it is
+    # enabled in a fork or merged in anew.
+    if: github.repository == '0xErwin1/dbflux'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:

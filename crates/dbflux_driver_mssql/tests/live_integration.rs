@@ -851,6 +851,88 @@ fn mssql_keeps_the_row_behind_a_word_it_would_call() -> Result<(), DbError> {
     })
 }
 
+/// These ran a write on a real server while the rating saw a read. The rating
+/// has to keep up with what the server's tokenizer accepts, so this checks both:
+/// the row goes, and a read-only profile or MCP would have refused it.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_rating_refuses_what_the_server_runs() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+        connection.execute(&QueryRequest::new("CREATE TABLE # (a INT)"))?;
+
+        let delete = "DELETE FROM explain_test WHERE id = 1";
+        let exec = format!("EXEC('{delete}')");
+
+        for sql in [
+            format!("SELECT 1. {exec}"),
+            format!("SELECT 1.e5{exec}"),
+            format!("SELECT 1e5{exec}"),
+            format!("SELECT $1.{exec}"),
+            format!("SELECT $1{exec}"),
+            format!("SELECT $.5{exec}"),
+            format!("SELECT 1E{exec}"),
+            format!("SELECT 1{delete}"),
+            format!("SELECT $1{delete}"),
+            format!("SELECT 1e5{delete}"),
+            format!("SELECT .5{delete}"),
+            format!("SELECT 'a'{exec}"),
+            format!("SELECT 1 [a]{exec}"),
+            format!("SELECT 1--c\r{exec}"),
+            format!("SELECT 1./*c*/{exec}"),
+            format!("SELECT 1. --c\n{exec}"),
+            format!("SELECT 1 FROM # {exec}"),
+            format!("SELECT 1. EXECUTE('{delete}')"),
+            format!("SELECT 1.{}{exec}", '\u{00A0}'),
+            format!("SELECT 1{}{exec}", '\u{200B}'),
+        ] {
+            connection.execute(&QueryRequest::new(
+                "DROP TABLE IF EXISTS explain_test; CREATE TABLE explain_test (id INT); \
+                 INSERT INTO explain_test (id) VALUES (1), (2)",
+            ))?;
+
+            let class = dbflux_core::classify_query_for_governance(
+                &dbflux_core::QueryLanguage::Sql,
+                &sql,
+                Some(connection.language_service()),
+            );
+            assert!(
+                !matches!(
+                    class,
+                    dbflux_core::ExecutionClassification::Metadata
+                        | dbflux_core::ExecutionClassification::Read
+                ),
+                "{sql:?}: {class:?}"
+            );
+
+            connection.execute(&QueryRequest::new(sql.clone()))?;
+            let remaining =
+                connection.execute(&QueryRequest::new("SELECT id FROM explain_test"))?;
+            assert_eq!(remaining.rows.len(), 1, "the server ran {sql:?}");
+        }
+
+        for sql in [
+            "SELECT id FROM explain_test OPTION (USE HINT('ENABLE_PARALLEL_PLAN_PREFERENCE'))",
+            "SELECT id FROM explain_test OPTION (RECOMPILE, USE HINT('DISABLE_TSQL_SCALAR_UDF_INLINING'))",
+        ] {
+            assert_eq!(
+                dbflux_core::classify_query_for_governance(
+                    &dbflux_core::QueryLanguage::Sql,
+                    sql,
+                    Some(connection.language_service()),
+                ),
+                dbflux_core::ExecutionClassification::Read,
+                "{sql}"
+            );
+            connection.execute(&QueryRequest::new(sql))?;
+        }
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Describe
 // ---------------------------------------------------------------------------

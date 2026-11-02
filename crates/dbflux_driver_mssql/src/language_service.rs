@@ -55,6 +55,10 @@ mod tests {
             "SHOW x; DELETE FROM t WHERE id = 1",
             "/* /* */ */ EXPLAIN DELETE FROM t WHERE id = 1",
             "SELECT 1 EXEC('DELETE FROM t WHERE id = 1')",
+            "SELECT 1. EXEC('DELETE FROM t WHERE id = 1')",
+            "SELECT 1DELETE FROM t WHERE id = 1",
+            "SELECT 1 FROM # EXEC('DELETE FROM t WHERE id = 1')",
+            "SELECT 1--c\rEXEC('DELETE FROM t WHERE id = 1')",
         ] {
             assert!(
                 !matches!(

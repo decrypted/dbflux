@@ -734,7 +734,8 @@ fn clickhouse_plan_only_explain_runs_nothing() -> Result<(), DbError> {
         );
         assert_eq!(rows(connection.as_ref())?, 2);
 
-        // A batch cannot go on past an unknown first word here, as on SQL Server.
+        // Unlike SQL Server, where the batch goes on after the failed call,
+        // ClickHouse fails the whole statement.
         for sql in [
             "SHOW x INSERT INTO dbflux_live_explain SELECT 3",
             "DESCRIBE x INSERT INTO dbflux_live_explain SELECT 3",

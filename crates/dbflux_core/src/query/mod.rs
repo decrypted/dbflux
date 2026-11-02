@@ -15,6 +15,7 @@ pub(crate) mod sql_context;
 pub(crate) mod table_browser;
 pub(crate) mod time_macros;
 pub(crate) mod transfer;
+pub(crate) mod tsql_safety;
 pub(crate) mod tx_vocab;
 pub(crate) mod types;
 pub(crate) mod visual_query;
@@ -51,8 +52,8 @@ pub use language_service::{
 pub use name_suggestion::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
 pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
 pub use safety::{
-    classify_query_for_governance, classify_sql_execution, classify_tsql_execution,
-    contains_compound_block, is_safe_read_query, starts_with_explain, tsql_batch_has_implicit_call,
+    classify_query_for_governance, classify_sql_execution, contains_compound_block,
+    is_safe_read_query, starts_with_explain,
 };
 pub use script_operation::{
     ScriptMethod, ScriptOperation, ScriptOperationCounts, ScriptOperationHost,
@@ -75,6 +76,7 @@ pub use table_browser::{
 };
 pub use time_macros::{contains_time_macros, substitute_time_macros};
 pub use transfer::TransferColumn;
+pub use tsql_safety::{classify_tsql_execution, tsql_batch_has_implicit_call};
 pub use tx_vocab::TransactionVocab;
 pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,

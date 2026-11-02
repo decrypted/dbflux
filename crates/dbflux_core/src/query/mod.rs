@@ -1,5 +1,6 @@
 pub(crate) mod column_kind;
 pub(crate) mod document_query;
+pub(crate) mod explain;
 pub(crate) mod generator;
 pub(crate) mod join_condition;
 pub(crate) mod keyset;
@@ -27,6 +28,7 @@ pub use document_query::{
     DocumentSortDirection, DocumentSortKey, DocumentSpecProblem, DocumentValue,
     UnrepresentableClause,
 };
+pub use explain::{explain_plan_only, is_plan_only_explain, starts_with_explain};
 pub use generator::{
     CollectionTemplateRequest, CreateTableSpec, GeneratedMutation, GeneratedQuery, GeneratorError,
     MutationCategory, MutationTemplateOperation, MutationTemplateRequest, QueryGenError,
@@ -68,8 +70,8 @@ pub use sql_context::{
 };
 pub use table_browser::{
     CollectionBrowseRequest, CollectionCountEstimate, CollectionCountRequest, CollectionRef,
-    ColumnRef, DescribeRequest, ExplainRequest, OrderByColumn, Pagination, SortDirection,
-    TableBrowseRequest, TableCountRequest, TableRef,
+    ColumnRef, DescribeRequest, ExplainFormat, ExplainRequest, OrderByColumn, Pagination,
+    SortDirection, TableBrowseRequest, TableCountRequest, TableRef,
 };
 pub use time_macros::{contains_time_macros, substitute_time_macros};
 pub use transfer::TransferColumn;

@@ -3,9 +3,9 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
     DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    FormFieldKind, FormSection, FormTab, FormValues, Icon, MutationCapabilities, QueryCapabilities,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
+    ExplainRequest, FormFieldKind, FormSection, FormTab, FormValues, Icon, MutationCapabilities,
+    QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RowDelete, RowInsert,
+    RowPatch, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
     TransactionCapabilities, TransferFamily, field, field_required,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
@@ -63,6 +63,7 @@ pub enum CrudOp {
 #[derive(Debug, Clone, Default)]
 pub struct FakeDriverStats {
     pub executed_requests: Vec<QueryRequest>,
+    pub explain_requests: Vec<ExplainRequest>,
     pub crud_ops: Vec<CrudOp>,
     pub cancelled_handle_count: usize,
     pub cancel_active_calls: usize,
@@ -75,6 +76,9 @@ struct FakeDriverState {
     query_outcomes: RwLock<HashMap<String, FakeQueryOutcome>>,
     default_outcome: RwLock<Option<FakeQueryOutcome>>,
     executed_requests: Mutex<Vec<QueryRequest>>,
+    explain_prefix: RwLock<Option<&'static str>>,
+    explain_result: RwLock<Option<QueryResult>>,
+    explain_requests: Mutex<Vec<ExplainRequest>>,
     crud_ops: Mutex<Vec<CrudOp>>,
     cancelled_handles: Mutex<Vec<QueryHandle>>,
     cancel_active_calls: AtomicUsize,
@@ -104,6 +108,20 @@ impl FakeDriver {
             }),
             metadata: Arc::new(metadata_for_kind(kind).clone()),
         }
+    }
+
+    /// Plans an explain as `<prefix> <query>`, the way a driver with a planner
+    /// does. Without this or `with_explain_result` the fake has no explain.
+    pub fn with_explain_planner(self, prefix: &'static str) -> Self {
+        *rwlock_write(&self.state.explain_prefix) = Some(prefix);
+        self
+    }
+
+    /// Answers `Connection::explain` itself, the way a driver without a
+    /// planner does, sending nothing through `execute`.
+    pub fn with_explain_result(self, result: QueryResult) -> Self {
+        *rwlock_write(&self.state.explain_result) = Some(result);
+        self
     }
 
     /// Declares `supports_read_only` and runs requests that require read-only
@@ -194,6 +212,7 @@ impl FakeDriver {
     pub fn stats(&self) -> FakeDriverStats {
         FakeDriverStats {
             executed_requests: mutex_lock(&self.state.executed_requests).clone(),
+            explain_requests: mutex_lock(&self.state.explain_requests).clone(),
             crud_ops: mutex_lock(&self.state.crud_ops).clone(),
             cancelled_handle_count: mutex_lock(&self.state.cancelled_handles).len(),
             cancel_active_calls: self.state.cancel_active_calls.load(Ordering::Relaxed),
@@ -686,6 +705,39 @@ impl Connection for FakeConnection {
         let handle = QueryHandle::new();
         let result = self.execute_internal(req).map_err(|error| *error)?;
         Ok((handle, result))
+    }
+
+    fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
+        let Some(result) = rwlock_read(&self.state.explain_result).clone() else {
+            return Err(DbError::NotSupported(
+                "EXPLAIN not supported by this driver".to_string(),
+            ));
+        };
+
+        mutex_lock(&self.state.explain_requests).push(request.clone());
+        Ok(result)
+    }
+
+    fn plan_semantic_request(
+        &self,
+        request: &dbflux_core::SemanticRequest,
+    ) -> Result<dbflux_core::SemanticPlan, DbError> {
+        let prefix = *rwlock_read(&self.state.explain_prefix);
+
+        match (request, prefix) {
+            (dbflux_core::SemanticRequest::Explain(explain), Some(prefix)) => {
+                Ok(dbflux_core::SemanticPlan::single_query(
+                    dbflux_core::SemanticPlanKind::Query,
+                    dbflux_core::PlannedQuery::new(
+                        QueryLanguage::Sql,
+                        format!("{prefix} {}", explain.query.as_deref().unwrap_or_default()),
+                    ),
+                ))
+            }
+            _ => Err(DbError::NotSupported(
+                "Semantic planning not supported".to_string(),
+            )),
+        }
     }
 
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {

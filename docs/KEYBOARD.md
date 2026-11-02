@@ -327,7 +327,7 @@ the find panel has focus.
 |------|--------|
 | `Leader a` | Open the pane actions menu, as `Shift+F10` |
 | `Leader r` | Run the query |
-| `Leader e` | Explain the query (code editor) |
+| `Leader e` | Show the plan of the selection or the statement under the cursor, without running it (code editor) |
 | `Leader s` | Save |
 | `Leader f` | Open the editor's find panel, as `/` |
 | `Leader h` / `Leader l` | Previous / next tab of the panel, as `Alt+h` / `Alt+l` |

@@ -90,7 +90,8 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 
 ### 쿼리 계획
 
-- `explain()`은 `SET SHOWPLAN_XML ON` 상태에서 쿼리를 실행하고 쿼리 계획을 XML로 반환합니다. 드라이버는 세션 상태가 새지 않도록 이후에 항상 `SET SHOWPLAN_XML OFF`를 실행합니다.
+- `explain()`은 `SET SHOWPLAN_XML ON` 상태에서 쿼리를 실행하고 쿼리 계획을 XML로 반환하며, 요청이 읽기 쉬운 형식을 원하면 `SET SHOWPLAN_TEXT ON` 상태에서 텍스트 줄로 반환합니다. 드라이버는 세션 상태가 새지 않도록 이후에 항상 SHOWPLAN을 끄고, 세 배치 동안 세션을 잡아 다른 요청이 실행되는 대신 계획되지 않게 합니다.
+- `execute()`는 `EXPLAIN`으로 시작하는 요청을 거부합니다. SQL Server에는 그런 문이 없어 키워드를 프로시저 호출로 읽고, 호출이 실패하면 배치의 나머지를 실행합니다.
 - `version_query()`는 `SELECT @@VERSION`을 반환합니다.
 
 ### 방언

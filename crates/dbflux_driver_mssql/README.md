@@ -193,8 +193,13 @@ Requires the `VIEW SERVER STATE` permission.
 ### Query planning
 
 - `explain()` runs the query under `SET SHOWPLAN_XML ON` and returns the
-  query plan as XML. The driver always runs `SET SHOWPLAN_XML OFF` afterward
-  so session state does not leak.
+  query plan as XML, or under `SET SHOWPLAN_TEXT ON` as text lines when the
+  request asks for the readable form. The driver always turns SHOWPLAN off
+  afterward so session state does not leak, and holds the session across the
+  three batches so no other request is planned instead of run.
+- `execute()` refuses a request that starts with `EXPLAIN`. SQL Server has no such
+  statement: it reads the keyword as a call to a procedure and, when the call
+  fails, runs the rest of the batch.
 - `version_query()` returns `SELECT @@VERSION`.
 
 ### Dialect

@@ -71,6 +71,43 @@ Only drivers that report them show them; PostgreSQL does.
 
 When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
 
+### Explaining a statement
+
+**Explain** shows how the database would run a statement, without running it.
+It is the info button on the editor's action strip, the Explain entry of the
+pane actions menu and of the editor's right-click menu, and the **Explain query**
+command in the palette; `Leader e` in Vim's Normal mode.
+
+It plans what a run would execute: the selection, or without one the statement
+under the cursor, by the rules above. A selection of several statements is
+refused with a message and nothing is sent, since no single plan answers it, and
+so is a buffer with a compound block. A statement that only opens or ends a
+transaction has no plan to show.
+
+The plan comes from the driver and the statement never runs, so a write is
+planned without a confirmation, on a read-only connection too:
+
+| Database | Asks for the plan with |
+|---|---|
+| PostgreSQL, MySQL, MariaDB, DuckDB, Redshift, ClickHouse | `EXPLAIN` |
+| SQLite, Turso | `EXPLAIN QUERY PLAN` |
+| SQL Server | `SET SHOWPLAN_TEXT ON` |
+
+There is no `ANALYZE`, which would run the statement. A statement you already
+wrote as an `EXPLAIN`, such as `EXPLAIN (COSTS OFF) SELECT ...`, runs as written.
+One that would run what it explains, such as `EXPLAIN ANALYZE ...`, is refused:
+use Run for it. SQL Server has no `EXPLAIN` statement: it would read the keyword as
+a procedure call and then run the rest, so it refuses any request that starts
+with `EXPLAIN`. ClickHouse evaluates scalar subqueries while it plans, so a plan
+there can read data; writes are refused.
+
+Explain is offered for SQL only. On a connection whose driver has no explain it
+says so and sends nothing. The result is captioned **Explain** followed by the
+statement's caption. A plan made of text lines, or with a cell of many lines,
+opens in the Text view with its indentation intact; a plan that is a real table,
+as on MySQL and SQLite, opens in the grid. The query history records it as
+`EXPLAIN` and the statement, so picking it there plans again.
+
 ## Multi-statement scripts
 
 To run several statements as a script, select them (`Ctrl+A` selects the

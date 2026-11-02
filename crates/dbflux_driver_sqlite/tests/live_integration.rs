@@ -441,6 +441,43 @@ fn sqlite_explain() -> Result<(), DbError> {
     Ok(())
 }
 
+/// A statement's plan comes from `EXPLAIN QUERY PLAN` and leaves the table as
+/// it was, for a write too, and several statements are refused outright: the
+/// driver would run each of them.
+#[test]
+fn sqlite_plan_only_explain_runs_nothing() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE explain_write (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO explain_write (id) VALUES (1), (2)",
+    ))?;
+
+    let plan = dbflux_core::explain_plan_only(
+        &*connection,
+        &QueryRequest::new("DELETE FROM explain_write WHERE id = 1"),
+    )?;
+    assert!(
+        plan.columns.iter().any(|column| column.name == "detail"),
+        "a query plan, not bytecode: {:?}",
+        plan.columns
+    );
+    assert_eq!(row_count(&*connection, "explain_write")?, 2);
+
+    assert!(
+        dbflux_core::explain_plan_only(
+            &*connection,
+            &QueryRequest::new("SELECT 1; DELETE FROM explain_write"),
+        )
+        .is_err()
+    );
+    assert_eq!(row_count(&*connection, "explain_write")?, 2);
+
+    Ok(())
+}
+
 #[test]
 fn sqlite_describe_table() -> Result<(), DbError> {
     let connection = connect_sqlite()?;

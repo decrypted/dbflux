@@ -1385,6 +1385,7 @@ document:
       formatter_unavailable: Formatador indisponível
       query_history: Histórico de consultas
       explain_query: Explicar consulta
+      explain_tooltip: Mostra o plano da seleção ou da instrução sob o cursor, sem executá-la
       open_in_chart: Abrir a consulta atual em um documento de gráfico
       run_in_new_tab: Executar em nova aba
       auto_refresh_interval: "Intervalo de atualização automática…"
@@ -1414,6 +1415,7 @@ document:
       truncated: "(truncado em %{limit} linhas)"
     result:
       statement_lines: "Instrução L%{start}–%{end}"
+      explain_caption: Explain
       search_placeholder: Buscar nos resultados
       count:
         one: "%{count} resultado"
@@ -1522,8 +1524,11 @@ document:
         no_active_connection: Nenhuma conexão ativa
         connection_not_found: Conexão não encontrada
         auto_refresh_blocked: "Atualização automática bloqueada: a consulta modifica dados"
-        explain_unavailable: Explain não está disponível para scripts
+        explain_unavailable: Explain está disponível apenas para SQL
         enter_query_to_explain: Digite uma consulta para explicar
+        explain_several_statements: "Selecione uma única instrução para explicar: esta seleção contém %{count}. Nada foi enviado."
+        explain_would_execute: "Isto executaria a instrução: EXPLAIN ANALYZE executa o que explica. Explain apenas planeja, então use Executar para isso."
+        explain_transaction_control: "Esta instrução apenas abre ou encerra uma transação e não tem plano para mostrar."
         enter_script_content: Digite o conteúdo do script para executar
         write_query_first: Escreva uma consulta primeiro para abri-la em um gráfico
         connecting: "Conectando ao banco de dados '%{database}', aguarde…"
@@ -1531,6 +1536,7 @@ document:
         read_only_profile: "O perfil desta conexão está definido como somente leitura. Aqui só são executadas instruções que leem dados."
       result_title:
         query_failed: Falha na consulta
+        explain_failed: Não foi possível explicar a instrução
         script_failed: Falha no script
       task:
         run_script: "Executar script %{name}"

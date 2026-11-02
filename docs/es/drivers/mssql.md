@@ -217,8 +217,13 @@ Requiere el permiso `VIEW SERVER STATE`.
 ### Planificación de queries
 
 - `explain()` ejecuta la query bajo `SET SHOWPLAN_XML ON` y devuelve el plan de
-  query como XML. El driver siempre ejecuta `SET SHOWPLAN_XML OFF` después para
-  que el estado de sesión no se filtre.
+  query como XML, o bajo `SET SHOWPLAN_TEXT ON` como líneas de texto cuando la
+  petición pide la forma legible. El driver siempre desactiva SHOWPLAN después para
+  que el estado de sesión no se filtre, y retiene la sesión durante los tres lotes
+  para que ninguna otra petición se planifique en lugar de ejecutarse.
+- `execute()` rechaza una petición que empieza por `EXPLAIN`. SQL Server no tiene
+  esa sentencia: lee la palabra clave como una llamada a un procedimiento y, cuando
+  la llamada falla, ejecuta el resto del lote.
 - `version_query()` devuelve `SELECT @@VERSION`.
 
 ### Dialecto

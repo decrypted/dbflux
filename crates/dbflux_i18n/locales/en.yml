@@ -1385,6 +1385,7 @@ document:
       formatter_unavailable: Formatter unavailable
       query_history: Query history
       explain_query: Explain query
+      explain_tooltip: Show the plan of the selection or the statement under the cursor, without running it
       open_in_chart: Open current query in a chart document
       run_in_new_tab: Run in new tab
       auto_refresh_interval: "Auto-refresh interval…"
@@ -1414,6 +1415,7 @@ document:
       truncated: "(truncated at %{limit} lines)"
     result:
       statement_lines: "Statement L%{start}–%{end}"
+      explain_caption: Explain
       search_placeholder: Search in results
       count:
         one: "%{count} result"
@@ -1522,8 +1524,11 @@ document:
         no_active_connection: No active connection
         connection_not_found: Connection not found
         auto_refresh_blocked: "Auto-refresh blocked: query modifies data"
-        explain_unavailable: Explain is not available for scripts
+        explain_unavailable: Explain is only available for SQL
         enter_query_to_explain: Enter a query to explain
+        explain_several_statements: "Select one statement to explain: this selection holds %{count}. Nothing was sent."
+        explain_would_execute: "This would run the statement: EXPLAIN ANALYZE executes what it explains. Explain only plans, so use Run for it."
+        explain_transaction_control: "This statement only opens or ends a transaction and has no plan to show."
         enter_script_content: Enter script content to run
         write_query_first: Write a query first to open it in a chart
         connecting: "Connecting to database '%{database}', please wait…"
@@ -1531,6 +1536,7 @@ document:
         read_only_profile: "This connection's profile is set to read-only. Only statements that read data run here."
       result_title:
         query_failed: Query failed
+        explain_failed: Could not explain the statement
         script_failed: Script failed
       task:
         run_script: "Run %{name} script"

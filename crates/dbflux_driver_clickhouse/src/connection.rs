@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionExt, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DocumentConnection, DriverMetadata, ExecutionSourceContext, InstanceCatalog,
+    DocumentConnection, DriverMetadata, ExecutionSourceContext, ExplainRequest, InstanceCatalog,
     KeyValueConnection, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest, QueryResult,
-    ReadEstimate, RelationalConnection, RelationalSchema, Row, SchemaLoadingStrategy,
-    SchemaSnapshot, SqlDialect, TableBrowseRequest, TableInfo, TablePartitions, TableProfile,
-    TableRef, TableViewFeatures, Value, WritePrivilege,
+    ReadEstimate, ReadOnlyEnforcement, RelationalConnection, RelationalSchema, Row,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableBrowseRequest, TableInfo,
+    TablePartitions, TableProfile, TableRef, TableViewFeatures, Value, WritePrivilege,
 };
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
@@ -359,6 +359,24 @@ impl Connection for ClickHouseConnection {
                 ClickHouseErrorFormatter::format_http_error(&error).into_query_error()
             })?;
         parse_limited_response(response, started.elapsed())
+    }
+
+    fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
+        let query = match &request.query {
+            Some(query) => query.clone(),
+            None => format!(
+                "SELECT * FROM {} LIMIT 100",
+                request.table.quoted_with(&CLICKHOUSE_DIALECT)
+            ),
+        };
+
+        // ClickHouse runs scalar subqueries while it analyzes a statement, so
+        // the plan is read with writes refused.
+        self.execute(
+            &QueryRequest::new(format!("EXPLAIN {query}"))
+                .with_database(request.database.clone())
+                .with_read_only(ReadOnlyEnforcement::Required),
+        )
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {

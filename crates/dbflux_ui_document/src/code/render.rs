@@ -1,3 +1,4 @@
+use super::explain::explain_menu_action;
 use super::*;
 use dbflux_components::composites::{EmptyState, SplitButton, result_tab, result_tab_bar};
 use dbflux_components::controls::Checkbox;
@@ -101,7 +102,7 @@ impl CodeDocument {
             .icon(AppIcon::History),
         );
 
-        if is_db_language {
+        if self.can_explain() {
             let document = entity.clone();
             actions.push(
                 PaneAction::callback(
@@ -424,12 +425,13 @@ impl CodeDocument {
                     }
                 })),
             )
-            .when(is_db_language, |el| {
+            .when(self.can_explain(), |el| {
                 el.child(
                     Button::new(
                         "toolbar-explain-btn",
                         dbflux_i18n::t!("document.code.toolbar.explain_query"),
                     )
+                    .tooltip(dbflux_i18n::t!("document.code.toolbar.explain_tooltip"))
                     .icon(AppIcon::Info)
                     .icon_only()
                     .inline()
@@ -567,6 +569,14 @@ impl CodeDocument {
                 div().flex_1().min_h_0().overflow_hidden().child(
                     self.vim
                         .editor(self.read_only)
+                        .when(self.can_explain(), |editor| {
+                            editor.context_menu_extra(|menu, _window, _cx| {
+                                menu.separator().menu(
+                                    dbflux_i18n::t!("document.code.toolbar.explain_query"),
+                                    Box::new(explain_menu_action()),
+                                )
+                            })
+                        })
                         .appearance(false)
                         .font_family(fonts::editor_family(cx))
                         .text_size(fonts::editor_font_size(cx))

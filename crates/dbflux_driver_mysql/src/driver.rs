@@ -14,7 +14,7 @@ use dbflux_core::{
     DbKind, DbSchemaInfo, DdlCapabilities, DdlRejection, DefaultSpec, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
     DriverMetadata, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest,
-    ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
+    ExecutionSourceContext, ExplainFormat, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
     ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
     IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
     MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
@@ -2104,7 +2104,7 @@ fn plan_mysql_aggregate(request: &dbflux_core::AggregateRequest) -> Result<Seman
     ))
 }
 
-fn plan_mysql_explain(request: &ExplainRequest) -> SemanticPlan {
+fn mysql_explain_sql(request: &ExplainRequest) -> String {
     let query = request.query.clone().unwrap_or_else(|| {
         format!(
             "SELECT * FROM {} LIMIT 100",
@@ -2112,13 +2112,17 @@ fn plan_mysql_explain(request: &ExplainRequest) -> SemanticPlan {
         )
     });
 
+    match request.format {
+        ExplainFormat::Structured => format!("EXPLAIN FORMAT=JSON {query}"),
+        ExplainFormat::Readable => format!("EXPLAIN {query}"),
+    }
+}
+
+fn plan_mysql_explain(request: &ExplainRequest) -> SemanticPlan {
     SemanticPlan::single_query(
         SemanticPlanKind::Query,
-        dbflux_core::PlannedQuery::new(
-            QueryLanguage::Sql,
-            format!("EXPLAIN FORMAT=JSON {}", query),
-        )
-        .with_database(request.table.schema.clone()),
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, mysql_explain_sql(request))
+            .with_database(request.table.schema.clone()),
     )
 }
 
@@ -3036,16 +3040,9 @@ impl Connection for MysqlConnection {
         Ok(CrudResult::new(affected, returning_row))
     }
     fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
-        let query = match &request.query {
-            Some(q) => q.clone(),
-            None => format!(
-                "SELECT * FROM {} LIMIT 100",
-                request.table.quoted_with(self.dialect())
-            ),
-        };
-
-        let sql = format!("EXPLAIN FORMAT=JSON {}", query);
-        self.execute(&QueryRequest::new(sql))
+        self.execute(
+            &QueryRequest::new(mysql_explain_sql(request)).with_database(request.database.clone()),
+        )
     }
 
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
@@ -3615,6 +3612,23 @@ fn mysql_execute_one_statement(
                     ));
                 }
             }
+
+            // The server reports no columns when it prepares some statements,
+            // `EXPLAIN` among them; the rows always carry them.
+            let columns = match (columns.is_empty(), rows.first()) {
+                (true, Some(first)) => first
+                    .columns_ref()
+                    .iter()
+                    .map(|col| ColumnMeta {
+                        name: col.name_str().to_string(),
+                        type_name: mysql_type_to_sql_label(col),
+                        kind: mysql_type_to_kind(col.column_type()),
+                        nullable: true,
+                        is_primary_key: false,
+                    })
+                    .collect(),
+                _ => columns,
+            };
 
             // Convert rows
             let result_rows: Vec<Row> = rows

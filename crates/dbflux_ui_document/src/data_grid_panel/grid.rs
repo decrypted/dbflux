@@ -107,6 +107,11 @@ impl DataGridPanel {
         self.result_generation
     }
 
+    #[cfg(test)]
+    pub(crate) fn shown_result(&self) -> &QueryResult {
+        &self.result
+    }
+
     /// The query text behind a query result, for a host re-running it.
     pub(crate) fn result_query(&self) -> Option<&str> {
         match &self.source {

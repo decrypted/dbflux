@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionExt, DatabaseInfo, DbError, DbKind, DocumentConnection,
-    DriverMetadata, ExecutionClassification, KeyValueConnection, QueryCancelHandle, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, RelationalSchema, Row,
-    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo, Value,
+    DriverMetadata, ExecutionClassification, ExplainRequest, KeyValueConnection, QueryCancelHandle,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection, RelationalSchema,
+    Row, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo, Value,
     classify_query_for_language,
 };
 use dbflux_ssh::SshTunnel;
@@ -861,6 +861,18 @@ impl Connection for RedshiftConnection {
         );
         result.set_rows_truncated(statement_rows.truncated);
         Ok(result)
+    }
+
+    fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
+        let query = match &request.query {
+            Some(query) => query.clone(),
+            None => format!(
+                "SELECT * FROM {} LIMIT 100",
+                request.table.quoted_with(self.dialect())
+            ),
+        };
+
+        self.execute(&QueryRequest::new(format!("EXPLAIN {query}")))
     }
 
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {

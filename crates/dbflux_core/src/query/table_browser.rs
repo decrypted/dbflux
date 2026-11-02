@@ -631,25 +631,66 @@ pub struct CollectionCountEstimate {
     pub exact: bool,
 }
 
+/// The form a driver returns a plan in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ExplainFormat {
+    /// The driver's structured form (JSON, XML), for tools that parse it.
+    #[default]
+    Structured,
+    /// The form the database itself shows a person: text lines or a table.
+    Readable,
+}
+
 /// Request for explaining a query execution plan.
 ///
-/// Drivers translate this into their native EXPLAIN syntax:
-/// - PostgreSQL: `EXPLAIN (FORMAT JSON, ANALYZE) ...`
-/// - MySQL: `EXPLAIN FORMAT=JSON ...`
+/// Drivers translate this into their native syntax, which only plans the
+/// statement and never runs it:
+/// - PostgreSQL: `EXPLAIN (FORMAT JSON) ...`, or `EXPLAIN ...` when readable
+/// - MySQL: `EXPLAIN FORMAT=JSON ...`, or `EXPLAIN ...` when readable
 /// - SQLite: `EXPLAIN QUERY PLAN ...`
+/// - SQL Server: `SET SHOWPLAN_XML ON`, or `SET SHOWPLAN_TEXT ON` when readable
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExplainRequest {
     pub table: TableRef,
     pub query: Option<String>,
+    /// Stays off the driver RPC wire with `database`: postcard encodes struct
+    /// fields by position, so a new field would break every external driver.
+    /// An external driver always answers in its own form.
+    #[serde(skip)]
+    pub format: ExplainFormat,
+    /// The database to plan in, where the connection does not already imply it.
+    #[serde(skip)]
+    pub database: Option<String>,
 }
 
 impl ExplainRequest {
     pub fn new(table: TableRef) -> Self {
-        Self { table, query: None }
+        Self {
+            table,
+            query: None,
+            format: ExplainFormat::default(),
+            database: None,
+        }
+    }
+
+    /// A request for the plan of `query`. No table is involved: drivers read
+    /// `table` only to build a statement when `query` is absent.
+    pub fn for_query(query: impl Into<String>) -> Self {
+        Self::new(TableRef::new("__dbflux_explain__")).with_query(query)
     }
 
     pub fn with_query(mut self, query: impl Into<String>) -> Self {
         self.query = Some(query.into());
+        self
+    }
+
+    pub fn with_format(mut self, format: ExplainFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    pub fn with_database(mut self, database: Option<String>) -> Self {
+        self.database = database;
         self
     }
 }

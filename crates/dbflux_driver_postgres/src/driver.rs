@@ -17,20 +17,20 @@ use dbflux_core::{
     DbKind, DbSchemaInfo, DdlCapabilities, DdlRejection, DefaultSpec, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
     DriverMetadata, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest,
-    ErrorLocation, ExecutionSourceContext, ExplainRequest, FieldExportTransform, ForeignKeyBuilder,
-    ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon,
-    IndexData, IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
-    RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransactionStateNote, TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator,
-    field_password, field_required, field_use_uri, generate_create_table, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
+    ErrorLocation, ExecutionSourceContext, ExplainFormat, ExplainRequest, FieldExportTransform,
+    ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues,
+    FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog, IsolationLevel,
+    KeyValueConnection, MutationCapabilities, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo,
+    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
+    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
+    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo,
+    TransactionCapabilities, TransactionStateNote, TransferFamily, TypeDefinition, Value, ViewInfo,
+    WhereOperator, field_password, field_required, field_use_uri, generate_create_table,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
     strip_leading_comments, validate_ddl_fragment, when_checked, when_unchecked, with_default,
     with_help,
 };
@@ -1790,7 +1790,7 @@ fn plan_postgres_aggregate(
     ))
 }
 
-fn plan_postgres_explain(request: &ExplainRequest) -> SemanticPlan {
+fn postgres_explain_sql(request: &ExplainRequest) -> String {
     let query = request.query.clone().unwrap_or_else(|| {
         format!(
             "SELECT * FROM {} LIMIT 100",
@@ -1798,12 +1798,16 @@ fn plan_postgres_explain(request: &ExplainRequest) -> SemanticPlan {
         )
     });
 
+    match request.format {
+        ExplainFormat::Structured => format!("EXPLAIN (FORMAT JSON) {query}"),
+        ExplainFormat::Readable => format!("EXPLAIN {query}"),
+    }
+}
+
+fn plan_postgres_explain(request: &ExplainRequest) -> SemanticPlan {
     SemanticPlan::single_query(
         SemanticPlanKind::Query,
-        dbflux_core::PlannedQuery::new(
-            QueryLanguage::Sql,
-            format!("EXPLAIN (FORMAT JSON) {}", query),
-        ),
+        dbflux_core::PlannedQuery::new(QueryLanguage::Sql, postgres_explain_sql(request)),
     )
 }
 
@@ -2792,16 +2796,7 @@ impl Connection for PostgresConnection {
     }
 
     fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
-        let query = match &request.query {
-            Some(q) => q.clone(),
-            None => format!(
-                "SELECT * FROM {} LIMIT 100",
-                request.table.quoted_with(self.dialect())
-            ),
-        };
-
-        let sql = format!("EXPLAIN (FORMAT JSON) {}", query);
-        self.execute(&QueryRequest::new(sql))
+        self.execute(&QueryRequest::new(postgres_explain_sql(request)))
     }
 
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {

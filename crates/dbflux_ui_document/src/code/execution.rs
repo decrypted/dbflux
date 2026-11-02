@@ -1,3 +1,4 @@
+use super::explain::{StatementRun, plan_caption, plan_for_display};
 use super::*;
 use crate::data_grid_panel::{LimitedRowActions, LimitedRowTotal};
 use dbflux_core::observability::actions as audit_actions;
@@ -96,6 +97,23 @@ fn show_read_only_profile_toast(cx: &mut App) {
         .push(cx);
 }
 
+/// Sends one editor request on `connection`, which is the editor session's
+/// when it has one, so a plan sees what the session sees.
+#[expect(
+    clippy::result_large_err,
+    reason = "returns the driver's own error unchanged, like `Connection::execute`"
+)]
+fn dispatch_statement(
+    connection: &dyn Connection,
+    run: StatementRun,
+    request: &QueryRequest,
+) -> Result<QueryResult, DbError> {
+    match run {
+        StatementRun::DriverExplain => dbflux_core::explain_plan_only(connection, request),
+        StatementRun::Query | StatementRun::WrittenExplain => connection.execute(request),
+    }
+}
+
 fn task_target_for_execution(
     profile_id: Uuid,
     connected: &dbflux_core::ConnectedProfile,
@@ -151,12 +169,6 @@ impl CodeDocument {
             Some(selection) => (selection, true),
             None => (self.editor.input_state.read(cx).value().to_string(), false),
         }
-    }
-
-    /// Returns the selected text if a selection exists, otherwise the full editor content.
-    fn selected_or_full_query(&self, window: &mut Window, cx: &mut Context<Self>) -> String {
-        self.selected_query(window, cx)
-            .unwrap_or_else(|| self.editor.input_state.read(cx).value().to_string())
     }
 
     fn clear_live_output(&mut self) {
@@ -746,6 +758,31 @@ impl CodeDocument {
         query: String,
         in_new_tab: bool,
         read_only: ReadOnlyEnforcement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute_statement(
+            query,
+            in_new_tab,
+            read_only,
+            StatementRun::Query,
+            window,
+            cx,
+        );
+    }
+
+    /// Sends `query` as `run` says, off the UI thread and through the
+    /// connection's queue, with the result delivered like any other run.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the closure returns the driver's own error unchanged, like `Connection::execute`"
+    )]
+    pub(super) fn execute_statement(
+        &mut self,
+        query: String,
+        in_new_tab: bool,
+        read_only: ReadOnlyEnforcement,
+        run: StatementRun,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -783,7 +820,9 @@ impl CodeDocument {
                 return;
             };
 
-            if is_refused_by_read_only_profile(connected, &query) {
+            // A plan does not run the statement, so a write is explained on a
+            // read-only profile too.
+            if !run.shows_plan() && is_refused_by_read_only_profile(connected, &query) {
                 show_read_only_profile_toast(cx);
                 return;
             }
@@ -851,7 +890,8 @@ impl CodeDocument {
         self.clear_live_output();
         self.result_tabs.run_in_new_tab = in_new_tab;
 
-        let description = dbflux_core::truncate_string_safe(query.trim(), 80);
+        let reported_query = run.reported_query(&query);
+        let description = dbflux_core::truncate_string_safe(reported_query.trim(), 80);
         let (task_id, cancel_token) = self.runner.start_primary_for_target(
             dbflux_core::TaskKind::Query,
             description,
@@ -859,7 +899,7 @@ impl CodeDocument {
             cx,
         );
         self.app_state.update(cx, |state, _cx| {
-            state.set_task_query_text(task_id, query.trim());
+            state.set_task_query_text(task_id, reported_query.trim());
         });
 
         let exec_id = Uuid::new_v4();
@@ -887,13 +927,15 @@ impl CodeDocument {
         // Drivers that cannot enforce a row budget refuse a request that carries
         // one, so the editor's cap goes only to the connections that advertise
         // the enforcement; the others run the query with no cap at all.
-        let row_limit = enforces_request_row_limit(connection.as_ref()).then(|| {
-            if result_grid.is_some() {
-                usize::MAX
-            } else {
-                self.app_state.read(cx).general_settings().editor_row_limit
-            }
-        });
+        // A plan cut short is no plan, and none grows anywhere near the cap.
+        let row_limit = (enforces_request_row_limit(connection.as_ref()) && !run.shows_plan())
+            .then(|| {
+                if result_grid.is_some() {
+                    usize::MAX
+                } else {
+                    self.app_state.read(cx).general_settings().editor_row_limit
+                }
+            });
 
         let session_database = active_database.clone();
         let mut request = query_request_for_execution(
@@ -926,7 +968,7 @@ impl CodeDocument {
                     .language_service()
                     .detect_dangerous(&query)
             });
-        if confirmed_ceiling.is_some() {
+        if confirmed_ceiling.is_some() && !run.shows_plan() {
             request =
                 request.with_confirmed_ceiling(dbflux_core::ExecutionClassification::Destructive);
         }
@@ -937,7 +979,7 @@ impl CodeDocument {
         let audit_service = self.app_state.read(cx).audit_service().clone();
         let task_target_for_audit = task_target.clone();
         let started_at = Instant::now();
-        let query_for_cancel = query.clone();
+        let query_for_cancel = reported_query.clone();
 
         // Capture honest connection metadata (connection_id string + driver_id) before spawn
         // so we can emit proper fallback events without needing cx in the async block.
@@ -971,15 +1013,16 @@ impl CodeDocument {
                     let execution = if dispatch_token.is_cancelled() {
                         None
                     } else if on_session {
-                        session_binding.execute_unless_cancelled(
+                        session_binding.run_unless_cancelled(
                             connection,
                             session_database,
-                            &request,
+                            &request.sql,
                             &dispatch_token,
+                            |connection| dispatch_statement(connection, run, &request),
                         )
                     } else {
                         Some(super::execution_session::SessionExecution {
-                            result: connection.execute(&request),
+                            result: dispatch_statement(connection.as_ref(), run, &request),
                             isolated: false,
                         })
                     };
@@ -1140,7 +1183,7 @@ impl CodeDocument {
 
             // Capture query text before it gets moved into PendingQueryResult so we can
             // use it in the fallback event if needed.
-            let query_text = query.clone();
+            let query_text = reported_query.clone();
 
             let inner_result = this.update(cx, |doc, cx| {
                 doc.pending.result = Some(PendingQueryResult {
@@ -1152,6 +1195,7 @@ impl CodeDocument {
                     read_only,
                     result_grid,
                     origin: Some(origin),
+                    run,
                 });
                 cx.notify();
             });
@@ -1529,6 +1573,7 @@ impl CodeDocument {
         let is_script = pending.is_script;
         let read_only_refused = pending.read_only.is_required()
             && matches!(pending.result, Err(DbError::NotSupported(_)));
+        let reported_query = pending.run.reported_query(&pending.query);
 
         match pending.result {
             Ok(mut qr) => {
@@ -1567,7 +1612,7 @@ impl CodeDocument {
                     .unwrap_or((None, None));
 
                 let history_entry = HistoryEntry::new(
-                    pending.query.clone(),
+                    reported_query.clone(),
                     database,
                     connection_name,
                     execution_time,
@@ -1580,6 +1625,7 @@ impl CodeDocument {
                 self.setup_data_grid(
                     arc_result,
                     pending.query.clone(),
+                    pending.run,
                     pending.result_grid,
                     pending.origin,
                     window,
@@ -1629,7 +1675,7 @@ impl CodeDocument {
                         audit_actions::SCRIPT_EXECUTE,
                         EventOutcome::Success,
                         summary,
-                        Some(&pending.query),
+                        Some(&reported_query),
                         duration_ms,
                         None,
                         None,
@@ -1641,7 +1687,7 @@ impl CodeDocument {
                         audit_actions::QUERY_EXECUTE,
                         EventOutcome::Success,
                         summary,
-                        Some(&pending.query),
+                        Some(&reported_query),
                         duration_ms,
                         None,
                         metadata_extra.as_ref(),
@@ -1695,6 +1741,9 @@ impl CodeDocument {
                 if !read_only_refused {
                     let title: SharedString = if is_script {
                         dbflux_i18n::t!("document.code.execution.result_title.script_failed").into()
+                    } else if pending.run.shows_plan() {
+                        dbflux_i18n::t!("document.code.execution.result_title.explain_failed")
+                            .into()
                     } else {
                         dbflux_i18n::t!("document.code.execution.result_title.query_failed").into()
                     };
@@ -1757,7 +1806,7 @@ impl CodeDocument {
                         audit_actions::SCRIPT_EXECUTE_FAILED,
                         EventOutcome::Failure,
                         summary,
-                        Some(&pending.query),
+                        Some(&reported_query),
                         duration_ms,
                         Some(&error_msg),
                         None,
@@ -1769,7 +1818,7 @@ impl CodeDocument {
                         audit_actions::QUERY_EXECUTE_FAILED,
                         EventOutcome::Failure,
                         summary,
-                        Some(&pending.query),
+                        Some(&reported_query),
                         duration_ms,
                         Some(&error_msg),
                         None,
@@ -1798,28 +1847,41 @@ impl CodeDocument {
     /// Shows `result` in a new tab, or in place of the tab holding
     /// `result_grid` when set, else of the active tab. A `result_grid` whose
     /// tab was closed meanwhile drops the result.
+    #[allow(clippy::too_many_arguments)]
     fn setup_data_grid(
         &mut self,
         result: Arc<QueryResult>,
-        query: String,
+        statement: String,
+        run: StatementRun,
         result_grid: Option<gpui::EntityId>,
         origin: Option<ResultOrigin>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let set_count = if result.has_additional_results() {
+        let result = if run.shows_plan() {
+            Arc::new(plan_for_display(&result))
+        } else {
+            result
+        };
+        // A plan answers one statement, however many sets the driver sent it in.
+        let set_count = if result.has_additional_results() && !run.shows_plan() {
             result.iter_result_sets().count()
         } else {
             1
         };
         let buffer = self.editor.input_state.read(cx).value().to_string();
-        let captions = super::statements::result_statement_captions(
+        let mut captions = super::statements::result_statement_captions(
             self.effective_language(),
             &buffer,
-            &query,
+            &statement,
             self.execution.query_origin,
             set_count,
         );
+        if run.shows_plan() {
+            let statement_caption = captions.pop().flatten();
+            captions = vec![Some(plan_caption(statement_caption))];
+        }
+        let query = run.reported_query(&statement);
 
         // A multi-statement batch yields one result set per statement. Give
         // each its own tab so every statement's output is visible, rather than
@@ -1855,7 +1917,11 @@ impl CodeDocument {
             .as_ref()
             .map(|origin| origin.connection_id)
             .or(self.connection_id);
-        let limited_row_actions = self.limited_row_actions(&query, profile_id, cx);
+        let limited_row_actions = if run.shows_plan() {
+            LimitedRowActions::default()
+        } else {
+            self.limited_row_actions(&query, profile_id, cx)
+        };
 
         if let Some(tab) =
             target_index.and_then(|index| self.result_tabs.result_tabs.get_mut(index))
@@ -2349,34 +2415,6 @@ impl CodeDocument {
         self.run_query_impl(true, window, cx);
     }
 
-    /// Prepends `EXPLAIN ` to the active query and executes it.
-    ///
-    /// Uses the selected text when a selection exists, otherwise the full buffer.
-    /// The result appears in the same Results panel as a regular query.
-    pub fn run_explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.supports_connection_context() {
-            Toast::warning(dbflux_i18n::t!(
-                "document.code.execution.toast.explain_unavailable"
-            ))
-            .meta_right(now_hms())
-            .push(cx);
-            return;
-        }
-
-        let base_query = self.selected_or_full_query(window, cx);
-        if base_query.trim().is_empty() {
-            Toast::warning(dbflux_i18n::t!(
-                "document.code.execution.toast.enter_query_to_explain"
-            ))
-            .meta_right(now_hms())
-            .push(cx);
-            return;
-        }
-
-        let explain_query = format!("EXPLAIN {}", base_query);
-        self.run_query_text(explain_query, false, window, cx);
-    }
-
     pub fn close_result_tab(&mut self, tab_id: Uuid, cx: &mut Context<Self>) {
         let Some(index) = self
             .result_tabs
@@ -2780,6 +2818,7 @@ impl CodeDocument {
                     read_only: ReadOnlyEnforcement::None,
                     result_grid: None,
                     origin: None,
+                    run: StatementRun::Query,
                 });
                 cx.notify();
             });
@@ -3458,6 +3497,10 @@ mod tests {
             "document.code.execution.toast.auto_refresh_blocked",
             "document.code.execution.toast.explain_unavailable",
             "document.code.execution.toast.enter_query_to_explain",
+            "document.code.execution.toast.explain_would_execute",
+            "document.code.execution.toast.explain_transaction_control",
+            "document.code.execution.result_title.explain_failed",
+            "document.code.result.explain_caption",
             "document.code.execution.toast.enter_script_content",
             "document.code.execution.toast.write_query_first",
             "document.code.execution.toast.connecting",
@@ -3588,6 +3631,7 @@ mod rail_tests {
                 document.setup_data_grid(
                     two_row_result(),
                     "SELECT 1".to_string(),
+                    crate::code::explain::StatementRun::Query,
                     None,
                     None,
                     window,
@@ -4066,6 +4110,7 @@ mod result_tab_keyboard_tests {
                     document.setup_data_grid(
                         one_row_result(),
                         "SELECT 1".to_string(),
+                        crate::code::explain::StatementRun::Query,
                         None,
                         None,
                         window,
@@ -4319,6 +4364,7 @@ mod result_tab_keyboard_tests {
                         document.setup_data_grid(
                             one_row_result(),
                             "SELECT 1".to_string(),
+                            crate::code::explain::StatementRun::Query,
                             None,
                             None,
                             window,
@@ -4386,6 +4432,7 @@ mod result_tab_keyboard_tests {
                     document.setup_data_grid(
                         one_row_result(),
                         "SELECT 1".to_string(),
+                        crate::code::explain::StatementRun::Query,
                         None,
                         None,
                         window,

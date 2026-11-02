@@ -751,6 +751,75 @@ fn mssql_explain_returns_xml_plan() -> Result<(), DbError> {
     })
 }
 
+/// SHOWPLAN compiles without running, for a write and for several statements
+/// in one batch, and the readable form is the plan as one table of text lines.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_plan_only_explain_reads_as_text_and_runs_nothing() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new("CREATE TABLE explain_test (id INT)"))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO explain_test (id) VALUES (1), (2)",
+        ))?;
+        let rows = |connection: &dyn Connection| -> Result<usize, DbError> {
+            Ok(connection
+                .execute(&QueryRequest::new("SELECT id FROM explain_test"))?
+                .rows
+                .len())
+        };
+
+        let plan = dbflux_core::explain_plan_only(
+            &*connection,
+            &QueryRequest::new("DELETE FROM explain_test WHERE id = 1"),
+        )?;
+        assert_eq!(plan.columns.len(), 1);
+        assert_eq!(plan.columns[0].name, "StmtText");
+        assert!(plan.rows.len() > 1, "the statement, then its plan");
+        assert!(!plan.has_additional_results());
+        assert_eq!(rows(&*connection)?, 2);
+
+        // The splitter sees one statement here; T-SQL sees two.
+        dbflux_core::explain_plan_only(
+            &*connection,
+            &QueryRequest::new("SELECT 1 DELETE FROM explain_test"),
+        )?;
+        assert_eq!(rows(&*connection)?, 2);
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+/// T-SQL reads the keyword as a procedure call, carries on after it fails and
+/// runs the rest of the batch.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_refuses_a_leading_explain_before_it_runs_the_rest() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new("CREATE TABLE explain_test (id INT)"))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO explain_test (id) VALUES (1), (2)",
+        ))?;
+
+        let refused = connection.execute(&QueryRequest::new(
+            "EXPLAIN DELETE FROM explain_test WHERE id = 1",
+        ));
+        assert!(matches!(refused, Err(DbError::NotSupported(_))));
+
+        let remaining = connection.execute(&QueryRequest::new("SELECT id FROM explain_test"))?;
+        assert_eq!(remaining.rows.len(), 2);
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Describe
 // ---------------------------------------------------------------------------

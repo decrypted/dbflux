@@ -88,7 +88,8 @@ Microsoft SQL Server 关系型数据库。
 
 ### 查询计划
 
-- `explain()` 在 `SET SHOWPLAN_XML ON` 下运行该查询，并以 XML 形式返回查询计划。驱动程序随后总会执行 `SET SHOWPLAN_XML OFF`，以免会话状态泄漏。
+- `explain()` 在 `SET SHOWPLAN_XML ON` 下运行该查询，并以 XML 形式返回查询计划；当请求要求可读形式时，则在 `SET SHOWPLAN_TEXT ON` 下以文本行返回。驱动程序随后总会关闭 SHOWPLAN，以免会话状态泄漏，并在三个批次期间持有会话，使其他请求不会被规划而不运行。
+- `execute()` 拒绝以 `EXPLAIN` 开头的请求。SQL Server 没有此语句：它把该关键字读作过程调用，调用失败后继续运行批次的其余部分。
 - `version_query()` 返回 `SELECT @@VERSION`。
 
 ### 方言

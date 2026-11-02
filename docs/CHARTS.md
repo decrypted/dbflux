@@ -157,6 +157,8 @@ A `SavedChart` persists:
 - `source` — a `SavedChartSource`, either `Query { query }` (a query string
   executed inside a `ChartDocument`) or `Collection { collection_ref,
   time_window }` (a collection-browse source).
+- `context`: where a `Query` source runs, a `SavedChartContext`; see
+  [Saving](#saving).
 - `chart_spec` and `bindings` — the full rendering configuration (`ChartSpec`
   and `BindingSpec`).
 - `time_range_preset`, `refresh_policy`, `created_at`, `updated_at`.
@@ -309,11 +311,34 @@ chart type and Y scale included, and upserts a `SavedChart` into the app state's
 existing `saved_chart_id` when present so the record is overwritten rather than
 duplicated.
 
-The database is not saved. A reopened chart or dashboard panel sends no database
-and runs on the connection's own, whatever the sidebar selects, so a chart saved
-from another database of the connection needs its table qualified. Saved query
-charts and dashboard panels take the editor row limit; metric and instance metric
-sources do not.
+Saving keeps where the chart runs, taken from its current execution context: the
+database, the schema and the container, the targets (such as CloudWatch log
+groups) and the query mode. A chart opened from an editor holds the editor's, and
+one saved from the Chart view of a result holds where that result ran. They are
+names, like the query saved beside them, in `context_*` columns of
+`viz_saved_charts` and in `viz_saved_chart_context_targets`. The connection id is
+not stored, since the chart names its profile, and neither are the time bounds,
+since the chart has its own range. A driver with one fixed database (SQLite,
+Turso, CloudWatch and others) stores no database. Renaming, saving again and
+duplicating keep the context.
+
+A reopened chart or dashboard panel runs there, whatever the sidebar selects. On a
+driver with one connection per database, the chart opens the connection it needs.
+A stored database the connection does not list stops the chart with a message
+naming it, and nothing runs on another database. That check reads the list from
+when the connection last connected or refreshed, so a database created since counts
+as missing until a refresh. A log group that no longer exists gets the driver's own
+error in the chart area. A chart saved before charts stored this has no context: it
+sends no database and runs on the connection's own, so its table needs to be
+qualified, and saving it again does not add one. Saved query charts and dashboard
+panels take the editor row limit; metric and instance metric sources do not.
+
+A chart runs on the connection, not on the session of the editor it came from. On a
+driver whose editor has a session of its own (DuckDB, Turso), the chart cannot see
+what that editor has not committed. A chart opened while the editor has a
+transaction open says so in one line above its area. On other drivers the editor
+runs on that same connection, so a chart opened during its transaction runs inside
+it and does see those rows, until the editor commits or rolls back.
 
 ```mermaid
 flowchart TD

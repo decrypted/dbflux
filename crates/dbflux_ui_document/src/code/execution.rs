@@ -2090,9 +2090,11 @@ impl CodeDocument {
             DataGridPanel::new_for_result(result, query.clone(), profile_id, app_state, window, cx)
         });
 
+        let chart_context = origin.as_ref().map(ResultOrigin::execution_context);
         grid.update(cx, |grid, cx| {
             grid.set_side_panels_hosted(true);
             grid.set_result_caption(caption, cx);
+            grid.set_result_context(chart_context);
         });
 
         if let Some(panel) = self.source.source_time_range_panel.clone() {

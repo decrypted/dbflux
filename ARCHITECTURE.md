@@ -1038,7 +1038,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - `cfg_folders` (connection tree organization)
   - `st_sessions`, `st_tabs`, `st_query_history`, `st_saved_queries`, `st_recent_items`, `st_ui_state`
   - `aud_audit_events`, `aud_audit_entities`, `aud_audit_attributes`
-  - `viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_dimensions`, `viz_saved_chart_source_metric_series`
+  - `viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_dimensions`, `viz_saved_chart_source_metric_series`, `viz_saved_chart_context_targets`
   - `qry_saved_queries`, `qry_saved_query_columns`, `qry_saved_query_sorts`, `qry_saved_query_joins`
   - `sys_migrations`, `sys_legacy_imports`
 - Legacy JSON import: On first startup, `dbflux_storage/src/legacy.rs` imports existing JSON files into SQLite if they exist:

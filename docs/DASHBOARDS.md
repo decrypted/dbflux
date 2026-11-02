@@ -140,6 +140,7 @@ under the `viz_*` table prefix:
 | `viz_saved_chart_binding_y` | Y-axis bindings |
 | `viz_saved_chart_source_metric_dimensions` | CloudWatch metric dimensions |
 | `viz_saved_chart_source_metric_series` | CloudWatch metric series spec |
+| `viz_saved_chart_context_targets` | Targets where a query chart runs, such as log groups |
 
 Repositories live in `crates/dbflux_storage/src/repositories/viz_*.rs` and
 implement the standard `Repository` trait

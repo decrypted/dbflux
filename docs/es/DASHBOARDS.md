@@ -149,6 +149,7 @@ Todos los datos de dashboard y saved-chart viven en
 | `viz_saved_chart_binding_y`                | Bindings del eje Y                                                       |
 | `viz_saved_chart_source_metric_dimensions` | Dimensiones de métrica de CloudWatch                                     |
 | `viz_saved_chart_source_metric_series`     | Spec de serie de métrica de CloudWatch                                   |
+| `viz_saved_chart_context_targets`          | Destinos de un gráfico de query, como grupos de logs                     |
 
 Los repositorios viven en `crates/dbflux_storage/src/repositories/viz_*.rs` e
 implementan el trait `Repository` estándar (`all()`, `find_by_id()`, `upsert()`,

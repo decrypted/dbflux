@@ -1029,7 +1029,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
   - `cfg_folders`（连接树组织）
   - `st_sessions`、`st_tabs`、`st_query_history`、`st_saved_queries`、`st_recent_items`、`st_ui_state`
   - `aud_audit_events`、`aud_audit_entities`、`aud_audit_attributes`
-  - `viz_dashboards`、`viz_dashboard_panels`、`viz_saved_charts`、`viz_saved_chart_series`、`viz_saved_chart_binding_y`、`viz_saved_chart_source_metric_dimensions`、`viz_saved_chart_source_metric_series`
+  - `viz_dashboards`、`viz_dashboard_panels`、`viz_saved_charts`、`viz_saved_chart_series`、`viz_saved_chart_binding_y`、`viz_saved_chart_source_metric_dimensions`、`viz_saved_chart_source_metric_series`、`viz_saved_chart_context_targets`
   - `qry_saved_queries`、`qry_saved_query_columns`、`qry_saved_query_sorts`、`qry_saved_query_joins`
   - `sys_migrations`、`sys_legacy_imports`
 - 旧版 JSON 导入：首次启动时，`dbflux_storage/src/legacy.rs` 会把已存在的 JSON 文件导入 SQLite：

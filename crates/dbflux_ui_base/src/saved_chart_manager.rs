@@ -18,7 +18,7 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 use dbflux_components::saved_chart::MetricSeries;
 use dbflux_components::{
-    SavedChart, SavedChartRefreshPolicy, TimeRangePreset,
+    SavedChart, SavedChartContext, SavedChartRefreshPolicy, TimeRangePreset,
     chart::{AggKind, AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, SeriesSpec, YScale},
     saved_chart::SavedChartSource,
 };
@@ -188,6 +188,13 @@ fn dto_to_chart(dto: SavedChartDto) -> Result<SavedChart, StorageError> {
         name: dto.name,
         profile_id,
         source,
+        context: SavedChartContext {
+            database: dto.context_database,
+            schema: dto.context_schema,
+            container: dto.context_container,
+            targets: dto.context_targets,
+            query_mode: dto.context_query_mode,
+        },
         chart_spec,
         bindings: binding,
         time_range_preset,
@@ -324,11 +331,17 @@ fn chart_to_dto(
             _ => None,
         },
 
+        context_database: chart.context.database.clone(),
+        context_schema: chart.context.schema.clone(),
+        context_container: chart.context.container.clone(),
+        context_query_mode: chart.context.query_mode.clone(),
+
         series,
         binding_y,
         metric_series,
         metric_dimensions,
         instance_metric_id,
+        context_targets: chart.context.targets.clone(),
     }
 }
 
@@ -689,7 +702,8 @@ impl SavedChartManager {
     }
 
     /// Deep-copies a chart: new UUID, name prefixed with "Copy of ", same
-    /// profile_id, chart spec, bindings, time range preset, and refresh policy.
+    /// profile_id, context, chart spec, bindings, time range preset, and refresh
+    /// policy.
     ///
     /// Returns the new chart's UUID.
     pub fn duplicate_chart(&mut self, id: Uuid) -> Result<Uuid, StorageError> {
@@ -708,6 +722,7 @@ impl SavedChartManager {
             name: format!("Copy of {}", src.name),
             profile_id: src.profile_id,
             source: src.source.clone(),
+            context: src.context.clone(),
             chart_spec: src.chart_spec.clone(),
             bindings: src.bindings.clone(),
             time_range_preset: src.time_range_preset,
@@ -781,6 +796,7 @@ mod tests {
             source: SavedChartSource::Query {
                 query: "SELECT 1".to_string(),
             },
+            context: Default::default(),
             chart_spec: ChartSpec {
                 kind: ChartKind::Line,
                 x_axis: AxisSpec {
@@ -891,6 +907,7 @@ mod tests {
                     label: None,
                 }],
             },
+            context: Default::default(),
             chart_spec: ChartSpec {
                 kind: ChartKind::Line,
                 x_axis: AxisSpec {
@@ -1009,6 +1026,94 @@ mod tests {
         assert_eq!(mgr2.all_charts().len(), 2);
     }
 
+    fn stored_context() -> SavedChartContext {
+        SavedChartContext {
+            database: Some("analytics".to_string()),
+            schema: Some("reporting".to_string()),
+            container: Some("orders".to_string()),
+            targets: vec!["/aws/b".to_string(), "/aws/a".to_string()],
+            query_mode: Some("sql".to_string()),
+        }
+    }
+
+    fn manager_for_profile() -> (StorageRuntime, Arc<SavedChartsRepository>, Uuid) {
+        let rt = temp_storage();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
+        let profile_id = Uuid::new_v4();
+        insert_test_profile(&conn, profile_id);
+        (rt, Arc::new(SavedChartsRepository::new(conn)), profile_id)
+    }
+
+    /// Through storage and back, target order included, and through what
+    /// rewrites a record: a rename keeps the context and Save-as copies it.
+    #[test]
+    fn test_context_survives_storage_rename_and_duplicate() {
+        let (_rt, repo, profile_id) = manager_for_profile();
+        let mut manager = SavedChartManager::new(Arc::clone(&repo));
+
+        let mut chart = sample_chart("with context", profile_id);
+        chart.context = stored_context();
+        let id = chart.id;
+        manager.upsert(chart).expect("upsert");
+
+        let reloaded = SavedChartManager::new(Arc::clone(&repo));
+        assert_eq!(
+            reloaded.chart_by_id(id).expect("stored").context,
+            stored_context()
+        );
+
+        manager
+            .rename_chart(id, "renamed".to_string())
+            .expect("rename");
+        let copy = manager.duplicate_chart(id).expect("duplicate");
+
+        let reloaded = SavedChartManager::new(repo);
+        assert_eq!(
+            reloaded.chart_by_id(id).expect("renamed").context,
+            stored_context()
+        );
+        assert_eq!(
+            reloaded.chart_by_id(copy).expect("copied").context,
+            stored_context()
+        );
+    }
+
+    /// Saving a record again with fewer targets leaves none of the old ones.
+    #[test]
+    fn test_context_targets_are_replaced_on_upsert() {
+        let (_rt, repo, profile_id) = manager_for_profile();
+        let mut manager = SavedChartManager::new(Arc::clone(&repo));
+
+        let mut chart = sample_chart("targets", profile_id);
+        chart.context = stored_context();
+        let id = chart.id;
+        manager.upsert(chart.clone()).expect("upsert");
+
+        chart.context.targets = vec!["/aws/a".to_string()];
+        manager.upsert(chart).expect("upsert again");
+
+        let reloaded = SavedChartManager::new(repo);
+        assert_eq!(
+            reloaded.chart_by_id(id).expect("stored").context.targets,
+            ["/aws/a"]
+        );
+    }
+
+    #[test]
+    fn test_chart_without_context_reads_back_empty() {
+        let (_rt, repo, profile_id) = manager_for_profile();
+        let mut manager = SavedChartManager::new(Arc::clone(&repo));
+
+        let chart = sample_chart("no context", profile_id);
+        let id = chart.id;
+        manager.upsert(chart).expect("upsert");
+
+        let reloaded = SavedChartManager::new(repo);
+        assert!(reloaded.chart_by_id(id).expect("stored").context.is_empty());
+    }
+
     #[test]
     fn test_duplicate_chart_not_found_returns_err() {
         let rt = temp_storage();
@@ -1090,6 +1195,7 @@ mod tests {
             source: SavedChartSource::InstanceMetric {
                 metric_id: "pg.cache_hit_ratio".to_string(),
             },
+            context: Default::default(),
             chart_spec: ChartSpec {
                 kind: ChartKind::Line,
                 x_axis: AxisSpec {

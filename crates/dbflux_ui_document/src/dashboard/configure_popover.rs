@@ -454,6 +454,7 @@ mod keyboard_tests {
             id: Uuid::new_v4(),
             name: "Latency".to_string(),
             profile_id,
+            context: Default::default(),
             source: SavedChartSource::Query {
                 query: String::new(),
             },

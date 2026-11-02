@@ -1330,6 +1330,9 @@ impl DashboardDocument {
             .collect();
 
         for idx in refreshable_indices {
+            if let Some(DashboardPanelSlot::Loaded { panel, .. }) = self.panel_slots.get(idx) {
+                panel.update(cx, |doc, _| doc.retry_database_on_next_run());
+            }
             self.request_reexec_for_slot(idx, cx);
         }
     }

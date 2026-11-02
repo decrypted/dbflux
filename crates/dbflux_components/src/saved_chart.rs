@@ -18,7 +18,9 @@
 
 use crate::chart::{BindingSpec, ChartSpec};
 use chrono::{DateTime, Utc};
-use dbflux_core::{CollectionRef, Identifiable, ResolvedWindow};
+use dbflux_core::{
+    CollectionRef, ExecutionContext, ExecutionSourceContext, Identifiable, ResolvedWindow,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -118,6 +120,83 @@ pub enum SavedChartRefreshPolicy {
 }
 
 // ---------------------------------------------------------------------------
+// SavedChartContext
+// ---------------------------------------------------------------------------
+
+/// Where a saved query chart runs, kept from its execution context at Save.
+///
+/// Names only, which are no more sensitive than the query saved beside them.
+/// The rest of `ExecutionContext` stays out on purpose: the connection is the
+/// chart's `profile_id`, and the time bounds come from the chart's own range.
+///
+/// Empty on a chart saved before this existed: it sends no database and runs on
+/// the connection's own.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SavedChartContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    /// What the query reads from within the connection, such as log groups.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<String>,
+    /// The driver's query mode, which names the language the query is written
+    /// in and so the language the read check judges it by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_mode: Option<String>,
+}
+
+impl SavedChartContext {
+    /// Keeps what can be stored of `context`. `has_databases` is false for a
+    /// driver with one fixed database, where there is no other one to read and
+    /// a chart has nothing to remember.
+    pub fn capture(context: &ExecutionContext, has_databases: bool) -> Self {
+        let (targets, query_mode) = match &context.source {
+            Some(ExecutionSourceContext::CollectionWindow {
+                targets,
+                query_mode,
+                ..
+            }) => (targets.clone(), query_mode.clone()),
+            _ => (Vec::new(), None),
+        };
+
+        Self {
+            database: context.database.clone().filter(|_| has_databases),
+            schema: context.schema.clone(),
+            container: context.container.clone(),
+            targets,
+            query_mode,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The execution context a reopened chart runs in. A run replaces the
+    /// bounds with the chart's time range, so `start_ms` and `end_ms` only
+    /// matter to a run before the chart has one.
+    pub fn execution_context(&self, start_ms: i64, end_ms: i64) -> ExecutionContext {
+        let has_source = !self.targets.is_empty() || self.query_mode.is_some();
+
+        ExecutionContext {
+            connection_id: None,
+            database: self.database.clone(),
+            schema: self.schema.clone(),
+            container: self.container.clone(),
+            source: has_source.then(|| ExecutionSourceContext::CollectionWindow {
+                targets: self.targets.clone(),
+                start_ms,
+                end_ms,
+                query_mode: self.query_mode.clone(),
+            }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SavedChart
 // ---------------------------------------------------------------------------
 
@@ -141,6 +220,10 @@ pub struct SavedChart {
     /// this field was introduced, no migration is needed.
     #[serde(default)]
     pub source: SavedChartSource,
+    /// Where a query source runs. Absent from anything written before it
+    /// existed, which then reads as an empty context.
+    #[serde(default, skip_serializing_if = "SavedChartContext::is_empty")]
+    pub context: SavedChartContext,
     /// Serialized chart spec. Uses `#[serde(default)]` fields so old JSON
     /// without newer fields is still loadable.
     pub chart_spec: ChartSpec,
@@ -173,6 +256,7 @@ impl SavedChart {
             name,
             profile_id,
             source: SavedChartSource::Query { query },
+            context: SavedChartContext::default(),
             chart_spec,
             bindings,
             time_range_preset: None,
@@ -200,6 +284,7 @@ impl SavedChart {
                 collection_ref,
                 time_window,
             },
+            context: SavedChartContext::default(),
             chart_spec,
             bindings,
             time_range_preset: None,
@@ -227,6 +312,7 @@ impl SavedChart {
             name,
             profile_id,
             source: SavedChartSource::Metric { series },
+            context: SavedChartContext::default(),
             chart_spec,
             bindings,
             time_range_preset: None,
@@ -294,6 +380,95 @@ mod tests {
             track_source_indices: false,
             y_scale: crate::chart::YScale::Linear,
         }
+    }
+
+    fn console_context() -> ExecutionContext {
+        ExecutionContext {
+            connection_id: Some(Uuid::new_v4()),
+            database: Some("analytics".to_string()),
+            schema: Some("reporting".to_string()),
+            container: Some("orders".to_string()),
+            source: Some(ExecutionSourceContext::CollectionWindow {
+                targets: vec!["/aws/app".to_string()],
+                start_ms: 11,
+                end_ms: 22,
+                query_mode: Some("sql".to_string()),
+            }),
+        }
+    }
+
+    /// Names travel; the connection id and the time bounds do not, since they
+    /// only mean something on this machine at this moment.
+    #[test]
+    fn capture_keeps_names_and_leaves_out_the_connection_and_the_bounds() {
+        let stored = SavedChartContext::capture(&console_context(), true);
+
+        assert_eq!(
+            stored,
+            SavedChartContext {
+                database: Some("analytics".to_string()),
+                schema: Some("reporting".to_string()),
+                container: Some("orders".to_string()),
+                targets: vec!["/aws/app".to_string()],
+                query_mode: Some("sql".to_string()),
+            }
+        );
+
+        let restored = stored.execution_context(100, 200);
+        assert_eq!(restored.connection_id, None);
+        assert_eq!(restored.database.as_deref(), Some("analytics"));
+        assert_eq!(restored.schema.as_deref(), Some("reporting"));
+        assert_eq!(restored.container.as_deref(), Some("orders"));
+        assert!(matches!(
+            restored.source,
+            Some(ExecutionSourceContext::CollectionWindow {
+                ref targets,
+                start_ms: 100,
+                end_ms: 200,
+                ref query_mode,
+            }) if targets == &["/aws/app"] && query_mode.as_deref() == Some("sql")
+        ));
+    }
+
+    #[test]
+    fn capture_keeps_no_database_for_a_driver_without_any() {
+        let stored = SavedChartContext::capture(&console_context(), false);
+
+        assert_eq!(stored.database, None);
+        assert_eq!(stored.schema.as_deref(), Some("reporting"));
+    }
+
+    /// No source of its own: a chart then keeps the window source its data
+    /// source builds, without targets, as before.
+    #[test]
+    fn an_empty_context_restores_to_an_empty_execution_context() {
+        let restored = SavedChartContext::default().execution_context(100, 200);
+
+        assert_eq!(restored.database, None);
+        assert!(restored.source.is_none());
+    }
+
+    /// What portable JSON of a chart holds, and what one written before the
+    /// field existed reads as.
+    #[test]
+    fn the_context_round_trips_and_an_old_record_reads_as_empty() {
+        let mut chart = sample_chart("c", Uuid::new_v4());
+        chart.context = SavedChartContext::capture(&console_context(), true);
+
+        let json = serde_json::to_value(&chart).expect("serialize");
+        let parsed: SavedChart = serde_json::from_value(json.clone()).expect("deserialize");
+        assert_eq!(parsed.context, chart.context);
+
+        let mut old = json;
+        old.as_object_mut().expect("an object").remove("context");
+        let parsed: SavedChart = serde_json::from_value(old).expect("old record");
+        assert!(parsed.context.is_empty());
+
+        let empty = serde_json::to_value(sample_chart("c", Uuid::new_v4())).expect("serialize");
+        assert!(
+            empty.get("context").is_none(),
+            "a chart without a context writes what an old build reads"
+        );
     }
 
     fn sample_chart(name: &str, profile_id: Uuid) -> SavedChart {

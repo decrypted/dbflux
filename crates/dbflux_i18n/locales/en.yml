@@ -1333,11 +1333,16 @@ document:
       rows_truncated: "The chart shows the first %{rows} rows: the query returned more than the row limit."
       chart_saved: Chart saved
       save_failed: "Failed to save chart: %{error}"
+    note:
+      console_transaction: "This chart runs on a separate connection and does not show the uncommitted changes of the console it was opened from."
     error:
       source: "Chart source error: %{error}"
       no_connection_selected: No connection selected
       connection_not_found: Connection not found
       collection_source_unsupported: "Collection source not supported in ChartDocument; open via DataDocument"
+      database_missing: "This chart was saved for database '%{database}', which is not on this connection, so it did not run. If the database is new, refresh the connection."
+      database_not_opened: "Could not open database '%{database}' for this chart."
+      database_open_failed: "Could not open database '%{database}' for this chart: %{error}"
     metric_picker:
       apply: Apply
       dropdown:

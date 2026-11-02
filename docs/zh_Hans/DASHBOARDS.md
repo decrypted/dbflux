@@ -95,6 +95,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 | `viz_saved_chart_binding_y` | Y 轴绑定 |
 | `viz_saved_chart_source_metric_dimensions` | CloudWatch 指标维度 |
 | `viz_saved_chart_source_metric_series` | CloudWatch 指标序列规格 |
+| `viz_saved_chart_context_targets` | 查询图表运行的目标（例如日志组） |
 
 存储库位于 `crates/dbflux_storage/src/repositories/viz_*.rs`，实现标准的 `Repository` trait（`all()`、`find_by_id()`、`upsert()`、`delete()`）。
 

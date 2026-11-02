@@ -130,6 +130,7 @@ DBFlux는 차트 구성을 **저장된 차트**로 유지하고 이를 **대시�
 | `viz_saved_chart_binding_y` | Y축 바인딩 |
 | `viz_saved_chart_source_metric_dimensions` | CloudWatch 메트릭 차원 |
 | `viz_saved_chart_source_metric_series` | CloudWatch 메트릭 시리즈 사양 |
+| `viz_saved_chart_context_targets` | 쿼리 차트가 실행되는 대상(로그 그룹 등) |
 
 리포지토리는 `crates/dbflux_storage/src/repositories/viz_*.rs`에 위치하며 표준
 `Repository` 트레이트(`all()`, `find_by_id()`, `upsert()`, `delete()`)를 구현합니다.

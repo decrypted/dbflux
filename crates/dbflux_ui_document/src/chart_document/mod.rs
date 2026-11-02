@@ -36,11 +36,13 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::ModalFocus;
 use dbflux_components::result_panel::{ResultPanel, SegmentPosition, ToolbarSegment, ViewHandle};
 use dbflux_components::result_view::ResultViewMode;
-use dbflux_components::saved_chart::{SavedChart, SavedChartSource};
+use dbflux_components::saved_chart::{SavedChart, SavedChartContext, SavedChartSource};
 use dbflux_core::{
-    ExecutionContext, ExecutionSourceContext, QueryRequest, QueryResult, RefreshPolicy,
+    ConnectedProfile, ExecutionContext, ExecutionSourceContext, QueryRequest, QueryResult,
+    RefreshPolicy, SchemaLoadingStrategy,
 };
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::object_tree::{ObjectTreeEvent, ObjectTreeOutcome, ObjectTreeRequestKey};
 use dbflux_ui_base::toast::{PendingToast, Toast};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
@@ -130,6 +132,58 @@ fn chart_query_request(
     crate::code::apply_editor_row_limit(request, row_limit)
 }
 
+/// What Save keeps of `context`: no database on a driver that has only one.
+/// Without a connection to ask, the context is kept as it is, and a driver with
+/// one database would still run it there.
+pub(crate) fn saved_chart_context(
+    app_state: &Entity<AppStateEntity>,
+    profile_id: Option<Uuid>,
+    context: &ExecutionContext,
+    cx: &App,
+) -> SavedChartContext {
+    let has_databases = profile_id
+        .and_then(|id| app_state.read(cx).connections().get(&id))
+        .is_none_or(|connected| {
+            connected.connection.schema_loading_strategy() != SchemaLoadingStrategy::SingleDatabase
+        });
+
+    SavedChartContext::capture(context, has_databases)
+}
+
+/// Whether the connection knows it has no `database`. A chart stored for one
+/// must not run on another, and not every driver refuses a name it does not
+/// have: MongoDB would answer with no rows, a driver with one fixed database
+/// would ignore the name.
+///
+/// Reads what the connection listed when it connected or last refreshed, so a
+/// database created since then counts as missing until a refresh. An empty list
+/// says nothing, and the driver decides.
+fn connection_lacks_database(
+    connected: &ConnectedProfile,
+    listed_since: Option<&[dbflux_core::DatabaseInfo]>,
+    database: &str,
+) -> bool {
+    let Some(schema) = connected.schema.as_ref() else {
+        return false;
+    };
+
+    let current = schema.current_database();
+    if connected.connection.schema_loading_strategy() == SchemaLoadingStrategy::SingleDatabase {
+        return current.is_some_and(|current| current != database);
+    }
+
+    let listed = schema.databases();
+    let names = |databases: &[dbflux_core::DatabaseInfo]| {
+        databases.iter().any(|known| known.name == database)
+    };
+
+    !listed.is_empty()
+        && current != Some(database)
+        && connected.database_connection(database).is_none()
+        && !names(listed)
+        && !listed_since.is_some_and(names)
+}
+
 /// The chart settings the user can change and Save keeps, compared against
 /// what the document opened or was last saved with.
 #[derive(Clone, PartialEq, Eq, Default)]
@@ -172,11 +226,28 @@ pub struct ChartDocument {
     app_state: Entity<AppStateEntity>,
     pending_result: Option<PendingResult>,
     pending_run_on_first_render: bool,
-    /// Where the query runs: the database, schema and source of the document
-    /// the chart was asked for from, fixed when it opened. Empty for a saved
-    /// chart: no database is stored with it, so it sends none and runs on the
-    /// connection's own, rather than follow whatever the sidebar selects.
+    /// Where the query runs, fixed when the chart opened and never following
+    /// the sidebar: the database, schema and source of the document it was asked
+    /// for from, or what a saved chart stored. A chart saved before charts
+    /// stored this has an empty one, sends no database and runs on the
+    /// connection's own.
     execution_context: ExecutionContext,
+    /// The database of `execution_context` came from storage, where nothing has
+    /// checked that it still exists.
+    database_is_stored: bool,
+    /// The connection per database this chart asked to open, which its run
+    /// waits for. Holds that run's report to the dashboard.
+    awaited_database: Option<String>,
+    /// The database just opened for this chart, so one that opens without
+    /// giving a connection to run on stops instead of asking again.
+    opened_database: Option<String>,
+    /// Why the database could not be opened. A dashboard's shared timer keeps
+    /// asking a panel, and each attempt would report the failure again, so only
+    /// a refresh by hand tries again.
+    database_open_failure: Option<(String, String)>,
+    /// The console this chart was opened from had a transaction open on its own
+    /// session, whose uncommitted rows the chart cannot see.
+    console_transaction_note: bool,
     /// Why the last run did not produce a result. A toast fades, so the chart
     /// area keeps saying it.
     failure: Option<String>,
@@ -339,6 +410,13 @@ impl ChartDocument {
             },
         );
 
+        let database_opened_sub = cx.subscribe(
+            &app_state,
+            |this: &mut Self, _state, event: &ObjectTreeEvent, cx| {
+                this.on_object_tree_settled(event, cx);
+            },
+        );
+
         let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
@@ -388,6 +466,11 @@ impl ChartDocument {
             pending_result: None,
             pending_run_on_first_render: pending_run,
             execution_context: ExecutionContext::default(),
+            database_is_stored: false,
+            awaited_database: None,
+            opened_database: None,
+            database_open_failure: None,
+            console_transaction_note: false,
             failure: None,
             truncation_reported: false,
             refusal_reported: None,
@@ -419,7 +502,11 @@ impl ChartDocument {
             focus_mode: ChartDocFocus::default(),
             result_panel: None,
             embedded: false,
-            _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
+            _subscriptions: vec![
+                metric_apply_sub,
+                app_state_disconnect_sub,
+                database_opened_sub,
+            ],
             instance_metric_buffer: None,
         }
     }
@@ -525,6 +612,16 @@ impl ChartDocument {
 
         doc.title = saved.name.clone();
         doc.saved_chart_id = Some(saved.id);
+
+        // The chart's time range replaces these bounds before a run reaches the
+        // driver, and until it has one the default range is the honest guess.
+        let now_ms = current_epoch_ms();
+        let lookback_ms = TimeRangePanel::lookback_ms_for_index(doc.initial_time_range_index)
+            .unwrap_or(24 * 60 * 60_000);
+        doc.execution_context = saved
+            .context
+            .execution_context(now_ms - lookback_ms, now_ms);
+        doc.database_is_stored = saved.context.database.is_some();
 
         // A chart saved before it had a result holds no bindings.
         if !saved.bindings.y.is_empty() {
@@ -645,6 +742,11 @@ impl ChartDocument {
             pending_result: None,
             pending_run_on_first_render: true,
             execution_context: ExecutionContext::default(),
+            database_is_stored: false,
+            awaited_database: None,
+            opened_database: None,
+            database_open_failure: None,
+            console_transaction_note: false,
             failure: None,
             truncation_reported: false,
             refusal_reported: None,
@@ -871,6 +973,7 @@ impl ChartDocument {
                 true
             }
             Command::RefreshSchema => {
+                self.retry_database_on_next_run();
                 self.request_reexecute(window, cx);
                 true
             }
@@ -1094,6 +1197,13 @@ impl ChartDocument {
                     _ => self.blocker_message(cx),
                 }
             };
+        }
+
+        if let Some(database) = &self.awaited_database {
+            return dbflux_i18n::t!(
+                "document.code.execution.toast.connecting",
+                database = database
+            );
         }
 
         if self.exec_state == ExecState::Running {
@@ -1345,6 +1455,18 @@ impl ChartDocument {
         let database = runs_user_query
             .then(|| self.execution_context.database.clone())
             .flatten();
+
+        if self.database_is_stored
+            && let Some(database) = database.as_deref()
+            && self.stored_database_is_missing(profile_id, database, cx)
+        {
+            self.refuse_run(
+                dbflux_i18n::t!("document.chart.error.database_missing", database = database),
+                cx,
+            );
+            return false;
+        }
+
         let resolved = {
             let state = self.app_state.read(cx);
             state
@@ -1356,19 +1478,7 @@ impl ChartDocument {
             Some(Ok(resolved)) => resolved,
             Some(Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
                 database,
-            })) => {
-                self.report_failure(
-                    UserFacingError::new(
-                        ErrorKind::Network,
-                        dbflux_i18n::t!(
-                            "document.code.execution.toast.connecting",
-                            database = database
-                        ),
-                    ),
-                    cx,
-                );
-                return false;
-            }
+            })) => return self.open_database_for_run(profile_id, database, cx),
             None => {
                 self.report_failure(
                     UserFacingError::new(
@@ -1380,6 +1490,9 @@ impl ChartDocument {
                 return false;
             }
         };
+
+        self.opened_database = None;
+        self.database_open_failure = None;
 
         // Apply time-range macro substitution before dispatch. ChartDocument
         // does not flow through `query_request_for_execution` in code/mod.rs,
@@ -1477,6 +1590,157 @@ impl ChartDocument {
         .detach();
 
         true
+    }
+
+    fn stored_database_is_missing(&self, profile_id: Uuid, database: &str, cx: &App) -> bool {
+        let state = self.app_state.read(cx);
+        let listed_since = state.get_database_list(profile_id).map(Vec::as_slice);
+
+        state
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|connected| connection_lacks_database(connected, listed_since, database))
+    }
+
+    /// Asks for the connection `database` needs on a driver with one per
+    /// database, then runs. Nothing else opens it: after a restart a saved chart
+    /// is the first to want it, and without this would wait for someone to
+    /// expand the database in the sidebar.
+    ///
+    /// True when this request's run is what the opening continues into, so its
+    /// report comes from there. A request while one waits has no run of its own
+    /// and reports now, as a run replaced by a newer one does.
+    fn open_database_for_run(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.awaited_database.as_ref() == Some(&database) {
+            return false;
+        }
+
+        let known_failure = self
+            .database_open_failure
+            .as_ref()
+            .filter(|(failed, _)| *failed == database)
+            .map(|(_, message)| message.clone());
+        if let Some(message) = known_failure {
+            self.show_database_failure(message, cx);
+            return false;
+        }
+
+        if self.opened_database.take().as_ref() == Some(&database) {
+            let message = dbflux_i18n::t!(
+                "document.chart.error.database_not_opened",
+                database = database
+            );
+            self.remember_database_failure(database, message, cx);
+            return false;
+        }
+
+        self.awaited_database = Some(database.clone());
+        self.exec_state = ExecState::Running;
+        self.state = DocumentState::Executing;
+        cx.notify();
+
+        self.app_state.update(cx, |state, cx| {
+            state.object_tree_request(
+                ObjectTreeRequestKey::DatabaseSchema {
+                    profile_id,
+                    database,
+                },
+                cx,
+            );
+        });
+
+        true
+    }
+
+    /// Continues the run that waited for its database. The coordinator already
+    /// reported a failure to the user, so this only keeps it in the chart area.
+    fn on_object_tree_settled(&mut self, event: &ObjectTreeEvent, cx: &mut Context<Self>) {
+        let ObjectTreeRequestKey::DatabaseSchema {
+            profile_id,
+            database,
+        } = &event.key
+        else {
+            return;
+        };
+        if Some(*profile_id) != self.profile_id || self.awaited_database.as_ref() != Some(database)
+        {
+            return;
+        }
+
+        self.awaited_database = None;
+        self.exec_state = ExecState::Idle;
+        self.state = DocumentState::Clean;
+
+        // The request also loads the database's schema, which a driver may not
+        // offer (Redshift): the run only needs the connection, and it is there.
+        let connection_is_open = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(profile_id)
+            .is_some_and(|connected| connected.database_connection(database).is_some());
+
+        let started = match &event.outcome {
+            _ if connection_is_open => self.run_after_opening(database.clone(), cx),
+            ObjectTreeOutcome::Applied | ObjectTreeOutcome::Cached => {
+                self.run_after_opening(database.clone(), cx)
+            }
+            ObjectTreeOutcome::Failed(error) => {
+                let message = dbflux_i18n::t!(
+                    "document.chart.error.database_open_failed",
+                    database = database,
+                    error = error
+                );
+                self.remember_database_failure(database.clone(), message, cx);
+                false
+            }
+            ObjectTreeOutcome::Cancelled | ObjectTreeOutcome::Rejected(_) => {
+                let message = dbflux_i18n::t!(
+                    "document.chart.error.database_not_opened",
+                    database = database
+                );
+                self.show_database_failure(message, cx);
+                false
+            }
+        };
+
+        if !started {
+            cx.emit(DocumentEvent::ExecutionFinished);
+        }
+        cx.notify();
+    }
+
+    fn run_after_opening(&mut self, database: String, cx: &mut Context<Self>) -> bool {
+        self.opened_database = Some(database);
+        self.start_run(cx)
+    }
+
+    fn remember_database_failure(
+        &mut self,
+        database: String,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.stop_auto_refresh(cx);
+        self.database_open_failure = Some((database, message.clone()));
+        self.show_database_failure(message, cx);
+    }
+
+    fn show_database_failure(&mut self, message: String, cx: &mut Context<Self>) {
+        self.exec_state = ExecState::Error;
+        self.state = DocumentState::Error;
+        self.failure = Some(message);
+        cx.notify();
+    }
+
+    /// Forgets a database that could not be opened, so the next run tries again.
+    pub fn retry_database_on_next_run(&mut self) {
+        self.database_open_failure = None;
     }
 
     /// Shows why the chart will not run its query. The notice comes once: a
@@ -1832,6 +2096,11 @@ impl ChartDocument {
 
         prompt.focus.restore(cx);
 
+        self.save_as(name, cx);
+    }
+
+    /// Saves what the chart shows now under `name`, where it runs included.
+    pub(crate) fn save_as(&mut self, name: String, cx: &mut Context<Self>) {
         let id = self.saved_chart_id.unwrap_or_else(Uuid::new_v4);
         let profile_id = self.profile_id.unwrap_or_else(Uuid::nil);
 
@@ -1846,6 +2115,9 @@ impl ChartDocument {
             SavedChart::new_query(name.clone(), profile_id, self.query.clone(), spec, bindings);
         // Preserve the ID so upsert overwrites the existing record.
         saved.id = id;
+        let context = self.context_to_save(cx);
+        let stores_database = context.database.is_some();
+        saved.context = context;
 
         let persist_result = self.app_state.update(cx, |state, _cx| {
             state.saved_charts.upsert(saved).inspect_err(|e| {
@@ -1862,6 +2134,7 @@ impl ChartDocument {
         match persist_result {
             Ok(_) => {
                 self.saved_chart_id = Some(id);
+                self.database_is_stored = stores_database;
                 self.title = name;
                 self.settings_baseline = self.current_settings(cx);
                 self.source_replaced = false;
@@ -1881,6 +2154,15 @@ impl ChartDocument {
         cx.notify();
     }
 
+    fn context_to_save(&self, cx: &App) -> SavedChartContext {
+        saved_chart_context(
+            &self.app_state,
+            self.profile_id,
+            &self.execution_context,
+            cx,
+        )
+    }
+
     /// Dismiss the name-prompt modal without saving.
     fn cancel_save(&mut self, cx: &mut Context<Self>) {
         if let Some(mut prompt) = self.name_prompt.take() {
@@ -1895,6 +2177,18 @@ impl ChartDocument {
     /// schema and source. Without this the chart sends no database.
     pub fn set_execution_context(&mut self, context: ExecutionContext) {
         self.execution_context = context;
+    }
+
+    /// Says in the chart that it cannot see what the console it was opened from
+    /// has not committed. Only true where the console has a session of its own.
+    pub fn set_console_transaction_note(&mut self, open: bool) {
+        self.console_transaction_note = open;
+    }
+
+    /// The one line shown while the note applies.
+    pub(super) fn transaction_note(&self) -> Option<String> {
+        self.console_transaction_note
+            .then(|| dbflux_i18n::t!("document.chart.note.console_transaction"))
     }
 
     /// Mark this chart document as embedded inside another document (typically
@@ -2084,6 +2378,24 @@ impl ChartDocument {
         });
         self.last_result = Some(result);
         cx.notify();
+    }
+
+    /// Whether a dashboard marked this panel to run, which the next render does.
+    #[cfg(test)]
+    pub(crate) fn has_pending_reexecute_for_test(&self) -> bool {
+        self.pending_chart_reexecute
+    }
+
+    /// Runs what `mark_pending_reexecute` marked, as the next render would.
+    #[cfg(test)]
+    pub(crate) fn drain_pending_reexecute_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if std::mem::take(&mut self.pending_chart_reexecute) {
+            self.request_reexecute(window, cx);
+        }
     }
 
     /// Cancels the running query, as the tasks panel does.

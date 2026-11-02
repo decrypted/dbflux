@@ -1333,11 +1333,16 @@ document:
       rows_truncated: "图表显示前 %{rows} 行：查询返回的行数超过了行数限制。"
       chart_saved: 图表已保存
       save_failed: "保存图表失败：%{error}"
+    note:
+      console_transaction: "此图表在单独的连接上运行，不会显示打开它的控制台中未提交的更改。"
     error:
       source: "图表源错误：%{error}"
       no_connection_selected: 未选择连接
       connection_not_found: 未找到连接
       collection_source_unsupported: ChartDocument 不支持集合数据源；请通过 DataDocument 打开
+      database_missing: "此图表是为数据库“%{database}”保存的，而此连接上没有该数据库，因此未运行。如果是新建的数据库，请刷新连接。"
+      database_not_opened: "无法为此图表打开数据库“%{database}”。"
+      database_open_failed: "无法为此图表打开数据库“%{database}”：%{error}"
     metric_picker:
       apply: 应用
       dropdown:

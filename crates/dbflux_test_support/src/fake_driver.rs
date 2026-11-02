@@ -3,10 +3,11 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
     DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    ExplainRequest, FormFieldKind, FormSection, FormTab, FormValues, Icon, LanguageService,
-    MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlLanguageService, SyntaxInfo, TransactionCapabilities, TransferFamily, field, field_required,
+    ExecutionSession, ExecutionSessionFactory, ExplainRequest, FormFieldKind, FormSection, FormTab,
+    FormValues, Icon, LanguageService, MutationCapabilities, QueryCapabilities, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
+    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
+    TransactionCapabilities, TransferFamily, field, field_required,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_core::{
@@ -86,6 +87,8 @@ struct FakeDriverState {
     ping_error: RwLock<Option<String>>,
     connect_error: RwLock<Option<String>>,
     refuse_read_only: AtomicBool,
+    offers_execution_sessions: AtomicBool,
+    opens_per_database_connections: AtomicBool,
     delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
     dialect: RwLock<Option<&'static dyn SqlDialect>>,
@@ -129,6 +132,25 @@ impl FakeDriver {
     /// planner does, sending nothing through `execute`.
     pub fn with_explain_result(self, result: QueryResult) -> Self {
         *rwlock_write(&self.state.explain_result) = Some(result);
+        self
+    }
+
+    /// Offers isolated execution sessions the way DuckDB and Turso do. Sessions
+    /// share the fake's recorded requests and canned results; nothing about
+    /// their transactions is simulated.
+    pub fn with_execution_sessions(self) -> Self {
+        self.state
+            .offers_execution_sessions
+            .store(true, Ordering::Relaxed);
+        self
+    }
+
+    /// Accepts a connection to another database of a profile, for a kind with
+    /// one connection per database. Without this such a connection is refused.
+    pub fn with_per_database_connections(self) -> Self {
+        self.state
+            .opens_per_database_connections
+            .store(true, Ordering::Relaxed);
         self
     }
 
@@ -617,6 +639,13 @@ impl DbDriver for FakeDriver {
         )))
     }
 
+    fn with_database(&self, config: &DbConfig, _database: &str) -> Option<DbConfig> {
+        self.state
+            .opens_per_database_connections
+            .load(Ordering::Relaxed)
+            .then(|| config.clone())
+    }
+
     fn test_connection(&self, _profile: &ConnectionProfile) -> Result<(), DbError> {
         if let Some(message) = rwlock_read(&self.state.connect_error).clone() {
             return Err(DbError::connection_failed(message));
@@ -632,6 +661,62 @@ struct FakeConnection {
     metadata: Arc<DriverMetadata>,
     active_database: RwLock<Option<String>>,
     secret_stores: Vec<FakeSecretStore>,
+    session_factory: FakeSessionFactory,
+}
+
+/// Opens sessions on the same fake state as the connection it belongs to.
+struct FakeSessionFactory {
+    kind: DbKind,
+    state: Arc<FakeDriverState>,
+    metadata: Arc<DriverMetadata>,
+}
+
+impl ExecutionSessionFactory for FakeSessionFactory {
+    fn open(&self) -> Result<Arc<dyn ExecutionSession>, DbError> {
+        Ok(Arc::new(FakeSession {
+            connection: Arc::new(FakeConnection {
+                kind: self.kind,
+                state: self.state.clone(),
+                metadata: self.metadata.clone(),
+                active_database: RwLock::new(None),
+                secret_stores: Vec::new(),
+                session_factory: FakeSessionFactory {
+                    kind: self.kind,
+                    state: self.state.clone(),
+                    metadata: self.metadata.clone(),
+                },
+            }),
+            closed: AtomicBool::new(false),
+        }))
+    }
+
+    fn shutdown(&self) -> Result<(), DbError> {
+        Ok(())
+    }
+}
+
+struct FakeSession {
+    connection: Arc<FakeConnection>,
+    closed: AtomicBool,
+}
+
+impl ExecutionSession for FakeSession {
+    fn connection(&self) -> Arc<dyn Connection> {
+        self.connection.clone()
+    }
+
+    fn close(&self) -> Result<(), DbError> {
+        self.closed.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn finish_operation(&self) -> Result<(), DbError> {
+        self.close()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Relaxed)
+    }
 }
 
 impl FakeConnection {
@@ -646,12 +731,19 @@ impl FakeConnection {
             _ => Vec::new(),
         };
 
+        let session_factory = FakeSessionFactory {
+            kind,
+            state: state.clone(),
+            metadata: metadata.clone(),
+        };
+
         Self {
             kind,
             state,
             metadata,
             active_database: RwLock::new(active_database_from_profile(profile)),
             secret_stores,
+            session_factory,
         }
     }
 
@@ -779,6 +871,13 @@ impl Connection for FakeConnection {
 
     fn kind(&self) -> DbKind {
         self.kind
+    }
+
+    fn execution_session_factory(&self) -> Option<&dyn ExecutionSessionFactory> {
+        self.state
+            .offers_execution_sessions
+            .load(Ordering::Relaxed)
+            .then_some(&self.session_factory as &dyn ExecutionSessionFactory)
     }
 
     fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {

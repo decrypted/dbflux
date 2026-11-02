@@ -1618,6 +1618,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: name.to_string(),
             profile_id,
+            context: Default::default(),
             source: SavedChartSource::Query {
                 query: "SELECT 1".to_string(),
             },
@@ -1995,6 +1996,7 @@ mod keyboard_tests {
             id: Uuid::nil(),
             name: "Latency".to_string(),
             profile_id: Uuid::nil(),
+            context: Default::default(),
             source: SavedChartSource::Query {
                 query: "SELECT 1".to_string(),
             },

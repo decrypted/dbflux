@@ -1950,7 +1950,8 @@ IA con una capa completa de gobernanza:
   - `viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`,
     `viz_saved_chart_series`, `viz_saved_chart_binding_y`,
     `viz_saved_chart_source_metric_dimensions`,
-    `viz_saved_chart_source_metric_series`
+    `viz_saved_chart_source_metric_series`,
+    `viz_saved_chart_context_targets`
   - `qry_saved_queries`, `qry_saved_query_columns`, `qry_saved_query_sorts`,
     `qry_saved_query_joins`
   - `sys_migrations`, `sys_legacy_imports`

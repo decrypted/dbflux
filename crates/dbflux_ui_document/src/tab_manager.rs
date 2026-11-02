@@ -405,11 +405,13 @@ impl TabManager {
                     query,
                     connection_id,
                     context,
+                    console_transaction_open,
                 } => {
                     cx.emit(TabManagerEvent::ChartThisQuery {
                         query: query.clone(),
                         connection_id: *connection_id,
                         context: context.clone(),
+                        console_transaction_open: *console_transaction_open,
                         source_tab: id,
                     });
                 }
@@ -902,6 +904,8 @@ pub enum TabManagerEvent {
         query: String,
         connection_id: Option<uuid::Uuid>,
         context: dbflux_core::ExecutionContext,
+        /// The asking console has a transaction open on its own session.
+        console_transaction_open: bool,
         /// The tab that asked, which Escape in the chart returns to.
         source_tab: DocumentId,
     },

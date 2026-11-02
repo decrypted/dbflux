@@ -953,6 +953,9 @@ pub struct DataGridPanel {
     batch_op_in_flight: bool,
     /// Pending "Save chart from collection" state.
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
+    /// Where the query behind a `QueryResult` ran, kept when its chart is saved.
+    /// Set by the host that ran it.
+    pub(super) result_context: Option<dbflux_core::ExecutionContext>,
     pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
     limited_rows: LimitedRows,
     /// Bumped by every `set_query_result`, so a host's asynchronous answer
@@ -1599,6 +1602,7 @@ impl DataGridPanel {
             close_after_apply: false,
             batch_op_in_flight: false,
             pending_collection_chart_save: None,
+            result_context: None,
             pending_mutation_exec: None,
             limited_rows: LimitedRows::default(),
             result_generation: 0,

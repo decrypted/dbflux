@@ -329,6 +329,7 @@ impl DataDocument {
                         database: this.database(cx),
                         ..dbflux_core::ExecutionContext::default()
                     },
+                    console_transaction_open: false,
                 });
             }
             DataGridEvent::RefreshPolicyReset(_policy) => {

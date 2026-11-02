@@ -390,6 +390,7 @@ impl Workspace {
                             id: uuid::Uuid::new_v4(),
                             name: panel_def.metric_id.clone(),
                             profile_id,
+                            context: Default::default(),
                             source: SavedChartSource::InstanceMetric {
                                 metric_id: panel_def.metric_id.clone(),
                             },

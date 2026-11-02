@@ -559,10 +559,21 @@ fn classify_redis_command(query: &str) -> ExecutionClassification {
     }
 
     match command {
-        "info" | "dbsize" | "type" | "ttl" | "pttl" | "exists" | "llen" | "hget" | "hmget"
-        | "hkeys" | "hvals" | "lrange" | "zrange" | "smembers" | "get" | "mget" | "scan" => {
-            ExecutionClassification::Read
-        }
+        // Commands that only read. Left out on purpose: those with a form that
+        // stores (`sort`, `georadius`), blocks (`xread`) or consumes (`getdel`),
+        // and `pfcount`, which rewrites a cached cardinality on older servers.
+        "info" | "dbsize" | "type" | "ttl" | "pttl" | "expiretime" | "pexpiretime" | "exists"
+        | "randomkey" | "get" | "mget" | "getrange" | "substr" | "strlen" | "getbit"
+        | "bitcount" | "bitpos" | "lcs" | "scan" | "hget" | "hmget" | "hgetall" | "hkeys"
+        | "hvals" | "hlen" | "hstrlen" | "hexists" | "hscan" | "hrandfield" | "llen" | "lrange"
+        | "lindex" | "lpos" | "smembers" | "scard" | "sismember" | "smismember" | "sscan"
+        | "srandmember" | "sunion" | "sinter" | "sdiff" | "sintercard" | "zrange"
+        | "zrangebyscore" | "zrangebylex" | "zrevrange" | "zrevrangebyscore" | "zrevrangebylex"
+        | "zcard" | "zcount" | "zlexcount" | "zscore" | "zmscore" | "zrank" | "zrevrank"
+        | "zscan" | "zrandmember" | "zunion" | "zinter" | "zdiff" | "xrange" | "xrevrange"
+        | "xlen" | "xpending" | "xinfo" | "geopos" | "geodist" | "geohash" | "geosearch"
+        | "ts.range" | "ts.revrange" | "ts.mrange" | "ts.mrevrange" | "ts.get" | "ts.mget"
+        | "ts.info" | "ts.queryindex" | "json.get" | "json.mget" => ExecutionClassification::Read,
         "command" | "help" => ExecutionClassification::Metadata,
         // Server control, replication and scripts, which can run any command
         // (`EVAL "redis.call('FLUSHALL')" 0`).
@@ -1628,6 +1639,58 @@ pub fn strip_leading_comments(sql: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redis_reads_rate_as_reads_and_writes_do_not() {
+        for read in [
+            "GET k",
+            "HGETALL h",
+            "HLEN h",
+            "LRANGE l 0 -1",
+            "ZRANGE z 0 -1",
+            "ZRANGEBYSCORE z 0 +inf WITHSCORES",
+            "ZREVRANGE z 0 -1",
+            "XRANGE s - +",
+            "XREVRANGE s + -",
+            "XLEN s",
+            "SCAN 0",
+            "SSCAN s 0",
+            "TS.RANGE cpu - +",
+        ] {
+            assert_eq!(
+                classify_redis_query(read),
+                ExecutionClassification::Read,
+                "{read}"
+            );
+        }
+
+        for write in [
+            "SET k v",
+            "INCR k",
+            "HSET h f v",
+            "ZADD z 1 m",
+            "XADD s * f v",
+            "GETDEL k",
+            "GETEX k",
+            "SORT l STORE d",
+            "ZRANGESTORE d z 0 -1",
+            "GEOSEARCHSTORE d k FROMLONLAT 0 0 BYRADIUS 1 km",
+            "XREAD BLOCK 0 STREAMS s $",
+            "PFCOUNT h",
+        ] {
+            assert_eq!(
+                classify_redis_query(write),
+                ExecutionClassification::Write,
+                "{write}"
+            );
+        }
+
+        assert_ne!(
+            classify_redis_query("HGETALL h\nFLUSHALL"),
+            ExecutionClassification::Read,
+            "a read cannot carry a write behind it"
+        );
+    }
 
     // ==================== DELETE tests ====================
 

@@ -157,7 +157,10 @@ En SQL Server una sentencia puede empezar en cualquier palabra, así que un lote
 abre con `SELECT` o `WITH` y contiene algo más que una lectura, como `SELECT 1
 DELETE FROM t WHERE id = 1` o `SELECT 1 EXEC('...')`, también pregunta primero, y el
 mensaje nombra la palabra encontrada. **No volver a preguntar** en ese mensaje solo
-afecta a este tipo, hasta que reinicies. En InfluxDB la comprobación encuentra
+afecta a este tipo, hasta que reinicies. Un `DROP` o `TRUNCATE` en cualquier parte de
+un lote de SQL Server también pregunta, abra como abra el lote, como en `DELETE FROM t
+WHERE id = 1 DROP TABLE u`, con el mensaje habitual de `DROP` o `TRUNCATE`. Un segundo
+`DELETE`, `UPDATE` o `INSERT` detrás de una primera escritura no pregunta. En InfluxDB la comprobación encuentra
 `DROP`, `ALTER` y un `DELETE` sin `WHERE` detrás de comentarios y en cualquier
 sentencia de un lote.
 

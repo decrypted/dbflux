@@ -227,9 +227,12 @@ Requiere el permiso `VIEW SERVER STATE`.
   llamar a un procedimiento con ese nombre.
 - `TSqlLanguageService` valora un lote por todas sus palabras, porque una sentencia no
   necesita `;` delante, así que un perfil de solo lectura y MCP rechazan una escritura
-  que sigue a una palabra clave de lectura. Un perfil con escritura sigue ejecutando
-  `SELECT 1 DELETE FROM t`, como hace SQL Server, y ninguna confirmación mira más allá
-  de la primera palabra clave.
+  que sigue a una palabra clave de lectura. En un perfil con escritura, un lote que abre
+  con `SELECT` o `WITH` y se valora por encima de una lectura pide confirmación
+  primero y nombra la palabra encontrada (`DangerousQueryKind::WriteBehindRead`). Un
+  `DROP` o `TRUNCATE` en cualquier parte de un lote también pregunta, abra como abra
+  (`DELETE FROM t WHERE id = 1 DROP TABLE u`). Un segundo `DELETE`, `UPDATE` o `INSERT`
+  detrás de una primera escritura no pregunta.
 - `version_query()` devuelve `SELECT @@VERSION`.
 
 ### Dialecto

@@ -1,6 +1,7 @@
 use dbflux_core::{
     DangerousQueryKind, EditorDiagnostic, ExecutionClassification, LanguageService,
-    ValidationResult, classify_tsql_execution, detect_dangerous_sql, tsql_write_behind_read,
+    ValidationResult, classify_tsql_execution, detect_dangerous_sql, tsql_drop_in_batch,
+    tsql_write_behind_read,
 };
 
 /// Language service for T-SQL (Microsoft SQL Server).
@@ -18,7 +19,10 @@ use dbflux_core::{
 /// statements and treats an unknown first word as a procedure call, so what looks
 /// like a read from its first keyword can hold a write
 /// ([`classify_tsql_execution`]). A writable profile asks before running one
-/// ([`tsql_write_behind_read`]).
+/// ([`tsql_write_behind_read`]), and before a `DROP` or `TRUNCATE` behind anything
+/// else ([`tsql_drop_in_batch`]). These come before the shared check, whose answer
+/// another setting can silence: `Require WHERE` off would otherwise wave through
+/// `DELETE FROM t DROP TABLE u` as a `DELETE` without a `WHERE`.
 pub struct TSqlLanguageService;
 
 impl LanguageService for TSqlLanguageService {
@@ -27,7 +31,9 @@ impl LanguageService for TSqlLanguageService {
     }
 
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        detect_dangerous_sql(query).or_else(|| tsql_write_behind_read(query))
+        tsql_write_behind_read(query)
+            .or_else(|| tsql_drop_in_batch(query))
+            .or_else(|| detect_dangerous_sql(query))
     }
 
     fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
@@ -116,7 +122,7 @@ mod tests {
     /// Run on a writable profile: the editor asks when this answers.
     #[test]
     fn a_write_behind_a_read_needs_a_confirmation_and_a_plain_one_keeps_its_rules() {
-        let svc = TSqlLanguageService;
+        let service = TSqlLanguageService;
 
         for (sql, word) in [
             ("SELECT 1 DELETE FROM t WHERE id = 1", "DELETE"),
@@ -125,9 +131,14 @@ mod tests {
             ("SELECT 1DELETE FROM t WHERE id = 1", "DELETE"),
             ("SELECT 1 UPDATE t SET a = 1 WHERE id = 1", "UPDATE"),
             ("SELECT 1 INSERT t VALUES (1)", "INSERT"),
+            // These get no pass from another kind's settings: "Don't ask again" on
+            // a script or `Require WHERE` off would otherwise silence them.
+            ("SELECT 1; DROP TABLE t", "DROP"),
+            ("SELECT 1 DROP TABLE u; DELETE FROM t", "DROP"),
+            ("WITH c AS (SELECT 1 AS a) DELETE FROM t", "DELETE"),
         ] {
             assert_eq!(
-                svc.detect_dangerous(sql),
+                service.detect_dangerous(sql),
                 Some(DangerousQueryKind::WriteBehindRead { word: Some(word) }),
                 "{sql}"
             );
@@ -140,10 +151,52 @@ mod tests {
             ("SELECT [delete], 'EXEC(x)' FROM t", None),
             ("DELETE FROM t", Some(DangerousQueryKind::DeleteNoWhere)),
             ("DROP TABLE t", Some(DangerousQueryKind::Drop)),
-            ("SELECT 1; DROP TABLE t", Some(DangerousQueryKind::Script)),
-            ("SELECT 1; DELETE FROM t", Some(DangerousQueryKind::Script)),
+            (
+                "DROP TABLE t; DELETE FROM u",
+                Some(DangerousQueryKind::Drop),
+            ),
+            ("TRUNCATE TABLE t", Some(DangerousQueryKind::Truncate)),
+            (
+                "ALTER TABLE t DROP COLUMN a",
+                Some(DangerousQueryKind::Alter),
+            ),
+            (
+                "DELETE FROM t WHERE id = 1 DROP TABLE u",
+                Some(DangerousQueryKind::Drop),
+            ),
+            ("DELETE FROM t DROP TABLE u", Some(DangerousQueryKind::Drop)),
+            (
+                "INSERT t VALUES (3) DROP TABLE u",
+                Some(DangerousQueryKind::Drop),
+            ),
+            (
+                "UPDATE t SET a = 1 WHERE id = 1 TRUNCATE TABLE u",
+                Some(DangerousQueryKind::Truncate),
+            ),
+            (
+                "DECLARE @a INT DROP TABLE u",
+                Some(DangerousQueryKind::Drop),
+            ),
+            (
+                "SET NOCOUNT ON DROP TABLE u",
+                Some(DangerousQueryKind::Drop),
+            ),
+            ("IF 1 = 1 DROP TABLE u", Some(DangerousQueryKind::Drop)),
+            ("EXEC sp_who DROP TABLE u", Some(DangerousQueryKind::Drop)),
+            ("sp_who DROP TABLE u", Some(DangerousQueryKind::Drop)),
+            // A second write of a lesser kind behind the first gets no prompt.
+            (
+                "DELETE FROM t WHERE id = 1 DELETE FROM u WHERE id = 2",
+                None,
+            ),
+            ("INSERT t VALUES (3) DELETE FROM u WHERE id = 2", None),
+            (
+                "DELETE FROM t WHERE [drop] = 1 AND a = 'DROP TABLE u' -- DROP TABLE u",
+                None,
+            ),
+            ("INSERT t VALUES ('TRUNCATE TABLE u') /* DROP */", None),
         ] {
-            assert_eq!(svc.detect_dangerous(sql), expected, "{sql}");
+            assert_eq!(service.detect_dangerous(sql), expected, "{sql}");
         }
     }
 

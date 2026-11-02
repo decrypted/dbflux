@@ -1051,6 +1051,33 @@ fn mssql_confirmation_asks_before_a_write_behind_a_read() -> Result<(), DbError>
             None
         );
 
+        // A `DROP` behind one does not: the server runs both.
+        let behind_a_write = "DELETE FROM explain_test WHERE id = 1 DROP TABLE explain_gone";
+        connection.execute(&QueryRequest::new(reset))?;
+        connection.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS explain_gone; CREATE TABLE explain_gone (id INT)",
+        ))?;
+        assert_eq!(
+            connection
+                .language_service()
+                .detect_dangerous(behind_a_write),
+            Some(dbflux_core::DangerousQueryKind::Drop)
+        );
+        connection.execute(&QueryRequest::new(behind_a_write))?;
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT id FROM explain_test"))?
+                .rows
+                .len(),
+            1
+        );
+        assert!(
+            connection
+                .execute(&QueryRequest::new("SELECT id FROM explain_gone"))
+                .is_err(),
+            "the server dropped it"
+        );
+
         cleanup_test_tables(&*connection);
         Ok(())
     })

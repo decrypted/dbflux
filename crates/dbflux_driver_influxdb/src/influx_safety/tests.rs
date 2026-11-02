@@ -388,3 +388,127 @@ fn the_dialect_comes_from_what_each_language_would_run() {
         assert_eq!(detect_dialect(query), Dialect::InfluxQl, "{query:?}");
     }
 }
+
+/// `--` is a comment in InfluxQL and two minus signs in Flux. Each of these ran on
+/// InfluxDB 2.7 and wrote, while the InfluxQL reading saw a comment.
+#[test]
+fn what_a_dash_comment_hides_counts_if_it_could_run_as_flux() {
+    for flux in [
+        r#"--1 from(bucket:"b") |> range(start:0) |> to(bucket:"hit")"#,
+        "--1 show = 1 from(bucket:\"b\") |> range(start:0) |> to(bucket:\"hit\")\nshow",
+        "--1 x = 1\nfrom(bucket:\"b\") |> range(start:0) |> to(bucket:\"hit\")",
+        r#"--1 to(tables: t, bucket:"hit")"#,
+        // Did not compile when measured, as an import must come first.
+        "--1\nimport \"http\"\nx = http.post(url:\"u\", data: bytes(v:\"x\"))",
+    ] {
+        assert_eq!(rate(flux), Write, "{flux:?}");
+    }
+
+    // It cannot be told which language runs a `|>` behind a `--`.
+    assert_eq!(rate("-- |>\nSELECT value FROM cpu"), Write);
+
+    assert_eq!(
+        InfluxLanguageService.detect_dangerous("--1 from(bucket:\"b\") |> delete(start:0)"),
+        Some(DangerousQueryKind::DeleteNoWhere)
+    );
+
+    for comment in [
+        "-- rollup to hourly\nSELECT value FROM cpu",
+        "SELECT value FROM cpu -- send to ops",
+        "SELECT value FROM cpu -- INTO hit",
+        "SELECT value FROM cpu -- ; DROP DATABASE d",
+    ] {
+        assert_eq!(rate(comment), Read, "{comment:?}");
+    }
+    assert_eq!(rate("-- a note to self"), Metadata);
+}
+
+/// Each of these wrote on InfluxDB 1.8. A wrong reading of where a regex opens or
+/// ends leaves the middle statement inside what looks like a string.
+#[test]
+fn influxql_regexes_end_where_the_server_ends_them() {
+    for sql in [
+        "SELECT value FROM /\\\\/ ' / ; SELECT value INTO hit FROM cpu ; SELECT value FROM /'/",
+        "SELECT value FROM /a\\/' / ; SELECT value INTO hit FROM cpu ; SELECT value FROM /'/",
+        "SHOW MEASUREMENTS WITH MEASUREMENT = /'/ ; SELECT value INTO hit FROM cpu ; SHOW MEASUREMENTS WITH MEASUREMENT = /'/",
+        "SHOW SERIES CARDINALITY FROM /'/ ; SELECT value INTO hit FROM cpu ; SELECT value FROM /'/",
+        "SELECT value FROM cpu; /** ' **/ SELECT value INTO hit FROM cpu",
+        "SELECT value FROM cpu WHERE host = 'a' /* ' */ ; SELECT value INTO hit FROM cpu",
+        "SELECT value FROM cpu WHERE host = \"a\\'b\" ; SELECT value INTO hit FROM cpu ; SELECT value FROM /'/",
+        ";;; SELECT value INTO hit FROM cpu",
+        "SELECT value INTO hit\rFROM cpu",
+        "SELECT value*1.5INTO hit FROM cpu",
+    ] {
+        assert_eq!(rate(sql), Write, "{sql:?}");
+    }
+}
+
+/// Each of these wrote points on InfluxDB 2.7.
+#[test]
+fn flux_strings_comments_and_regexes_end_where_the_server_ends_them() {
+    for flux in [
+        // `$$` takes the `{` out of the interpolation it looks like.
+        r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host != "$${") |> to(bucket:"hit") |> filter(fn:(r)=> r.host != "}")"#,
+        // Only `\n` ends a comment, so the `"` is still inside it.
+        "from(bucket:\"b\") |> range(start:0) // a\r\"\n |> to(bucket:\"hit\") // \"",
+        // Only `\/` is an escape, so `\\/` escapes the `/` and the `"` is in the regex.
+        r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host =~ /\\/"/ or true) |> to(bucket:"hit") |> filter(fn:(r)=> r.host =~ /"/ or true)"#,
+        r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host =~ /\/"/ or true) |> to(bucket:"hit") |> filter(fn:(r)=> r.host =~ /"/ or true)"#,
+        // A regex opening an interpolation, and a call behind one.
+        "import \"http\"\nimport \"array\"\ns = \"${if \"a\" =~ /\"/ then string(v: http.post(url:\"u\", data: bytes(v:\"x\"))) else \"b\"}\"\narray.from(rows:[{a:s}])",
+        // A number ends where its digits do.
+        r#"x = 1to(tables: from(bucket:"b") |> range(start:0), bucket:"hit")"#,
+        r#"y = 1.to(tables: from(bucket:"b") |> range(start:0), bucket:"hit")"#,
+    ] {
+        assert_eq!(rate(flux), Write, "{flux:?}");
+    }
+}
+
+/// These send a request or open a connection on InfluxDB 2.7, whatever they read.
+#[test]
+fn flux_that_reaches_another_host_rates_up() {
+    for flux in [
+        "import \"socket\"\nsocket.from(url:\"tcp://x:1\", decoder:\"csv\")",
+        "import \"experimental/usage\"\nusage.limits(host:\"u\", orgID:\"o\", token:\"t\")",
+        "import \"experimental/usage\"\nusage.from(start:0, host:\"u\", orgID:\"o\", token:\"t\")",
+        "import \"experimental/bigtable\"\nbigtable.from(token:\"t\", project:\"p\", instance:\"i\", table:\"t\")",
+        r#"from(bucket:"b", host:"http://x", token:"t") |> range(start:0)"#,
+        "import \"influxdata/influxdb\"\ninfluxdb.from(bucket:\"b\", host:\"http://x\", token:\"t\")",
+        "import \"influxdata/influxdb/v1\"\nv1.databases(host:\"http://x\", token:\"t\")",
+    ] {
+        assert_eq!(rate(flux), Write, "{flux:?}");
+    }
+}
+
+#[test]
+fn flux_this_scan_does_not_follow_rates_up() {
+    for flux in [
+        "import \"universe\"\nfrom(bucket:\"b\") |> universe.to(bucket:\"hit\")",
+        "import u \"universe\"\nfrom(bucket:\"b\") |> u.to(bucket:\"hit\")",
+        "@edition(\"2022.1\")\nimport \"http\"\nx = http.post(url:\"u\", data: bytes(v:\"x\"))\nfrom(bucket:\"b\")",
+        "@edition(\"2022.1\")\nfrom(bucket:\"b\") |> range(start:0)",
+        "package main\nimport \"http\"\nx = http.post(url:\"u\")\nfrom(bucket:\"b\")",
+        "builtin foo : (x: int) => int\nfrom(bucket:\"b\") |> range(start:0)",
+    ] {
+        assert_eq!(rate(flux), Write, "{flux:?}");
+    }
+}
+
+/// What looks like what rates up above, and read on InfluxDB 2.7.
+#[test]
+fn flux_that_only_looks_like_those_stays_a_read() {
+    for flux in [
+        r#"from(bucket:"b") |> range(start:0) |> map(fn:(r)=>({r with host: "x"}))"#,
+        r#"from(bucket:"b") |> range(start:0) |> map(fn:(r)=>({host: r.a, url: r.b}))"#,
+        r#"from(bucket:"b") |> range(start:0) |> rename(columns:{host:"x", url:"y"})"#,
+        r#"from(bucket:"b") |> range(start:0) |> group(columns:["host"])"#,
+        r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "$")"#,
+        r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "a$b")"#,
+        r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "a\${to(x)}")"#,
+        "from(bucket:\"b\") |> range(start:0) |> filter(fn:(r)=> r.host =~ /a\nb/ or true) |> limit(n:1)",
+        "import \"universe\"\nfrom(bucket:\"b\") |> universe.limit(n:1)",
+        "package main\nimport \"array\"\narray.from(rows:[{a:1}])",
+    ] {
+        assert_eq!(rate(flux), Read, "{flux:?}");
+    }
+}

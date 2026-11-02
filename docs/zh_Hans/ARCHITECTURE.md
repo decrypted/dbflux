@@ -792,7 +792,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - 文档型：insertOne/updateOne/deleteOne/deleteMany
   - 键值：SET/DELETE/HASH_SET/SET_ADD/LIST_PUSH/ZSET_ADD 及其对应的移除操作，另加 STREAM_ADD
 - **键值类型**：`crates/dbflux_core/src/data/key_value.rs` 为变参 Redis 命令定义基于 Vec 的请求结构体（例如 `HashSetRequest.fields: Vec<(String, String)>`、`SetAddRequest.members: Vec<String>`）。
-- **查询安全 / `LanguageService`**：`crates/dbflux_core/src/query/language_service.rs` 定义 `LanguageService` trait（`validate`、`detect_dangerous`、`editor_diagnostics`）以及一个被关系型驱动程序复用的默认 `SqlLanguageService` 实现。非 SQL 方言（MongoDB、Redis、T-SQL）由对应的驱动程序 crate 自带实现（例如 `TSqlLanguageService` 位于 `dbflux_driver_mssql`）。`DangerousQueryKind` 覆盖 SQL 的 `DeleteNoWhere` / `UpdateNoWhere` / `Truncate` / `Drop` / `Alter` / `Script`，MongoDB 的 `deleteMany` / `updateMany` / `dropCollection` / `dropDatabase`，以及 Redis 的 `FlushAll` / `FlushDb` / `MultiDelete` / `KeysPattern`。分发器 `classify_query_for_language(&QueryLanguage, &str)` 会把查询路由到正确的分类器，因此界面永远不会依据驱动程序 id 做分支。
+- **查询安全 / `LanguageService`**：`crates/dbflux_core/src/query/language_service.rs` 定义 `LanguageService` trait（`validate`、`detect_dangerous`、`editor_diagnostics`）以及一个被关系型驱动程序复用的默认 `SqlLanguageService` 实现。非 SQL 方言（MongoDB、Redis、T-SQL）由对应的驱动程序 crate 自带实现（例如 `TSqlLanguageService` 位于 `dbflux_driver_mssql`）。`DangerousQueryKind` 覆盖 SQL 的 `DeleteNoWhere` / `UpdateNoWhere` / `Truncate` / `Drop` / `Alter` / `Script` / `WriteBehindRead`，MongoDB 的 `deleteMany` / `updateMany` / `dropCollection` / `dropDatabase`，以及 Redis 的 `FlushAll` / `FlushDb` / `MultiDelete` / `KeysPattern`。分发器 `classify_query_for_language(&QueryLanguage, &str)` 会把查询路由到正确的分类器，因此界面永远不会依据驱动程序 id 做分支。
 
 ### 存储与配置
 

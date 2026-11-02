@@ -203,8 +203,11 @@ Requires the `VIEW SERVER STATE` permission.
   a procedure of that name.
 - `TSqlLanguageService` rates a batch by all of its words, since a statement needs
   no `;` before it, so a read-only profile and MCP refuse a write that follows a
-  read keyword. A writable profile still runs `SELECT 1 DELETE FROM t`, as SQL
-  Server does, and no confirmation looks past the first keyword.
+  read keyword. On a writable profile a batch that opens with `SELECT` or `WITH` and
+  rates above a read asks for confirmation first, naming the word it found
+  (`DangerousQueryKind::WriteBehindRead`). A `DROP` or `TRUNCATE` anywhere in a batch
+  asks too, whatever opens it (`DELETE FROM t WHERE id = 1 DROP TABLE u`). A second
+  `DELETE`, `UPDATE` or `INSERT` behind a first write does not.
 - `version_query()` returns `SELECT @@VERSION`.
 
 ### Dialect

@@ -1,6 +1,9 @@
 use dbflux_policy::ExecutionClassification::{self, Admin, Destructive, Read, Write};
 
-use super::{classify_tsql_execution, tsql_batch_has_implicit_call, tsql_write_behind_read};
+use super::{
+    classify_tsql_execution, tsql_batch_has_implicit_call, tsql_drop_in_batch,
+    tsql_write_behind_read,
+};
 use crate::DangerousQueryKind;
 
 const D: &str = "DELETE FROM t WHERE id = 1";
@@ -429,4 +432,57 @@ fn dont_ask_again_is_kept_per_kind() {
     assert!(suppressions.is_suppressed(other_word));
     assert!(!suppressions.is_suppressed(DangerousQueryKind::Script));
     assert!(!suppressions.is_suppressed(DangerousQueryKind::Drop));
+}
+
+/// Each of these dropped `u` on a real server with no prompt on a writable profile.
+#[test]
+fn a_drop_or_truncate_counts_whatever_opens_the_batch() {
+    use DangerousQueryKind::{Drop, Truncate};
+
+    for (sql, expected) in [
+        ("DELETE FROM t WHERE id = 1 DROP TABLE u", Drop),
+        ("DELETE FROM t WHERE id = 1DROP TABLE u", Drop),
+        ("INSERT t VALUES (3) DROP TABLE u", Drop),
+        ("DECLARE @a INT DROP TABLE u", Drop),
+        ("SET NOCOUNT ON DROP TABLE u", Drop),
+        ("IF 1 = 1 DROP TABLE u", Drop),
+        ("EXEC sp_who DROP TABLE u", Drop),
+        ("sp_who DROP TABLE u", Drop),
+        ("IF OBJECT_ID('t') IS NOT NULL DROP TABLE t", Drop),
+        ("BEGIN TRAN DROP TABLE u COMMIT", Drop),
+        ("CREATE PROCEDURE p AS DROP TABLE #t", Drop),
+        ("drop table u", Drop),
+        ("/* a */ DROP TABLE u", Drop),
+        ("UPDATE t SET a = 1 WHERE id = 1 TRUNCATE TABLE u", Truncate),
+        ("SET NOCOUNT ON TRUNCATE TABLE u", Truncate),
+        ("TRUNCATE TABLE u", Truncate),
+        ("DELETE FROM t WHERE id = 1; DROP TABLE u", Drop),
+        // Rated as a keyword by the rest of the scan too: a reserved word cannot be
+        // an unquoted name.
+        ("UPDATE t SET a = x.drop", Drop),
+    ] {
+        assert_eq!(tsql_drop_in_batch(sql), Some(expected), "{sql:?}");
+    }
+
+    for sql in [
+        "DELETE FROM t WHERE id = 1",
+        "INSERT t VALUES ('DROP TABLE u')",
+        "DELETE FROM t WHERE a = 'TRUNCATE TABLE u'",
+        "DELETE FROM t -- DROP TABLE u",
+        "DELETE FROM t /* DROP TABLE u */",
+        "DELETE FROM t --c\u{2028}",
+        "UPDATE [drop] SET [truncate] = 1 WHERE \"drop\" = 1",
+        "DELETE FROM #drop WHERE @truncate = 1",
+        "DELETE FROM dropped WHERE truncated = 1 AND drop_me = 2",
+        "EXEC('DROP TABLE u')",
+        // `ALTER`'s own grammar keeps `ALTER`'s prompt.
+        "ALTER TABLE t DROP COLUMN a",
+        "/* a */ ALTER TABLE t DROP CONSTRAINT c",
+        // The driver refuses these before they run.
+        "EXPLAIN DROP TABLE u",
+        "DESCRIBE x DROP TABLE u",
+        "",
+    ] {
+        assert_eq!(tsql_drop_in_batch(sql), None, "{sql:?}");
+    }
 }

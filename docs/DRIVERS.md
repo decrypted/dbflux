@@ -42,7 +42,7 @@ The capability flags listed below are exactly the ones each driver's
 | Redis | Key-Value | RedisCommands | Key-value base + multiple databases, TTL, key types, value size, rename, bulk get, stream range/add/delete, auth, SSH tunnel, SSL | Redis command syntax only (no SQL); no query cancellation; SSH tunneling unavailable in URI mode. |
 | DynamoDB | Document | Custom("DynamoDB") | Auth, pagination, filtering, insert/update/delete, nested documents, arrays | AWS-managed; native command envelope (`scan`/`query`/`put`/`update`/`delete`); no PartiQL/transactions; no query cancellation; `update many+upsert` unsupported. |
 | CloudWatch Logs | Log Stream | Sql (metadata default) | Auth | AWS-managed; executes Logs Insights QL, OpenSearch PPL, and OpenSearch SQL via editor-managed source context; no query cancellation yet. |
-| InfluxDB | Time Series | InfluxQuery | Auth, multiple databases, pagination, CSV/JSON export | v1 and v2 in one crate; InfluxQL on both, Flux on v2 only; read-only (no INSERT/UPDATE/DELETE); no transactions. |
+| InfluxDB | Time Series | InfluxQuery | Auth, multiple databases, pagination, CSV/JSON export | v1 and v2 in one crate; InfluxQL on both, Flux on v2 only; no row editing, though a query can write (`SELECT ... INTO`, `DELETE`, Flux `to()`); no transactions. |
 | ClickHouse | Relational | SQL | Multiple databases, views, auth, pagination, sorting, filtering, grouping, joins, CTEs, windows, CSV/JSON export | HTTP(S), including ClickHouse Cloud; read-oriented DBFlux integration with no structured mutations, DDL, transactions, SSH tunneling, or query parameters. |
 | TursoDB | Relational | SQL | Auth token, views, indexes, foreign keys, check/unique constraints, prepared statements, insert/update/delete, pagination, sorting, filtering, CSV/JSON export, transactions, transactional DDL, multi-statement | Remote Turso / libSQL over HTTP (`libsql://`, or `http://` for a local `sqld`); interactive transactions run on per-document server streams; no query cancellation, SSH tunnel, replicas, or database switching. |
 | DuckDB | Relational | SQL | Multiple databases, schemas, views, indexes, foreign keys, check/unique constraints, prepared statements, insert/update/delete with RETURNING, pagination, sorting, filtering, CSV/JSON export, transactions, transactional DDL, query cancellation, row limits, read-only enforcement, multi-statement | Embedded file or in-memory database; attaches a DuckLake catalog on connect; only one process can hold a file for writing; no statement timeouts. |
@@ -126,8 +126,8 @@ the actual mode is chosen per query document. See
 ### InfluxDB
 
 Time-series driver supporting both InfluxDB v1 and v2 in one crate. InfluxQL runs
-on both versions; Flux runs on v2 only. The query API is read-only (no
-INSERT/UPDATE/DELETE, no transactions), with optional default bucket/database and
+on both versions; Flux runs on v2 only. There is no row editing and no
+transactions, though a query can write (`SELECT ... INTO`, `DELETE`, Flux `to()`), with optional default bucket/database and
 per-query bucket routing. See
 [`crates/dbflux_driver_influxdb/README.md`](../crates/dbflux_driver_influxdb/README.md).
 

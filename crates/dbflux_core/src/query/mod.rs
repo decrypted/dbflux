@@ -77,7 +77,8 @@ pub use table_browser::{
 pub use time_macros::{contains_time_macros, substitute_time_macros};
 pub use transfer::TransferColumn;
 pub use tsql_safety::{
-    classify_tsql_execution, tsql_batch_has_implicit_call, tsql_write_behind_read,
+    classify_tsql_execution, tsql_batch_has_implicit_call, tsql_drop_in_batch,
+    tsql_write_behind_read,
 };
 pub use tx_vocab::TransactionVocab;
 pub use types::{

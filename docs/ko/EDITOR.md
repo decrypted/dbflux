@@ -62,7 +62,7 @@ Explain은 SQL에서만 제공됩니다. 드라이버에 explain이 없는 연�
 
 DBFlux는 여러 언어에 걸친 위험한 작업을 감지합니다. SQL의 `DELETE`/`DROP`/`TRUNCATE`와 `WHERE` 없는 `DELETE`/`UPDATE`, MongoDB의 `deleteMany`/`drop`, Redis의 `FLUSHALL`/`FLUSHDB`/`KEYS`가 대상이며, 실행 전에 확인을 요청합니다. 이 동작은 설정의 영향을 받습니다. 위험 쿼리 확인은 끌 수 있고, `DELETE`/`UPDATE`에 `WHERE` 절을 요구하도록 할 수 있으며, Redis `FLUSHALL`/`FLUSHDB`는 완전히 비활성화할 수 있습니다(이 경우 해당 명령은 확인 대신 차단됩니다).
 
-SQL Server에서는 문이 어떤 단어에서든 시작할 수 있으므로, `SELECT`나 `WITH`로 시작하면서 읽기 이상의 작업을 담은 배치(`SELECT 1 DELETE FROM t WHERE id = 1`, `SELECT 1 EXEC('...')` 등)도 먼저 확인을 요청하며, 메시지에 찾아낸 단어를 표시합니다. 이 메시지의 **다시 묻지 않기**는 다시 시작할 때까지 이 종류에만 적용됩니다. InfluxDB에서는 주석 뒤에 있거나 배치의 어느 문에 있든 `DROP`, `ALTER`, `WHERE` 없는 `DELETE`를 찾아냅니다.
+SQL Server에서는 문이 어떤 단어에서든 시작할 수 있으므로, `SELECT`나 `WITH`로 시작하면서 읽기 이상의 작업을 담은 배치(`SELECT 1 DELETE FROM t WHERE id = 1`, `SELECT 1 EXEC('...')` 등)도 먼저 확인을 요청하며, 메시지에 찾아낸 단어를 표시합니다. 이 메시지의 **다시 묻지 않기**는 다시 시작할 때까지 이 종류에만 적용됩니다. SQL Server 배치의 어디에든 있는 `DROP`이나 `TRUNCATE`도 배치가 무엇으로 시작하든 일반 `DROP` 또는 `TRUNCATE` 메시지로 확인을 요청합니다(`DELETE FROM t WHERE id = 1 DROP TABLE u` 등). 첫 쓰기 뒤의 두 번째 `DELETE`, `UPDATE`, `INSERT`는 묻지 않습니다. InfluxDB에서는 주석 뒤에 있거나 배치의 어느 문에 있든 `DROP`, `ALTER`, `WHERE` 없는 `DELETE`를 찾아냅니다.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/editor/dangerous-query-dark.webp">

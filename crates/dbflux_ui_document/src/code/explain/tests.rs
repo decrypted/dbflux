@@ -1053,6 +1053,56 @@ mod document {
         );
     }
 
+    /// A `DROP` behind a write stops at the confirmation too, and a plan of it asks
+    /// nothing.
+    #[gpui::test]
+    fn a_writable_sql_server_profile_asks_before_a_drop_behind_a_write(cx: &mut TestAppContext) {
+        const BATCH: &str = "DELETE FROM t WHERE id = 1 DROP TABLE u";
+
+        let driver = FakeDriver::new(DbKind::SqlServer)
+            .with_language_service(&dbflux_driver_mssql::TSqlLanguageService)
+            .with_explain_planner("EXPLAIN");
+        let profile = memory_profile();
+        let connection = driver.connect_arc(&profile).expect("fake connection");
+        let (document, _toasts, _state, window) = open_on(
+            cx,
+            profile,
+            connection,
+            QueryLanguage::Sql,
+            BATCH,
+            FIRST_LINE,
+        );
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        settle(window);
+
+        assert!(sent(&driver).is_empty(), "stops at the confirmation");
+        assert_eq!(
+            window.update(|_, cx| {
+                document
+                    .read(cx)
+                    .pending
+                    .dangerous_query
+                    .as_ref()
+                    .map(|pending| pending.kind)
+            }),
+            Some(dbflux_core::DangerousQueryKind::Drop)
+        );
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.cancel_dangerous_query(window, cx)
+            });
+        });
+        settle(window);
+
+        explain(window, &document);
+        assert!(window.update(|_, cx| document.read(cx).pending.dangerous_query.is_none()));
+        assert_eq!(sent(&driver), vec![format!("EXPLAIN {BATCH}")]);
+    }
+
     #[gpui::test]
     fn a_sql_server_read_and_a_plain_delete_ask_as_they_did(cx: &mut TestAppContext) {
         for sql in [

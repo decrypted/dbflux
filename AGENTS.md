@@ -631,7 +631,7 @@ The document query builder is a separate rail for document collections, with the
 
 - `LanguageService` trait in `crates/dbflux_core/src/query/language_service.rs` exposes `validate`, `detect_dangerous`, and `editor_diagnostics`. `SqlLanguageService` is the default impl for relational drivers.
 - Non-SQL dialects ship their `LanguageService` from the driver crate (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`; MongoDB and Redis dangerous detection live in their own driver crates and route through `classify_query_for_language(&QueryLanguage, &str)`).
-- `DangerousQueryKind` enumerates risky patterns across SQL (`DeleteNoWhere`, `UpdateNoWhere`, `Truncate`, `Drop`, `Alter`, `Script`), MongoDB (`deleteMany`, `updateMany`, `dropCollection`, `dropDatabase`), and Redis (`FlushAll`, `FlushDb`, `MultiDelete`, `KeysPattern`).
+- `DangerousQueryKind` enumerates risky patterns across SQL (`DeleteNoWhere`, `UpdateNoWhere`, `Truncate`, `Drop`, `Alter`, `Script`, `WriteBehindRead`), MongoDB (`deleteMany`, `updateMany`, `dropCollection`, `dropDatabase`), and Redis (`FlushAll`, `FlushDb`, `MultiDelete`, `KeysPattern`).
 - The UI must call into the dispatcher; do NOT add per-driver dangerous-query branches in `dbflux_ui`.
 
 ### WHERE Clause Syntax

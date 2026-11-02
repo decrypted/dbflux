@@ -1340,7 +1340,7 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
   implementaciones desde el crate de driver correspondiente (por ejemplo
   `TSqlLanguageService` vive en `dbflux_driver_mssql`). `DangerousQueryKind`
   cubre SQL `DeleteNoWhere` / `UpdateNoWhere` / `Truncate` / `Drop` / `Alter` /
-  `Script`, MongoDB `deleteMany` / `updateMany` / `dropCollection` /
+  `Script` / `WriteBehindRead`, MongoDB `deleteMany` / `updateMany` / `dropCollection` /
   `dropDatabase`, y Redis `FlushAll` / `FlushDb` / `MultiDelete` /
   `KeysPattern`. El dispatcher `classify_query_for_language(&QueryLanguage,
   &str)` enruta al clasificador correcto para que la UI nunca bifurque según

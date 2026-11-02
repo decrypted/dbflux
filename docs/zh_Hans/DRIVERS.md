@@ -26,7 +26,7 @@
 | Redis | 键值 | RedisCommands | 键值基础能力 + 多数据库、TTL、键类型、值大小、重命名、批量获取、流的范围查询/添加/删除、认证、SSH 隧道、SSL | 仅支持 Redis 命令语法（不支持 SQL）；不支持查询取消；URI 模式下无法使用 SSH 隧道。 |
 | DynamoDB | 文档型 | Custom("DynamoDB") | 认证、分页、筛选、插入/更新/删除、嵌套文档、数组 | 由 AWS 托管；原生命令信封（`scan`/`query`/`put`/`update`/`delete`）；不支持 PartiQL/事务；不支持查询取消；不支持 `update many+upsert`。 |
 | CloudWatch Logs | 日志流 | Sql（元数据默认值） | 认证 | 由 AWS 托管；通过编辑器管理的源上下文执行 Logs Insights QL、OpenSearch PPL 与 OpenSearch SQL；暂不支持查询取消。 |
-| InfluxDB | 时序 | InfluxQuery | 认证、多数据库、分页、CSV/JSON 导出 | 同一个 crate 同时支持 v1 与 v2；两者都支持 InfluxQL，仅 v2 支持 Flux；只读（不支持 INSERT/UPDATE/DELETE）；不支持事务。 |
+| InfluxDB | 时序 | InfluxQuery | 认证、多数据库、分页、CSV/JSON 导出 | 同一个 crate 同时支持 v1 与 v2；两者都支持 InfluxQL，仅 v2 支持 Flux；没有行编辑功能，但查询可以写入（`SELECT ... INTO`、`DELETE`、Flux `to()`）；不支持事务。 |
 | ClickHouse | 关系型 | SQL | 多数据库、视图、认证、分页、排序、筛选、分组、join、CTE、窗口函数、CSV/JSON 导出 | 走 HTTP(S)，包括 ClickHouse Cloud；DBFlux 的集成以读取为主，不支持结构化变更、DDL、事务、SSH 隧道或查询参数。 |
 | TursoDB | 关系型 | SQL | 认证令牌、视图、索引、外键、CHECK/唯一约束、预编译语句、插入/更新/删除、分页、排序、筛选、CSV/JSON 导出、事务、事务性 DDL、多语句 | 走 HTTP 的远程 Turso / libSQL（`libsql://`，本地 `sqld` 用 `http://`）；交互式事务在每个文档独立的服务端流上运行；不支持查询取消、SSH 隧道、副本或切换数据库。 |
 | DuckDB | 关系型 | SQL | 多数据库、schema、视图、索引、外键、CHECK/唯一约束、预编译语句、带 RETURNING 的插入/更新/删除、分页、排序、筛选、CSV/JSON 导出、事务、事务性 DDL、查询取消、行数限制、只读强制、多语句 | 嵌入式文件或内存数据库；连接时挂载 DuckLake 目录；同一文件只能由一个进程以写模式打开；不支持语句超时。 |
@@ -73,7 +73,7 @@ AWS CloudWatch Logs 驱动程序，通过 `StartQuery` 执行查询，时间范�
 
 ### InfluxDB
 
-时序驱动程序，在同一个 crate 中同时支持 InfluxDB v1 与 v2。InfluxQL 在两个版本上都能运行，Flux 仅在 v2 上运行。查询 API 为只读（没有 INSERT/UPDATE/DELETE，也没有事务），支持可选的默认存储桶/数据库，以及按查询路由存储桶。参见 [`crates/dbflux_driver_influxdb/README.md`](../crates/dbflux_driver_influxdb/README.md)。
+时序驱动程序，在同一个 crate 中同时支持 InfluxDB v1 与 v2。InfluxQL 在两个版本上都能运行，Flux 仅在 v2 上运行。没有行编辑功能，也没有事务，但查询可以写入（`SELECT ... INTO`、`DELETE`、Flux `to()`），支持可选的默认存储桶/数据库，以及按查询路由存储桶。参见 [`crates/dbflux_driver_influxdb/README.md`](../crates/dbflux_driver_influxdb/README.md)。
 
 ### ClickHouse
 

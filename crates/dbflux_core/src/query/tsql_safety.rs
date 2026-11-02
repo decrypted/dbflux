@@ -560,6 +560,34 @@ pub fn tsql_write_behind_read(sql: &str) -> Option<DangerousQueryKind> {
     (class != ExecutionClassification::Read).then_some(DangerousQueryKind::WriteBehindRead { word })
 }
 
+/// The confirmation a batch needs for a `DROP` or `TRUNCATE` behind whatever opens
+/// it: `DELETE FROM t WHERE id = 1 DROP TABLE u` drops `u`, and the shared danger
+/// check only reads the `DELETE`. Both words are reserved, so a listed one is the
+/// keyword, and one in a string, comment or quoted name is not a word here.
+///
+/// `ALTER TABLE t DROP COLUMN a` is `ALTER`'s own grammar, so a batch opening with
+/// `ALTER` keeps the prompt it has. A batch the driver refuses for its implicit
+/// call does not ask, as it would not run after a yes.
+pub fn tsql_drop_in_batch(sql: &str) -> Option<DangerousQueryKind> {
+    let lexed = lex(sql);
+
+    let opens_with_alter = lexed
+        .lexemes
+        .iter()
+        .find(|lexeme| !matches!(lexeme, Lexeme::Symbol(_)))
+        .is_some_and(|lexeme| matches!(lexeme, Lexeme::Word(word) if word == "ALTER"));
+
+    if opens_with_alter || has_implicit_call(&lexed.lexemes) {
+        return None;
+    }
+
+    lexed.lexemes.iter().find_map(|lexeme| match lexeme {
+        Lexeme::Word(word) if word == "DROP" => Some(DangerousQueryKind::Drop),
+        Lexeme::Word(word) if word == "TRUNCATE" => Some(DangerousQueryKind::Truncate),
+        _ => None,
+    })
+}
+
 /// The last word of the unquoted, possibly qualified name in `lexemes`.
 fn called_procedure(lexemes: &[Lexeme]) -> Option<&str> {
     lexemes

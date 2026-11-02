@@ -30,7 +30,7 @@
 | Redis | 키-값 | RedisCommands | 키-값 베이스 + 여러 데이터베이스, TTL, 키 타입, 값 크기, 이름 바꾸기, 벌크 조회, 스트림 범위/추가/삭제, 인증, SSH 터널, SSL | Redis 명령 문법만 지원(SQL 없음), 쿼리 취소 없음, URI 모드에서는 SSH 터널링 불가. |
 | DynamoDB | 문서 | Custom("DynamoDB") | 인증, 페이지 나누기, 필터, 삽입/업데이트/삭제, 중첩 문서, 배열 | AWS 관리형, 네이티브 명령 엔벨로프(`scan`/`query`/`put`/`update`/`delete`), PartiQL/트랜잭션 없음, 쿼리 취소 없음, `update many+upsert` 미지원. |
 | CloudWatch Logs | 로그 스트림 | Sql (메타데이터 기본값) | 인증 | AWS 관리형, 에디터가 관리하는 소스 컨텍스트를 통해 Logs Insights QL, OpenSearch PPL, OpenSearch SQL 실행, 아직 쿼리 취소 없음. |
-| InfluxDB | 시계열 | InfluxQuery | 인증, 여러 데이터베이스, 페이지 나누기, CSV/JSON 내보내기 | v1과 v2를 하나의 크레이트에서 지원, 두 버전 모두 InfluxQL, Flux는 v2 전용, 읽기 전용(INSERT/UPDATE/DELETE 없음), 트랜잭션 없음. |
+| InfluxDB | 시계열 | InfluxQuery | 인증, 여러 데이터베이스, 페이지 나누기, CSV/JSON 내보내기 | v1과 v2를 하나의 크레이트에서 지원, 두 버전 모두 InfluxQL, Flux는 v2 전용, 행 편집 없음(단, 쿼리로 쓰기 가능: `SELECT ... INTO`, `DELETE`, Flux `to()`), 트랜잭션 없음. |
 | ClickHouse | 관계형 | SQL | 여러 데이터베이스, 뷰, 인증, 페이지 나누기, 정렬, 필터, 그룹화, 조인, CTE, 윈도우, CSV/JSON 내보내기 | HTTP(S), ClickHouse Cloud 포함, 구조화된 변경, DDL, 트랜잭션, SSH 터널링, 쿼리 매개변수가 없는 읽기 중심 DBFlux 통합. |
 | TursoDB | 관계형 | SQL | 인증 토큰, 뷰, 인덱스, 외래 키, CHECK/UNIQUE 제약 조건, 프리페어드 스테이트먼트, 삽입/업데이트/삭제, 페이지 나누기, 정렬, 필터, CSV/JSON 내보내기, 트랜잭션, 트랜잭션 DDL, 다중 문 | HTTP를 통한 원격 Turso / libSQL(`libsql://`, 로컬 `sqld`는 `http://`), 대화형 트랜잭션은 문서별 서버 스트림에서 실행, 쿼리 취소, SSH 터널, 복제본, 데이터베이스 전환 없음. |
 | Amazon S3 | 개체 스토리지 | Custom("S3") | 인증(프로필/SSO 또는 정적 자격 증명, 사용자 지정 엔드포인트), 버킷 탐색, 페이지 나누기 기반 개체 탐색, 미리 보기, 전체 CRUD, 사전 서명된 URL | S3 호환(Cloudflare R2, MinIO), 멀티파트 업로드/전송 패널 없음, 내장 PDF 뷰어 없음, 수명 주기/ACL 관리 및 S3 Select 없음. |
@@ -76,7 +76,7 @@ PostgreSQL 와이어 프로토콜을 사용하는 읽기 전용 관계형 SQL �
 
 ### InfluxDB
 
-하나의 크레이트에서 InfluxDB v1과 v2를 모두 지원하는 시계열 드라이버입니다. InfluxQL은 두 버전 모두에서, Flux는 v2에서만 실행됩니다. 쿼리 API는 읽기 전용(INSERT/UPDATE/DELETE 없음, 트랜잭션 없음)이며, 선택적으로 기본 버킷/데이터베이스와 쿼리별 버킷 라우팅을 지원합니다. 자세한 내용은 [`crates/dbflux_driver_influxdb/README.md`](../crates/dbflux_driver_influxdb/README.md)를 참조하세요.
+하나의 크레이트에서 InfluxDB v1과 v2를 모두 지원하는 시계열 드라이버입니다. InfluxQL은 두 버전 모두에서, Flux는 v2에서만 실행됩니다. 행 편집과 트랜잭션은 없지만 쿼리로 쓰기는 가능하며(`SELECT ... INTO`, `DELETE`, Flux `to()`), 선택적으로 기본 버킷/데이터베이스와 쿼리별 버킷 라우팅을 지원합니다. 자세한 내용은 [`crates/dbflux_driver_influxdb/README.md`](../crates/dbflux_driver_influxdb/README.md)를 참조하세요.
 
 ### ClickHouse
 

@@ -171,8 +171,11 @@ Driver de InfluxDB para DBFlux.
   escritura cuando llega a `to()`, `experimental.to()`, `influxdb.wideTo()`,
   `sql.to()`, `sql.from()`, `kafka.to()`, `mqtt.to()`, `http.post()`, `requests.*`,
   `slack.message()`, `pagerduty.sendEvent()`, `monitor.check()`, `monitor.notify()`
-  u otro miembro que escribe o envía una petición, con cualquier nombre, o importa
-  un paquete fuera de la biblioteca estándar de Flux. Una columna, clave o cadena
+  u otro miembro que escribe o envía una petición, con cualquier nombre, pasa un
+  argumento `host:` o `url:` a una llamada, o importa un paquete fuera de la
+  biblioteca estándar de Flux. Un texto que se lee como InfluxQL con un comentario
+  `--` también se califica como Flux cuando ese comentario oculta un programa, porque
+  en Flux `--` es código. Una columna, clave o cadena
   llamada `to` sigue siendo lectura. Lo que el análisis no puede ubicar se califica
   hacia arriba. `validate` es una verificación sintáctica básica
   (paréntesis y comillas balanceados), no un parser completo.
@@ -192,8 +195,7 @@ Driver de InfluxDB para DBFlux.
   en curso no se pueden abortar desde la UI (`QUERY_CANCELLATION` no está
   declarada).
 - **Sin generación de mutaciones** — `QueryGenerator::generate_mutation` siempre
-  devuelve `None`; solo se generan plantillas de lectura, en consonancia con la
-  API de queries de solo lectura.
+  devuelve `None`; solo se generan plantillas de lectura.
 - **Flux no soportado en v1** — intentar ejecutar una query Flux contra una
   conexión v1 devuelve un error de inmediato, sin realizar una llamada HTTP.
 - **Sin INSERT/UPDATE**: el driver no edita filas. La ingesta de datos usa la Line

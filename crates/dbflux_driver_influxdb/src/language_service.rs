@@ -12,10 +12,7 @@ use dbflux_core::{
     DangerousQueryKind, Diagnostic, ExecutionClassification, LanguageService, ValidationResult,
 };
 
-use crate::influx_safety::{
-    Dialect, classify_flux, classify_influxql, detect_dangerous_flux, detect_dangerous_influxql,
-    detect_dialect,
-};
+use crate::influx_safety;
 
 pub struct InfluxLanguageService;
 
@@ -33,17 +30,11 @@ impl LanguageService for InfluxLanguageService {
     }
 
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        match detect_dialect(query) {
-            Dialect::InfluxQl => detect_dangerous_influxql(query),
-            Dialect::Flux => detect_dangerous_flux(query),
-        }
+        influx_safety::detect_dangerous(query)
     }
 
     fn classify_execution(&self, query: &str) -> Option<ExecutionClassification> {
-        Some(match detect_dialect(query) {
-            Dialect::InfluxQl => classify_influxql(query),
-            Dialect::Flux => classify_flux(query),
-        })
+        Some(influx_safety::classify_execution(query))
     }
 }
 

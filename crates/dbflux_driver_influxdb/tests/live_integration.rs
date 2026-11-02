@@ -962,12 +962,12 @@ fn v1_database_other_than_the_default_lists_its_measurements() -> Result<(), DbE
 // The rating against what the server does
 // ---------------------------------------------------------------------------
 
-fn is_refused(conn: &dyn Connection, query: &str) -> bool {
+fn is_refused(connection: &dyn Connection, query: &str) -> bool {
     !matches!(
         dbflux_core::classify_query_for_governance(
             &QueryLanguage::InfluxQuery,
             query,
-            Some(conn.language_service()),
+            Some(connection.language_service()),
         ),
         dbflux_core::ExecutionClassification::Metadata | dbflux_core::ExecutionClassification::Read
     )
@@ -985,9 +985,9 @@ fn v1_rating_refuses_the_influxql_the_server_writes_with() -> Result<(), DbError
         write_v1_line_protocol(&cfg.endpoint, database, "cpu,host=a value=1 1700000000000")?;
         std::thread::sleep(Duration::from_millis(500));
 
-        let conn = connect_v1(&cfg.endpoint, database)?;
+        let connection = connect_v1(&cfg.endpoint, database)?;
         let has_measurement = |name: &str| -> Result<bool, DbError> {
-            let shown = conn.execute(&QueryRequest::new("SHOW MEASUREMENTS"))?;
+            let shown = connection.execute(&QueryRequest::new("SHOW MEASUREMENTS"))?;
             Ok(shown
                 .rows
                 .iter()
@@ -1015,15 +1015,26 @@ fn v1_rating_refuses_the_influxql_the_server_writes_with() -> Result<(), DbError
                 "SELECT value FROM cpu WHERE host =~ /'/ ; SELECT value INTO {} FROM cpu ; SELECT value FROM /'/",
             ),
             (
+                "hit_backslashes",
+                "SELECT value FROM /\\\\/ ' / ; SELECT value INTO {} FROM cpu ; SELECT value FROM /'/",
+            ),
+            (
+                "hit_with_measurement",
+                "SHOW MEASUREMENTS WITH MEASUREMENT = /'/ ; SELECT value INTO {} FROM cpu ; SHOW MEASUREMENTS WITH MEASUREMENT = /'/",
+            ),
+            (
                 "hit_show",
                 "SHOW SERIES FROM /'/ ; SELECT value INTO {} FROM cpu ; SELECT value FROM /'/",
             ),
         ] {
             let query = template.replace("{}", name);
 
-            assert!(is_refused(&*conn, &query), "rated as a read: {query:?}");
+            assert!(
+                is_refused(&*connection, &query),
+                "rated as a read: {query:?}"
+            );
             assert!(!has_measurement(name)?, "{name} exists before {query:?}");
-            conn.execute(&QueryRequest::new(query.clone()))?;
+            connection.execute(&QueryRequest::new(query.clone()))?;
             assert!(has_measurement(name)?, "the server did not run {query:?}");
         }
 
@@ -1031,9 +1042,9 @@ fn v1_rating_refuses_the_influxql_the_server_writes_with() -> Result<(), DbError
         std::thread::sleep(Duration::from_millis(500));
 
         let behind_a_read = "SELECT value FROM /'/ ; DROP MEASUREMENT gone ; SELECT value FROM /'/";
-        assert!(is_refused(&*conn, behind_a_read));
+        assert!(is_refused(&*connection, behind_a_read));
         assert!(has_measurement("gone")?);
-        conn.execute(&QueryRequest::new(behind_a_read))?;
+        connection.execute(&QueryRequest::new(behind_a_read))?;
         assert!(!has_measurement("gone")?, "the server did not drop it");
 
         for query in [
@@ -1045,8 +1056,8 @@ fn v1_rating_refuses_the_influxql_the_server_writes_with() -> Result<(), DbError
             "SELECT value / 2 FROM /cpu/",
             "SHOW MEASUREMENTS",
         ] {
-            assert!(!is_refused(&*conn, query), "refused {query:?}");
-            conn.execute(&QueryRequest::new(query))?;
+            assert!(!is_refused(&*connection, query), "refused {query:?}");
+            connection.execute(&QueryRequest::new(query))?;
         }
         assert!(!has_measurement("hit_string")? && !has_measurement("hit_line")?);
 
@@ -1067,7 +1078,7 @@ fn v2_rating_refuses_the_flux_the_server_writes_with() -> Result<(), DbError> {
         )?;
         std::thread::sleep(Duration::from_millis(500));
 
-        let conn = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
+        let connection = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
         let bucket = &cfg.bucket;
         let source = format!(
             r#"from(bucket: "{bucket}") |> range(start: 0) |> filter(fn: (r) => r._measurement == "cpu")"#
@@ -1076,7 +1087,10 @@ fn v2_rating_refuses_the_flux_the_server_writes_with() -> Result<(), DbError> {
             let query = format!(
                 r#"from(bucket: "{bucket}") |> range(start: 0) |> filter(fn: (r) => r._measurement == "{name}")"#
             );
-            Ok(conn.execute(&flux_query_with_window(&query))?.rows.len())
+            Ok(connection
+                .execute(&flux_query_with_window(&query))?
+                .rows
+                .len())
         };
 
         for (name, template) in [
@@ -1090,6 +1104,23 @@ fn v2_rating_refuses_the_flux_the_server_writes_with() -> Result<(), DbError> {
             (
                 "to_regex",
                 "{SOURCE} |> filter(fn: (r) => r.host =~ /\"/ or true) {SET} |> to(bucket: \"{BUCKET}\") |> filter(fn: (r) => r.host =~ /\"/)",
+            ),
+            ("to_dash", "--1 {SOURCE} {SET} |> to(bucket: \"{BUCKET}\")"),
+            (
+                "to_dash_show",
+                "--1 show = 1 {SOURCE} {SET} |> to(bucket: \"{BUCKET}\")\nshow",
+            ),
+            (
+                "to_dollar",
+                "{SOURCE} |> filter(fn: (r) => r.host != \"$${\") {SET} |> to(bucket: \"{BUCKET}\") |> filter(fn: (r) => r.host != \"}\")",
+            ),
+            (
+                "to_return",
+                "{SOURCE} {SET} // a\r\"\n |> to(bucket: \"{BUCKET}\") // \"",
+            ),
+            (
+                "to_backslashes",
+                "{SOURCE} |> filter(fn: (r) => r.host =~ /\\\\/\"/ or true) {SET} |> to(bucket: \"{BUCKET}\") |> filter(fn: (r) => r.host =~ /\"/ or true)",
             ),
             (
                 "to_tables",
@@ -1134,9 +1165,9 @@ fn v2_rating_refuses_the_flux_the_server_writes_with() -> Result<(), DbError> {
                 .replace("{SET}", &set)
                 .replace("{BUCKET}", bucket);
 
-            assert!(is_refused(&*conn, &flux), "rated as a read: {flux:?}");
+            assert!(is_refused(&*connection, &flux), "rated as a read: {flux:?}");
             assert_eq!(points_in(name)?, 0, "{name} exists before {flux:?}");
-            conn.execute(&flux_query_with_window(&flux))?;
+            connection.execute(&flux_query_with_window(&flux))?;
             std::thread::sleep(Duration::from_millis(200));
             assert!(points_in(name)? > 0, "the server did not run {flux:?}");
         }
@@ -1150,10 +1181,204 @@ fn v2_rating_refuses_the_flux_the_server_writes_with() -> Result<(), DbError> {
             format!(r#"{source} |> keep(columns: ["to", "_value"])"#),
             format!("{source} // |> to(bucket: \"{bucket}\")"),
         ] {
-            assert!(!is_refused(&*conn, &flux), "refused {flux:?}");
-            conn.execute(&flux_query_with_window(&flux))?;
+            assert!(!is_refused(&*connection, &flux), "refused {flux:?}");
+            connection.execute(&flux_query_with_window(&flux))?;
         }
 
+        Ok(())
+    })
+}
+
+/// A write hidden behind every mix of the characters that open or close something
+/// in the language. What rates as a read goes to a real server, which must not
+/// have written once all of them ran. A text the server refuses runs nothing, so
+/// only the lexer's wrong readings of what the server accepts can fail this.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v1_nothing_rated_a_read_writes() -> Result<(), DbError> {
+    const HEADS: &[&str] = &[
+        "SELECT value FROM ",
+        "SELECT ",
+        "SELECT value, ",
+        "SELECT mean(",
+        "SELECT value FROM cpu, ",
+        "SELECT value FROM d.autogen.",
+        "SELECT value FROM cpu WHERE host =~ ",
+        "SELECT value FROM cpu WHERE host = ",
+        "SELECT value FROM cpu GROUP BY ",
+        "SHOW SERIES FROM ",
+        "SHOW MEASUREMENTS WITH MEASUREMENT = ",
+    ];
+    const PIECES: &[&str] = &[
+        "", "/", "'", "\"", "\\", "\\/", "\\\\", "\\'", "--", "/*", "*/", "\n", "\r", ";", "cpu",
+        "$", "(", ")", "/'/",
+    ];
+    const TAILS: &[&str] = &[
+        "SELECT value FROM /'/",
+        "SELECT value FROM /\"/",
+        "SELECT value FROM cpu WHERE host = '",
+        "SELECT value FROM cpu -- '",
+        "SELECT value FROM cpu /* ' */",
+        "' /",
+    ];
+
+    containers::with_influxdb_v1(|cfg| {
+        let database = "testdb";
+        setup_v1_database(&cfg.endpoint, database)?;
+        write_v1_line_protocol(&cfg.endpoint, database, "cpu,host=a value=1 1700000000000")?;
+        std::thread::sleep(Duration::from_millis(500));
+
+        let connection = connect_v1(&cfg.endpoint, database)?;
+        let mut sent: Vec<String> = Vec::new();
+
+        for head in HEADS {
+            for first in PIECES {
+                for second in PIECES {
+                    for third in PIECES {
+                        for tail in TAILS {
+                            let query = format!(
+                                "{head}{first}{second}{third} ; SELECT value INTO h{} FROM cpu ; {tail}",
+                                sent.len()
+                            );
+
+                            if is_refused(&*connection, &query) {
+                                continue;
+                            }
+
+                            // A refusal is what most of these get.
+                            let _ = connection.execute(&QueryRequest::new(query.clone()));
+                            sent.push(query);
+                        }
+                    }
+                }
+            }
+        }
+
+        let shown = connection.execute(&QueryRequest::new("SHOW MEASUREMENTS"))?;
+        let written: Vec<&String> = shown
+            .rows
+            .iter()
+            .flatten()
+            .filter_map(|value| match value {
+                Value::Text(name) => name.strip_prefix('h')?.parse::<usize>().ok(),
+                _ => None,
+            })
+            .filter_map(|index| sent.get(index))
+            .collect();
+
+        eprintln!("sent {} texts rated as reads", sent.len());
+        assert!(
+            written.is_empty(),
+            "rated as reads, and wrote: {written:#?}"
+        );
+        Ok(())
+    })
+}
+
+/// The same for Flux, with `--` and `//` around the hidden write.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v2_nothing_rated_a_read_writes() -> Result<(), DbError> {
+    const OPENERS: &[&str] = &[
+        "",
+        " // ",
+        " --1 ",
+        " |> filter(fn: (r) => r.host != \"",
+        " |> filter(fn: (r) => r.host =~ /",
+        " |> filter(fn: (r) => \"${r.host}\" != \"",
+        " |> filter(fn: (r) => \"${\"",
+    ];
+    const INSIDES: &[&str] = &[
+        "", "\"", "/", "\\", "\\\\", "\\/", "\\\\/", "\\\"", "$", "$$", "${", "$${", "$\\", "\r",
+        "\r\"", "\n", "\n\"", "'", "}", "--", "//",
+    ];
+    const CLOSERS: &[&str] = &[
+        "",
+        "\")",
+        "/ or true)",
+        "\" or true)",
+        ")",
+        "}\")",
+        "}\" != \"\")",
+    ];
+
+    const AFTER_OPENERS: &[&str] = &[
+        "",
+        " // ",
+        " |> filter(fn: (r) => r.host != \"",
+        " |> filter(fn: (r) => r.host =~ /",
+    ];
+    const AFTER_INSIDES: &[&str] = &["", "\"", "/", "\\/", "$", "${", "\r\"", "\n", "}"];
+    const AFTER_CLOSERS: &[&str] = &["", "\")", "/ or true)", ")"];
+
+    containers::with_influxdb_v2(|cfg| {
+        write_v2_line_protocol(
+            &cfg.endpoint,
+            &cfg.token,
+            &cfg.org,
+            &cfg.bucket,
+            "cpu,host=a value=1 1700000000000",
+        )?;
+        std::thread::sleep(Duration::from_millis(500));
+
+        let connection = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
+        let bucket = &cfg.bucket;
+        let source = format!(r#"from(bucket: "{bucket}") |> range(start: 0)"#);
+        let mut sent: Vec<String> = Vec::new();
+
+        for before in ["", "--1 ", "x = 1 ", "// \n", "\"a\" "] {
+            for opener in OPENERS {
+                for inside in INSIDES {
+                    for closer in CLOSERS {
+                        for after_opener in AFTER_OPENERS {
+                            for after_inside in AFTER_INSIDES {
+                                for after_closer in AFTER_CLOSERS {
+                                    let flux = format!(
+                                        "{before}{source}{opener}{inside}{closer} \
+                                         |> set(key: \"_measurement\", value: \"h{}\") \
+                                         |> to(bucket: \"{bucket}\")\
+                                         {after_opener}{after_inside}{after_closer}",
+                                        sent.len()
+                                    );
+
+                                    if is_refused(&*connection, &flux) {
+                                        continue;
+                                    }
+
+                                    // A refusal is what most of these get.
+                                    let _ = connection.execute(&flux_query_with_window(&flux));
+                                    sent.push(flux);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(500));
+        let all = format!(
+            r#"import "influxdata/influxdb/schema"
+schema.measurements(bucket: "{bucket}")"#
+        );
+        let shown = connection.execute(&flux_query_with_window(&all))?;
+        let written: Vec<&String> = shown
+            .rows
+            .iter()
+            .flatten()
+            .filter_map(|value| match value {
+                Value::Text(name) => name.strip_prefix('h')?.parse::<usize>().ok(),
+                _ => None,
+            })
+            .filter_map(|index| sent.get(index))
+            .collect();
+
+        eprintln!("sent {} texts rated as reads", sent.len());
+        assert!(
+            written.is_empty(),
+            "rated as reads, and wrote: {written:#?}"
+        );
+        assert!(!shown.rows.is_empty(), "the listing must have worked");
         Ok(())
     })
 }

@@ -781,7 +781,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
   - 문서: insertOne/updateOne/deleteOne/deleteMany
   - 키-값: SET/DELETE/HASH_SET/SET_ADD/LIST_PUSH/ZSET_ADD 및 그에 대응하는 제거 명령, 그리고 STREAM_ADD
 - **키-값 타입**: `crates/dbflux_core/src/data/key_value.rs`는 가변 인자 Redis 명령을 위한 Vec 기반 요청 구조체를 정의합니다(예: `HashSetRequest.fields: Vec<(String, String)>`, `SetAddRequest.members: Vec<String>`).
-- **쿼리 안전성 / `LanguageService`**: `crates/dbflux_core/src/query/language_service.rs`는 `LanguageService` 트레이트(`validate`, `detect_dangerous`, `editor_diagnostics`)와 관계형 드라이버가 재사용하는 기본 `SqlLanguageService` 구현을 정의합니다. 비 SQL 방언(MongoDB, Redis, T-SQL)은 해당 드라이버 크레이트에서 자체 구현을 제공합니다(예: `TSqlLanguageService`는 `dbflux_driver_mssql`에 있습니다). `DangerousQueryKind`는 SQL `DeleteNoWhere` / `UpdateNoWhere` / `Truncate` / `Drop` / `Alter` / `Script`, MongoDB `deleteMany` / `updateMany` / `dropCollection` / `dropDatabase`, Redis `FlushAll` / `FlushDb` / `MultiDelete` / `KeysPattern`을 다룹니다. 디스패처 `classify_query_for_language(&QueryLanguage, &str)`가 올바른 분류기로 라우팅하므로 UI는 드라이버 id로 분기하지 않습니다.
+- **쿼리 안전성 / `LanguageService`**: `crates/dbflux_core/src/query/language_service.rs`는 `LanguageService` 트레이트(`validate`, `detect_dangerous`, `editor_diagnostics`)와 관계형 드라이버가 재사용하는 기본 `SqlLanguageService` 구현을 정의합니다. 비 SQL 방언(MongoDB, Redis, T-SQL)은 해당 드라이버 크레이트에서 자체 구현을 제공합니다(예: `TSqlLanguageService`는 `dbflux_driver_mssql`에 있습니다). `DangerousQueryKind`는 SQL `DeleteNoWhere` / `UpdateNoWhere` / `Truncate` / `Drop` / `Alter` / `Script` / `WriteBehindRead`, MongoDB `deleteMany` / `updateMany` / `dropCollection` / `dropDatabase`, Redis `FlushAll` / `FlushDb` / `MultiDelete` / `KeysPattern`을 다룹니다. 디스패처 `classify_query_for_language(&QueryLanguage, &str)`가 올바른 분류기로 라우팅하므로 UI는 드라이버 id로 분기하지 않습니다.
 
 ### 저장소 및 구성
 

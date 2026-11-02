@@ -88,6 +88,36 @@ fn is_refused_by_read_only_profile(connected: &dbflux_core::ConnectedProfile, qu
     )
 }
 
+/// Why a chart must not run `query`, or `None` when it may: the connection's
+/// read-only profile refuses it, or it changes data. Languages without a shared
+/// classifier default to "write", so outside SQL only the driver's own danger
+/// check decides.
+pub(super) fn chart_refusal(
+    connected: &dbflux_core::ConnectedProfile,
+    query: &str,
+) -> Option<String> {
+    if is_refused_by_read_only_profile(connected, query) {
+        return Some(dbflux_i18n::t!(
+            "document.code.execution.toast.read_only_profile"
+        ));
+    }
+
+    let language = &connected.connection.metadata().query_language;
+    let service = connected.connection.language_service();
+
+    let changes_data = if matches!(language, QueryLanguage::Sql) {
+        !matches!(
+            dbflux_core::classify_query_for_language_with_service(language, query, Some(service)),
+            dbflux_core::ExecutionClassification::Metadata
+                | dbflux_core::ExecutionClassification::Read
+        )
+    } else {
+        service.detect_dangerous(query).is_some()
+    };
+
+    changes_data.then(|| dbflux_i18n::t!("document.code.execution.toast.chart_reads_only"))
+}
+
 fn show_read_only_profile_toast(cx: &mut App) {
     let msg = dbflux_i18n::t!("document.code.execution.toast.read_only_profile");
     Toast::error(msg.clone())
@@ -128,7 +158,7 @@ impl CodeDocument {
         self.selected_query_text(cx)
     }
 
-    fn selected_query_text(&self, cx: &App) -> Option<String> {
+    pub(super) fn selected_query_text(&self, cx: &App) -> Option<String> {
         let state = self.editor.input_state.read(cx);
         let ranges = state.selected_nonempty_ranges();
         if ranges.is_empty() {
@@ -1986,10 +2016,11 @@ impl CodeDocument {
                 DataGridEvent::CloseInspector => {
                     cx.emit(DocumentEvent::CloseInspector);
                 }
-                DataGridEvent::ChartThisQuery { .. } => {
-                    // CodeDocument result tabs use QueryResult sources created without an
-                    // original_query, so can_chart_from_context_menu is always false for them.
-                    // This arm exists only for exhaustiveness.
+                DataGridEvent::ChartThisQuery {
+                    query,
+                    connection_id,
+                } => {
+                    this.chart_result_of(&grid, query.clone(), *connection_id, cx);
                 }
                 DataGridEvent::RefreshPolicyReset(_) => {
                     // ResultPanel for result tabs has no refresh dropdown

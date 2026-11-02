@@ -14,16 +14,17 @@ mod render;
 use super::chart::keyboard::{
     ChartKeyOutcome, chart_shell_pane_actions, step_time_range, time_range_pane_actions,
 };
+use super::chart::shell::ChartBlocker;
 use super::chart::shell::ChartShellEvent;
 use super::chart::{ChartHost, ChartShell, HostAdapter};
 use super::handle::DocumentEvent;
-use super::pane::PaneAction;
+use super::pane::{EscapeClose, PaneAction};
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::{
-    ChartDataSource, ChartDetection, ChartSourceError, TimeWindow, detect_chart_columns,
-    resolve_source,
+    ChartDataSource, ChartDetection, ChartKind, ChartSourceError, ManualChartSelection, TimeWindow,
+    YScale, resolve_source,
 };
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::TimeRangePanel;
@@ -36,9 +37,11 @@ use dbflux_components::modals::ModalFocus;
 use dbflux_components::result_panel::{ResultPanel, SegmentPosition, ToolbarSegment, ViewHandle};
 use dbflux_components::result_view::ResultViewMode;
 use dbflux_components::saved_chart::{SavedChart, SavedChartSource};
-use dbflux_core::{QueryResult, RefreshPolicy};
+use dbflux_core::{
+    ExecutionContext, ExecutionSourceContext, QueryRequest, QueryResult, RefreshPolicy,
+};
 use dbflux_ui_base::AppStateEntity;
-use dbflux_ui_base::toast::PendingToast;
+use dbflux_ui_base::toast::{PendingToast, Toast};
 use gpui::prelude::*;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable as _, Subscription, Task, Window,
@@ -68,6 +71,72 @@ enum ExecState {
     Idle,
     Running,
     Error,
+}
+
+/// Whether a request carries a query the user wrote, as opposed to the driver's
+/// own metric or inspector dispatch, which takes no database and no row limit.
+fn runs_user_query(request: &QueryRequest) -> bool {
+    matches!(
+        request
+            .execution_context
+            .as_ref()
+            .and_then(|context| context.source.as_ref()),
+        None | Some(ExecutionSourceContext::CollectionWindow { .. })
+    )
+}
+
+/// Dresses a chart's query like a console run: `context` names where it runs,
+/// the row cap keeps a `SELECT *` from reading a whole table, and the chart's
+/// time window replaces the one the console showed, keeping its targets and
+/// query mode.
+fn chart_query_request(
+    mut request: QueryRequest,
+    context: &ExecutionContext,
+    database: Option<String>,
+    row_limit: Option<usize>,
+) -> QueryRequest {
+    let chart_source = request
+        .execution_context
+        .take()
+        .and_then(|chart_context| chart_context.source);
+
+    let source = match (chart_source, context.source.clone()) {
+        (
+            Some(ExecutionSourceContext::CollectionWindow {
+                start_ms, end_ms, ..
+            }),
+            Some(ExecutionSourceContext::CollectionWindow {
+                targets,
+                query_mode,
+                ..
+            }),
+        ) => Some(ExecutionSourceContext::CollectionWindow {
+            targets,
+            start_ms,
+            end_ms,
+            query_mode,
+        }),
+        (Some(chart_source), _) => Some(chart_source),
+        (None, console_source) => console_source,
+    };
+
+    request.database = database;
+    request.execution_context = Some(ExecutionContext {
+        source,
+        ..context.clone()
+    });
+
+    crate::code::apply_editor_row_limit(request, row_limit)
+}
+
+/// The chart settings the user can change and Save keeps, compared against
+/// what the document opened or was last saved with.
+#[derive(Clone, PartialEq, Eq, Default)]
+struct ChartSettings {
+    selection: Option<ManualChartSelection>,
+    kind: ChartKind,
+    y_scale: YScale,
+    hidden_series: Vec<usize>,
 }
 
 /// State for the name-prompt modal shown during Save.
@@ -103,6 +172,26 @@ pub struct ChartDocument {
     app_state: Entity<AppStateEntity>,
     pending_result: Option<PendingResult>,
     pending_run_on_first_render: bool,
+    /// Where the query runs: the database, schema and source of the document
+    /// the chart was asked for from. Empty for a saved chart, which then runs
+    /// on the connection's active database as a console does.
+    execution_context: ExecutionContext,
+    /// Why the last run did not produce a result. A toast fades, so the chart
+    /// area keeps saying it.
+    failure: Option<String>,
+    /// A truncated result is mentioned once, not on every auto-refresh.
+    truncation_reported: bool,
+
+    /// The bindings a saved chart reopens with, applied to its first result:
+    /// `ChartShell::set_result` forgets picks made before there is a result.
+    saved_selection: Option<ManualChartSelection>,
+    /// What the settings were when opened or last saved.
+    settings_baseline: ChartSettings,
+    /// The metric picker replaced the source, which Save does not undo.
+    source_replaced: bool,
+    /// The settings Escape last warned about losing. A second Escape closes
+    /// only while they are still the settings on screen.
+    escape_warned_for: Option<ChartSettings>,
 
     // Shell
     chart_shell: Entity<ChartShell>,
@@ -294,6 +383,13 @@ impl ChartDocument {
             app_state,
             pending_result: None,
             pending_run_on_first_render: pending_run,
+            execution_context: ExecutionContext::default(),
+            failure: None,
+            truncation_reported: false,
+            saved_selection: None,
+            settings_baseline: ChartSettings::default(),
+            source_replaced: false,
+            escape_warned_for: None,
             chart_shell,
             time_range_panel: None,
             _time_range_sub: None,
@@ -424,6 +520,24 @@ impl ChartDocument {
 
         doc.title = saved.name.clone();
         doc.saved_chart_id = Some(saved.id);
+
+        // A chart saved before it had a result holds no bindings.
+        if !saved.bindings.y.is_empty() {
+            doc.saved_selection = Some(ManualChartSelection {
+                x_col: saved.bindings.x,
+                y_cols: saved.bindings.y.clone(),
+                group_by: saved.bindings.group_by,
+            });
+        }
+        let kind = saved.chart_spec.kind;
+        doc.chart_shell
+            .update(cx, |shell, cx| shell.set_chart_kind(kind, cx));
+        doc.settings_baseline = ChartSettings {
+            selection: doc.saved_selection.clone(),
+            kind,
+            ..ChartSettings::default()
+        };
+
         Ok(doc)
     }
 
@@ -522,6 +636,13 @@ impl ChartDocument {
             app_state,
             pending_result: None,
             pending_run_on_first_render: true,
+            execution_context: ExecutionContext::default(),
+            failure: None,
+            truncation_reported: false,
+            saved_selection: None,
+            settings_baseline: ChartSettings::default(),
+            source_replaced: false,
+            escape_warned_for: None,
             chart_shell,
             time_range_panel: None,
             _time_range_sub: None,
@@ -702,6 +823,10 @@ impl ChartDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if cmd != Command::Cancel {
+            self.escape_warned_for = None;
+        }
+
         if self.name_prompt.is_some() {
             return match cmd {
                 Command::Execute => {
@@ -746,6 +871,85 @@ impl ChartDocument {
             }
             _ => false,
         }
+    }
+
+    /// The settings on screen, to compare against `settings_baseline`.
+    fn current_settings(&self, cx: &App) -> ChartSettings {
+        let shell = self.chart_shell.read(cx);
+        let mut hidden_series: Vec<usize> = shell.chart_hidden_series.iter().copied().collect();
+        hidden_series.sort_unstable();
+
+        ChartSettings {
+            selection: shell
+                .chart_manual_selection
+                .clone()
+                .or_else(|| self.saved_selection.clone()),
+            kind: shell.chart_kind(),
+            y_scale: shell.y_scale(),
+            hidden_series,
+        }
+    }
+
+    /// Whether closing drops something the user cannot get back: picks made
+    /// in this chart since it opened or was saved, a metric swapped in the
+    /// picker, or the samples only this session collected.
+    ///
+    /// A chart with its default settings is safe: it opens again from its
+    /// query or from the saved list. The time range and the refresh interval
+    /// do not count, since Save does not keep them either.
+    fn closing_loses_work(&self, cx: &App) -> bool {
+        let collected_samples = self.data_source.is_accumulating()
+            && self
+                .last_result
+                .as_ref()
+                .is_some_and(|result| result.row_count() > 1);
+
+        collected_samples
+            || self.source_replaced
+            || self.current_settings(cx) != self.settings_baseline
+    }
+
+    /// What Escape does once nothing in the chart is left to dismiss.
+    ///
+    /// `keyboard_free` means no other control holds the keyboard. Any such
+    /// control, a text field above all, keeps Escape: the workspace takes the
+    /// focus off it and the next press reaches the chart.
+    pub(crate) fn escape_close(
+        &mut self,
+        keyboard_free: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> EscapeClose {
+        if self.embedded || (!keyboard_free && !self.focus_handle.is_focused(window)) {
+            return EscapeClose::Declined;
+        }
+
+        if self.chart_shell.read(cx).chart_rail_open {
+            self.chart_shell.update(cx, |shell, cx| {
+                shell.chart_rail_open = false;
+                cx.notify();
+            });
+            return EscapeClose::Handled;
+        }
+
+        if !self.closing_loses_work(cx) {
+            return EscapeClose::Close;
+        }
+
+        let settings = self.current_settings(cx);
+        if self.escape_warned_for.as_ref() == Some(&settings) {
+            return EscapeClose::Close;
+        }
+
+        self.escape_warned_for = Some(settings);
+        Toast::warning(dbflux_i18n::t!(
+            "document.chart.toast.escape_loses_settings",
+            save = dbflux_ui_base::keymap::shortcut_label(ContextId::Chart, Command::SaveQuery)
+                .unwrap_or_default()
+        ))
+        .push(cx);
+
+        EscapeClose::Handled
     }
 
     /// The chart's toolbar and pointer-only controls, for the pane-actions
@@ -864,6 +1068,51 @@ impl ChartDocument {
             cx,
         ));
         actions
+    }
+
+    /// The message the chart area shows while it has nothing to draw.
+    pub(super) fn degraded_message(&self, cx: &App) -> String {
+        if let Some(failure) = &self.failure {
+            return failure.clone();
+        }
+
+        if self.data_source.is_self_executing() {
+            return if self.exec_state == ExecState::Running {
+                dbflux_i18n::t!("document.chart.shell.degraded.loading_metric")
+            } else {
+                match self.chart_shell.read(cx).chart_detection {
+                    Some(ChartDetection::EmptyResult) | None => {
+                        dbflux_i18n::t!("document.chart.shell.degraded.no_data_points")
+                    }
+                    _ => self.blocker_message(cx),
+                }
+            };
+        }
+
+        if self.exec_state == ExecState::Running {
+            return dbflux_i18n::t!("document.chart.shell.degraded.running");
+        }
+
+        self.blocker_message(cx)
+    }
+
+    fn blocker_message(&self, cx: &App) -> String {
+        let columns = self.last_result_columns().unwrap_or_default();
+
+        match self.chart_shell.read(cx).chart_blocker(&columns) {
+            ChartBlocker::NoResult => dbflux_i18n::t!("document.chart.shell.degraded.run_query"),
+            ChartBlocker::NoRows => dbflux_i18n::t!("document.chart.shell.degraded.no_rows"),
+            ChartBlocker::NoNumericColumn => {
+                dbflux_i18n::t!("document.chart.shell.degraded.no_numeric_series")
+            }
+            ChartBlocker::PickY => dbflux_i18n::t!("document.chart.shell.degraded.pick_y"),
+            ChartBlocker::PickYWithoutTime { x } => {
+                dbflux_i18n::t!("document.chart.shell.degraded.pick_y_no_time", x = x)
+            }
+            ChartBlocker::BuildFailed => {
+                dbflux_i18n::t!("document.chart.shell.degraded.build_failed")
+            }
+        }
     }
 
     /// Whether the auto-refresh interval list is open.
@@ -1003,6 +1252,7 @@ impl ChartDocument {
         }
 
         self.data_source = source;
+        self.source_replaced = true;
         self.pending_chart_reexecute = true;
 
         // Drop the accumulation buffer when the source changes so stale
@@ -1034,6 +1284,8 @@ impl ChartDocument {
         // Driver request. Query/Collection sources always yield ChartDataPlan::Driver;
         // the non-Driver arm is a defensive guard for any future source kind that
         // somehow reaches ChartDocument (which should not happen by design).
+        self.failure = None;
+
         let request = match self.data_source.build_plan(window) {
             Ok(dbflux_components::chart::ChartDataPlan::Driver(r)) => r,
             Ok(_non_driver) => {
@@ -1045,48 +1297,63 @@ impl ChartDocument {
             }
             Err(ChartSourceError::EmptyQuery) => return,
             Err(e) => {
-                self.pending_toast = Some(PendingToast {
-                    message: dbflux_i18n::t!("document.chart.error.source", error = e),
-                    is_error: true,
-                });
-                cx.notify();
+                self.report_failure(
+                    dbflux_i18n::t!("document.chart.error.source", error = e),
+                    cx,
+                );
                 return;
             }
         };
 
         let Some(profile_id) = self.profile_id else {
-            self.pending_toast = Some(PendingToast {
-                message: dbflux_i18n::t!("document.chart.error.no_connection_selected"),
-                is_error: true,
-            });
-            cx.notify();
+            self.report_failure(
+                dbflux_i18n::t!("document.chart.error.no_connection_selected"),
+                cx,
+            );
             return;
         };
 
+        let runs_user_query = runs_user_query(&request);
+
         // Resolve the connection synchronously on the foreground thread.
-        let conn = {
+        let resolved = {
             let state = self.app_state.read(cx);
-            let Some(connected) = state.connections().get(&profile_id) else {
-                self.pending_toast = Some(PendingToast {
-                    message: dbflux_i18n::t!("document.chart.error.connection_not_found"),
-                    is_error: true,
-                });
-                cx.notify();
+            state.connections().get(&profile_id).map(|connected| {
+                // The same database a console on this connection runs in.
+                let database = runs_user_query
+                    .then(|| {
+                        self.execution_context
+                            .database
+                            .clone()
+                            .or_else(|| connected.active_database.clone())
+                    })
+                    .flatten();
+
+                connected
+                    .resolve_connection_for_execution(database.as_deref())
+                    .map(|connection| (connection, database))
+            })
+        };
+        let (conn, database) = match resolved {
+            Some(Ok(resolved)) => resolved,
+            Some(Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
+                database,
+            })) => {
+                self.report_failure(
+                    dbflux_i18n::t!(
+                        "document.code.execution.toast.connecting",
+                        database = database
+                    ),
+                    cx,
+                );
                 return;
-            };
-            match connected.resolve_connection_for_execution(None) {
-                Ok(c) => c,
-                Err(e) => {
-                    self.pending_toast = Some(PendingToast {
-                        message: dbflux_i18n::t!(
-                            "document.chart.error.connection_error",
-                            error = format!("{:?}", e)
-                        ),
-                        is_error: true,
-                    });
-                    cx.notify();
-                    return;
-                }
+            }
+            None => {
+                self.report_failure(
+                    dbflux_i18n::t!("document.chart.error.connection_not_found"),
+                    cx,
+                );
+                return;
             }
         };
 
@@ -1102,6 +1369,12 @@ impl ChartDocument {
         let query_language = conn.metadata().query_language.clone();
         request.sql =
             dbflux_core::substitute_time_macros(&request.sql, macro_window, query_language);
+
+        if runs_user_query {
+            let row_limit = crate::code::enforces_request_row_limit(conn.as_ref())
+                .then(|| self.app_state.read(cx).general_settings().editor_row_limit);
+            request = chart_query_request(request, &self.execution_context, database, row_limit);
+        }
 
         let (task_id, cancel_token) = self.runner.start_primary(
             dbflux_core::TaskKind::Query,
@@ -1144,6 +1417,17 @@ impl ChartDocument {
         .detach();
     }
 
+    /// Shows why a run produced nothing: a toast now, and the chart area until
+    /// the next run.
+    fn report_failure(&mut self, message: String, cx: &mut Context<Self>) {
+        self.failure = Some(message.clone());
+        self.pending_toast = Some(PendingToast {
+            message,
+            is_error: true,
+        });
+        cx.notify();
+    }
+
     /// Apply a completed query result to the chart shell.
     ///
     /// For accumulating sources (`is_accumulating() == true`) the raw
@@ -1180,10 +1464,25 @@ impl ChartDocument {
                     Arc::new(result)
                 };
 
+                if display_result.rows_truncated() && !self.truncation_reported {
+                    self.truncation_reported = true;
+                    self.pending_toast = Some(PendingToast {
+                        message: dbflux_i18n::t!(
+                            "document.chart.toast.rows_truncated",
+                            rows = display_result.row_count()
+                        ),
+                        is_error: false,
+                    });
+                }
+
                 let display_clone = display_result.clone();
                 let x_time_domain = self.accumulating_x_time_domain(now_ms);
+                let saved_selection = self.saved_selection.take();
                 self.chart_shell.update(cx, |shell, cx| {
                     shell.set_result(&display_clone, was_chart_mode, cx);
+                    if let Some(selection) = saved_selection {
+                        shell.chart_manual_selection = Some(selection);
+                    }
                     shell.set_x_time_domain(x_time_domain, cx);
                     shell.ensure_chart_view(&display_clone, cx);
                 });
@@ -1193,10 +1492,7 @@ impl ChartDocument {
             Err(err) => {
                 self.exec_state = ExecState::Error;
                 self.state = DocumentState::Error;
-                self.pending_toast = Some(PendingToast {
-                    message: err.to_string(),
-                    is_error: true,
-                });
+                self.report_failure(err.to_string(), cx);
             }
         }
 
@@ -1438,37 +1734,10 @@ impl ChartDocument {
         let id = self.saved_chart_id.unwrap_or_else(Uuid::new_v4);
         let profile_id = self.profile_id.unwrap_or_else(Uuid::nil);
 
-        // Build a ChartSpec from the last result if available, otherwise use a minimal placeholder.
-        let spec = self
-            .last_result
-            .as_ref()
-            .and_then(|r| match detect_chart_columns(r) {
-                ChartDetection::Ok {
-                    time_col,
-                    numeric_cols,
-                } => dbflux_components::chart::ChartSpec::from_detection(
-                    time_col,
-                    numeric_cols,
-                    &r.columns,
-                    10_000,
-                ),
-                _ => None,
-            })
-            .unwrap_or_else(|| dbflux_components::chart::ChartSpec {
-                kind: dbflux_components::chart::ChartKind::Line,
-                x_axis: dbflux_components::chart::AxisSpec {
-                    column_index: 0,
-                    label: String::new(),
-                    kind: dbflux_components::chart::AxisKind::Time,
-                    unit: None,
-                },
-                series: Vec::new(),
-                legend_visible: false,
-                decimation_threshold: 10_000,
-                binding: dbflux_components::chart::BindingSpec::default(),
-                track_source_indices: false,
-                y_scale: dbflux_components::chart::YScale::Linear,
-            });
+        // What the chart shows now: the user's picks and kind included, or a
+        // placeholder before the first result.
+        let columns = self.last_result_columns().unwrap_or_default();
+        let spec = self.chart_shell.read(cx).current_chart_spec(&columns);
 
         let bindings = spec.binding.clone();
 
@@ -1493,6 +1762,8 @@ impl ChartDocument {
             Ok(_) => {
                 self.saved_chart_id = Some(id);
                 self.title = name;
+                self.settings_baseline = self.current_settings(cx);
+                self.source_replaced = false;
                 self.pending_toast = Some(PendingToast {
                     message: dbflux_i18n::t!("document.chart.toast.chart_saved"),
                     is_error: false,
@@ -1518,6 +1789,13 @@ impl ChartDocument {
     }
 
     // ---- ViewHandle construction ----
+
+    /// Runs the query where the document it came from runs it: its database,
+    /// schema and source. Without this the chart uses the connection's active
+    /// database.
+    pub fn set_execution_context(&mut self, context: ExecutionContext) {
+        self.execution_context = context;
+    }
 
     /// Mark this chart document as embedded inside another document (typically
     /// a `DashboardDocument` panel).
@@ -1706,6 +1984,14 @@ impl ChartDocument {
         });
         self.last_result = Some(result);
         cx.notify();
+    }
+
+    /// Applies a finished run, as the next render would.
+    #[cfg(test)]
+    pub(crate) fn apply_pending_result_for_test(&mut self, cx: &mut Context<Self>) {
+        if let Some(pending) = self.pending_result.take() {
+            self.apply_result(pending, cx);
+        }
     }
 
     /// The chart shell, for tests that read the chart state.

@@ -1302,8 +1302,11 @@ document:
         loading_metric: "Carregando dados da métrica…"
         no_data_points: "Nenhum ponto de dados na janela selecionada."
         run_query: "Execute a consulta para preencher o gráfico."
-        no_time_column: "Nenhuma coluna de tempo detectada no resultado."
-        no_numeric_series: "Nenhuma série numérica detectada no resultado."
+        running: "Executando a consulta…"
+        no_rows: "A consulta não retornou linhas."
+        no_numeric_series: "Este resultado não tem coluna numérica para plotar. Altere a consulta para retornar uma."
+        pick_y: "Escolha uma coluna Y para desenhar o gráfico."
+        pick_y_no_time: "Este resultado não tem coluna de tempo. Escolha uma coluna Y para plotá-la em relação a %{x}."
         build_failed: "Falha ao montar o gráfico."
       custom_range:
         apply: Aplicar
@@ -1325,13 +1328,14 @@ document:
     status:
       task_label: Consulta do gráfico
     toast:
+      escape_loses_settings: "Este gráfico tem alterações não salvas. Pressione Escape de novo para fechá-lo ou %{save} para salvá-lo."
+      rows_truncated: "O gráfico mostra as primeiras %{rows} linhas: a consulta retornou mais que o limite de linhas."
       chart_saved: Gráfico salvo
       save_failed: "Falha ao salvar o gráfico: %{error}"
     error:
       source: "Erro na origem do gráfico: %{error}"
       no_connection_selected: Nenhuma conexão selecionada
       connection_not_found: Conexão não encontrada
-      connection_error: "Erro de conexão: %{error}"
       collection_source_unsupported: "Origem de coleção não compatível com ChartDocument; abra por meio de DataDocument"
     metric_picker:
       apply: Aplicar
@@ -1526,6 +1530,9 @@ document:
         enter_query_to_explain: Digite uma consulta para explicar
         enter_script_content: Digite o conteúdo do script para executar
         write_query_first: Escreva uma consulta primeiro para abri-la em um gráfico
+        chart_not_a_query: "Esta instrução não retorna linhas para o gráfico. Coloque o cursor em uma consulta ou selecione uma."
+        chart_one_statement: "Um gráfico desenha uma única instrução. Coloque o cursor nela ou selecione-a."
+        chart_reads_only: "Um gráfico executa a consulta sozinho, então só aceita consultas que leem dados."
         connecting: "Conectando ao banco de dados '%{database}', aguarde…"
         redis_flush_disabled: FLUSHALL / FLUSHDB está desabilitado nas configurações
         read_only_profile: "O perfil desta conexão está definido como somente leitura. Aqui só são executadas instruções que leem dados."

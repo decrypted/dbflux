@@ -60,6 +60,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
 
+#[cfg(test)]
+mod chart_query_tests;
 mod code_actions;
 mod comment;
 mod completion;
@@ -299,7 +301,7 @@ fn source_input_values_from_context(source: &ExecutionSourceContext) -> Option<(
 /// `None` leaves the request as it is: the connection cannot enforce a row
 /// budget, and a driver that cannot enforce one refuses the whole request
 /// instead of running it unbounded (see [`enforces_request_row_limit`]).
-fn apply_editor_row_limit(
+pub(crate) fn apply_editor_row_limit(
     mut request: QueryRequest,
     editor_row_limit: Option<usize>,
 ) -> QueryRequest {
@@ -1303,32 +1305,146 @@ impl CodeDocument {
             .is_some_and(|connected| connected.connection.metadata().enforces_read_only())
     }
 
-    /// Returns the full editor content trimmed, or `None` when blank.
-    ///
-    /// Used by the "New chart from current query" command to seed a new `ChartDocument`.
-    pub fn current_query_text(&self, cx: &App) -> Option<String> {
-        let text = self.editor.input_state.read(cx).value().trim().to_string();
-        if text.is_empty() { None } else { Some(text) }
+    /// The text "Open in chart" charts: what Run would run, the selection or
+    /// else the statement under the cursor. A chart reads one result set, and
+    /// a script's primary set is its first statement's, so sending the buffer
+    /// drew the wrong statement.
+    fn chart_query_text(&self, cx: &Context<Self>) -> Result<String, String> {
+        let selection = self.selected_query_text(cx);
+        let state = self.editor.input_state.read(cx);
+        let buffer = state.value().to_string();
+
+        if buffer.trim().is_empty() {
+            return Err(dbflux_i18n::t!(
+                "document.code.execution.toast.write_query_first"
+            ));
+        }
+
+        let language = self.effective_language();
+        let query = selection.unwrap_or_else(|| {
+            statements::cursor_statement(language, &buffer, state.cursor())
+                .and_then(|range| buffer.get(range))
+                .unwrap_or(&buffer)
+                .trim()
+                .to_string()
+        });
+
+        if statements::is_transaction_boundary(&query) {
+            return Err(dbflux_i18n::t!(
+                "document.code.execution.toast.chart_not_a_query"
+            ));
+        }
+
+        if language.statement_count(&query) > 1 {
+            return Err(dbflux_i18n::t!(
+                "document.code.execution.toast.chart_one_statement"
+            ));
+        }
+
+        Ok(query)
     }
 
-    /// Emit a `ChartThisQuery` event with the current editor text.
+    /// The context a chart of this document's query runs in, the same a Run
+    /// resolves: the document's own database, else the connection's active one.
+    fn chart_execution_context(&self, cx: &App) -> ExecutionContext {
+        let active_database = self
+            .connection_id
+            .and_then(|id| self.app_state.read(cx).connections().get(&id))
+            .and_then(|connected| connected.active_database.clone());
+
+        let mut context = self.source.exec_ctx.clone();
+        context.connection_id = self.connection_id;
+        context.database = context.database.or(active_database);
+        context
+    }
+
+    /// Asks the workspace for a chart of `query`, unless it cannot run there.
     ///
-    /// Wired to the editor toolbar "Chart" button. When the editor is blank,
-    /// surfaces a toast instead of emitting so the user gets feedback.
-    pub fn emit_chart_this_query(&mut self, cx: &mut Context<Self>) {
-        let Some(query) = self.current_query_text(cx) else {
+    /// A chart runs its query unattended, on opening and on every refresh, with
+    /// no confirmation to stop on, so it takes reads only.
+    pub(super) fn request_chart(
+        &mut self,
+        query: String,
+        connection_id: Option<Uuid>,
+        context: ExecutionContext,
+        cx: &mut Context<Self>,
+    ) {
+        let refusal = match connection_id {
+            None => Some(dbflux_i18n::t!(
+                "document.code.execution.toast.no_active_connection"
+            )),
+            Some(id) => match self.app_state.read(cx).connections().get(&id) {
+                None => Some(dbflux_i18n::t!(
+                    "document.code.execution.toast.connection_not_found"
+                )),
+                Some(connected) => execution::chart_refusal(connected, &query),
+            },
+        };
+
+        if let Some(message) = refusal {
+            Toast::warning(message).meta_right(now_hms()).push(cx);
+            return;
+        }
+
+        cx.emit(DocumentEvent::ChartThisQuery {
+            query,
+            connection_id,
+            context,
+        });
+    }
+
+    /// The results menu's "Chart this query": the statement `grid` shows, in
+    /// the database its result came from, which the document may have left.
+    pub(super) fn chart_result_of(
+        &mut self,
+        grid: &Entity<DataGridPanel>,
+        query: String,
+        connection_id: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.effective_language().statement_count(&query) > 1 {
             Toast::warning(dbflux_i18n::t!(
-                "document.code.execution.toast.write_query_first"
+                "document.code.execution.toast.chart_one_statement"
             ))
             .meta_right(now_hms())
             .push(cx);
             return;
+        }
+
+        let context = self
+            .result_tabs
+            .result_tabs
+            .iter()
+            .find(|tab| tab.grid == *grid)
+            .and_then(|tab| tab.origin.as_ref())
+            .map(|origin| ExecutionContext {
+                connection_id: Some(origin.connection_id),
+                database: origin.context.database.clone(),
+                ..origin.exec_ctx.clone()
+            })
+            .unwrap_or_else(|| self.chart_execution_context(cx));
+
+        self.request_chart(query, connection_id, context, cx);
+    }
+
+    /// The buffer as typed, for tests in the workspace crate.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn buffer_text_for_test(&self, cx: &App) -> String {
+        self.editor.input_state.read(cx).value().to_string()
+    }
+
+    /// Wired to the editor toolbar "Chart" button.
+    pub fn emit_chart_this_query(&mut self, cx: &mut Context<Self>) {
+        let query = match self.chart_query_text(cx) {
+            Ok(query) => query,
+            Err(message) => {
+                Toast::warning(message).meta_right(now_hms()).push(cx);
+                return;
+            }
         };
 
-        cx.emit(DocumentEvent::ChartThisQuery {
-            query,
-            connection_id: self.connection_id,
-        });
+        let context = self.chart_execution_context(cx);
+        self.request_chart(query, self.connection_id, context, cx);
     }
 
     /// Records whether this tab is the active one and, on activation, lets the

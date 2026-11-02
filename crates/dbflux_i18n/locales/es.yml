@@ -1302,8 +1302,11 @@ document:
         loading_metric: "Cargando datos de la métrica…"
         no_data_points: "No hay puntos de datos para la ventana seleccionada."
         run_query: "Ejecuta la consulta para generar el gráfico."
-        no_time_column: "No se detectó ninguna columna de tiempo en el resultado."
-        no_numeric_series: "No se detectó ninguna serie numérica en el resultado."
+        running: "Ejecutando la consulta…"
+        no_rows: "La consulta no devolvió filas."
+        no_numeric_series: "Este resultado no tiene ninguna columna numérica que dibujar. Cambia la consulta para que devuelva una."
+        pick_y: "Elige una columna Y para dibujar el gráfico."
+        pick_y_no_time: "Este resultado no tiene columna de tiempo. Elige una columna Y para dibujarla frente a %{x}."
         build_failed: "No se pudo generar el gráfico."
       custom_range:
         apply: Aplicar
@@ -1325,13 +1328,14 @@ document:
     status:
       task_label: Consulta de gráfico
     toast:
+      escape_loses_settings: "Este gráfico tiene cambios sin guardar. Pulsa Escape otra vez para cerrarlo o %{save} para guardarlo."
+      rows_truncated: "El gráfico muestra las primeras %{rows} filas: la consulta devolvió más que el límite de filas."
       chart_saved: Gráfico guardado
       save_failed: "No se pudo guardar el gráfico: %{error}"
     error:
       source: "Error del origen del gráfico: %{error}"
       no_connection_selected: No hay ninguna conexión seleccionada
       connection_not_found: Conexión no encontrada
-      connection_error: "Error de conexión: %{error}"
       collection_source_unsupported: "El origen de colección no es compatible con ChartDocument; ábrelo desde DataDocument"
     metric_picker:
       apply: Aplicar
@@ -1526,6 +1530,9 @@ document:
         enter_query_to_explain: Escribe una consulta para analizar con Explain
         enter_script_content: Escribe contenido del script para ejecutar
         write_query_first: Escribe primero una consulta para abrirla en una gráfica
+        chart_not_a_query: "Esta sentencia no devuelve filas que dibujar. Pon el cursor en una consulta o selecciona una."
+        chart_one_statement: "Un gráfico dibuja una sola sentencia. Pon el cursor en ella o selecciónala."
+        chart_reads_only: "Un gráfico ejecuta su consulta por sí solo, así que solo acepta consultas que leen datos."
         connecting: "Conectando a la base de datos '%{database}', espera…"
         redis_flush_disabled: FLUSHALL / FLUSHDB está deshabilitado en la configuración
         read_only_profile: "El perfil de esta conexión está configurado como solo lectura. Aquí solo se ejecutan sentencias que leen datos."

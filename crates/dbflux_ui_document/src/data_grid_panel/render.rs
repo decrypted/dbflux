@@ -3189,12 +3189,8 @@ impl DataGridPanel {
                     let active_y_cols: Vec<usize> =
                         if let Some(manual) = &shell.chart_manual_selection {
                             manual.y_cols.clone()
-                        } else if let Some(ChartDetection::Ok { numeric_cols, .. }) =
-                            &shell.chart_detection
-                        {
-                            numeric_cols.clone()
                         } else {
-                            vec![]
+                            shell.chart_default_y.clone()
                         };
 
                     let detection_ok =

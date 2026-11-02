@@ -6331,7 +6331,10 @@ mod tests {
             "document.chart.shell.degraded.loading_metric",
             "document.chart.shell.degraded.no_data_points",
             "document.chart.shell.degraded.run_query",
-            "document.chart.shell.degraded.no_time_column",
+            "document.chart.shell.degraded.running",
+            "document.chart.shell.degraded.no_rows",
+            "document.chart.shell.degraded.pick_y",
+            "document.chart.shell.degraded.pick_y_no_time",
             "document.chart.shell.degraded.no_numeric_series",
             "document.chart.shell.degraded.build_failed",
             "document.chart.shell.custom_range.apply",
@@ -6348,7 +6351,6 @@ mod tests {
             "document.chart.error.source",
             "document.chart.error.no_connection_selected",
             "document.chart.error.connection_not_found",
-            "document.chart.error.connection_error",
             "document.chart.error.collection_source_unsupported",
             // Reused from PR 23 — the toolbar's kind chips route through
             // `configure_chart_kind_label` instead of a duplicate key set.

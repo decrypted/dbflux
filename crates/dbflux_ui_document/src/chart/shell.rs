@@ -17,6 +17,23 @@ pub enum ChartRailTab {
     Metric,
 }
 
+/// Why a chart has nothing to draw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ChartBlocker {
+    /// No result has arrived yet.
+    NoResult,
+    /// The query ran and returned no rows.
+    NoRows,
+    /// The result has no numeric column, so no Y axis can be picked.
+    NoNumericColumn,
+    /// Numeric columns exist but none is on the Y axis.
+    PickY,
+    /// The same without a time column, plotted against the named X column.
+    PickYWithoutTime { x: String },
+    /// Columns are bound and the chart still did not build.
+    BuildFailed,
+}
+
 /// Events emitted by `ChartShell`.
 ///
 /// Subscribed by `ChartDocument` to receive apply notifications from the
@@ -44,7 +61,7 @@ use super::host::{ChartHost, HostAdapter};
 use super::metric_picker::MetricPickerState;
 use dbflux_components::chart::{
     AggKind, AxisPill, BindingSpec, ChartDetection, ChartKind, ChartSpec, ChartView, DataPointRef,
-    ManualChartSelection, SourceRowRef, YScale, detect_chart_columns,
+    ManualChartSelection, SourceRowRef, YScale, default_series_columns, detect_chart_columns,
 };
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult};
 use gpui::prelude::*;
@@ -140,6 +157,14 @@ pub struct ChartShell {
     /// that row; off by default to spare the per-point index memory.
     track_source_indices: bool,
 
+    // ---- defaults for the current result ----
+    /// The X axis until the user picks one: the first time column, else the
+    /// first column the X picker offers.
+    chart_default_x: usize,
+
+    /// The Y axis until the user picks one (see `default_series_columns`).
+    pub(crate) chart_default_y: Vec<usize>,
+
     // ---- chart kind ----
     /// User-selected chart kind (Line, Bar, …). Applied to every `ChartSpec`
     /// the shell produces, so it survives rebuilds triggered by binding edits.
@@ -188,6 +213,8 @@ impl ChartShell {
             axis_picker_cursor: 0,
             y_scale: YScale::Linear,
             track_source_indices: false,
+            chart_default_x: 0,
+            chart_default_y: Vec::new(),
             chart_kind: ChartKind::default(),
             metric_picker: None,
         }
@@ -243,6 +270,22 @@ impl ChartShell {
         let prev_rail_open = self.chart_rail_open;
         let prev_rail_tab = self.chart_rail_tab;
 
+        self.chart_default_x = result
+            .columns
+            .iter()
+            .position(|c| c.kind == ColumnKind::Timestamp)
+            .or_else(|| {
+                result
+                    .columns
+                    .iter()
+                    .position(|c| matches!(c.kind, ColumnKind::Integer | ColumnKind::Float))
+            })
+            .unwrap_or(0);
+        self.chart_default_y = match &detection {
+            ChartDetection::Ok { numeric_cols, .. } => default_series_columns(result, numeric_cols),
+            _ => Vec::new(),
+        };
+
         self.chart_detection = Some(detection);
         self.chart_view = None;
         self.chart_view_observer = None;
@@ -257,7 +300,10 @@ impl ChartShell {
             self.chart_rail_tab = prev_rail_tab;
         } else {
             self.chart_hidden_series = HashSet::new();
-            self.chart_manual_selection = None;
+            // A result without a time column draws only what the user picked,
+            // so a re-run of the same chart keeps those picks.
+            self.chart_manual_selection =
+                prev_manual.filter(|manual| was_chart_mode && manual_fits(manual, &result.columns));
             self.chart_focused_series_idx = 0;
             self.chart_rail_open = false;
             self.chart_rail_tab = ChartRailTab::Configure;
@@ -286,12 +332,9 @@ impl ChartShell {
             ChartSpec::from_manual_selection(manual, &result.columns, 10_000)
         } else {
             match &self.chart_detection {
-                Some(ChartDetection::Ok {
-                    time_col,
-                    numeric_cols,
-                }) => ChartSpec::from_detection(
+                Some(ChartDetection::Ok { time_col, .. }) => ChartSpec::from_detection(
                     *time_col,
-                    numeric_cols.clone(),
+                    self.chart_default_y.clone(),
                     &result.columns,
                     10_000,
                 ),
@@ -322,6 +365,38 @@ impl ChartShell {
             Err(err) => {
                 log::warn!("[chart-shell] ChartView::build failed: {}", err);
                 None
+            }
+        }
+    }
+
+    /// Why a chart cannot draw `columns`, and so what the user can do next.
+    /// Only meaningful while there is no chart view.
+    pub(crate) fn chart_blocker(&self, columns: &[ColumnMeta]) -> ChartBlocker {
+        let has_numeric = columns
+            .iter()
+            .any(|column| matches!(column.kind, ColumnKind::Integer | ColumnKind::Float));
+
+        match &self.chart_detection {
+            None => ChartBlocker::NoResult,
+            Some(ChartDetection::EmptyResult) => ChartBlocker::NoRows,
+            Some(_) if !has_numeric => ChartBlocker::NoNumericColumn,
+            Some(detection) => {
+                let bindings = self.active_bindings();
+
+                if bindings.y.iter().any(|y| *y != bindings.x) {
+                    return ChartBlocker::BuildFailed;
+                }
+
+                let x = columns
+                    .get(bindings.x)
+                    .map(|column| column.name.clone())
+                    .unwrap_or_default();
+
+                if matches!(detection, ChartDetection::NoTimeColumn) {
+                    ChartBlocker::PickYWithoutTime { x }
+                } else {
+                    ChartBlocker::PickY
+                }
             }
         }
     }
@@ -521,12 +596,9 @@ impl ChartShell {
         }
 
         // Auto-detection fallback.
-        if let Some(ChartDetection::Ok {
-            time_col,
-            numeric_cols,
-        }) = &self.chart_detection
+        if let Some(ChartDetection::Ok { time_col, .. }) = &self.chart_detection
             && let Some(mut spec) =
-                ChartSpec::from_detection(*time_col, numeric_cols.clone(), columns, 10_000)
+                ChartSpec::from_detection(*time_col, self.chart_default_y.clone(), columns, 10_000)
         {
             spec.kind = self.chart_kind;
             return spec;
@@ -564,20 +636,19 @@ impl ChartShell {
                 filter: None,
                 aggregation: dbflux_components::chart::AggKind::None,
             }
-        } else if let Some(ChartDetection::Ok {
-            time_col,
-            numeric_cols,
-        }) = &self.chart_detection
-        {
+        } else if let Some(ChartDetection::Ok { time_col, .. }) = &self.chart_detection {
             BindingSpec {
                 x: *time_col,
-                y: numeric_cols.clone(),
+                y: self.chart_default_y.clone(),
                 group_by: None,
                 filter: None,
                 aggregation: dbflux_components::chart::AggKind::None,
             }
         } else {
-            BindingSpec::default()
+            BindingSpec {
+                x: self.chart_default_x,
+                ..BindingSpec::default()
+            }
         }
     }
 
@@ -608,12 +679,8 @@ impl ChartShell {
         let (x_col, y_col_indices) = if let Some(manual) = &self.chart_manual_selection {
             let ys: Vec<usize> = manual.y_cols.clone();
             (manual.x_col, ys)
-        } else if let Some(ChartDetection::Ok {
-            time_col,
-            numeric_cols,
-        }) = &self.chart_detection
-        {
-            (*time_col, numeric_cols.clone())
+        } else if let Some(ChartDetection::Ok { time_col, .. }) = &self.chart_detection {
+            (*time_col, self.chart_default_y.clone())
         } else {
             let x = columns
                 .iter()
@@ -728,6 +795,27 @@ impl ChartShell {
         self.prime_rail_picker_from_spec(result);
         cx.notify();
     }
+}
+
+/// Whether a user's column picks still name plottable columns of `columns`.
+fn manual_fits(manual: &ManualChartSelection, columns: &[ColumnMeta]) -> bool {
+    let plots = |column: usize, kinds: &[ColumnKind]| {
+        columns
+            .get(column)
+            .is_some_and(|meta| kinds.contains(&meta.kind))
+    };
+
+    plots(
+        manual.x_col,
+        &[
+            ColumnKind::Timestamp,
+            ColumnKind::Integer,
+            ColumnKind::Float,
+        ],
+    ) && manual
+        .y_cols
+        .iter()
+        .all(|column| plots(*column, &[ColumnKind::Integer, ColumnKind::Float]))
 }
 
 #[cfg(test)]

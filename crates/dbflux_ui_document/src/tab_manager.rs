@@ -317,6 +317,9 @@ pub struct TabManager {
 
     /// Subscriptions per document (for cleanup on close).
     subscriptions: HashMap<DocumentId, Subscription>,
+    /// The tab each document was opened from, for the ones that asked for one
+    /// (see [`Self::open_from`]).
+    opened_from: HashMap<DocumentId, DocumentId>,
 }
 
 /// The shared inspector rail's per-tab state, carried from the outgoing
@@ -334,7 +337,15 @@ impl TabManager {
             active_index: None,
             mru_order: Vec::new(),
             subscriptions: HashMap::new(),
+            opened_from: HashMap::new(),
         }
+    }
+
+    /// Opens a document that `source` asked for and activates it. Closing it
+    /// while it is active returns to `source`, if that tab is still open.
+    pub fn open_from(&mut self, doc: Tab, source: DocumentId, cx: &mut Context<Self>) {
+        self.opened_from.insert(doc.id(), source);
+        self.open(doc, cx);
     }
 
     /// Opens a new document and activates it.
@@ -385,10 +396,13 @@ impl TabManager {
                 DocumentEvent::ChartThisQuery {
                     query,
                     connection_id,
+                    context,
                 } => {
                     cx.emit(TabManagerEvent::ChartThisQuery {
                         query: query.clone(),
                         connection_id: *connection_id,
+                        context: context.clone(),
+                        source_tab: id,
                     });
                 }
                 DocumentEvent::RequestAddPanel { dashboard_id } => {
@@ -470,11 +484,22 @@ impl TabManager {
     fn remove_document(&mut self, idx: usize, id: DocumentId, cx: &mut Context<Self>) {
         let previous_active_id = self.active_id();
         let rail = self.capture_rail_state(cx);
+        let was_active = previous_active_id == Some(id);
+        let source = self.opened_from.remove(&id);
 
         self.documents.remove(idx);
         self.subscriptions.remove(&id);
         self.mru_order.retain(|&i| i != id);
         self.active_index = self.compute_new_active_after_close(idx);
+
+        if was_active
+            && let Some(source) = source
+            && let Some(source_index) = self.index_of(source)
+        {
+            self.active_index = Some(source_index);
+            self.mru_order.retain(|&i| i != source);
+            self.mru_order.insert(0, source);
+        }
 
         let new_active_id = self
             .active_id()
@@ -878,6 +903,9 @@ pub enum TabManagerEvent {
     ChartThisQuery {
         query: String,
         connection_id: Option<uuid::Uuid>,
+        context: dbflux_core::ExecutionContext,
+        /// The tab that asked, which closing the chart returns to.
+        source_tab: DocumentId,
     },
     /// Dashboard document requested the workspace to open the "Add Panel" picker.
     RequestAddPanel {
@@ -1086,6 +1114,75 @@ mod close_activation_tests {
         harness.window.run_until_parked();
 
         harness.events.borrow().clone()
+    }
+
+    fn open_code_tab_from(harness: &mut Harness<'_>, source: DocumentId) -> DocumentId {
+        let app_state = harness.app_state.clone();
+        let manager = harness.manager.clone();
+
+        harness.window.update(|window, cx| {
+            let document = cx.new(|cx| {
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+            });
+            let document_id = document.read(cx).id();
+
+            let pane = CodeDocument::into_pane(document, cx);
+            manager.update(cx, |manager, cx| {
+                manager.open_from(Tab::Pane(Box::new(pane)), source, cx);
+            });
+
+            document_id
+        })
+    }
+
+    /// A tab opened from another returns there when it closes, even with a
+    /// more recently used tab in between.
+    #[gpui::test]
+    fn closing_a_tab_returns_to_the_tab_it_was_opened_from(cx: &mut TestAppContext) {
+        let mut harness = harness(cx);
+        let source = open_code_tab(&mut harness);
+        let opened = open_code_tab_from(&mut harness, source);
+        let other = open_code_tab(&mut harness);
+
+        let manager = harness.manager.clone();
+        harness.window.update(|_, cx| {
+            manager.update(cx, |manager, cx| manager.activate(opened, cx));
+        });
+        close_and_record(&mut harness, opened);
+
+        let active = harness.window.update(|_, cx| manager.read(cx).active_id());
+        assert_eq!(active, Some(source));
+        assert_ne!(active, Some(other));
+    }
+
+    #[gpui::test]
+    fn a_closed_source_tab_leaves_the_next_tab_to_the_usual_order(cx: &mut TestAppContext) {
+        let mut harness = harness(cx);
+        let source = open_code_tab(&mut harness);
+        let other = open_code_tab(&mut harness);
+        let opened = open_code_tab_from(&mut harness, source);
+
+        close_and_record(&mut harness, source);
+        close_and_record(&mut harness, opened);
+
+        let manager = harness.manager.clone();
+        let active = harness.window.update(|_, cx| manager.read(cx).active_id());
+        assert_eq!(active, Some(other));
+    }
+
+    /// A background tab closing moves nothing.
+    #[gpui::test]
+    fn closing_a_background_tab_does_not_return_to_its_source(cx: &mut TestAppContext) {
+        let mut harness = harness(cx);
+        let source = open_code_tab(&mut harness);
+        let opened = open_code_tab_from(&mut harness, source);
+        let other = open_code_tab(&mut harness);
+
+        close_and_record(&mut harness, opened);
+
+        let manager = harness.manager.clone();
+        let active = harness.window.update(|_, cx| manager.read(cx).active_id());
+        assert_eq!(active, Some(other));
     }
 
     /// Closing the active tab hands activation to the tab that takes over,

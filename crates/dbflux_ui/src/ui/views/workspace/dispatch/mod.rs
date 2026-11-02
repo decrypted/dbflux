@@ -274,6 +274,29 @@ impl Workspace {
             return true;
         }
 
+        // A document may close on Escape once nothing is left to dismiss, but
+        // only while it owns the keyboard: Escape in the sidebar or the tasks
+        // panel reaches this method too and must not close the active tab.
+        if self.focus_target == FocusTarget::Document {
+            let keyboard_free =
+                self.focus_handle.is_focused(window) || window.focused(cx).is_none();
+            let answer = self.tab_manager.update(cx, |mgr, cx| {
+                mgr.active_tab()
+                    .map_or(crate::ui::document::pane::EscapeClose::Declined, |tab| {
+                        tab.as_pane().answer_escape(keyboard_free, window, cx)
+                    })
+            });
+
+            match answer {
+                crate::ui::document::pane::EscapeClose::Close => {
+                    self.dispatch(Command::CloseCurrentTab, window, cx);
+                    return true;
+                }
+                crate::ui::document::pane::EscapeClose::Handled => return true,
+                crate::ui::document::pane::EscapeClose::Declined => {}
+            }
+        }
+
         // Always focus workspace to blur any input and enable keyboard navigation
         self.focus_handle.focus(window, cx);
         true

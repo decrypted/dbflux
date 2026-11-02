@@ -27,8 +27,8 @@ use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_ch
 use crate::chrome::{document_bar, document_title};
 use crate::pane::DocumentSidePanel;
 use dbflux_components::chart::{
-    ChartDetection, ChartView, MetricSource, axis_bar_element, format_span, format_x_value,
-    format_y_value, legend_element,
+    ChartView, MetricSource, axis_bar_element, format_span, format_x_value, format_y_value,
+    legend_element,
 };
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
@@ -143,9 +143,6 @@ impl Render for ChartDocument {
             self.request_reexecute(window, cx);
         }
 
-        // -- Flush pending toasts --
-        flush_pending_toast(self.pending_toast.take(), window, cx);
-
         // -- Apply pending query result --
         if let Some(pending) = self.pending_result.take() {
             self.apply_result(pending, cx);
@@ -156,6 +153,11 @@ impl Render for ChartDocument {
             self.pending_run_on_first_render = false;
             self.request_reexecute(window, cx);
         }
+
+        // -- Flush pending toasts --
+        // Last: a notify during render schedules no new frame, so a toast the
+        // steps above queued would otherwise wait for an unrelated repaint.
+        flush_pending_toast(self.pending_toast.take(), window, cx);
 
         // -- Lazily build ResultPanel on first render --
         // Self-referential construction requires a live entity handle, which
@@ -266,46 +268,22 @@ impl ChartDocument {
 
         // -- Read chart view entity from shell --
         let chart_view_entity = self.chart_shell.read(cx).chart_view().cloned();
-        let chart_detection = self.chart_shell.read(cx).chart_detection.clone();
 
         // -- Chart area content --
         let chart_area: AnyElement = if let Some(chart_entity) = chart_view_entity {
             div().size_full().child(chart_entity).into_any_element()
         } else {
-            // Degraded state: show a placeholder based on detection result.
-            // For self-executing sources (MetricSource) the copy is tailored to
-            // metric charts; for query/empty sources the generic copy is shown.
-            let is_metric = self.data_source.is_self_executing();
+            // Nothing to draw: say why, and what to do next when there is
+            // something to do.
             let metric_unconfigured = self
                 .data_source
                 .as_any()
                 .and_then(|any| any.downcast_ref::<MetricSource>())
                 .is_some_and(|source| source.series.is_empty());
-            let msg = if metric_unconfigured {
+            let msg: String = if metric_unconfigured {
                 "This chart has no metric series configured. Edit it to add one.".into()
             } else {
-                match &chart_detection {
-                    Some(ChartDetection::EmptyResult) | None => {
-                        if is_metric {
-                            if self.exec_state == ExecState::Running {
-                                dbflux_i18n::t!("document.chart.shell.degraded.loading_metric")
-                            } else {
-                                dbflux_i18n::t!("document.chart.shell.degraded.no_data_points")
-                            }
-                        } else {
-                            dbflux_i18n::t!("document.chart.shell.degraded.run_query")
-                        }
-                    }
-                    Some(ChartDetection::NoTimeColumn) => {
-                        dbflux_i18n::t!("document.chart.shell.degraded.no_time_column")
-                    }
-                    Some(ChartDetection::NoNumericSeries) => {
-                        dbflux_i18n::t!("document.chart.shell.degraded.no_numeric_series")
-                    }
-                    Some(ChartDetection::Ok { .. }) => {
-                        dbflux_i18n::t!("document.chart.shell.degraded.build_failed")
-                    }
-                }
+                self.degraded_message(cx)
             };
             div()
                 .size_full()

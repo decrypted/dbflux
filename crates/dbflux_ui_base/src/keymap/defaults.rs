@@ -1952,8 +1952,9 @@ fn bind_chart_pane_keys(layer: &mut KeymapLayer, from_controls: &'static str) {
 /// H and L move the highlighted point, J and K the series (or the rows of an
 /// open axis picker), G and Shift+G jump to the first and last point, Enter
 /// picks the picker row, Space toggles a Y column or hides the focused
-/// series, Escape closes the picker or clears the point, Alt+H / Alt+L switch
-/// the chart kind and Ctrl/Cmd+S saves.
+/// series, Escape closes the picker, clears the point or else leaves the chart
+/// (see `chart::keyboard` in the document crate), Alt+H / Alt+L switch the chart
+/// kind and Ctrl/Cmd+S saves.
 fn chart_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Chart);
 

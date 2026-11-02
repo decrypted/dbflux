@@ -765,6 +765,8 @@ struct ChromeState {
     /// each time the menu opens.
     export_options: export_options::ExportOptions,
     result_view_mode: ResultViewMode,
+    /// The view the Chart view was entered from, which Escape returns to.
+    previous_result_view: Option<ResultViewMode>,
     /// When `true`, the result area shows the active row as a vertical
     /// name/value record instead of the grid.
     record_mode: bool,
@@ -1537,6 +1539,7 @@ impl DataGridPanel {
                 export_menu_selected: 0,
                 export_options: export_options::ExportOptions::default(),
                 result_view_mode,
+                previous_result_view: None,
                 record_mode: false,
                 derived_json: None,
                 derived_text: None,

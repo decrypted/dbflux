@@ -16,27 +16,34 @@ use crate::ui::labels::{
 impl Workspace {
     /// Opens a new `ChartDocument` seeded with the given query.
     ///
-    /// Called when the user selects "Chart this query" from a data grid context menu.
+    /// Called when the user selects "Chart this query" from a data grid context
+    /// menu or "Open in chart" in a code editor. `context` is where the query
+    /// runs and `source_tab` the tab that asked, which closing the chart
+    /// returns to.
     pub(in crate::ui::views::workspace) fn open_chart_from_query(
         &mut self,
         query: String,
         connection_id: Option<uuid::Uuid>,
+        context: dbflux_core::ExecutionContext,
+        source_tab: crate::ui::document::DocumentId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let doc = cx.new(|cx| {
-            crate::ui::document::ChartDocument::new(
+            let mut chart = crate::ui::document::ChartDocument::new(
                 connection_id,
                 query,
                 self.app_state.clone(),
                 window,
                 cx,
-            )
+            );
+            chart.set_execution_context(context);
+            chart
         });
         let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Pane(Box::new(pane)), cx);
+            mgr.open_from(Tab::Pane(Box::new(pane)), source_tab, cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -178,9 +185,13 @@ impl Workspace {
                 });
 
                 let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.open(Tab::Pane(Box::new(pane)), cx);
-                });
+                self.tab_manager
+                    .update(cx, |mgr, cx| match mgr.active_id() {
+                        Some(source_tab) => {
+                            mgr.open_from(Tab::Pane(Box::new(pane)), source_tab, cx)
+                        }
+                        None => mgr.open(Tab::Pane(Box::new(pane)), cx),
+                    });
                 self.set_focus(FocusTarget::Document, window, cx);
             }
         }

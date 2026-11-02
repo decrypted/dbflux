@@ -1302,8 +1302,11 @@ document:
         loading_metric: 正在加载指标数据…
         no_data_points: 所选时间窗口内没有数据点。
         run_query: 执行查询以填充图表。
-        no_time_column: 结果中未检测到时间列。
-        no_numeric_series: 结果中未检测到数值序列。
+        running: "正在运行查询…"
+        no_rows: "查询未返回任何行。"
+        no_numeric_series: "此结果没有可绘制的数值列。请修改查询以返回数值列。"
+        pick_y: "请选择 Y 列以绘制图表。"
+        pick_y_no_time: "此结果没有时间列。请选择 Y 列，以相对于 %{x} 绘制。"
         build_failed: 图表构建失败。
       custom_range:
         apply: 应用
@@ -1325,13 +1328,14 @@ document:
     status:
       task_label: 图表查询
     toast:
+      escape_loses_settings: "此图表有未保存的更改。再次按 Escape 关闭，或按 %{save} 保存。"
+      rows_truncated: "图表显示前 %{rows} 行：查询返回的行数超过了行数限制。"
       chart_saved: 图表已保存
       save_failed: "保存图表失败：%{error}"
     error:
       source: "图表源错误：%{error}"
       no_connection_selected: 未选择连接
       connection_not_found: 未找到连接
-      connection_error: "连接错误：%{error}"
       collection_source_unsupported: ChartDocument 不支持集合数据源；请通过 DataDocument 打开
     metric_picker:
       apply: 应用
@@ -1526,6 +1530,9 @@ document:
         enter_query_to_explain: 输入要解释的查询
         enter_script_content: 输入要执行的脚本内容
         write_query_first: 请先编写查询才能在图表中打开
+        chart_not_a_query: "此语句不返回可绘制的行。请将光标放在查询上或选中一个查询。"
+        chart_one_statement: "图表只绘制一条语句。请将光标放在该语句上或选中它。"
+        chart_reads_only: "图表会自行运行查询，因此只接受读取数据的查询。"
         connecting: "正在连接数据库 %{database}，请稍候…"
         redis_flush_disabled: FLUSHALL / FLUSHDB 已在设置中禁用
         read_only_profile: "此连接的配置文件设为只读。此处只执行读取数据的语句。"

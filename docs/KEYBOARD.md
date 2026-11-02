@@ -496,7 +496,7 @@ chart replaces it.
 | `g` / `Shift+g` (or `Home` / `End`) | Highlight the first / last point |
 | `j` / `k` (or `Down` / `Up`) | Move the highlighted point to the next / previous visible series, at the nearest X |
 | `Space` | Hide or show the focused series, like its legend entry |
-| `Escape` | Clear the highlighted point, or close an open axis picker |
+| `Escape` | One layer per press: close an open axis picker, popover or the save prompt, then clear the highlighted point, then close the stats rail. With nothing left to dismiss, the chart view of a result returns to the view it was entered from with the keyboard in the results, and a chart tab closes and returns to the tab it was opened from. A chart with unsaved changes warns on the first press and closes on the second. A chart panel in a dashboard leaves the panel instead; Table + Chart keeps `Escape` with the table |
 | `Alt+l` / `Alt+h` | Next / previous chart type (chart tab) |
 | `]` / `[` | Next / previous time range, Custom included (chart tab) |
 | `F5` | Run the chart again (chart tab) |

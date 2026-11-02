@@ -294,6 +294,21 @@ fn enter_opens_a_chart_panel_and_escape_leaves_it(cx: &mut TestAppContext) {
         window.update(|_, cx| dashboard.read(cx).entered_panel()),
         None
     );
+
+    // The panel's chart never asks for a close, here or from the workspace.
+    assert_eq!(
+        window.update(|window, cx| {
+            chart.update(cx, |chart, cx| chart.escape_close(true, window, cx))
+        }),
+        crate::pane::EscapeClose::Declined
+    );
+    let pane = window
+        .update(|_, cx| crate::dashboard::DashboardDocument::into_pane(dashboard.clone(), cx));
+    assert_eq!(
+        window.update(|window, cx| pane.answer_escape(true, window, cx)),
+        crate::pane::EscapeClose::Declined,
+        "a dashboard tab is never closed by Escape"
+    );
 }
 
 /// C opens the Configure popover of a chart panel; its chart keys switch

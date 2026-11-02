@@ -1,3 +1,4 @@
+mod chart_view_escape;
 mod coverage;
 mod query_queue;
 pub(crate) mod rail_keys;

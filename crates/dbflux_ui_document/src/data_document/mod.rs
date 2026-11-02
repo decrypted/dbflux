@@ -325,6 +325,7 @@ impl DataDocument {
                 cx.emit(DocumentEvent::ChartThisQuery {
                     query: query.clone(),
                     connection_id: *connection_id,
+                    context: dbflux_core::ExecutionContext::default(),
                 });
             }
             DataGridEvent::RefreshPolicyReset(_policy) => {

@@ -15,6 +15,7 @@ use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+mod chart_escape;
 mod close_flush;
 
 fn new_workspace(

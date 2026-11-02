@@ -173,7 +173,7 @@ fn default_decimation_threshold() -> usize {
 }
 
 /// A manual column selection entered by the user via the picker UI.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualChartSelection {
     pub x_col: usize,
     pub y_cols: Vec<usize>,

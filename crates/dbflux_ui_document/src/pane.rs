@@ -20,6 +20,17 @@ use gpui::{AnyElement, App, Subscription, Window};
 /// Type-erased callback for document events, used by the `subscribe` closure.
 pub type BoxedDocEventCallback = Box<dyn Fn(&DocumentEvent, &mut App) + 'static>;
 
+/// What Escape did in a document that has nothing left to dismiss.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EscapeClose {
+    /// Escape means nothing here; the workspace goes on as it would without.
+    Declined,
+    /// Escape dismissed something or warned, and the tab stays.
+    Handled,
+    /// The tab should close, through the normal close path.
+    Close,
+}
+
 /// What closing a document means, decided by the document's own close policy.
 ///
 /// A pane exposes a policy through [`PaneHandle::resolve_close`]; panes without
@@ -372,6 +383,12 @@ pub struct PaneHandle {
     /// Runs document-owned asynchronous teardown before the pane is removed.
     pub on_close: Option<Box<dyn Fn(&mut App)>>,
 
+    /// Answers an Escape the document's own keys left unhandled, with the tab
+    /// holding the keyboard. The flag says no other control holds it either
+    /// (see `ChartDocument::escape_close`). `None` for a document Escape never
+    /// closes.
+    pub escape_close: Option<Box<dyn Fn(bool, &mut Window, &mut App) -> EscapeClose>>,
+
     /// Saves the document as part of an interrupted close and asks the
     /// workspace to close its tab once the write actually lands. `None` means
     /// the document has no save path, so its tab keeps the pending changes.
@@ -492,6 +509,7 @@ impl PaneHandle {
             side_panels: None,
             pane_actions: None,
             on_close: None,
+            escape_close: None,
             save_for_close: None,
             apply_for_close: None,
             resolve_close: None,
@@ -620,6 +638,20 @@ impl PaneHandle {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         (self.subscribe)(cx, Box::new(callback))
+    }
+
+    /// See [`Self::escape_close`]; a pane without the hook declines.
+    pub fn answer_escape(
+        &self,
+        keyboard_free: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> EscapeClose {
+        self.escape_close
+            .as_ref()
+            .map_or(EscapeClose::Declined, |answer| {
+                answer(keyboard_free, window, cx)
+            })
     }
 
     /// Invokes the optional close hook before tab removal.

@@ -59,6 +59,8 @@ pub enum DocumentEvent {
     ChartThisQuery {
         query: String,
         connection_id: Option<uuid::Uuid>,
+        /// Where the query runs: the database and schema it was asked from.
+        context: dbflux_core::ExecutionContext,
     },
     /// The chart document's active data source was replaced via `set_data_source`.
     ///

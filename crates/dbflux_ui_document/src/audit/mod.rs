@@ -2547,6 +2547,21 @@ mod tests {
             "Alt+L shows the chart"
         );
 
+        window.simulate_keystrokes("escape");
+        assert!(
+            window.update(|_, cx| matches!(
+                document.read(cx).view_mode,
+                super::chart_view::AuditViewMode::Chart
+            )),
+            "Escape leaves the audit log's chart view as it is"
+        );
+        let pane = window.update(|_, cx| AuditDocument::into_pane(document.clone(), cx));
+        assert_eq!(
+            window.update(|window, cx| pane.answer_escape(true, window, cx)),
+            crate::pane::EscapeClose::Declined,
+            "and never closes the audit tab"
+        );
+
         window.simulate_keystrokes("alt-h");
         assert!(
             window.update(|_, cx| matches!(

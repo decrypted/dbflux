@@ -382,6 +382,9 @@ Estas limitaciones están fundamentadas en el código actual, no son suposicione
   clasificada como un eje `AxisKind::Numeric`.
 - Las columnas con `ColumnKind::Unknown` quedan excluidas por completo de la
   auto-detección.
+- Un gráfico rechaza lo que el clasificador de queries califica como escritura, así
+  que es tan fiable como ese clasificador. En InfluxDB, `SELECT ... INTO` y Flux
+  `to()` escriben pero se califican como lecturas, y no se detectan.
 - Los saved charts de fuente `Collection` no se pueden abrir como un
   `ChartDocument`; en su lugar reabren el `DataDocument` subyacente en modo
   chart. Pasar una fuente `Collection` a `ChartDocument::from_saved` devuelve un

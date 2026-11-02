@@ -18,6 +18,7 @@ use dbflux_core::{
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_test_support::fake_driver::{FakeDriver, FakeQueryOutcome};
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::toast::ToastGlobal;
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -1013,15 +1014,24 @@ fn a_run_reports_finished_once_when_it_ends_or_is_cancelled(cx: &mut TestAppCont
 #[gpui::test]
 fn a_repeated_refusal_is_reported_once(cx: &mut TestAppContext) {
     let mut console = console_with(cx, "");
+    let refusals = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            cx.global::<ToastGlobal>()
+                .host
+                .read(cx)
+                .toast_titles()
+                .iter()
+                .filter(|title| title.contains("read data"))
+                .count()
+        })
+    };
+
+    // Runs twice already.
     let chart = run_saved_chart(&mut console, "delete from users");
+    console.run_chart(&chart);
 
     assert!(console.message(&chart).contains("read data"));
-    assert_eq!(
-        console
-            .window
-            .update(|_, cx| chart.read(cx).refusal_reported_for_test().is_some()),
-        true
-    );
+    assert_eq!(refusals(console.window), 1);
 }
 
 /// A driver with one connection per database may still be opening this one.

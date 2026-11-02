@@ -2092,12 +2092,6 @@ impl ChartDocument {
         self.runner.cancel_primary(cx);
     }
 
-    /// The refusal the chart has reported, if any.
-    #[cfg(test)]
-    pub(crate) fn refusal_reported_for_test(&self) -> Option<&str> {
-        self.refusal_reported.as_deref()
-    }
-
     /// Applies a finished run, as the next render would.
     #[cfg(test)]
     pub(crate) fn apply_pending_result_for_test(&mut self, cx: &mut Context<Self>) {

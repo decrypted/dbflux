@@ -1374,7 +1374,7 @@ impl CodeDocument {
                 None => Some(dbflux_i18n::t!(
                     "document.code.execution.toast.connection_not_found"
                 )),
-                Some(connected) => chart_refusal(connected, &query),
+                Some(connected) => chart_refusal(connected, &query, context.source.as_ref()),
             },
         };
 

@@ -311,6 +311,107 @@ fn enter_opens_a_chart_panel_and_escape_leaves_it(cx: &mut TestAppContext) {
     );
 }
 
+/// A panel holds one of the dashboard's run slots until it reports back. More
+/// refused panels than there are slots must not stop the other panels.
+#[gpui::test]
+fn refused_panels_do_not_stop_the_other_panels(cx: &mut TestAppContext) {
+    use crate::dashboard::PANEL_REEXEC_CAP;
+    use crate::keyboard_test_support::connected_app_state;
+    use dbflux_test_support::fake_driver::FakeDriver;
+
+    const GOOD: &str = "select 1";
+    let refused_panels = PANEL_REEXEC_CAP + 2;
+
+    init_keyboard_runtime(cx);
+    let driver = FakeDriver::new(dbflux_core::DbKind::MySQL);
+    let (app_state, profile_id) = connected_app_state(cx, &driver, "shop");
+
+    let (_host, dashboard, window) = dashboard_with_keyboard(
+        cx,
+        Uuid::nil(),
+        app_state,
+        Box::new(move |app_state, window, cx| {
+            let panel = |query: &str, row: u32, window: &mut Window, cx: &mut App| {
+                let chart = cx.new(|cx| {
+                    let mut chart = ChartDocument::new(
+                        Some(profile_id),
+                        query.to_string(),
+                        app_state.clone(),
+                        window,
+                        cx,
+                    );
+                    chart.set_embedded(true, cx);
+                    chart
+                });
+                DashboardPanelSlot::Loaded {
+                    panel: chart,
+                    grid_pos: pos(row, 0, 12, 1),
+                    title_override: None,
+                }
+            };
+
+            let mut slots: Vec<_> = (0..refused_panels)
+                .map(|row| panel("delete from users", row as u32, window, cx))
+                .collect();
+            slots.push(panel(GOOD, refused_panels as u32, window, cx));
+            slots
+        }),
+    );
+
+    let settle = |window: &mut VisualTestContext| {
+        for _ in 0..4 {
+            window.run_until_parked();
+            window.update(|window, _| window.refresh());
+            window.run_until_parked();
+        }
+    };
+    let good_runs = || {
+        driver
+            .stats()
+            .executed_requests
+            .iter()
+            .filter(|request| request.sql == GOOD)
+            .count()
+    };
+
+    settle(window);
+    let mut runs = good_runs();
+
+    for tick in 0..3 {
+        window.update(|_, cx| {
+            dashboard.update(cx, |dashboard, cx| {
+                for slot in 0..=refused_panels {
+                    dashboard.request_reexec_for_slot(slot, cx);
+                }
+            });
+        });
+        settle(window);
+
+        assert!(
+            good_runs() > runs,
+            "tick {tick}: the panel that reads ran again"
+        );
+        runs = good_runs();
+    }
+
+    let (inflight, pending) = window.update(|_, cx| {
+        let dashboard = dashboard.read(cx);
+        (
+            dashboard.inflight_reexec_count_for_testing(),
+            dashboard.pending_reexec_count_for_testing(),
+        )
+    });
+    assert_eq!((inflight, pending), (0, 0), "every slot came back");
+    assert!(
+        driver
+            .stats()
+            .executed_requests
+            .iter()
+            .all(|request| request.sql == GOOD),
+        "a refused panel never reached the driver"
+    );
+}
+
 /// C opens the Configure popover of a chart panel; its chart keys switch
 /// the type and Escape closes it.
 #[gpui::test]

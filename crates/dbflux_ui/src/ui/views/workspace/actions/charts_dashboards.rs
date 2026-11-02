@@ -18,7 +18,7 @@ impl Workspace {
     ///
     /// Called when the user selects "Chart this query" from a data grid context
     /// menu or "Open in chart" in a code editor. `context` is where the query
-    /// runs and `source_tab` the tab that asked, which closing the chart
+    /// runs and `source_tab` the tab that asked, which Escape in the chart
     /// returns to.
     pub(in crate::ui::views::workspace) fn open_chart_from_query(
         &mut self,

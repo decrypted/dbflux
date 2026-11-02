@@ -180,6 +180,8 @@ pub struct ChartDocument {
     /// Why the last run did not produce a result. A toast fades, so the chart
     /// area keeps saying it.
     failure: Option<String>,
+    /// The refusal already reported, so a repeat stays quiet.
+    refusal_reported: Option<String>,
     /// A truncated result is toasted once per window and source, not on every
     /// auto-refresh; the toolbar's point count marks it all the while.
     truncation_reported: bool,
@@ -388,6 +390,7 @@ impl ChartDocument {
             execution_context: ExecutionContext::default(),
             failure: None,
             truncation_reported: false,
+            refusal_reported: None,
             saved_selection: None,
             settings_baseline: ChartSettings::default(),
             source_replaced: false,
@@ -644,6 +647,7 @@ impl ChartDocument {
             execution_context: ExecutionContext::default(),
             failure: None,
             truncation_reported: false,
+            refusal_reported: None,
             saved_selection: None,
             settings_baseline: ChartSettings::default(),
             source_replaced: false,
@@ -1275,7 +1279,19 @@ impl ChartDocument {
     /// Gets the connection from `app_state`, fires the query on a background
     /// thread, and delivers the result back to the entity via `pending_result`.
     /// The render loop picks up `pending_result` and applies it.
+    ///
+    /// Every request reports `ExecutionFinished` once, also one that never
+    /// started: a dashboard holds one of its few run slots until it does, so a
+    /// silent exit stops every other panel.
     pub fn request_reexecute(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.start_run(cx) {
+            cx.emit(DocumentEvent::ExecutionFinished);
+        }
+    }
+
+    /// Starts a run, whose end reports `ExecutionFinished`. False when none
+    /// started.
+    fn start_run(&mut self, cx: &mut Context<Self>) -> bool {
         // Build the execution request through the data source seam.
         // EmptyQuery → silent early return (preserves the old inline empty-query guard).
         // Other errors → show a toast and return.
@@ -1297,9 +1313,9 @@ impl ChartDocument {
                 // is unreachable with Query/Collection sources but is handled
                 // defensively to avoid a silent no-op.
                 log::warn!("[chart-doc] build_plan returned a non-Driver plan; ignoring");
-                return;
+                return false;
             }
-            Err(ChartSourceError::EmptyQuery) => return,
+            Err(ChartSourceError::EmptyQuery) => return false,
             Err(e) => {
                 self.report_failure(
                     UserFacingError::new(
@@ -1308,7 +1324,7 @@ impl ChartDocument {
                     ),
                     cx,
                 );
-                return;
+                return false;
             }
         };
 
@@ -1320,26 +1336,10 @@ impl ChartDocument {
                 ),
                 cx,
             );
-            return;
+            return false;
         };
 
         let runs_user_query = runs_user_query(&request);
-
-        // Every run comes through here: the first, a refresh, a saved chart and
-        // a dashboard panel, whose query nobody may have looked at since it was
-        // saved, on a profile that may have turned read-only since.
-        let refusal = runs_user_query
-            .then(|| {
-                let state = self.app_state.read(cx);
-                let connected = state.connections().get(&profile_id)?;
-                crate::code::chart_refusal(connected, &request.sql)
-            })
-            .flatten();
-        if let Some(message) = refusal {
-            self.stop_auto_refresh(cx);
-            self.report_failure(UserFacingError::new(ErrorKind::User, message), cx);
-            return;
-        }
 
         // Resolve the connection synchronously on the foreground thread.
         let database = runs_user_query
@@ -1367,7 +1367,7 @@ impl ChartDocument {
                     ),
                     cx,
                 );
-                return;
+                return false;
             }
             None => {
                 self.report_failure(
@@ -1377,7 +1377,7 @@ impl ChartDocument {
                     ),
                     cx,
                 );
-                return;
+                return false;
             }
         };
 
@@ -1398,6 +1398,26 @@ impl ChartDocument {
             let row_limit = crate::code::enforces_request_row_limit(conn.as_ref())
                 .then(|| self.app_state.read(cx).general_settings().editor_row_limit);
             request = chart_query_request(request, &self.execution_context, database, row_limit);
+
+            // Every run comes through here: the first, a refresh, a saved chart
+            // and a dashboard panel, whose query nobody may have looked at since
+            // it was saved, on a profile that may have turned read-only since.
+            // Checked on the final request, whose query mode names the language.
+            let refusal = {
+                let state = self.app_state.read(cx);
+                let source = request
+                    .execution_context
+                    .as_ref()
+                    .and_then(|context| context.source.as_ref());
+                state.connections().get(&profile_id).and_then(|connected| {
+                    crate::code::chart_refusal(connected, &request.sql, source)
+                })
+            };
+            if let Some(message) = refusal {
+                self.refuse_run(message, cx);
+                return false;
+            }
+            self.refusal_reported = None;
         }
 
         let (task_id, cancel_token) = self.runner.start_primary(
@@ -1424,24 +1444,61 @@ impl ChartDocument {
             let result = task.await;
 
             cx.update(|cx| {
+                let Some(entity) = this.upgrade() else {
+                    if cancel_token.is_cancelled()
+                        && let Err(e) = conn_cleanup.cleanup_after_cancel()
+                    {
+                        log::warn!("[chart-doc] cleanup after cancel failed: {}", e);
+                    }
+                    return;
+                };
+
                 if cancel_token.is_cancelled() {
                     if let Err(e) = conn_cleanup.cleanup_after_cancel() {
                         log::warn!("[chart-doc] cleanup after cancel failed: {}", e);
                     }
+                    entity.update(cx, |_, cx| cx.emit(DocumentEvent::ExecutionFinished));
                     return;
                 }
 
-                let Some(entity) = this.upgrade() else { return };
                 entity.update(cx, |doc, cx| {
-                    doc.pending_result = Some(PendingResult { task_id, result });
+                    let replaced = doc
+                        .pending_result
+                        .replace(PendingResult { task_id, result });
+                    // Only the newest result gets applied, so the run it replaced
+                    // ends here.
+                    if replaced.is_some() {
+                        cx.emit(DocumentEvent::ExecutionFinished);
+                    }
                     cx.notify();
                 });
             });
         })
         .detach();
+
+        true
     }
 
-    /// A query the chart refuses stays refused, so the timer has nothing to do.
+    /// Shows why the chart will not run its query. The notice comes once: a
+    /// dashboard's shared timer keeps asking a panel, and each ask would be
+    /// another toast and audit row for the same refusal.
+    fn refuse_run(&mut self, message: String, cx: &mut Context<Self>) {
+        self.stop_auto_refresh(cx);
+
+        if self.refusal_reported.as_ref() == Some(&message) {
+            self.exec_state = ExecState::Error;
+            self.state = DocumentState::Error;
+            self.failure = Some(message);
+            cx.notify();
+            return;
+        }
+
+        self.refusal_reported = Some(message.clone());
+        self.report_failure(UserFacingError::new(ErrorKind::User, message), cx);
+    }
+
+    /// A query the chart refuses stays refused, so its own timer has nothing to
+    /// do.
     fn stop_auto_refresh(&mut self, cx: &mut Context<Self>) {
         if self.refresh_policy == RefreshPolicy::Manual {
             return;
@@ -2027,6 +2084,18 @@ impl ChartDocument {
         });
         self.last_result = Some(result);
         cx.notify();
+    }
+
+    /// Cancels the running query, as the tasks panel does.
+    #[cfg(test)]
+    pub(crate) fn cancel_run_for_test(&mut self, cx: &mut Context<Self>) {
+        self.runner.cancel_primary(cx);
+    }
+
+    /// The refusal the chart has reported, if any.
+    #[cfg(test)]
+    pub(crate) fn refusal_reported_for_test(&self) -> Option<&str> {
+        self.refusal_reported.as_deref()
     }
 
     /// Applies a finished run, as the next render would.

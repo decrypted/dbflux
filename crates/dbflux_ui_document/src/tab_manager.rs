@@ -902,7 +902,7 @@ pub enum TabManagerEvent {
         query: String,
         connection_id: Option<uuid::Uuid>,
         context: dbflux_core::ExecutionContext,
-        /// The tab that asked, which closing the chart returns to.
+        /// The tab that asked, which Escape in the chart returns to.
         source_tab: DocumentId,
     },
     /// Dashboard document requested the workspace to open the "Add Panel" picker.

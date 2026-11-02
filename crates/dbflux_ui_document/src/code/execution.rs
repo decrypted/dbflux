@@ -72,12 +72,24 @@ pub(crate) fn evaluate_dangerous_with_effective_settings(
 /// driver-owned dialects are rated by their driver. Only the profile setting
 /// is enforced here; a server that rejects writes reports them itself.
 fn is_refused_by_read_only_profile(connected: &dbflux_core::ConnectedProfile, query: &str) -> bool {
+    read_only_profile_refuses(
+        connected,
+        &connected.connection.metadata().query_language,
+        query,
+    )
+}
+
+fn read_only_profile_refuses(
+    connected: &dbflux_core::ConnectedProfile,
+    language: &QueryLanguage,
+    query: &str,
+) -> bool {
     if connected.read_only_reason != Some(dbflux_core::ReadOnlyReason::ProfileSetting) {
         return false;
     }
 
     let classification = dbflux_core::classify_query_for_language_with_service(
-        &connected.connection.metadata().query_language,
+        language,
         query,
         Some(connected.connection.language_service()),
     );
@@ -86,6 +98,31 @@ fn is_refused_by_read_only_profile(connected: &dbflux_core::ConnectedProfile, qu
         classification,
         dbflux_core::ExecutionClassification::Metadata | dbflux_core::ExecutionClassification::Read
     )
+}
+
+/// The language a chart's query is written in. A driver with query modes names
+/// it per mode, and its metadata can say something else entirely: CloudWatch's
+/// says SQL while the default mode is Logs Insights.
+fn chart_query_language(
+    connected: &dbflux_core::ConnectedProfile,
+    source: Option<&ExecutionSourceContext>,
+) -> QueryLanguage {
+    let metadata = connected.connection.metadata().query_language.clone();
+
+    let Some(spec) = connected.connection.source_context_spec() else {
+        return metadata;
+    };
+
+    let mode = match source {
+        Some(ExecutionSourceContext::CollectionWindow {
+            query_mode: Some(mode),
+            ..
+        }) => Some(mode.as_str()),
+        _ => spec.default_query_mode.as_deref(),
+    };
+
+    mode.and_then(|mode| spec.query_modes.iter().find(|known| known.value == mode))
+        .map_or(metadata, |mode| mode.query_language.clone())
 }
 
 /// Why a chart must not run `query`, or `None` when it may. A chart runs its
@@ -99,8 +136,9 @@ fn is_refused_by_read_only_profile(connected: &dbflux_core::ConnectedProfile, qu
 pub(crate) fn chart_refusal(
     connected: &dbflux_core::ConnectedProfile,
     query: &str,
+    source: Option<&ExecutionSourceContext>,
 ) -> Option<String> {
-    let language = &connected.connection.metadata().query_language;
+    let language = chart_query_language(connected, source);
     let service = connected.connection.language_service();
 
     if language.statement_count(query) > 1 {
@@ -109,20 +147,20 @@ pub(crate) fn chart_refusal(
         ));
     }
 
-    if is_refused_by_read_only_profile(connected, query) {
+    if read_only_profile_refuses(connected, &language, query) {
         return Some(dbflux_i18n::t!(
             "document.code.execution.toast.read_only_profile"
         ));
     }
 
-    let classification = match language {
+    let classification = match &language {
         QueryLanguage::Sql
         | QueryLanguage::MongoQuery
         | QueryLanguage::RedisCommands
         | QueryLanguage::CloudWatchLogsInsightsQl
         | QueryLanguage::OpenSearchPpl
         | QueryLanguage::OpenSearchSql => Some(
-            dbflux_core::classify_query_for_language_with_service(language, query, Some(service)),
+            dbflux_core::classify_query_for_language_with_service(&language, query, Some(service)),
         ),
         _ => service.classify_execution(query),
     };

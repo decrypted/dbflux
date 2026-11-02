@@ -5,12 +5,15 @@ use crate::code::CodeDocument;
 use crate::data_grid_panel::DataGridEvent;
 use crate::handle::DocumentEvent;
 use crate::keyboard_test_support::init_keyboard_runtime;
-use dbflux_components::chart::{BindingSpec, ChartKind, ChartSpec, YScale};
+use dbflux_components::chart::{
+    BindingSpec, ChartKind, ChartSpec, InstanceMetricSource, MetricSource, YScale,
+};
 use dbflux_components::controls::InputPosition;
+use dbflux_components::saved_chart::MetricSeries;
 use dbflux_components::saved_chart::SavedChart;
 use dbflux_core::{
-    ColumnKind, ColumnMeta, ConnectionProfile, DbConfig, DbKind, ExecutionContext, QueryLanguage,
-    QueryResult, RefreshPolicy, Value,
+    ColumnKind, ColumnMeta, ConnectionProfile, DbConfig, DbKind, ExecutionContext,
+    ExecutionSourceContext, QueryLanguage, QueryResult, RefreshPolicy, Value,
 };
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_test_support::fake_driver::{FakeDriver, FakeQueryOutcome};
@@ -693,34 +696,332 @@ fn a_saved_chart_of_two_statements_says_why_it_stopped(cx: &mut TestAppContext) 
 
 /// Writes in the languages core can classify are refused like SQL writes, not
 /// only the ones the danger check calls dangerous.
-#[gpui::test]
-fn a_redis_write_is_not_charted(cx: &mut TestAppContext) {
-    let mut console = console_on(cx, DbKind::Redis, "");
-    for write in ["INCR page_hits", "SET k v", "EVAL \"return 1\" 0"] {
-        let chart = run_saved_chart(&mut console, write);
+/// Runs each query as a saved chart: `reads` must reach the driver, `writes`
+/// must not, and a refused one says why.
+fn assert_gate(console: &mut Fixture<'_>, reads: &[&str], writes: &[&str]) {
+    for write in writes {
+        let before = console.executed().len();
+        let chart = run_saved_chart(console, write);
+        assert_eq!(console.executed().len(), before, "{write} ran");
         assert!(console.message(&chart).contains("read data"), "{write}");
     }
-    assert!(console.executed().is_empty());
 
-    run_saved_chart(&mut console, "GET k");
-    assert!(!console.executed().is_empty(), "a read still runs");
+    for read in reads {
+        let before = console.executed().len();
+        let chart = run_saved_chart(console, read);
+        assert!(console.executed().len() > before, "{read} was refused");
+        assert!(!console.message(&chart).contains("read data"), "{read}");
+    }
 }
 
 #[gpui::test]
-fn a_mongo_write_is_not_charted(cx: &mut TestAppContext) {
+fn redis_reads_chart_and_writes_do_not(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::Redis, "");
+    assert_gate(
+        &mut console,
+        &[
+            "GET k",
+            "HGETALL stats",
+            "LRANGE events 0 -1",
+            "ZRANGE temps 0 -1",
+            "ZRANGEBYSCORE temps 0 +inf WITHSCORES",
+            "XRANGE events - +",
+            "SCAN 0",
+            "TS.RANGE cpu - +",
+        ],
+        &[
+            "INCR page_hits",
+            "SET k v",
+            "HSET h f v",
+            "XADD s * f v",
+            "ZADD z 1 m",
+            "EVAL \"return 1\" 0",
+            "FLUSHALL",
+        ],
+    );
+}
+
+/// Mongo's real language service, with the core classifier behind it.
+#[gpui::test]
+fn mongo_reads_chart_and_writes_do_not(cx: &mut TestAppContext) {
     let mut console = console_on(cx, DbKind::MongoDB, "");
-    for write in [
-        "db.users.insertOne({})",
-        "db.users.updateOne({}, {})",
-        "db.users.deleteOne({})",
-    ] {
-        let chart = run_saved_chart(&mut console, write);
-        assert!(console.message(&chart).contains("read data"), "{write}");
+    assert_gate(
+        &mut console,
+        &[
+            "db.users.find({})",
+            "db.users.aggregate([{ $match: { active: true } }])",
+            "db.users.countDocuments({})",
+        ],
+        &[
+            "db.users.insertOne({})",
+            "db.users.updateOne({}, {})",
+            "db.users.deleteOne({})",
+            "db.users.drop()",
+            "db.users.aggregate([{ $out: \"copy\" }])",
+        ],
+    );
+}
+
+/// CloudWatch's metadata says SQL, so a Logs Insights query judged by that
+/// language looked like a write. No query mode is stored with a saved chart, so
+/// the driver's default applies, as it does when the query runs.
+#[gpui::test]
+fn logs_insights_and_opensearch_queries_chart(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::CloudWatchLogs, "");
+    assert_gate(
+        &mut console,
+        &[
+            "stats count(*) by bin(5m)",
+            "fields @timestamp, @message | filter @message like /error/",
+            "source logs | stats count() by host",
+        ],
+        &[],
+    );
+}
+
+#[gpui::test]
+fn a_console_query_mode_names_the_language_of_the_chart(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::CloudWatchLogs, "SELECT * FROM logs");
+    let document = console.document.clone();
+    console.window.update(|_, cx| {
+        document.update(cx, |document, _| {
+            document.source.exec_ctx.source = Some(ExecutionSourceContext::CollectionWindow {
+                targets: vec!["group".to_string()],
+                start_ms: 0,
+                end_ms: 1,
+                query_mode: Some("sql".to_string()),
+            });
+        });
+    });
+    console.click_open_in_chart();
+    console.open_the_chart();
+
+    let request = console
+        .driver
+        .stats()
+        .executed_requests
+        .last()
+        .cloned()
+        .expect("the chart ran");
+    let source = request.execution_context.and_then(|context| context.source);
+    assert!(
+        matches!(
+            source,
+            Some(ExecutionSourceContext::CollectionWindow { query_mode: Some(ref mode), .. })
+                if mode == "sql"
+        ),
+        "{source:?}"
+    );
+}
+
+/// A read-only profile is held to the same language: its Logs Insights charts
+/// keep reading.
+#[gpui::test]
+fn a_read_only_profile_does_not_refuse_logs_insights(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::CloudWatchLogs, "");
+    let app_state = console.app_state.clone();
+    let profile_id = console.profile_id;
+    console.window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
+                connected.read_only_reason = Some(dbflux_core::ReadOnlyReason::ProfileSetting);
+            }
+        });
+    });
+
+    assert_gate(&mut console, &["stats count(*) by bin(5m)"], &[]);
+}
+
+#[gpui::test]
+fn influx_reads_chart_and_writes_do_not(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::InfluxDB, "");
+    assert_gate(
+        &mut console,
+        &[
+            "SELECT mean(v) FROM cpu WHERE $timeFilter GROUP BY time(1m)",
+            "from(bucket: \"b\") |> range(start: -1h)",
+        ],
+        &["DROP MEASUREMENT cpu", "DELETE FROM cpu"],
+    );
+}
+
+/// Metric sources are the driver's own dispatch, not a query anyone wrote: they
+/// carry no text to judge, on a language that would refuse any.
+#[gpui::test]
+fn metric_sources_keep_running(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::CloudWatchLogs, "");
+    let app_state = console.app_state.clone();
+    let profile_id = console.profile_id;
+
+    let instance = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            ChartDocument::new_with_source(
+                Some(profile_id),
+                "metric".to_string(),
+                Box::new(InstanceMetricSource {
+                    metric_id: "connections".to_string(),
+                }),
+                app_state.clone(),
+                window,
+                cx,
+            )
+        })
+    });
+    console.window.update(|_, cx| {
+        instance.update(cx, |chart, cx| {
+            chart.on_time_range_changed(Some(0), Some(1_000), cx);
+        });
+    });
+    console.run_chart(&instance);
+    assert_eq!(console.driver.stats().executed_requests.len(), 1);
+    assert!(!console.message(&instance).contains("read data"));
+
+    let metric = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            ChartDocument::new_with_source(
+                Some(profile_id),
+                "metric".to_string(),
+                Box::new(MetricSource {
+                    series: vec![MetricSeries {
+                        namespace: "AWS/RDS".to_string(),
+                        metric_name: "CPUUtilization".to_string(),
+                        dimensions: Vec::new(),
+                        period_seconds: 60,
+                        statistic: "Average".to_string(),
+                        region: None,
+                        label: None,
+                    }],
+                }),
+                app_state,
+                window,
+                cx,
+            )
+        })
+    });
+    console.window.update(|_, cx| {
+        metric.update(cx, |chart, cx| {
+            chart.on_time_range_changed(Some(0), Some(1_000), cx);
+        });
+    });
+    console.run_chart(&metric);
+    assert_eq!(console.driver.stats().executed_requests.len(), 2);
+}
+
+/// Counts how often `chart` reports a finished run.
+fn finishes_of(console: &mut Fixture<'_>, chart: &Entity<ChartDocument>) -> Rc<RefCell<usize>> {
+    let count: Rc<RefCell<usize>> = Rc::default();
+    let sink = count.clone();
+    console.window.update(|_, cx| {
+        cx.subscribe(chart, move |_, event: &DocumentEvent, _| {
+            if matches!(event, DocumentEvent::ExecutionFinished) {
+                *sink.borrow_mut() += 1;
+            }
+        })
+        .detach();
+    });
+    count
+}
+
+/// A dashboard holds a run slot until the panel reports back, so a request that
+/// never starts has to report back too: once, whatever stopped it.
+#[gpui::test]
+fn every_request_that_starts_no_run_reports_finished_once(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::Postgres, "");
+    let app_state = console.app_state.clone();
+    let profile_id = console.profile_id;
+
+    // (profile, query, database)
+    let cases: [(Option<Uuid>, &str, Option<&str>); 5] = [
+        (Some(profile_id), "delete from users", None),
+        (None, SECOND_STATEMENT, None),
+        (Some(Uuid::new_v4()), SECOND_STATEMENT, None),
+        (Some(profile_id), "", None),
+        (Some(profile_id), SECOND_STATEMENT, Some("still_connecting")),
+    ];
+
+    for (profile, query, database) in cases {
+        let app_state = app_state.clone();
+        let chart = console.window.update(|window, cx| {
+            cx.new(|cx| {
+                let mut chart =
+                    ChartDocument::new(profile, query.to_string(), app_state, window, cx);
+                chart.set_execution_context(ExecutionContext {
+                    database: database.map(str::to_string),
+                    ..ExecutionContext::default()
+                });
+                chart
+            })
+        });
+        let finishes = finishes_of(&mut console, &chart);
+
+        let window_handle = chart.clone();
+        console.window.update(|window, cx| {
+            window_handle.update(cx, |chart, cx| chart.request_reexecute(window, cx));
+        });
+        console.window.run_until_parked();
+
+        assert_eq!(*finishes.borrow(), 1, "{profile:?} {query:?} {database:?}");
     }
     assert!(console.executed().is_empty());
 
-    run_saved_chart(&mut console, "db.users.find({})");
-    assert!(!console.executed().is_empty(), "a read still runs");
+    // A source that cannot build its request: a metric chart without a window.
+    let chart = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            ChartDocument::new_with_source(
+                Some(profile_id),
+                "metric".to_string(),
+                Box::new(MetricSource { series: Vec::new() }),
+                app_state,
+                window,
+                cx,
+            )
+        })
+    });
+    let finishes = finishes_of(&mut console, &chart);
+    let handle = chart.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |chart, cx| chart.request_reexecute(window, cx));
+    });
+    console.window.run_until_parked();
+    assert_eq!(*finishes.borrow(), 1);
+}
+
+/// A finished run reports once, from the result; a cancelled one has no result
+/// to report from, and reports when it ends.
+#[gpui::test]
+fn a_run_reports_finished_once_when_it_ends_or_is_cancelled(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.click_open_in_chart();
+    let chart = console.open_the_chart();
+
+    let finishes = finishes_of(&mut console, &chart);
+    console.run_chart(&chart);
+    assert_eq!(*finishes.borrow(), 1, "a run that ends");
+
+    let handle = chart.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |chart, cx| {
+            chart.request_reexecute(window, cx);
+            chart.cancel_run_for_test(cx);
+        });
+    });
+    console.window.run_until_parked();
+    assert_eq!(*finishes.borrow(), 2, "a run that was cancelled");
+}
+
+/// The same refusal on every tick of a dashboard's timer is one notice.
+#[gpui::test]
+fn a_repeated_refusal_is_reported_once(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let chart = run_saved_chart(&mut console, "delete from users");
+
+    assert!(console.message(&chart).contains("read data"));
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| chart.read(cx).refusal_reported_for_test().is_some()),
+        true
+    );
 }
 
 /// A driver with one connection per database may still be opening this one.

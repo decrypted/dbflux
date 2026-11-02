@@ -6325,6 +6325,7 @@ mod tests {
             "document.chart.toolbar.save_chart",
             "document.chart.toolbar.points.one",
             "document.chart.toolbar.points.many",
+            "document.chart.toolbar.points.row_limit",
             "document.chart.shell.save",
             "document.chart.shell.cancel",
             "document.chart.shell.name_placeholder",

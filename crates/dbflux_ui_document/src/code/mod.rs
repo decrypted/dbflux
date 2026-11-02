@@ -60,8 +60,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
 
-#[cfg(test)]
-mod chart_query_tests;
 mod code_actions;
 mod comment;
 mod completion;
@@ -2425,6 +2423,8 @@ mod language_binding_tests {
 
 #[cfg(test)]
 mod tests {
+    mod chart_query;
+
     use super::{
         CodeDocument, LanguageBinding, SqlQueryFocus, diff_stats_from_pair,
         source_input_values_from_context,

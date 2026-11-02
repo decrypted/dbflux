@@ -159,7 +159,7 @@ pub struct ChartShell {
 
     // ---- defaults for the current result ----
     /// The X axis until the user picks one: the first time column, else the
-    /// first column the X picker offers.
+    /// first numeric column, else the first column.
     chart_default_x: usize,
 
     /// The Y axis until the user picks one (see `default_series_columns`).

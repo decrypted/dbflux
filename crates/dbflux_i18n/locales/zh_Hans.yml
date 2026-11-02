@@ -1294,6 +1294,7 @@ document:
       points:
         one: "%{count} 个点"
         many: "%{count} 个点"
+        row_limit: "%{points}，已达到行数限制"
     shell:
       save: 保存
       cancel: 取消

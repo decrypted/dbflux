@@ -56,6 +56,8 @@ pub struct ChartToolbarContext<'a> {
     pub time_range_panel: Option<Entity<TimeRangePanel>>,
     /// Total number of data-point rows in the current result.
     pub row_count: usize,
+    /// The row limit cut the current result short.
+    pub rows_truncated: bool,
     /// The resolved time window from the driver response `(start_ms, end_ms)`.
     /// When `None`, the toolbar falls back to the chart view's x-axis bounds.
     pub resolved_window: Option<(i64, i64)>,
@@ -136,6 +138,7 @@ pub fn chart_window_label(
     chart_shell: &Entity<ChartShell>,
     resolved_window: Option<(i64, i64)>,
     row_count: usize,
+    rows_truncated: bool,
     cx: &App,
 ) -> String {
     let chart_view = chart_shell.read(cx).chart_view().cloned();
@@ -146,6 +149,11 @@ pub fn chart_window_label(
     };
 
     let points = crate::labels::chart_toolbar_points_label(row_count);
+    let points = if rows_truncated {
+        dbflux_i18n::t!("document.chart.toolbar.points.row_limit", points = points)
+    } else {
+        points
+    };
 
     match bounds {
         Some((start, end)) => format!(
@@ -178,9 +186,15 @@ pub fn render_chart_toolbar(
         )
     };
 
-    let window_label = ctx
-        .show_window
-        .then(|| chart_window_label(&ctx.chart_shell, ctx.resolved_window, ctx.row_count, cx));
+    let window_label = ctx.show_window.then(|| {
+        chart_window_label(
+            &ctx.chart_shell,
+            ctx.resolved_window,
+            ctx.row_count,
+            ctx.rows_truncated,
+            cx,
+        )
+    });
 
     let presets = ctx.time_range_panel.map(|panel| {
         let selected = panel.read(cx).selected_time_range;
@@ -297,6 +311,7 @@ mod tests {
                 refresh_dropdown: self.refresh_dropdown.clone(),
                 time_range_panel: None,
                 row_count: 0,
+                rows_truncated: false,
                 resolved_window: Some((0, 3_600_000)),
                 source_supports_save: true,
                 refresh_variant: dbflux_components::controls::ButtonVariant::Secondary,

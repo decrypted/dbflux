@@ -1294,6 +1294,7 @@ document:
       points:
         one: "%{count} pt"
         many: "%{count} pts"
+        row_limit: "%{points}, row limit reached"
     shell:
       save: Save
       cancel: Cancel

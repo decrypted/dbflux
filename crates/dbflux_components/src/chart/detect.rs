@@ -96,17 +96,7 @@ pub fn default_series_columns(result: &QueryResult, numeric_cols: &[usize]) -> V
         .filter(|column| !is_flagged_key(*column))
         .collect();
 
-    let measures: Vec<usize> = unflagged
-        .iter()
-        .copied()
-        .filter(|column| !is_integer_sequence(result, *column))
-        .collect();
-
-    if measures.is_empty() {
-        return unflagged;
-    }
-
-    let floats: Vec<usize> = measures
+    let floats: Vec<usize> = unflagged
         .iter()
         .copied()
         .filter(|column| {
@@ -117,7 +107,22 @@ pub fn default_series_columns(result: &QueryResult, numeric_cols: &[usize]) -> V
         })
         .collect();
 
-    if floats.is_empty() { measures } else { floats }
+    // Before the row scan below, which can only drop integers.
+    if !floats.is_empty() {
+        return floats;
+    }
+
+    let measures: Vec<usize> = unflagged
+        .iter()
+        .copied()
+        .filter(|column| !is_integer_sequence(result, *column))
+        .collect();
+
+    if measures.is_empty() {
+        unflagged
+    } else {
+        measures
+    }
 }
 
 /// Whether `column` holds integers that strictly grow or strictly shrink over

@@ -2028,6 +2028,7 @@ impl DataGridPanel {
             refresh_dropdown: self.filter_bar.refresh_dropdown.clone(),
             time_range_panel: self.chart.chart_source_time_range_panel.clone(),
             row_count: self.result.row_count(),
+            rows_truncated: self.result.rows_truncated(),
             resolved_window,
             // Saving a chart stores its query; a table browse has none, so
             // `open_collection_chart_save` does nothing for it.

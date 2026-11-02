@@ -344,6 +344,10 @@ impl ChartDocument {
                 refresh_dropdown: self.refresh_dropdown.clone(),
                 time_range_panel: self.time_range_panel.clone(),
                 row_count,
+                rows_truncated: self
+                    .last_result
+                    .as_ref()
+                    .is_some_and(|result| result.rows_truncated()),
                 resolved_window,
                 source_supports_save: true,
                 refresh_variant: dbflux_components::controls::ButtonVariant::Secondary,
@@ -458,7 +462,18 @@ impl ChartDocument {
                 .map(|r| r.row_count())
                 .unwrap_or(0);
 
-            chart_window_label(&self.chart_shell, resolved_window, row_count, cx)
+            let rows_truncated = self
+                .last_result
+                .as_ref()
+                .is_some_and(|result| result.rows_truncated());
+
+            chart_window_label(
+                &self.chart_shell,
+                resolved_window,
+                row_count,
+                rows_truncated,
+                cx,
+            )
         };
 
         // Session-only notice for accumulating sources: the visible series is

@@ -1,7 +1,7 @@
 //! What "Open in chart" hands the chart, and what the chart makes of it.
 
-use super::CodeDocument;
 use crate::chart_document::ChartDocument;
+use crate::code::CodeDocument;
 use crate::data_grid_panel::DataGridEvent;
 use crate::handle::DocumentEvent;
 use crate::keyboard_test_support::init_keyboard_runtime;

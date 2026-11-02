@@ -367,6 +367,27 @@ fn escape_never_closes_an_embedded_chart(cx: &mut TestAppContext) {
     assert_eq!(answer_escape(&chart, window), EscapeClose::Declined);
 }
 
+/// The toolbar's point count marks a cut result the whole time, and the toast
+/// comes back for a new window instead of staying silent for the tab's life.
+#[gpui::test]
+fn a_truncated_result_is_marked_and_a_new_window_reports_it_again(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    let label = window.update(|_, cx| {
+        let shell = chart.read(cx).chart_shell_for_test().clone();
+        crate::chart::toolbar::chart_window_label(&shell, None, 10_000, true, cx)
+    });
+    assert!(label.contains("row limit"), "{label}");
+
+    window.update(|_, cx| {
+        chart.update(cx, |chart, cx| {
+            chart.truncation_reported = true;
+            chart.on_time_range_changed(Some(0), Some(1_000), cx);
+        });
+    });
+    assert!(!window.update(|_, cx| chart.read(cx).truncation_reported));
+}
+
 /// Every toolbar control of the chart is a pane action.
 #[gpui::test]
 fn the_pane_actions_list_the_chart_toolbar(cx: &mut TestAppContext) {

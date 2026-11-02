@@ -1294,6 +1294,7 @@ document:
       points:
         one: "%{count} pt"
         many: "%{count} pt"
+        row_limit: "%{points}, 행 제한 도달"
     shell:
       save: 저장
       cancel: 취소

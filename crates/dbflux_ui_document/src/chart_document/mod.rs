@@ -42,6 +42,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{PendingToast, Toast};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable as _, Subscription, Task, Window,
@@ -179,7 +180,8 @@ pub struct ChartDocument {
     /// Why the last run did not produce a result. A toast fades, so the chart
     /// area keeps saying it.
     failure: Option<String>,
-    /// A truncated result is mentioned once, not on every auto-refresh.
+    /// A truncated result is toasted once per window and source, not on every
+    /// auto-refresh; the toolbar's point count marks it all the while.
     truncation_reported: bool,
 
     /// The bindings a saved chart reopens with, applied to its first result:
@@ -1254,6 +1256,7 @@ impl ChartDocument {
 
         self.data_source = source;
         self.source_replaced = true;
+        self.truncation_reported = false;
         self.pending_chart_reexecute = true;
 
         // Drop the accumulation buffer when the source changes so stale
@@ -1299,7 +1302,10 @@ impl ChartDocument {
             Err(ChartSourceError::EmptyQuery) => return,
             Err(e) => {
                 self.report_failure(
-                    dbflux_i18n::t!("document.chart.error.source", error = e),
+                    UserFacingError::new(
+                        ErrorKind::User,
+                        dbflux_i18n::t!("document.chart.error.source", error = e),
+                    ),
                     cx,
                 );
                 return;
@@ -1308,7 +1314,10 @@ impl ChartDocument {
 
         let Some(profile_id) = self.profile_id else {
             self.report_failure(
-                dbflux_i18n::t!("document.chart.error.no_connection_selected"),
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("document.chart.error.no_connection_selected"),
+                ),
                 cx,
             );
             return;
@@ -1327,10 +1336,8 @@ impl ChartDocument {
             })
             .flatten();
         if let Some(message) = refusal {
-            self.exec_state = ExecState::Error;
-            self.state = DocumentState::Error;
             self.stop_auto_refresh(cx);
-            self.report_failure(message, cx);
+            self.report_failure(UserFacingError::new(ErrorKind::User, message), cx);
             return;
         }
 
@@ -1351,9 +1358,12 @@ impl ChartDocument {
                 database,
             })) => {
                 self.report_failure(
-                    dbflux_i18n::t!(
-                        "document.code.execution.toast.connecting",
-                        database = database
+                    UserFacingError::new(
+                        ErrorKind::Network,
+                        dbflux_i18n::t!(
+                            "document.code.execution.toast.connecting",
+                            database = database
+                        ),
                     ),
                     cx,
                 );
@@ -1361,7 +1371,10 @@ impl ChartDocument {
             }
             None => {
                 self.report_failure(
-                    dbflux_i18n::t!("document.chart.error.connection_not_found"),
+                    UserFacingError::new(
+                        ErrorKind::Network,
+                        dbflux_i18n::t!("document.chart.error.connection_not_found"),
+                    ),
                     cx,
                 );
                 return;
@@ -1441,14 +1454,14 @@ impl ChartDocument {
         });
     }
 
-    /// Shows why a run produced nothing: a toast now, and the chart area until
-    /// the next run.
-    fn report_failure(&mut self, message: String, cx: &mut Context<Self>) {
-        self.failure = Some(message.clone());
-        self.pending_toast = Some(PendingToast {
-            message,
-            is_error: true,
-        });
+    /// Shows why a run produced nothing: reported now, and in the chart area
+    /// until the next run. Deferred because a run can start during render, where
+    /// the toast's notify would schedule no frame.
+    fn report_failure(&mut self, error: UserFacingError, cx: &mut Context<Self>) {
+        self.exec_state = ExecState::Error;
+        self.state = DocumentState::Error;
+        self.failure = Some(error.summary.clone());
+        cx.defer(move |cx| report_error(error, cx));
         cx.notify();
     }
 
@@ -1514,9 +1527,13 @@ impl ChartDocument {
                 self.last_result = Some(display_result);
             }
             Err(err) => {
-                self.exec_state = ExecState::Error;
-                self.state = DocumentState::Error;
-                self.report_failure(err.to_string(), cx);
+                let error = match err.formatted() {
+                    Some(formatted) => {
+                        UserFacingError::from_formatted(ErrorKind::Driver, formatted.clone())
+                    }
+                    None => UserFacingError::new(ErrorKind::Driver, err.to_string()),
+                };
+                self.report_failure(error, cx);
             }
         }
 
@@ -1554,6 +1571,7 @@ impl ChartDocument {
             }
 
             self.pending_time_window = Some((start, end));
+            self.truncation_reported = false;
             self.applied_display_window = Some(classify_applied_window(
                 self.selected_time_range,
                 start,
@@ -1639,6 +1657,7 @@ impl ChartDocument {
         cx: &mut Context<Self>,
     ) {
         self.pending_time_window = Some((start_ms, end_ms));
+        self.truncation_reported = false;
         self.applied_display_window = Some(display_window);
         self.external_window_staged = true;
         self.reproject_accumulated_display(cx);
@@ -1680,6 +1699,7 @@ impl ChartDocument {
                 // document's mirrored preset selection — the panel had already
                 // switched to `Custom` when the picker validated.
                 self.pending_time_window = Some((start_ms, end_ms));
+                self.truncation_reported = false;
                 self.applied_display_window =
                     Some(MetricDisplayWindow::Absolute { start_ms, end_ms });
                 self.pending_chart_reexecute = true;

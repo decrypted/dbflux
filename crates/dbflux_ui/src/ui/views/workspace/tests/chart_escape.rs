@@ -223,6 +223,33 @@ fn escape_clears_the_point_then_closes_the_tab_and_returns_to_its_source(cx: &mu
     assert_eq!(text, "typed", "the keyboard is in the source tab's editor");
 }
 
+/// Only Escape goes back to the source. The close shortcut and the tab's close
+/// button keep the usual order, the most recently used tab.
+#[gpui::test]
+fn the_close_shortcut_keeps_the_usual_next_tab(cx: &mut TestAppContext) {
+    use crate::keymap::{Command, CommandDispatcher as _};
+
+    let mut fixture = connected_workspace(cx);
+    let (source, _) = fixture.open_code_tab("");
+    let (other, _) = fixture.open_code_tab("");
+
+    fixture.activate(source);
+    let chart = fixture.open_chart_from(source);
+    fixture.activate(other);
+    fixture.activate(chart);
+
+    let workspace = fixture.workspace.clone();
+    fixture.window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.dispatch(Command::CloseCurrentTab, window, cx);
+        });
+    });
+    fixture.window.run_until_parked();
+
+    assert!(!fixture.is_open(chart));
+    assert_eq!(fixture.active(), Some(other));
+}
+
 /// The source tab may be gone by then: the usual order picks the next tab.
 #[gpui::test]
 fn escape_without_the_source_tab_goes_to_the_next_tab(cx: &mut TestAppContext) {

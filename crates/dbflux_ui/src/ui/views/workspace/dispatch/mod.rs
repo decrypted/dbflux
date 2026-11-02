@@ -289,7 +289,7 @@ impl Workspace {
 
             match answer {
                 crate::ui::document::pane::EscapeClose::Close => {
-                    self.dispatch(Command::CloseCurrentTab, window, cx);
+                    self.close_active_tab_to_its_source(window, cx);
                     return true;
                 }
                 crate::ui::document::pane::EscapeClose::Handled => return true,
@@ -300,6 +300,28 @@ impl Workspace {
         // Always focus workspace to blur any input and enable keyboard navigation
         self.focus_handle.focus(window, cx);
         true
+    }
+}
+
+impl Workspace {
+    /// Closes the active tab through the normal close path and, when it
+    /// closed, goes back to the tab it was opened from if that is still open.
+    fn close_active_tab_to_its_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let source = {
+            let manager = self.tab_manager.read(cx);
+            manager.active_id().and_then(|id| manager.source_of(id))
+        };
+
+        if !self.close_active_tab(window, cx) {
+            return;
+        }
+
+        self.tab_manager.update(cx, |manager, cx| {
+            if let Some(source) = source {
+                manager.activate(source, cx);
+            }
+            manager.focus_active(window, cx);
+        });
     }
 }
 

@@ -28,7 +28,7 @@ pub use document_query::{
     DocumentSortDirection, DocumentSortKey, DocumentSpecProblem, DocumentValue,
     UnrepresentableClause,
 };
-pub use explain::{explain_plan_only, is_plan_only_explain, starts_with_explain};
+pub use explain::{explain_plan_only, is_plan_only_explain};
 pub use generator::{
     CollectionTemplateRequest, CreateTableSpec, GeneratedMutation, GeneratedQuery, GeneratorError,
     MutationCategory, MutationTemplateOperation, MutationTemplateRequest, QueryGenError,
@@ -51,8 +51,8 @@ pub use language_service::{
 pub use name_suggestion::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
 pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
 pub use safety::{
-    classify_query_for_governance, classify_sql_execution, contains_compound_block,
-    is_safe_read_query,
+    classify_query_for_governance, classify_sql_execution, classify_tsql_execution,
+    contains_compound_block, is_safe_read_query, starts_with_explain, tsql_batch_has_implicit_call,
 };
 pub use script_operation::{
     ScriptMethod, ScriptOperation, ScriptOperationCounts, ScriptOperationHost,

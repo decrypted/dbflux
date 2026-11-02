@@ -3,10 +3,10 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError,
     DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    ExplainRequest, FormFieldKind, FormSection, FormTab, FormValues, Icon, MutationCapabilities,
-    QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RowDelete, RowInsert,
-    RowPatch, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
-    TransactionCapabilities, TransferFamily, field, field_required,
+    ExplainRequest, FormFieldKind, FormSection, FormTab, FormValues, Icon, LanguageService,
+    MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    SqlLanguageService, SyntaxInfo, TransactionCapabilities, TransferFamily, field, field_required,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_core::{
@@ -89,6 +89,7 @@ struct FakeDriverState {
     delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
     dialect: RwLock<Option<&'static dyn SqlDialect>>,
+    language_service: RwLock<Option<&'static dyn LanguageService>>,
 }
 
 #[derive(Clone)]
@@ -108,6 +109,13 @@ impl FakeDriver {
             }),
             metadata: Arc::new(metadata_for_kind(kind).clone()),
         }
+    }
+
+    /// Answers `Connection::language_service` with `service` instead of the
+    /// shared SQL one, to exercise what a driver's own service decides.
+    pub fn with_language_service(self, service: &'static dyn LanguageService) -> Self {
+        *rwlock_write(&self.state.language_service) = Some(service);
+        self
     }
 
     /// Plans an explain as `<prefix> <query>`, the way a driver with a planner
@@ -842,6 +850,12 @@ impl Connection for FakeConnection {
     }
 
     fn language_service(&self) -> &dyn dbflux_core::LanguageService {
+        let service: Option<&'static dyn LanguageService> =
+            *rwlock_read(&self.state.language_service);
+        if let Some(service) = service {
+            return service;
+        }
+
         match self.kind {
             DbKind::Redis => &REDIS_LANGUAGE_SERVICE,
             _ => &SQL_LANGUAGE_SERVICE,

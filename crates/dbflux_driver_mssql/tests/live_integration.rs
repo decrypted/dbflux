@@ -793,11 +793,12 @@ fn mssql_plan_only_explain_reads_as_text_and_runs_nothing() -> Result<(), DbErro
     })
 }
 
-/// T-SQL reads the keyword as a procedure call, carries on after it fails and
-/// runs the rest of the batch.
+/// T-SQL reads an unknown first word as a procedure call, carries on after it
+/// fails and runs the rest of the batch. Run, and the checks a read-only
+/// profile and MCP make, must all keep the row.
 #[test]
 #[ignore = "requires Docker daemon"]
-fn mssql_refuses_a_leading_explain_before_it_runs_the_rest() -> Result<(), DbError> {
+fn mssql_keeps_the_row_behind_a_word_it_would_call() -> Result<(), DbError> {
     containers::with_mssql_url(|uri| {
         let (connection, _) = connect_mssql(uri)?;
         cleanup_test_tables(&*connection);
@@ -806,14 +807,44 @@ fn mssql_refuses_a_leading_explain_before_it_runs_the_rest() -> Result<(), DbErr
         connection.execute(&QueryRequest::new(
             "INSERT INTO explain_test (id) VALUES (1), (2)",
         ))?;
+        let rows = |connection: &dyn Connection| -> Result<usize, DbError> {
+            Ok(connection
+                .execute(&QueryRequest::new("SELECT id FROM explain_test"))?
+                .rows
+                .len())
+        };
+        let delete = "DELETE FROM explain_test WHERE id = 1";
 
-        let refused = connection.execute(&QueryRequest::new(
-            "EXPLAIN DELETE FROM explain_test WHERE id = 1",
-        ));
-        assert!(matches!(refused, Err(DbError::NotSupported(_))));
+        for sql in [
+            format!("EXPLAIN {delete}"),
+            format!("DESCRIBE {delete}"),
+            format!("DESCRIBE x {delete}"),
+            format!("DESC x {delete}"),
+            format!("SHOW {delete}"),
+            format!("SHOW x {delete}"),
+            format!("SHOW x; {delete}"),
+            format!("/* /* */ */ EXPLAIN {delete}"),
+            format!("-- why\nEXPLAIN {delete}"),
+            format!("SELECT 1; EXPLAIN {delete}"),
+        ] {
+            let class = dbflux_core::classify_query_for_governance(
+                &dbflux_core::QueryLanguage::Sql,
+                &sql,
+                Some(connection.language_service()),
+            );
+            assert!(
+                !matches!(
+                    class,
+                    dbflux_core::ExecutionClassification::Metadata
+                        | dbflux_core::ExecutionClassification::Read
+                ),
+                "{sql}: {class:?}"
+            );
 
-        let remaining = connection.execute(&QueryRequest::new("SELECT id FROM explain_test"))?;
-        assert_eq!(remaining.rows.len(), 2);
+            let refused = connection.execute(&QueryRequest::new(sql.clone()));
+            assert!(matches!(refused, Err(DbError::NotSupported(_))), "{sql}");
+            assert_eq!(rows(&*connection)?, 2, "{sql}");
+        }
 
         cleanup_test_tables(&*connection);
         Ok(())

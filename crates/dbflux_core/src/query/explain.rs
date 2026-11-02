@@ -2,7 +2,6 @@
 
 use dbflux_policy::ExecutionClassification;
 
-use super::language_service::strip_leading_comments;
 use super::safety::classify_sql_execution;
 use super::semantic::SemanticRequest;
 use super::table_browser::{ExplainFormat, ExplainRequest};
@@ -16,18 +15,6 @@ use crate::{Connection, DbError, QueryLanguage};
 /// read pass: a plan-only explain must not run anything at all.
 pub fn is_plan_only_explain(explain: &str) -> bool {
     classify_sql_execution(explain) == ExecutionClassification::Metadata
-}
-
-/// Whether `sql` opens with the `EXPLAIN` keyword, after any comments.
-pub fn starts_with_explain(sql: &str) -> bool {
-    let statement = strip_leading_comments(sql);
-    let keyword_end = statement
-        .find(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-        .unwrap_or(statement.len());
-
-    statement
-        .get(..keyword_end)
-        .is_some_and(|keyword| keyword.eq_ignore_ascii_case("EXPLAIN"))
 }
 
 /// The plan of the SQL statement in `statement.sql`, in the form a person

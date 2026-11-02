@@ -723,12 +723,28 @@ fn clickhouse_plan_only_explain_runs_nothing() -> Result<(), DbError> {
         assert_eq!(plan.columns.len(), 1);
         assert!(!plan.rows.is_empty());
 
-        // Whatever the server makes of it, the row stays.
-        let _ = dbflux_core::explain_plan_only(
-            connection.as_ref(),
-            &QueryRequest::new("INSERT INTO dbflux_live_explain SELECT 3"),
+        // ClickHouse explains SELECT only, so the plan of a write is the server's
+        // refusal, and the row stays.
+        assert!(
+            dbflux_core::explain_plan_only(
+                connection.as_ref(),
+                &QueryRequest::new("INSERT INTO dbflux_live_explain SELECT 3"),
+            )
+            .is_err()
         );
         assert_eq!(rows(connection.as_ref())?, 2);
+
+        // A batch cannot go on past an unknown first word here, as on SQL Server.
+        for sql in [
+            "SHOW x INSERT INTO dbflux_live_explain SELECT 3",
+            "DESCRIBE x INSERT INTO dbflux_live_explain SELECT 3",
+        ] {
+            assert!(
+                connection.execute(&QueryRequest::new(sql)).is_err(),
+                "{sql}"
+            );
+            assert_eq!(rows(connection.as_ref())?, 2, "{sql}");
+        }
 
         Ok(())
     })

@@ -85,7 +85,9 @@ so is a buffer with a compound block. A statement that only opens or ends a
 transaction has no plan to show.
 
 The plan comes from the driver and the statement never runs, so a write is
-planned without a confirmation, on a read-only connection too:
+planned without a confirmation, on a read-only connection too. Two databases show
+why not instead of a plan of a write: Redshift, whose DBFlux connections run reads
+only, and ClickHouse, which explains `SELECT` only.
 
 | Database | Asks for the plan with |
 |---|---|
@@ -96,17 +98,19 @@ planned without a confirmation, on a read-only connection too:
 There is no `ANALYZE`, which would run the statement. A statement you already
 wrote as an `EXPLAIN`, such as `EXPLAIN (COSTS OFF) SELECT ...`, runs as written.
 One that would run what it explains, such as `EXPLAIN ANALYZE ...`, is refused:
-use Run for it. SQL Server has no `EXPLAIN` statement: it would read the keyword as
-a procedure call and then run the rest, so it refuses any request that starts
-with `EXPLAIN`. ClickHouse evaluates scalar subqueries while it plans, so a plan
-there can read data; writes are refused.
+use Run for it. SQL Server has no `EXPLAIN`, `DESCRIBE` or `SHOW` statement: it
+would read the word as a procedure call and then run the rest of the batch, so it
+refuses a statement that starts with one, and a read-only connection or MCP rates
+such text by everything in it. ClickHouse evaluates scalar subqueries while it plans, so a plan
+there can read data.
 
 Explain is offered for SQL only. On a connection whose driver has no explain it
 says so and sends nothing. The result is captioned **Explain** followed by the
 statement's caption. A plan made of text lines, or with a cell of many lines,
 opens in the Text view with its indentation intact; a plan that is a real table,
-as on MySQL and SQLite, opens in the grid. The query history records it as
-`EXPLAIN` and the statement, so picking it there plans again.
+as on MySQL and SQLite, opens in the grid. The query history keeps the statement
+under a `-- Explain (plan only)` comment. Picking it there loads it into the
+editor, where Explain plans it again; Run would run it, with the usual checks.
 
 ## Multi-statement scripts
 

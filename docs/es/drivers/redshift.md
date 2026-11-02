@@ -115,8 +115,10 @@ directamente sobre el cliente de wire protocol
   existe ningún motor de Redshift local ni basado en Docker.
 - Sin soporte de `COPY`/`UNLOAD` ni integración de transferencia de
   datos/exportación masiva específica de Redshift.
-- Sin visualización de plan de query (el output de `EXPLAIN` no se parsea ni se
-  renderiza).
+- Los planes de query vienen de `EXPLAIN` (`Connection::explain`) y se muestran como
+  líneas de texto. Como toda escritura se rechaza en la capa de wire, el plan de una
+  escritura también se rechaza, y el plan no se parsea ni se dibuja como árbol. No se
+  ha ejecutado contra un clúster real.
 - Sin métricas de instancia ni inspector de instancia
   (`INSTANCE_METRICS`/`INSTANCE_INSPECTOR` no están declaradas).
 - Sin sondeo de privilegio de escritura: `Connection::probe_write_privilege`

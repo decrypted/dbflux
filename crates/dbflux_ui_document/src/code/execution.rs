@@ -1095,6 +1095,7 @@ impl CodeDocument {
                         exec_id,
                         &task_target_for_audit,
                         Some(query_for_cancel),
+                        run,
                         cx,
                     );
                 });
@@ -1104,7 +1105,7 @@ impl CodeDocument {
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
                     let duration_ms = started_at.elapsed().as_millis() as i64;
-                    let details_json = serde_json::json!({ "query": query }).to_string();
+                    let details_json = serde_json::json!({ "query": reported_query }).to_string();
                     let mut event = EventRecord::new(
                         ts_ms,
                         EventSeverity::Warn,
@@ -1112,7 +1113,7 @@ impl CodeDocument {
                         EventOutcome::Cancelled,
                     )
                     .with_typed_action(audit_actions::QUERY_CANCEL)
-                    .with_summary("Query cancelled")
+                    .with_summary(run.audit_cancelled())
                     .with_connection_context(
                         fallback_conn_id.clone().unwrap_or_default(),
                         task_target_for_audit.database.clone().unwrap_or_default(),
@@ -1154,10 +1155,7 @@ impl CodeDocument {
                     } else {
                         "returned"
                     };
-                    let summary = format!(
-                        "Query executed successfully: {} rows {}",
-                        affected_rows, rows_label
-                    );
+                    let summary = run.audit_success(affected_rows, rows_label);
                     (
                         EventOutcome::Success,
                         EventSeverity::Info,
@@ -1167,7 +1165,7 @@ impl CodeDocument {
                     )
                 }
                 Err(e) => {
-                    let summary = format!("Query failed: {}", e);
+                    let summary = run.audit_failure(&e.to_string());
                     (
                         EventOutcome::Failure,
                         EventSeverity::Error,
@@ -1276,6 +1274,7 @@ impl CodeDocument {
         exec_id: Uuid,
         target: &TaskTarget,
         query: Option<String>,
+        run: StatementRun,
         cx: &mut Context<Self>,
     ) {
         // Determine if this is a script execution by looking up the record
@@ -1345,7 +1344,7 @@ impl CodeDocument {
         let summary = if is_script {
             "Script cancelled"
         } else {
-            "Query cancelled"
+            run.audit_cancelled()
         };
 
         self.emit_audit_event(
@@ -1662,10 +1661,7 @@ impl CodeDocument {
                     } else {
                         "returned"
                     };
-                    format!(
-                        "Query executed successfully: {} rows {}",
-                        row_count, rows_label
-                    )
+                    pending.run.audit_success(row_count, rows_label)
                 };
 
                 if is_script {
@@ -1796,7 +1792,7 @@ impl CodeDocument {
                 let summary = if is_script {
                     format!("Script failed: {}", error_msg)
                 } else {
-                    format!("Query failed: {}", error_msg)
+                    pending.run.audit_failure(&error_msg)
                 };
 
                 if is_script {
@@ -2737,6 +2733,7 @@ impl CodeDocument {
                         exec_id,
                         &dummy_target,
                         Some(content_for_cancel),
+                        StatementRun::Query,
                         cx,
                     );
                 });

@@ -1,517 +1,292 @@
-//! The Explain action of the code editor: show a statement's plan without
-//! running the statement.
+use super::{
+    ExplainTarget, StatementRun, explain_menu_action, explain_route, explain_target, plan_caption,
+    plan_for_display,
+};
+use dbflux_app::keymap::Command;
+use dbflux_core::{ColumnKind, ColumnMeta, QueryLanguage, QueryResult, QueryResultShape, Value};
+use std::time::Duration;
 
-use super::*;
-use dbflux_components::actions::RunCommand;
-use dbflux_core::{QueryResultShape, Value};
-
-/// What a run sends for its statement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StatementRun {
-    Query,
-    /// The driver's own plan of the statement, which is not run.
-    DriverExplain,
-    /// A statement that already is a plan-only `EXPLAIN`, run as written.
-    WrittenExplain,
-}
-
-impl StatementRun {
-    pub(super) fn shows_plan(self) -> bool {
-        self != Self::Query
-    }
-
-    /// What the run reports doing, for the task list, history and audit log.
-    /// It never reads as a run of the statement it only planned, and picking
-    /// it from the history plans again.
-    pub(super) fn reported_query(self, statement: &str) -> String {
-        match self {
-            Self::DriverExplain => format!("EXPLAIN {}", statement.trim()),
-            Self::Query | Self::WrittenExplain => statement.to_string(),
-        }
+fn column(name: &str) -> ColumnMeta {
+    ColumnMeta {
+        name: name.to_string(),
+        type_name: "text".to_string(),
+        kind: ColumnKind::Text,
+        nullable: true,
+        is_primary_key: false,
     }
 }
 
-/// What Explain plans in the editor, picked as a run picks it.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum ExplainTarget {
-    Statement {
-        text: String,
-        /// Where the text starts in the buffer; `None` for a selection.
-        origin: Option<usize>,
-    },
-    Empty,
-    /// More than one statement: no single plan answers, and sending them
-    /// would run all but the first on most engines.
-    SeveralStatements(usize),
+fn table(columns: &[&str], rows: Vec<Vec<Value>>) -> QueryResult {
+    QueryResult::table(
+        columns.iter().map(|name| column(name)).collect(),
+        rows,
+        None,
+        Duration::ZERO,
+    )
 }
 
-/// The selection when there is one, else the statement under the cursor.
-///
-/// A buffer the splitter leaves whole, such as one with a compound block, is
-/// planned only if it counts as one statement, unlike a run, which confirms
-/// and sends it all.
-pub(super) fn explain_target(
-    language: &QueryLanguage,
-    buffer: &str,
-    cursor: usize,
-    selection: Option<&str>,
-) -> ExplainTarget {
-    if let Some(selection) = selection {
-        return match language.statement_count(selection) {
-            0 => ExplainTarget::Empty,
-            1 => ExplainTarget::Statement {
-                text: selection.to_string(),
-                origin: None,
-            },
-            count => ExplainTarget::SeveralStatements(count),
-        };
-    }
+fn text(value: &str) -> Value {
+    Value::Text(value.to_string())
+}
 
-    if let Some(range) = statements::cursor_statement(language, buffer, cursor)
-        && let Some(text) = buffer.get(range.clone())
-    {
-        return ExplainTarget::Statement {
-            text: text.to_string(),
-            origin: Some(range.start),
-        };
-    }
+fn target(buffer: &str, cursor: usize, selection: Option<&str>) -> ExplainTarget {
+    explain_target(&QueryLanguage::Sql, buffer, cursor, selection)
+}
 
-    match language.statement_count(buffer) {
-        0 => ExplainTarget::Empty,
-        1 => ExplainTarget::Statement {
-            text: buffer.to_string(),
+#[test]
+fn the_statement_under_the_cursor_is_the_target_of_a_buffer_of_several() {
+    let buffer = "SELECT 1;\nDELETE FROM t;\nSELECT 3;";
+
+    assert_eq!(
+        target(buffer, 0, None),
+        ExplainTarget::Statement {
+            text: "SELECT 1".to_string(),
             origin: Some(0),
-        },
-        count => ExplainTarget::SeveralStatements(count),
-    }
-}
-
-/// How a statement reaches the database for its plan, or `None` when even
-/// asking for the plan would run it (`EXPLAIN ANALYZE`, in either spelling).
-pub(super) fn explain_route(statement: &str) -> Option<StatementRun> {
-    if dbflux_core::starts_with_explain(statement) {
-        return dbflux_core::is_plan_only_explain(statement)
-            .then_some(StatementRun::WrittenExplain);
-    }
-
-    dbflux_core::is_plan_only_explain(&format!("EXPLAIN {statement}"))
-        .then_some(StatementRun::DriverExplain)
-}
-
-/// A plan as the result view shows it. A plan of text lines, or with a cell
-/// holding many lines, reads as text: the grid collapses a cell to one line
-/// and sorts and filters rows whose order is the plan. A real table, such as
-/// MySQL's or SQLite's, stays one.
-pub(super) fn plan_for_display(result: &QueryResult) -> QueryResult {
-    let is_table = result.shape == QueryResultShape::Table && !result.has_additional_results();
-    let all_text = result
-        .rows
-        .iter()
-        .flatten()
-        .all(|cell| plan_text(cell).is_some());
-    let has_multi_line_cell = result
-        .rows
-        .iter()
-        .flatten()
-        .filter_map(plan_text)
-        .any(|text| text.contains('\n'));
-
-    if !is_table
-        || result.rows.is_empty()
-        || !all_text
-        || !(result.columns.len() == 1 || has_multi_line_cell)
-    {
-        return result.clone();
-    }
-
-    let body = result
-        .rows
-        .iter()
-        .flatten()
-        .filter_map(plan_text)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let mut plan = QueryResult::text(body, result.execution_time);
-    plan.metadata_extra = result.metadata_extra.clone();
-    plan
-}
-
-fn plan_text(cell: &Value) -> Option<&str> {
-    match cell {
-        Value::Text(text) | Value::Json(text) => Some(text),
-        _ => None,
-    }
-}
-
-/// The caption of a plan: "Explain", then the statement's own caption.
-pub(super) fn plan_caption(statement_caption: Option<String>) -> String {
-    let explain = dbflux_i18n::t!("document.code.result.explain_caption");
-
-    match statement_caption {
-        Some(caption) => format!("{explain} · {caption}"),
-        None => explain,
-    }
-}
-
-/// What the editor's right-click menu dispatches for Explain, routed like
-/// the command palette's entry.
-pub(super) fn explain_menu_action() -> RunCommand {
-    RunCommand::new(Command::ExplainQuery.action_id())
-}
-
-impl CodeDocument {
-    /// Whether this document offers Explain: SQL only, since the other query
-    /// languages have no plan the drivers can ask for.
-    pub(super) fn can_explain(&self) -> bool {
-        !self.read_only
-            && self.supports_connection_context()
-            && *self.effective_language() == QueryLanguage::Sql
-    }
-
-    /// Shows the plan of the selection, or of the statement under the cursor,
-    /// without running it. The result appears in the Results panel like a run.
-    pub fn run_explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only || self.state == DocumentState::Executing {
-            return;
         }
-
-        let connection_runs_sql = self.connection_id.is_none_or(|conn_id| {
-            self.app_state
-                .read(cx)
-                .connections()
-                .get(&conn_id)
-                .is_none_or(|connected| {
-                    connected.connection.metadata().query_language == QueryLanguage::Sql
-                })
-        });
-
-        if !self.can_explain() || !connection_runs_sql {
-            self.explain_toast("document.code.execution.toast.explain_unavailable", cx);
-            return;
+    );
+    assert_eq!(
+        target(buffer, buffer.find("DELETE").unwrap(), None),
+        ExplainTarget::Statement {
+            text: "DELETE FROM t".to_string(),
+            origin: buffer.find("DELETE"),
         }
-
-        let target = {
-            let selection = self.selected_query(window, cx);
-            let state = self.editor.input_state.read(cx);
-            let buffer = state.value().to_string();
-            let cursor = state.cursor();
-
-            explain_target(
-                self.effective_language(),
-                &buffer,
-                cursor,
-                selection.as_deref(),
-            )
-        };
-
-        let (statement, origin) = match target {
-            ExplainTarget::Statement { text, origin } => (text, origin),
-            ExplainTarget::Empty => {
-                self.explain_toast("document.code.execution.toast.enter_query_to_explain", cx);
-                return;
-            }
-            ExplainTarget::SeveralStatements(count) => {
-                Toast::warning(dbflux_i18n::t!(
-                    "document.code.execution.toast.explain_several_statements",
-                    count = count
-                ))
-                .meta_right(now_hms())
-                .push(cx);
-                return;
-            }
-        };
-
-        if statements::is_transaction_boundary(&statement) {
-            self.explain_toast(
-                "document.code.execution.toast.explain_transaction_control",
-                cx,
-            );
-            return;
+    );
+    assert_eq!(
+        target(buffer, buffer.len(), None),
+        ExplainTarget::Statement {
+            text: "SELECT 3".to_string(),
+            origin: buffer.find("SELECT 3"),
         }
-
-        let Some(run) = explain_route(&statement) else {
-            self.explain_toast("document.code.execution.toast.explain_would_execute", cx);
-            return;
-        };
-
-        self.execution.load_all_rows = None;
-        self.execution.query_origin = origin;
-        self.execute_statement(statement, false, ReadOnlyEnforcement::None, run, window, cx);
-    }
-
-    fn explain_toast(&self, key: &'static str, cx: &mut Context<Self>) {
-        Toast::warning(dbflux_i18n::t!(key))
-            .meta_right(now_hms())
-            .push(cx);
-    }
+    );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        ExplainTarget, StatementRun, explain_menu_action, explain_route, explain_target,
-        plan_caption, plan_for_display,
-    };
-    use dbflux_app::keymap::Command;
-    use dbflux_core::{
-        ColumnKind, ColumnMeta, QueryLanguage, QueryResult, QueryResultShape, Value,
-    };
-    use std::time::Duration;
-
-    fn column(name: &str) -> ColumnMeta {
-        ColumnMeta {
-            name: name.to_string(),
-            type_name: "text".to_string(),
-            kind: ColumnKind::Text,
-            nullable: true,
-            is_primary_key: false,
+#[test]
+fn a_buffer_of_one_statement_is_the_target_whole() {
+    assert_eq!(
+        target("SELECT 1", 3, None),
+        ExplainTarget::Statement {
+            text: "SELECT 1".to_string(),
+            origin: Some(0),
         }
-    }
+    );
+}
 
-    fn table(columns: &[&str], rows: Vec<Vec<Value>>) -> QueryResult {
-        QueryResult::table(
-            columns.iter().map(|name| column(name)).collect(),
-            rows,
-            None,
-            Duration::ZERO,
-        )
-    }
+#[test]
+fn a_selection_wins_over_the_cursor_and_has_no_origin() {
+    let buffer = "SELECT 1;\nSELECT 2;";
 
-    fn text(value: &str) -> Value {
-        Value::Text(value.to_string())
-    }
-
-    fn target(buffer: &str, cursor: usize, selection: Option<&str>) -> ExplainTarget {
-        explain_target(&QueryLanguage::Sql, buffer, cursor, selection)
-    }
-
-    #[test]
-    fn the_statement_under_the_cursor_is_the_target_of_a_buffer_of_several() {
-        let buffer = "SELECT 1;\nDELETE FROM t;\nSELECT 3;";
-
-        assert_eq!(
-            target(buffer, 0, None),
-            ExplainTarget::Statement {
-                text: "SELECT 1".to_string(),
-                origin: Some(0),
-            }
-        );
-        assert_eq!(
-            target(buffer, buffer.find("DELETE").unwrap(), None),
-            ExplainTarget::Statement {
-                text: "DELETE FROM t".to_string(),
-                origin: buffer.find("DELETE"),
-            }
-        );
-        assert_eq!(
-            target(buffer, buffer.len(), None),
-            ExplainTarget::Statement {
-                text: "SELECT 3".to_string(),
-                origin: buffer.find("SELECT 3"),
-            }
-        );
-    }
-
-    #[test]
-    fn a_buffer_of_one_statement_is_the_target_whole() {
-        assert_eq!(
-            target("SELECT 1", 3, None),
-            ExplainTarget::Statement {
-                text: "SELECT 1".to_string(),
-                origin: Some(0),
-            }
-        );
-    }
-
-    #[test]
-    fn a_selection_wins_over_the_cursor_and_has_no_origin() {
-        let buffer = "SELECT 1;\nSELECT 2;";
-
-        assert_eq!(
-            target(buffer, 0, Some("SELECT 2;")),
-            ExplainTarget::Statement {
-                text: "SELECT 2;".to_string(),
-                origin: None,
-            }
-        );
-    }
-
-    #[test]
-    fn a_selection_of_several_statements_is_refused_with_its_count() {
-        assert_eq!(
-            target("anything", 0, Some("SELECT 1; DELETE FROM t; SELECT 3")),
-            ExplainTarget::SeveralStatements(3)
-        );
-    }
-
-    #[test]
-    fn a_trailing_comment_does_not_make_a_second_statement() {
-        assert_eq!(
-            target("anything", 0, Some("SELECT 1; -- one row")),
-            ExplainTarget::Statement {
-                text: "SELECT 1; -- one row".to_string(),
-                origin: None,
-            }
-        );
-    }
-
-    #[test]
-    fn a_buffer_with_a_procedure_body_is_refused_rather_than_sent_whole() {
-        let buffer = "CREATE PROCEDURE p() BEGIN DELETE FROM t; SELECT 1; END";
-
-        assert!(matches!(
-            target(buffer, 0, None),
-            ExplainTarget::SeveralStatements(_)
-        ));
-    }
-
-    #[test]
-    fn nothing_to_plan_is_empty() {
-        assert_eq!(target("", 0, None), ExplainTarget::Empty);
-        assert_eq!(target("  \n-- a note\n", 0, None), ExplainTarget::Empty);
-        assert_eq!(target("x", 0, Some("-- a note")), ExplainTarget::Empty);
-    }
-
-    #[test]
-    fn a_plain_statement_goes_to_the_driver_and_a_write_is_no_exception() {
-        for statement in [
-            "SELECT 1",
-            "DELETE FROM t",
-            "UPDATE t SET a = 1",
-            "-- why\nWITH c AS (SELECT 1) SELECT * FROM c",
-        ] {
-            assert_eq!(
-                explain_route(statement),
-                Some(StatementRun::DriverExplain),
-                "{statement}"
-            );
+    assert_eq!(
+        target(buffer, 0, Some("SELECT 2;")),
+        ExplainTarget::Statement {
+            text: "SELECT 2;".to_string(),
+            origin: None,
         }
-    }
+    );
+}
 
-    #[test]
-    fn a_written_explain_keeps_its_form_and_is_never_prefixed_again() {
-        for statement in [
-            "EXPLAIN SELECT 1",
-            "explain query plan SELECT 1",
-            "/* mine */ EXPLAIN (COSTS OFF) SELECT 1",
-            "EXPLAIN FORMAT=JSON DELETE FROM t",
-        ] {
-            assert_eq!(
-                explain_route(statement),
-                Some(StatementRun::WrittenExplain),
-                "{statement}"
-            );
+#[test]
+fn a_selection_of_several_statements_is_refused_with_its_count() {
+    assert_eq!(
+        target("anything", 0, Some("SELECT 1; DELETE FROM t; SELECT 3")),
+        ExplainTarget::SeveralStatements(3)
+    );
+}
+
+#[test]
+fn a_trailing_comment_does_not_make_a_second_statement() {
+    assert_eq!(
+        target("anything", 0, Some("SELECT 1; -- one row")),
+        ExplainTarget::Statement {
+            text: "SELECT 1; -- one row".to_string(),
+            origin: None,
         }
-    }
+    );
+}
 
-    #[test]
-    fn whatever_would_run_the_statement_has_no_route() {
-        for statement in [
-            "EXPLAIN ANALYZE SELECT 1",
-            "EXPLAIN ANALYZE DELETE FROM t",
-            "EXPLAIN (ANALYZE) DELETE FROM t",
-            "ANALYZE DELETE FROM t",
-            "(ANALYZE) DELETE FROM t",
-            "(FORMAT JSON, ANALYZE) SELECT 1",
-        ] {
-            assert_eq!(explain_route(statement), None, "{statement}");
-        }
-    }
+#[test]
+fn a_buffer_with_a_procedure_body_is_refused_rather_than_sent_whole() {
+    let buffer = "CREATE PROCEDURE p() BEGIN DELETE FROM t; SELECT 1; END";
 
-    #[test]
-    fn a_plan_of_text_lines_keeps_its_lines_and_indentation() {
-        let plan = plan_for_display(&table(
-            &["QUERY PLAN"],
-            vec![
-                vec![text("Hash Join  (cost=1.00..2.00 rows=1 width=4)")],
-                vec![text("  ->  Seq Scan on orders")],
-            ],
-        ));
+    assert!(matches!(
+        target(buffer, 0, None),
+        ExplainTarget::SeveralStatements(_)
+    ));
+}
 
-        assert_eq!(plan.shape, QueryResultShape::Text);
+#[test]
+fn nothing_to_plan_is_empty() {
+    assert_eq!(target("", 0, None), ExplainTarget::Empty);
+    assert_eq!(target("  \n-- a note\n", 0, None), ExplainTarget::Empty);
+    assert_eq!(target("x", 0, Some("-- a note")), ExplainTarget::Empty);
+}
+
+#[test]
+fn a_plain_statement_goes_to_the_driver_and_a_write_is_no_exception() {
+    for statement in [
+        "SELECT 1",
+        "DELETE FROM t",
+        "UPDATE t SET a = 1",
+        "-- why\nWITH c AS (SELECT 1) SELECT * FROM c",
+    ] {
         assert_eq!(
-            plan.text_body.as_deref(),
-            Some("Hash Join  (cost=1.00..2.00 rows=1 width=4)\n  ->  Seq Scan on orders")
-        );
-    }
-
-    #[test]
-    fn a_multi_line_cell_among_columns_reads_as_text() {
-        let plan = plan_for_display(&table(
-            &["explain_key", "explain_value"],
-            vec![vec![text("physical_plan"), text("┌───┐\n│ X │\n└───┘")]],
-        ));
-
-        assert_eq!(plan.shape, QueryResultShape::Text);
-        assert_eq!(
-            plan.text_body.as_deref(),
-            Some("physical_plan\n┌───┐\n│ X │\n└───┘")
-        );
-    }
-
-    #[test]
-    fn a_plan_that_is_a_table_stays_one() {
-        let sqlite = table(
-            &["id", "parent", "notused", "detail"],
-            vec![vec![
-                Value::Int(2),
-                Value::Int(0),
-                Value::Int(0),
-                text("SCAN t"),
-            ]],
-        );
-        assert_eq!(plan_for_display(&sqlite).shape, QueryResultShape::Table);
-
-        let text_columns = table(
-            &["select_type", "table"],
-            vec![vec![text("SIMPLE"), text("t")]],
-        );
-        assert_eq!(
-            plan_for_display(&text_columns).shape,
-            QueryResultShape::Table
-        );
-    }
-
-    #[test]
-    fn an_empty_plan_stays_a_table() {
-        let empty = table(&["QUERY PLAN"], Vec::new());
-        assert_eq!(plan_for_display(&empty).shape, QueryResultShape::Table);
-    }
-
-    #[test]
-    fn the_caption_says_it_is_a_plan_and_keeps_the_statements_caption() {
-        assert_eq!(plan_caption(None), "Explain");
-        assert_eq!(
-            plan_caption(Some("Statement L2–2 · t".to_string())),
-            "Explain · Statement L2–2 · t"
-        );
-    }
-
-    #[test]
-    fn what_a_run_reports_says_it_only_planned() {
-        assert_eq!(
-            StatementRun::DriverExplain.reported_query(" DELETE FROM t\n"),
-            "EXPLAIN DELETE FROM t"
-        );
-        assert_eq!(
-            StatementRun::WrittenExplain.reported_query("EXPLAIN SELECT 1"),
-            "EXPLAIN SELECT 1"
-        );
-        assert_eq!(StatementRun::Query.reported_query("SELECT 1"), "SELECT 1");
-    }
-
-    #[test]
-    fn the_right_click_entry_runs_the_explain_command() {
-        assert_eq!(
-            dbflux_ui_base::keymap::run_command(&explain_menu_action()),
-            Some(Command::ExplainQuery)
+            explain_route(statement),
+            Some(StatementRun::DriverExplain),
+            "{statement}"
         );
     }
 }
 
-#[cfg(test)]
-mod document_tests {
+#[test]
+fn a_written_explain_keeps_its_form_and_is_never_prefixed_again() {
+    for statement in [
+        "EXPLAIN SELECT 1",
+        "explain query plan SELECT 1",
+        "/* mine */ EXPLAIN (COSTS OFF) SELECT 1",
+        "EXPLAIN FORMAT=JSON DELETE FROM t",
+    ] {
+        assert_eq!(
+            explain_route(statement),
+            Some(StatementRun::WrittenExplain),
+            "{statement}"
+        );
+    }
+}
+
+#[test]
+fn whatever_would_run_the_statement_has_no_route() {
+    for statement in [
+        "EXPLAIN ANALYZE SELECT 1",
+        "EXPLAIN ANALYZE DELETE FROM t",
+        "EXPLAIN (ANALYZE) DELETE FROM t",
+        "ANALYZE DELETE FROM t",
+        "(ANALYZE) DELETE FROM t",
+        "(FORMAT JSON, ANALYZE) SELECT 1",
+    ] {
+        assert_eq!(explain_route(statement), None, "{statement}");
+    }
+}
+
+#[test]
+fn a_plan_of_text_lines_keeps_its_lines_and_indentation() {
+    let plan = plan_for_display(&table(
+        &["QUERY PLAN"],
+        vec![
+            vec![text("Hash Join  (cost=1.00..2.00 rows=1 width=4)")],
+            vec![text("  ->  Seq Scan on orders")],
+        ],
+    ));
+
+    assert_eq!(plan.shape, QueryResultShape::Text);
+    assert_eq!(
+        plan.text_body.as_deref(),
+        Some("Hash Join  (cost=1.00..2.00 rows=1 width=4)\n  ->  Seq Scan on orders")
+    );
+}
+
+#[test]
+fn a_multi_line_cell_among_columns_reads_as_text() {
+    let plan = plan_for_display(&table(
+        &["explain_key", "explain_value"],
+        vec![vec![text("physical_plan"), text("┌───┐\n│ X │\n└───┘")]],
+    ));
+
+    assert_eq!(plan.shape, QueryResultShape::Text);
+    assert_eq!(
+        plan.text_body.as_deref(),
+        Some("physical_plan\n┌───┐\n│ X │\n└───┘")
+    );
+}
+
+#[test]
+fn a_plan_that_is_a_table_stays_one() {
+    let sqlite = table(
+        &["id", "parent", "notused", "detail"],
+        vec![vec![
+            Value::Int(2),
+            Value::Int(0),
+            Value::Int(0),
+            text("SCAN t"),
+        ]],
+    );
+    assert_eq!(plan_for_display(&sqlite).shape, QueryResultShape::Table);
+
+    let text_columns = table(
+        &["select_type", "table"],
+        vec![vec![text("SIMPLE"), text("t")]],
+    );
+    assert_eq!(
+        plan_for_display(&text_columns).shape,
+        QueryResultShape::Table
+    );
+}
+
+#[test]
+fn an_empty_plan_stays_a_table() {
+    let empty = table(&["QUERY PLAN"], Vec::new());
+    assert_eq!(plan_for_display(&empty).shape, QueryResultShape::Table);
+}
+
+#[test]
+fn the_caption_says_it_is_a_plan_and_keeps_the_statements_caption() {
+    assert_eq!(plan_caption(None), "Explain");
+    assert_eq!(
+        plan_caption(Some("Statement L2–2 · t".to_string())),
+        "Explain · Statement L2–2 · t"
+    );
+}
+
+#[test]
+fn what_a_run_reports_says_it_only_planned() {
+    assert_eq!(
+        StatementRun::DriverExplain.reported_query(" DELETE FROM t\n"),
+        "-- Explain (plan only)\nDELETE FROM t"
+    );
+    assert_eq!(
+        StatementRun::WrittenExplain.reported_query("EXPLAIN SELECT 1"),
+        "EXPLAIN SELECT 1"
+    );
+    assert_eq!(StatementRun::Query.reported_query("SELECT 1"), "SELECT 1");
+}
+
+/// Explaining what was picked from the history must not stack up markers.
+#[test]
+fn a_statement_from_the_history_keeps_one_marker() {
+    let reported = StatementRun::DriverExplain.reported_query("DELETE FROM t");
+
+    assert_eq!(
+        StatementRun::DriverExplain.reported_query(&reported),
+        reported
+    );
+}
+
+#[test]
+fn the_audit_wording_says_nothing_ran() {
+    for run in [StatementRun::DriverExplain, StatementRun::WrittenExplain] {
+        assert!(run.audit_success(3, "returned").starts_with("Explain"));
+        assert!(run.audit_failure("boom").starts_with("Explain"));
+        assert_eq!(run.audit_cancelled(), "Explain cancelled");
+    }
+
+    assert_eq!(
+        StatementRun::Query.audit_success(3, "returned"),
+        "Query executed successfully: 3 rows returned"
+    );
+    assert_eq!(
+        StatementRun::Query.audit_failure("boom"),
+        "Query failed: boom"
+    );
+    assert_eq!(StatementRun::Query.audit_cancelled(), "Query cancelled");
+}
+
+#[test]
+fn the_right_click_entry_runs_the_explain_command() {
+    assert_eq!(
+        dbflux_ui_base::keymap::run_command(&explain_menu_action()),
+        Some(Command::ExplainQuery)
+    );
+}
+
+mod document {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
@@ -967,8 +742,8 @@ mod document_tests {
         assert_eq!(body.as_deref(), Some("Hash Join\n  ->  Seq Scan on t"));
         assert_eq!(
             grid_query.as_deref(),
-            Some("EXPLAIN DELETE FROM t WHERE id = 1"),
-            "the tab never holds the bare statement a rerun would execute"
+            Some("-- Explain (plan only)\nDELETE FROM t WHERE id = 1"),
+            "the tab says it was a plan"
         );
 
         let history = window.update(|_, cx| {
@@ -980,8 +755,8 @@ mod document_tests {
         });
         assert_eq!(
             history.as_deref(),
-            Some("EXPLAIN DELETE FROM t WHERE id = 1"),
-            "the history replays a plan, not the write"
+            Some("-- Explain (plan only)\nDELETE FROM t WHERE id = 1"),
+            "the history says it was a plan"
         );
     }
 
@@ -1095,6 +870,117 @@ mod document_tests {
         settle(window);
 
         assert_eq!(sent(&driver), vec!["EXPLAIN QUERY PLAN SELECT 1"]);
+    }
+
+    /// The text the history keeps, picked and explained again on a real engine,
+    /// and what a run of it asks.
+    #[gpui::test]
+    fn a_history_entry_plans_again_through_explain_and_asks_before_it_runs(
+        cx: &mut TestAppContext,
+    ) {
+        let profile = memory_profile();
+        let connection: Arc<dyn Connection> = Arc::from(
+            SqliteDriver::new()
+                .connect(&profile)
+                .expect("in-memory SQLite"),
+        );
+        connection
+            .execute(&QueryRequest::new(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY)",
+            ))
+            .expect("create");
+        connection
+            .execute(&QueryRequest::new("INSERT INTO t (id) VALUES (1), (2)"))
+            .expect("insert");
+        let rows = {
+            let connection = connection.clone();
+            move || {
+                connection
+                    .execute(&QueryRequest::new("SELECT id FROM t"))
+                    .expect("count")
+                    .rows
+                    .len()
+            }
+        };
+
+        let (document, _toasts, state, window) = open_on(
+            cx,
+            profile,
+            connection,
+            QueryLanguage::Sql,
+            "DELETE FROM t",
+            FIRST_LINE,
+        );
+        explain(window, &document);
+
+        let entry = window
+            .update(|_, cx| {
+                state
+                    .read(cx)
+                    .history_entries()
+                    .first()
+                    .map(|entry| entry.sql.clone())
+            })
+            .expect("the plan is in the history");
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.set_content(&entry, window, cx));
+        });
+        settle(window);
+        explain(window, &document);
+
+        assert_eq!(rows(), 2);
+        let grid = shown_grid(window, &document);
+        let columns: Vec<String> = window.update(|_, cx| {
+            let result = grid.read(cx).shown_result();
+            result.columns.iter().map(|c| c.name.clone()).collect()
+        });
+        assert!(
+            columns.iter().any(|name| name == "detail"),
+            "a query plan, not bytecode: {columns:?}"
+        );
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        settle(window);
+
+        assert_eq!(rows(), 2, "a run of it stops at the confirmation");
+        assert!(window.update(|_, cx| document.read(cx).pending.dangerous_query.is_some()));
+    }
+
+    /// The shape SQL Server runs a write behind, on a read-only profile, with
+    /// the driver's own service, as the real connection has it.
+    #[gpui::test]
+    fn a_read_only_sql_server_profile_refuses_a_write_behind_a_read_keyword(
+        cx: &mut TestAppContext,
+    ) {
+        let driver = FakeDriver::new(DbKind::SqlServer)
+            .with_language_service(&dbflux_driver_mssql::TSqlLanguageService);
+        let mut profile = memory_profile();
+        profile.read_only_flag = true;
+        let connection = driver.connect_arc(&profile).expect("fake connection");
+        let (document, toasts, _state, window) = open_on(
+            cx,
+            profile,
+            connection,
+            QueryLanguage::Sql,
+            "DESCRIBE x DELETE FROM t WHERE id = 1",
+            FIRST_LINE,
+        );
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        settle(window);
+
+        assert!(sent(&driver).is_empty());
+        assert_eq!(
+            last_toast(window, &toasts),
+            Some(dbflux_i18n::t!(
+                "document.code.execution.toast.read_only_profile"
+            ))
+        );
     }
 
     /// The plan's text view must not stick to the tab: the next run is a table

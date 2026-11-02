@@ -35,7 +35,7 @@ Amazon Redshift 드라이버(읽기 전용 v1)로, `dbflux_driver_postgres` 위�
 - IAM/SSO 기반 인증 없음. 사용자 이름/비밀번호(선택적으로 SSH 터널을 통해)만 지원되며, Redshift의 IAM 기반 `GetClusterCredentials`와 브라우저 SSO 흐름은 구현되지 않았습니다.
 - 상호 TLS용 클라이언트 인증서는 PEM 인증서와 PKCS#8 PEM 개인 키로 제공해야 하며(둘은 별도의 파일 경로로 구성됨), 결합된 PKCS#12 번들은 받지 않습니다. 루트 CA / 클라이언트 인증서 로드 경로의 PEM 파싱과 오류 처리는 단위 테스트로 검증되지만, private CA가 앞에 있는 클러스터나 클라이언트 인증서를 요구하는 클러스터에 대한 엔드투엔드 TLS 핸드셰이크는 `#[ignore]`된 라이브 통합 테스트(`redshift_live_verify_full_with_private_ca_and_client_cert`)로만 검증됩니다. 로컬이나 Docker 기반 Redshift 엔진이 존재하지 않기 때문입니다.
 - `COPY`/`UNLOAD` 지원이 없고 Redshift 전용 데이터 전송/대량 내보내기 통합도 없습니다.
-- 쿼리 계획 시각화가 없습니다(`EXPLAIN` 출력은 파싱되거나 렌더링되지 않음).
+- 쿼리 계획은 `EXPLAIN`(`Connection::explain`)에서 가져와 텍스트 줄로 표시합니다. 모든 쓰기가 와이어 계층에서 거부되므로 쓰기 문의 계획도 거부되며, 계획을 파싱하거나 트리로 그리지 않습니다. 실제 클러스터에서 실행해 보지는 않았습니다.
 - 인스턴스 메트릭과 인스턴스 검사기가 없습니다(`INSTANCE_METRICS`/`INSTANCE_INSPECTOR`가 선언되지 않음).
 - 쓰기 권한 프로브 없음: `Connection::probe_write_privilege`는 트레이트 기본값(`WritePrivilege::Unknown`)에 그대로 머뭅니다. 드라이버가 연결된 역할의 실제 권한과 무관하게 모든 변경 문을 와이어 계층에서 이미 거부하기 때문입니다.
 - `SUPER`/`VARBYTE`/`GEOMETRY`/`GEOGRAPHY`/`HLLSKETCH`에 사용되는 확장 타입 OID 값과 스토리지 힌트에 사용되는 정확한 `SVV_TABLE_INFO`/`PG_TABLE_DEF` 쿼리 형태는 `#[ignore]`된 라이브 통합 테스트(`crates/dbflux_driver_redshift/tests/live_integration.rs`)로만 검증됩니다. 로컬이나 Docker 기반 Redshift 엔진이 존재하지 않기 때문입니다. 실제 클러스터에 대해 `cargo nextest run -p dbflux_driver_redshift --run-ignored all`로 명시적으로 실행하세요.

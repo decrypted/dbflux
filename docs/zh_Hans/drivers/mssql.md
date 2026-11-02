@@ -89,7 +89,8 @@ Microsoft SQL Server 关系型数据库。
 ### 查询计划
 
 - `explain()` 在 `SET SHOWPLAN_XML ON` 下运行该查询，并以 XML 形式返回查询计划；当请求要求可读形式时，则在 `SET SHOWPLAN_TEXT ON` 下以文本行返回。驱动程序随后总会关闭 SHOWPLAN，以免会话状态泄漏，并在三个批次期间持有会话，使其他请求不会被规划而不运行。
-- `execute()` 拒绝以 `EXPLAIN` 开头的请求。SQL Server 没有此语句：它把该关键字读作过程调用，调用失败后继续运行批次的其余部分。
+- `execute()` 拒绝以 `EXPLAIN`、`DESC`、`DESCRIBE` 或 `SHOW` 开头的语句。SQL Server 没有这些语句：它把该词读作过程调用，调用失败后继续运行批次的其余部分。要调用同名过程，请使用 `EXEC`。
+- `TSqlLanguageService` 按批次的全部单词评定，因为语句前不需要 `;`，所以只读配置文件和 MCP 会拒绝跟在读取关键字之后的写操作。可写配置文件仍会运行 `SELECT 1 DELETE FROM t`，与 SQL Server 一样，也没有确认会看第一个关键字之后的内容。
 - `version_query()` 返回 `SELECT @@VERSION`。
 
 ### 方言

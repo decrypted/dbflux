@@ -74,6 +74,7 @@ así que el endpoint es una URL y no un par host/port.
   escrituras de todos modos (sin efectos secundarios; los grants alcanzables
   solo a través de un rol dentro de otro rol no se resuelven y dejan la
   política sin cambios).
+- Planes de query (`Connection::explain`): ejecuta `EXPLAIN <sentencia>` con `readonly = 2` y se muestra como líneas de texto. ClickHouse evalúa las subconsultas escalares mientras analiza una sentencia, así que un plan puede leer datos. ClickHouse solo explica `SELECT`, así que el servidor rechaza el plan de una escritura.
 - Vistas de tabla (`TableViewFeatures`): la vista Columnas de una tabla lee
   `system.columns`, `system.tables` y `system.parts` para obtener el codec de
   cada columna, su tamaño en disco y sin comprimir, la razón de compresión, la

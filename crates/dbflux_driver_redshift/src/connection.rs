@@ -872,7 +872,9 @@ impl Connection for RedshiftConnection {
             ),
         };
 
-        self.execute(&QueryRequest::new(format!("EXPLAIN {query}")))
+        self.execute(
+            &QueryRequest::new(format!("EXPLAIN {query}")).with_database(request.database.clone()),
+        )
     }
 
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {

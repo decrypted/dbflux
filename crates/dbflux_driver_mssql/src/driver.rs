@@ -1744,17 +1744,6 @@ fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
     }
 }
 
-/// Splits a list of result sets into a primary `QueryResult` plus additional
-/// sets, mirroring the multi-result-set contract on
-/// `QueryResult::additional_results`.
-///
-/// The LAST set becomes the primary (this preserves the historical "last
-/// statement wins" UX for `SELECT 1; SELECT 2;` style batches), and every
-/// earlier set is attached to `additional_results` in batch order. Empty
-/// input yields an empty primary.
-///
-/// Factored out of `execute_simple` so it can be unit-tested without a live
-/// SQL Server.
 /// Runs one batch on `client` and reads all of its result sets.
 async fn run_collected_batch(
     client: &mut TiberiusClient,
@@ -1785,6 +1774,17 @@ fn build_text_plan(collected: Vec<CollectedSet>, total_time: std::time::Duration
     QueryResult::table(columns, rows, None, total_time)
 }
 
+/// Splits a list of result sets into a primary `QueryResult` plus additional
+/// sets, mirroring the multi-result-set contract on
+/// `QueryResult::additional_results`.
+///
+/// The LAST set becomes the primary (this preserves the historical "last
+/// statement wins" UX for `SELECT 1; SELECT 2;` style batches), and every
+/// earlier set is attached to `additional_results` in batch order. Empty
+/// input yields an empty primary.
+///
+/// Factored out of `execute_simple` so it can be unit-tested without a live
+/// SQL Server.
 fn build_multi_result(
     mut collected: Vec<CollectedSet>,
     total_time: std::time::Duration,
@@ -1996,13 +1996,13 @@ impl Connection for MssqlConnection {
         // SQL Server has no read-only transaction mode to apply per request.
         req.refuse_read_only_enforcement("SQL Server")?;
 
-        // T-SQL reads a leading `EXPLAIN` as a call to a procedure of that
+        // T-SQL reads an unknown first word as a call to a procedure of that
         // name and the rest as the next statement: the call fails, the batch
-        // goes on, and `EXPLAIN DELETE ...` deletes. Classification rates the
-        // text as a plan, so no prompt or read-only check catches it.
-        if dbflux_core::starts_with_explain(&req.sql) {
+        // goes on, and `DESCRIBE x DELETE ...` deletes. On a writable profile
+        // nothing else stops it, since no prompt looks past the first keyword.
+        if dbflux_core::tsql_batch_has_implicit_call(&req.sql) {
             return Err(DbError::NotSupported(
-                "SQL Server has no EXPLAIN statement, and the text after it would run; remove the keyword and use Explain. The request was rejected before execution".to_string(),
+                "SQL Server has no EXPLAIN, DESCRIBE or SHOW statement, and the text after one would run; use Explain for a plan, or EXEC to call a procedure of that name. The request was rejected before execution".to_string(),
             ));
         }
 
@@ -3153,14 +3153,25 @@ impl Connection for MssqlConnection {
         };
 
         let start = Instant::now();
-        let (plan_batch, off_batch) = self.with_client(|runtime, client| {
-            runtime.block_on(async move {
-                run_collected_batch(client, format!("SET {showplan} ON")).await?;
-                let plan_batch = run_collected_batch(client, query).await;
-                let off_batch = run_collected_batch(client, format!("SET {showplan} OFF")).await;
-                Ok((plan_batch, off_batch))
+        let as_cancelled = |error: DbError| {
+            if self.cancelled.load(Ordering::SeqCst) || is_kill_error(&error) {
+                DbError::Cancelled
+            } else {
+                error
+            }
+        };
+
+        let (plan_batch, off_batch) = self
+            .with_client(|runtime, client| {
+                runtime.block_on(async move {
+                    run_collected_batch(client, format!("SET {showplan} ON")).await?;
+                    let plan_batch = run_collected_batch(client, query).await;
+                    let off_batch =
+                        run_collected_batch(client, format!("SET {showplan} OFF")).await;
+                    Ok((plan_batch, off_batch))
+                })
             })
-        })?;
+            .map_err(as_cancelled)?;
 
         // If the cleanup batch fails, every subsequent query on this session
         // keeps returning plan rows instead of real data (SHOWPLAN is
@@ -3176,13 +3187,7 @@ impl Connection for MssqlConnection {
             self.poisoned.store(true, Ordering::SeqCst);
         }
 
-        let collected = plan_batch.map_err(|error| {
-            if self.cancelled.load(Ordering::SeqCst) || is_kill_error(&error) {
-                DbError::Cancelled
-            } else {
-                error
-            }
-        })?;
+        let collected = plan_batch.map_err(as_cancelled)?;
 
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(DbError::Cancelled);

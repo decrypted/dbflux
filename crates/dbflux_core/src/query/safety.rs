@@ -134,16 +134,121 @@ pub fn classify_sql_execution(sql: &str) -> ExecutionClassification {
 /// whenever one is available, so driver-owned dialects (`InfluxQuery`, `Flux`,
 /// `Custom(_)`, `MongoQuery`, and the CloudWatch/OpenSearch trio) are
 /// classified by the driver instead of a conservative default. `None`
-/// preserves the language-keyed fallback classification for those dialects —
+/// preserves the language-keyed fallback classification for those dialects:
 /// for `MongoQuery` that fallback is the pre-existing core text heuristic
-/// (`classify_mongo_query`), unchanged. `Sql` and `RedisCommands` always use
-/// the shared core heuristic regardless of `service`.
+/// (`classify_mongo_query`), unchanged. `Sql` uses the shared core heuristic,
+/// which `service` can only make stricter, so it matters on a SQL Server
+/// connection. `RedisCommands` always uses the shared core heuristic.
 pub fn classify_query_for_governance(
     query_language: &QueryLanguage,
     query: &str,
     service: Option<&dyn LanguageService>,
 ) -> ExecutionClassification {
     classify_query_for_language_with_service(query_language, query, service)
+}
+
+/// Words SQL Server has no statement for, which the shared classifier rates as
+/// reads because other dialects do.
+fn is_tsql_implicit_call_word(word: &str) -> bool {
+    matches!(word, "EXPLAIN" | "DESC" | "DESCRIBE" | "SHOW")
+}
+
+/// Classifies `sql` as SQL Server runs it, for its language service to raise
+/// the shared class with.
+///
+/// T-SQL differs from every other dialect in two ways that matter here. It
+/// needs no `;` between statements, so a statement can start at any word. And
+/// an unknown first word is a call to a procedure of that name: when the call
+/// fails the batch goes on, so `DESCRIBE x DELETE FROM t` deletes. Reading only
+/// the first keyword therefore rates a write as `Metadata`, so every word
+/// counts here and the strictest class wins.
+pub fn classify_tsql_execution(sql: &str) -> ExecutionClassification {
+    tokenize(sql, &TSQL_RULES)
+        .split(|token| token.is_symbol(';'))
+        .map(classify_tsql_statement)
+        .fold(
+            ExecutionClassification::Metadata,
+            ExecutionClassification::max,
+        )
+}
+
+fn classify_tsql_statement(tokens: &[Token]) -> ExecutionClassification {
+    let Some((first, rest)) = skip_leading_symbols(tokens).split_first() else {
+        return ExecutionClassification::Metadata;
+    };
+
+    let leading = if first.word().is_some_and(is_tsql_implicit_call_word) {
+        ExecutionClassification::Write
+    } else {
+        classify_statement(tokens)
+    };
+
+    leading
+        .max(classify_read_body(rest))
+        .max(classify_tsql_statement_words(rest))
+}
+
+/// The class of the T-SQL statement keywords in `tokens` that the shared read
+/// check has no reason to know. All are reserved words, so outside quotes one
+/// can only open a statement, unless it names something after `.`, `@` or `#`.
+fn classify_tsql_statement_words(tokens: &[Token]) -> ExecutionClassification {
+    let mut classification = ExecutionClassification::Metadata;
+
+    for (index, token) in tokens.iter().enumerate() {
+        let Some(word) = token.word() else {
+            continue;
+        };
+
+        let names_something = index
+            .checked_sub(1)
+            .and_then(|previous| tokens.get(previous))
+            .is_some_and(|previous| {
+                previous.is_symbol('.') || previous.is_symbol('@') || previous.is_symbol('#')
+            });
+        if names_something {
+            continue;
+        }
+
+        let found = match word {
+            "EXEC" | "EXECUTE" => {
+                classify_procedure_call(tokens.get(index + 1..).unwrap_or_default())
+            }
+            "BACKUP" | "RESTORE" | "KILL" | "SHUTDOWN" | "DBCC" | "RECONFIGURE" | "DENY"
+            | "BULK" => ExecutionClassification::Admin,
+            "USE" | "WAITFOR" | "WRITETEXT" | "UPDATETEXT" | "COMMIT" | "ROLLBACK" | "BEGIN"
+            | "SAVE" => ExecutionClassification::Write,
+            _ => continue,
+        };
+
+        classification = classification.max(found);
+    }
+
+    classification
+}
+
+/// Whether a statement of `sql` opens with a word SQL Server would take for a
+/// procedure call and then run the rest of the batch after. The driver refuses
+/// these, since no such procedure is what anyone typing them meant.
+pub fn tsql_batch_has_implicit_call(sql: &str) -> bool {
+    tokenize(sql, &TSQL_RULES)
+        .split(|token| token.is_symbol(';'))
+        .any(|statement| {
+            skip_leading_symbols(statement)
+                .first()
+                .and_then(Token::word)
+                .is_some_and(is_tsql_implicit_call_word)
+        })
+}
+
+/// Whether `sql` opens with the `EXPLAIN` keyword in any dialect's reading of
+/// its leading comments.
+pub fn starts_with_explain(sql: &str) -> bool {
+    DIALECT_RULES.iter().any(|rules| {
+        skip_leading_symbols(&tokenize(sql, rules))
+            .first()
+            .and_then(Token::word)
+            == Some("EXPLAIN")
+    })
 }
 
 pub fn is_safe_read_query(sql: &str) -> bool {
@@ -824,9 +929,122 @@ mod tests {
     use crate::QueryLanguage;
 
     use super::{
-        classify_query_for_governance, classify_sql_execution, contains_compound_block,
-        is_safe_read_query,
+        classify_query_for_governance, classify_sql_execution, classify_tsql_execution,
+        contains_compound_block, is_safe_read_query, tsql_batch_has_implicit_call,
     };
+
+    /// Each runs its `DELETE` on SQL Server, measured against a real server,
+    /// while the shared rating of most of them stops at the first keyword.
+    const TSQL_BATCHES_THAT_WRITE: [&str; 10] = [
+        "EXPLAIN DELETE FROM t WHERE id = 1",
+        "DESCRIBE DELETE FROM t WHERE id = 1",
+        "DESCRIBE x DELETE FROM t WHERE id = 1",
+        "SHOW DELETE FROM t WHERE id = 1",
+        "SHOW x DELETE FROM t WHERE id = 1",
+        "SHOW x; DELETE FROM t WHERE id = 1",
+        "/* /* */ */ EXPLAIN DELETE FROM t WHERE id = 1",
+        "-- why\nEXPLAIN DELETE FROM t WHERE id = 1",
+        "SELECT 1 DELETE FROM t WHERE id = 1",
+        "SELECT 1 EXEC('DELETE FROM t WHERE id = 1')",
+    ];
+
+    #[test]
+    fn tsql_rates_a_batch_by_all_of_its_words() {
+        for sql in TSQL_BATCHES_THAT_WRITE {
+            assert!(
+                !matches!(
+                    classify_tsql_execution(sql),
+                    ExecutionClassification::Metadata | ExecutionClassification::Read
+                ),
+                "{sql}"
+            );
+        }
+
+        for (sql, expected) in [
+            (
+                "SELECT 1 DROP TABLE t",
+                ExecutionClassification::Destructive,
+            ),
+            ("SELECT 1 KILL 55", ExecutionClassification::Admin),
+            ("SELECT 1 SHUTDOWN", ExecutionClassification::Admin),
+            (
+                "SELECT 1 EXEC xp_cmdshell 'dir'",
+                ExecutionClassification::Admin,
+            ),
+            ("SHOW x; DROP TABLE t", ExecutionClassification::Destructive),
+            ("SELECT 1 USE master", ExecutionClassification::Write),
+            (
+                "SELECT 1; EXPLAIN DELETE FROM t",
+                ExecutionClassification::Write,
+            ),
+        ] {
+            assert_eq!(classify_tsql_execution(sql), expected, "{sql}");
+        }
+    }
+
+    #[test]
+    fn tsql_leaves_its_reads_alone() {
+        for sql in [
+            "SELECT TOP 10 * FROM dbo.orders WITH (NOLOCK) ORDER BY id DESC",
+            "SELECT [delete], [use], 'DROP TABLE t' AS [kill] FROM t",
+            "SELECT x.[exec], dbo.backup_log.id FROM x JOIN dbo.backup_log ON 1 = 1",
+            "SELECT t.use, @begin, #kill.id FROM t, #kill",
+            "/* DELETE FROM t */ SELECT 1 -- DROP TABLE t",
+            "SELECT REPLACE(name, 'a', 'b') FROM t",
+            "WITH c AS (SELECT 1 AS a) SELECT a FROM c",
+            "SELECT 1;",
+        ] {
+            assert_eq!(
+                classify_tsql_execution(sql),
+                ExecutionClassification::Read,
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn tsql_finds_the_implicit_call_in_any_statement_behind_any_comment() {
+        for sql in [
+            "EXPLAIN SELECT 1",
+            "explain select 1",
+            "DESCRIBE t",
+            "desc t",
+            "SHOW TABLES",
+            "/* /* */ */ EXPLAIN DELETE FROM t",
+            "-- why\nSHOW x DELETE FROM t",
+            "SELECT 1; DESCRIBE x DELETE FROM t",
+            "(EXPLAIN DELETE FROM t)",
+        ] {
+            assert!(tsql_batch_has_implicit_call(sql), "{sql}");
+        }
+
+        for sql in [
+            "SELECT 1",
+            "EXEC [SHOW]",
+            "EXEC dbo.explain_me",
+            "explain_me",
+            "[EXPLAIN] 1",
+            "SELECT a FROM t ORDER BY a DESC",
+            "SELECT 'EXPLAIN'; SELECT 2",
+            "",
+        ] {
+            assert!(!tsql_batch_has_implicit_call(sql), "{sql}");
+        }
+    }
+
+    /// The first keyword is all the shared heuristic has for these, and other
+    /// dialects need it to stay that way.
+    #[test]
+    fn the_shared_rating_of_an_explain_is_untouched_by_the_tsql_one() {
+        assert_eq!(
+            classify_sql_execution("EXPLAIN DELETE FROM t"),
+            ExecutionClassification::Metadata
+        );
+        assert_eq!(
+            classify_query_for_governance(&QueryLanguage::Sql, "EXPLAIN DELETE FROM t", None),
+            ExecutionClassification::Metadata
+        );
+    }
 
     #[test]
     fn allows_basic_read_queries() {

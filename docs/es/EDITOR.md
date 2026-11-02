@@ -92,7 +92,9 @@ lo mismo ocurre con un buffer con un bloque compuesto. Una sentencia que solo ab
 o cierra una transacción no tiene plan que mostrar.
 
 El plan viene del driver y la sentencia nunca se ejecuta, así que una escritura se
-planifica sin confirmación, también en una conexión de solo lectura:
+planifica sin confirmación, también en una conexión de solo lectura. Dos bases de
+datos muestran el motivo en lugar del plan de una escritura: Redshift, cuyas conexiones
+de DBFlux solo ejecutan lecturas, y ClickHouse, que solo explica `SELECT`.
 
 | Base de datos | Pide el plan con |
 |---|---|
@@ -103,18 +105,20 @@ planifica sin confirmación, también en una conexión de solo lectura:
 No se usa `ANALYZE`, que ejecutaría la sentencia. Una sentencia que ya escribiste
 como `EXPLAIN`, por ejemplo `EXPLAIN (COSTS OFF) SELECT ...`, se ejecuta tal cual.
 Una que ejecutaría lo que explica, como `EXPLAIN ANALYZE ...`, se rechaza: usa Run
-para ella. SQL Server no tiene sentencia `EXPLAIN`: leería la palabra clave como una
-llamada a un procedimiento y luego ejecutaría el resto, así que rechaza cualquier
-petición que empiece por `EXPLAIN`. ClickHouse evalúa las subconsultas escalares
-mientras planifica, así que allí un plan puede leer datos; las escrituras se
-rechazan.
+para ella. SQL Server no tiene sentencias `EXPLAIN`, `DESCRIBE` ni `SHOW`: leería la
+palabra como una llamada a un procedimiento y luego ejecutaría el resto del lote, así
+que rechaza una sentencia que empiece por una de ellas, y una conexión de solo lectura
+o MCP valoran ese texto por todo lo que contiene. ClickHouse evalúa las subconsultas escalares
+mientras planifica, así que allí un plan puede leer datos.
 
 Explain se ofrece solo para SQL. En una conexión cuyo driver no tiene explain lo
 indica y no envía nada. El resultado lleva el título **Explain** seguido del título
 de la sentencia. Un plan hecho de líneas de texto, o con una celda de muchas líneas,
 se abre en la vista Text con su sangría intacta; un plan que es una tabla real, como
-en MySQL y SQLite, se abre en la cuadrícula. El historial de queries lo registra como
-`EXPLAIN` y la sentencia, así que al elegirlo allí se vuelve a planificar.
+en MySQL y SQLite, se abre en la cuadrícula. El historial de queries guarda la
+sentencia bajo un comentario `-- Explain (plan only)`. Al elegirla allí se carga en el
+editor, donde Explain la vuelve a planificar; Run la ejecutaría, con las comprobaciones
+de siempre.
 
 ## Scripts multi-statement
 

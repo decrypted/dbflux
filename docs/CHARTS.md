@@ -203,10 +203,17 @@ document") to open the current query in a chart document.
 
 The chart runs what Run would run: the selection, or else the statement under
 the cursor, in the database and schema the editor runs in and with the same row
-limit, so a `SELECT *` reads the same rows as Run and a toast says when the limit
-cut them. A chart runs its query on its own, on opening and on every refresh, so
-a statement that changes data, a transaction boundary and a selection of several
-statements are refused with a notice and open no chart.
+limit, so a `SELECT *` reads the same rows as Run. When the limit cuts them, a
+toast says so and the toolbar's point count shows "row limit reached".
+
+A chart runs its query on its own, on opening and on every refresh, so it takes
+one statement that reads. Every run checks this, saved charts and dashboard panels
+included, with the query classifier where the language has one (SQL, MongoDB,
+Redis and the drivers that classify their own language) and the driver's danger
+check otherwise. From the editor, a refused statement or a transaction boundary
+gets a notice and opens no chart. An open chart that is refused shows the reason
+in its area and stops auto-refreshing, also when the connection's profile turned
+read-only after the chart was saved.
 
 ### Chart this query
 
@@ -223,7 +230,8 @@ Selecting the item calls `Workspace::open_chart_from_query`, which constructs a
 wraps it in a `PaneHandle` via `ChartDocument::into_pane`, and opens it as a new
 tab. A non-empty query causes the document to auto-execute on its first render.
 From a query editor's result the chart runs in the database that result came
-from, even if the editor has moved on since.
+from, even if the editor has moved on since, and from a data document in that
+document's database.
 
 ### Open chart...
 
@@ -272,8 +280,9 @@ prompt, then the highlighted point, then the stats rail. A text field keeps its
 `Escape`; the press only takes the keyboard off it. With nothing left to dismiss:
 
 - A chart tab closes through the normal close path and returns to the tab it was
-  opened from when that tab is still open, otherwise to the next tab. Closing
-  cancels a run still in progress.
+  opened from when that tab is still open, otherwise to the next tab. The tab's
+  close button and the close shortcut keep the usual next tab. Every close cancels
+  a run still in progress.
 - The chart view of a result returns to the view it was entered from, or to the
   first view, with the keyboard in the results.
 - A chart panel in a dashboard leaves the panel, and the dashboard stays open.
@@ -281,22 +290,27 @@ prompt, then the highlighted point, then the stats rail. A text field keeps its
   of the result with no state of its own to collapse.
 
 A chart tab has no reopen, so closing drops what only it holds: the columns, chart
-type, Y scale and hidden series changed since it opened or was saved, a metric
-swapped in the picker, and the samples an instance metric chart collected. With
-any of those, the first `Escape` warns and the second closes. A chart still on its
-defaults closes at once, since it opens again from its query or the saved list.
-The time range and refresh interval do not count, since saving does not keep them
+type and Y scale changed since it opened or was saved, a metric swapped in the
+picker, and the samples an instance metric chart collected. With any of those, the
+first `Escape` warns and the second closes. A chart still on its defaults closes at
+once, since it opens again from its query or the saved list. The time range, the
+refresh interval and hidden series do not count, since saving does not keep them
 either. Closing with the tab's close button or the close shortcut does not ask.
 
 ### Saving
 
 Inside a `ChartDocument`, the Save toolbar button opens a name prompt and then
-calls `confirm_save`, which keeps what the chart shows now, the picked columns
-and chart type included, and upserts a `SavedChart` into the app state's
-`saved_charts` manager. A saved chart reopens with those columns and that type.
-Saving reuses the existing `saved_chart_id` when present so the record is
-overwritten rather than duplicated. The database is not saved: a reopened chart
-runs on the connection's active database.
+calls `confirm_save`, which keeps what the chart shows now, the picked columns,
+chart type and Y scale included, and upserts a `SavedChart` into the app state's
+`saved_charts` manager. A saved chart reopens with those. Saving reuses the
+existing `saved_chart_id` when present so the record is overwritten rather than
+duplicated.
+
+The database is not saved. A reopened chart or dashboard panel sends no database
+and runs on the connection's own, whatever the sidebar selects, so a chart saved
+from another database of the connection needs its table qualified. Saved query
+charts and dashboard panels take the editor row limit; metric and instance metric
+sources do not.
 
 ```mermaid
 flowchart TD

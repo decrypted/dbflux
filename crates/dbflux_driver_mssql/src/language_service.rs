@@ -1,12 +1,12 @@
 use dbflux_core::{
     DangerousQueryKind, EditorDiagnostic, ExecutionClassification, LanguageService,
-    ValidationResult, classify_tsql_execution, detect_dangerous_sql,
+    ValidationResult, classify_tsql_execution, detect_dangerous_sql, tsql_write_behind_read,
 };
 
 /// Language service for T-SQL (Microsoft SQL Server).
 ///
-/// Behaves like the generic `SqlLanguageService` for dangerous-query detection
-/// (the destructive keywords DROP/TRUNCATE/DELETE are spelled identically), but
+/// Starts from the generic `SqlLanguageService` dangerous-query detection (the
+/// destructive keywords DROP/TRUNCATE/DELETE are spelled identically), but
 /// suppresses live parse diagnostics entirely. The bundled `tree-sitter-sequel`
 /// grammar follows generic ANSI SQL and flags T-SQL-only constructs as errors —
 /// `SELECT TOP n`, `OUTPUT INSERTED.*`, `MERGE`, `CROSS APPLY / OUTER APPLY`,
@@ -17,7 +17,8 @@ use dbflux_core::{
 /// It also raises the shared execution class: a T-SQL batch needs no `;` between
 /// statements and treats an unknown first word as a procedure call, so what looks
 /// like a read from its first keyword can hold a write
-/// ([`classify_tsql_execution`]).
+/// ([`classify_tsql_execution`]). A writable profile asks before running one
+/// ([`tsql_write_behind_read`]).
 pub struct TSqlLanguageService;
 
 impl LanguageService for TSqlLanguageService {
@@ -26,7 +27,7 @@ impl LanguageService for TSqlLanguageService {
     }
 
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        detect_dangerous_sql(query)
+        detect_dangerous_sql(query).or_else(|| tsql_write_behind_read(query))
     }
 
     fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
@@ -110,6 +111,40 @@ mod tests {
         );
         assert!(svc.editor_diagnostics("EXEC sp_helpdb 'master'").is_empty());
         assert!(svc.editor_diagnostics("").is_empty());
+    }
+
+    /// Run on a writable profile: the editor asks when this answers.
+    #[test]
+    fn a_write_behind_a_read_needs_a_confirmation_and_a_plain_one_keeps_its_rules() {
+        let svc = TSqlLanguageService;
+
+        for (sql, word) in [
+            ("SELECT 1 DELETE FROM t WHERE id = 1", "DELETE"),
+            ("SELECT 1 EXEC('DELETE FROM t WHERE id = 1')", "EXEC"),
+            ("SELECT 1. EXEC('DELETE FROM t WHERE id = 1')", "EXEC"),
+            ("SELECT 1DELETE FROM t WHERE id = 1", "DELETE"),
+            ("SELECT 1 UPDATE t SET a = 1 WHERE id = 1", "UPDATE"),
+            ("SELECT 1 INSERT t VALUES (1)", "INSERT"),
+        ] {
+            assert_eq!(
+                svc.detect_dangerous(sql),
+                Some(DangerousQueryKind::WriteBehindRead { word: Some(word) }),
+                "{sql}"
+            );
+        }
+
+        for (sql, expected) in [
+            ("DELETE FROM t WHERE id = 1", None),
+            ("UPDATE t SET a = 1 WHERE id = 1", None),
+            ("SELECT TOP 1 * FROM t WITH (NOLOCK)", None),
+            ("SELECT [delete], 'EXEC(x)' FROM t", None),
+            ("DELETE FROM t", Some(DangerousQueryKind::DeleteNoWhere)),
+            ("DROP TABLE t", Some(DangerousQueryKind::Drop)),
+            ("SELECT 1; DROP TABLE t", Some(DangerousQueryKind::Script)),
+            ("SELECT 1; DELETE FROM t", Some(DangerousQueryKind::Script)),
+        ] {
+            assert_eq!(svc.detect_dangerous(sql), expected, "{sql}");
+        }
     }
 
     #[test]

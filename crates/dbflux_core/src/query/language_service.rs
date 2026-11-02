@@ -165,6 +165,12 @@ pub enum DangerousQueryKind {
     Alter,
     /// Multi-statement script containing at least one dangerous query.
     Script,
+    /// A batch that opens with a read and holds more than a read behind it, on
+    /// a dialect that needs no `;` between statements. `word` is the keyword
+    /// that gave it away, when the scan found one.
+    WriteBehindRead {
+        word: Option<&'static str>,
+    },
 
     // MongoDB patterns
     /// deleteMany with empty or missing filter ({} or no arguments)
@@ -204,6 +210,9 @@ impl DangerousQueryKind {
             Self::Drop => "DROP will permanently remove the object",
             Self::Alter => "ALTER will modify the structure",
             Self::Script => "This script contains potentially destructive statements",
+            Self::WriteBehindRead { .. } => {
+                "This batch starts like a read, but a statement behind it can change data"
+            }
             Self::MongoDeleteMany => "deleteMany with empty filter will delete all documents",
             Self::MongoUpdateMany => "updateMany with empty filter will update all documents",
             Self::MongoDropCollection => "drop() will permanently remove the collection",

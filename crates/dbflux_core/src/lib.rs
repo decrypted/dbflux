@@ -219,6 +219,7 @@ pub use query::{
     parse_semantic_filter_json, project_aggregate_kinds, render_filter_node_sql,
     render_semantic_filter_sql, sql_statement_keywords, starts_with_explain,
     strip_leading_comments, substitute_time_macros, tsql_batch_has_implicit_call,
+    tsql_write_behind_read,
 };
 pub use query::{
     DocumentAccumulator, DocumentAccumulatorKind, DocumentCombinator, DocumentCondition,

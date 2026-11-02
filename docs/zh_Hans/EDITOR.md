@@ -61,6 +61,8 @@ Explain 仅用于 SQL。在驱动程序没有 explain 的连接上，它会给�
 
 DBFlux 会跨语言检测危险操作 — SQL 的 `DELETE`/`DROP`/`TRUNCATE` 以及不带 `WHERE` 的 `DELETE`/`UPDATE`、MongoDB 的 `deleteMany`/`drop`、Redis 的 `FLUSHALL`/`FLUSHDB`/`KEYS` — 并在执行前提示确认。该行为由设置控制：可以关闭 **确认危险查询**、可以要求 `DELETE`/`UPDATE` 必须带 `WHERE` 子句（**DELETE / UPDATE 需要 WHERE**），也可以完全禁用 Redis 的 `FLUSHALL`/`FLUSHDB`（此时这些命令会被直接阻止，而不是弹出确认）。
 
+在 SQL Server 上，语句可以从任何单词开始，因此以 `SELECT` 或 `WITH` 开头却包含读取以外操作的批处理（例如 `SELECT 1 DELETE FROM t WHERE id = 1` 或 `SELECT 1 EXEC('...')`）也会先询问，并在消息中指出找到的单词。该消息上的 **不再询问** 只对这一类生效，直到重新启动。在 InfluxDB 上，无论在注释之后还是批处理的任何语句中，都能找到 `DROP`、`ALTER` 和不带 `WHERE` 的 `DELETE`。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/editor/dangerous-query-dark.webp">
   <img src="../images/editor/dangerous-query-light.webp" alt="针对不带 WHERE 子句的 DELETE 的危险查询确认对话框">

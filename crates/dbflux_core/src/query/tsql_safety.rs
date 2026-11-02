@@ -18,6 +18,7 @@
 
 use dbflux_policy::ExecutionClassification;
 
+use super::language_service::DangerousQueryKind;
 use super::safety::{classify_procedure_name, side_effecting_function};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -241,17 +242,24 @@ fn opens_with_implicit_call(lexemes: &[Lexeme]) -> bool {
         .is_some_and(|lexeme| matches!(lexeme, Lexeme::Word(word) if is_implicit_call_word(word)))
 }
 
-/// Whether `lexemes` opens a statement with an unreserved word that opens one
-/// in Service Broker. The server requires a `;` before these: `SELECT 1 RECEIVE *
-/// FROM q` does not compile, since `RECEIVE` reads as an alias. So only this
-/// position counts, and a table or column of that name stays a read.
-fn opens_with_unreserved_statement(lexemes: &[Lexeme]) -> bool {
-    lexemes
+const UNRESERVED_STATEMENT_WORDS: &[&str] = &["SEND", "RECEIVE", "MOVE", "GET"];
+
+/// The unreserved word that opens a Service Broker statement in `lexemes`, if
+/// one does. The server requires a `;` before these: `SELECT 1 RECEIVE * FROM q`
+/// does not compile, since `RECEIVE` reads as an alias. So only this position
+/// counts, and a table or column of that name stays a read.
+fn unreserved_statement_word(lexemes: &[Lexeme]) -> Option<&'static str> {
+    let Some(Lexeme::Word(opening)) = lexemes
         .iter()
         .find(|lexeme| !matches!(lexeme, Lexeme::Symbol(_)))
-        .is_some_and(|lexeme| {
-            matches!(lexeme, Lexeme::Word(word) if matches!(word.as_str(), "SEND" | "RECEIVE" | "MOVE" | "GET"))
-        })
+    else {
+        return None;
+    };
+
+    UNRESERVED_STATEMENT_WORDS
+        .iter()
+        .find(|word| **word == opening.as_str())
+        .copied()
 }
 
 /// Whether the `CONVERSATION` at `index` is the statement `END CONVERSATION`,
@@ -317,7 +325,107 @@ fn is_use_query_hint(lexemes: &[Lexeme], index: usize) -> bool {
     after_list_symbol && before_hint
 }
 
-/// The class of `word`, or `None` for a word a read may hold.
+const DESTRUCTIVE_WORDS: &[&str] = &["DROP", "TRUNCATE", "ALTER"];
+
+const ADMIN_WORDS: &[&str] = &[
+    "CREATE",
+    "GRANT",
+    "REVOKE",
+    "DENY",
+    "BACKUP",
+    "RESTORE",
+    "DUMP",
+    "LOAD",
+    "KILL",
+    "SHUTDOWN",
+    "DBCC",
+    "RECONFIGURE",
+    "BULK",
+    "CHECKPOINT",
+    "SETUSER",
+    "REVERT",
+    "OPENROWSET",
+    "OPENDATASOURCE",
+];
+
+const WRITE_WORDS: &[&str] = &[
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "MERGE",
+    "INTO",
+    "OPENQUERY",
+    "UPDATETEXT",
+    "WRITETEXT",
+    "READTEXT",
+    "SET",
+    "USE",
+    "WAITFOR",
+    "COMMIT",
+    "ROLLBACK",
+    "BEGIN",
+    "SAVE",
+    "TRAN",
+    "TRANSACTION",
+    "DISTRIBUTED",
+    "DECLARE",
+    "IF",
+    "WHILE",
+    "GOTO",
+    "RETURN",
+    "PRINT",
+    "RAISERROR",
+    "BREAK",
+    "CONTINUE",
+    "EXIT",
+    "OPEN",
+    "CLOSE",
+    "DEALLOCATE",
+    "CURSOR",
+    "ADD",
+    "AUTHORIZATION",
+    "CASCADE",
+    "CHECK",
+    "CLUSTERED",
+    "NONCLUSTERED",
+    "COLUMN",
+    "COMPUTE",
+    "CONSTRAINT",
+    "DATABASE",
+    "DISK",
+    "ERRLVL",
+    "EXTERNAL",
+    "FILE",
+    "FILLFACTOR",
+    "FOREIGN",
+    "FUNCTION",
+    "IDENTITY_INSERT",
+    "LINENO",
+    "NOCHECK",
+    "OFF",
+    "OFFSETS",
+    "PRIMARY",
+    "PROC",
+    "PROCEDURE",
+    "PUBLIC",
+    "READ",
+    "REFERENCES",
+    "REPLICATION",
+    "RESTRICT",
+    "ROWCOUNT",
+    "RULE",
+    "SCHEMA",
+    "SECURITYAUDIT",
+    "STATISTICS",
+    "TABLE",
+    "TEXTSIZE",
+    "TRIGGER",
+    "TSEQUAL",
+    "UNIQUE",
+    "VIEW",
+];
+
+/// The class of `word` with its name, or `None` for a word a read may hold.
 ///
 /// All of these are T-SQL reserved words, so no name can use one without quotes,
 /// also after a `.` (measured: `SELECT t.exec FROM t` does not compile), and a
@@ -326,50 +434,60 @@ fn is_use_query_hint(lexemes: &[Lexeme], index: usize) -> bool {
 /// (`fn(DEFAULT)`) and every write using it holds a listed word.
 ///
 /// Unreserved words are not here, as they are legal names. See
-/// [`opens_with_unreserved_statement`] and [`is_end_conversation`].
-fn classify_word(word: &str) -> Option<ExecutionClassification> {
+/// [`unreserved_statement_word`] and [`is_end_conversation`].
+fn classify_word(word: &str) -> Option<(ExecutionClassification, &'static str)> {
     use ExecutionClassification::{Admin, Destructive, Write};
 
-    let class = match word {
-        "DROP" | "TRUNCATE" | "ALTER" => Destructive,
-        "CREATE" | "GRANT" | "REVOKE" | "DENY" | "BACKUP" | "RESTORE" | "DUMP" | "LOAD"
-        | "KILL" | "SHUTDOWN" | "DBCC" | "RECONFIGURE" | "BULK" | "CHECKPOINT" | "SETUSER"
-        | "REVERT" | "OPENROWSET" | "OPENDATASOURCE" => Admin,
-        "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "INTO" | "OPENQUERY" | "UPDATETEXT"
-        | "WRITETEXT" | "READTEXT" | "SET" | "USE" | "WAITFOR" | "COMMIT" | "ROLLBACK"
-        | "BEGIN" | "SAVE" | "TRAN" | "TRANSACTION" | "DISTRIBUTED" | "DECLARE" | "IF"
-        | "WHILE" | "GOTO" | "RETURN" | "PRINT" | "RAISERROR" | "BREAK" | "CONTINUE" | "EXIT"
-        | "OPEN" | "CLOSE" | "DEALLOCATE" | "CURSOR" | "ADD" | "AUTHORIZATION" | "CASCADE"
-        | "CHECK" | "CLUSTERED" | "NONCLUSTERED" | "COLUMN" | "COMPUTE" | "CONSTRAINT"
-        | "DATABASE" | "DISK" | "ERRLVL" | "EXTERNAL" | "FILE" | "FILLFACTOR" | "FOREIGN"
-        | "FUNCTION" | "IDENTITY_INSERT" | "LINENO" | "NOCHECK" | "OFF" | "OFFSETS" | "PRIMARY"
-        | "PROC" | "PROCEDURE" | "PUBLIC" | "READ" | "REFERENCES" | "REPLICATION" | "RESTRICT"
-        | "ROWCOUNT" | "RULE" | "SCHEMA" | "SECURITYAUDIT" | "STATISTICS" | "TABLE"
-        | "TEXTSIZE" | "TRIGGER" | "TSEQUAL" | "UNIQUE" | "VIEW" => Write,
-        _ => return None,
-    };
-
-    Some(class)
+    [
+        (Destructive, DESTRUCTIVE_WORDS),
+        (Admin, ADMIN_WORDS),
+        (Write, WRITE_WORDS),
+    ]
+    .into_iter()
+    .find_map(|(class, words)| {
+        words
+            .iter()
+            .find(|listed| **listed == word)
+            .map(|listed| (class, *listed))
+    })
 }
 
-/// Rates `sql` by every word in it as SQL Server tokenizes it, for its language
-/// service to raise the shared class with. `Read` when nothing raises it.
-pub fn classify_tsql_execution(sql: &str) -> ExecutionClassification {
-    let Lexed {
-        lexemes,
-        unterminated,
-    } = lex(sql);
+/// What a batch rates, and the first word found at that rating.
+struct Rating {
+    class: ExecutionClassification,
+    word: Option<&'static str>,
+}
 
-    let mut classification = ExecutionClassification::Read;
+impl Rating {
+    fn raise(&mut self, class: ExecutionClassification, word: Option<&'static str>) {
+        let raised = class.max(self.class) != self.class;
 
-    if unterminated
-        || lexemes
-            .split(|lexeme| *lexeme == Lexeme::Symbol(';'))
-            .any(|statement| {
-                opens_with_implicit_call(statement) || opens_with_unreserved_statement(statement)
-            })
-    {
-        classification = classification.max(ExecutionClassification::Write);
+        if raised || (class == self.class && self.word.is_none()) {
+            self.class = class;
+            self.word = word;
+        }
+    }
+}
+
+fn rate(lexed: &Lexed) -> Rating {
+    let lexemes = &lexed.lexemes;
+    let mut rating = Rating {
+        class: ExecutionClassification::Read,
+        word: None,
+    };
+
+    if lexed.unterminated {
+        rating.raise(ExecutionClassification::Write, None);
+    }
+
+    for statement in lexemes.split(|lexeme| *lexeme == Lexeme::Symbol(';')) {
+        if opens_with_implicit_call(statement) {
+            rating.raise(ExecutionClassification::Write, None);
+        }
+
+        if let Some(word) = unreserved_statement_word(statement) {
+            rating.raise(ExecutionClassification::Write, Some(word));
+        }
     }
 
     for (index, lexeme) in lexemes.iter().enumerate() {
@@ -381,24 +499,65 @@ pub fn classify_tsql_execution(sql: &str) -> ExecutionClassification {
         if following.first() == Some(&Lexeme::Symbol('('))
             && let Some(found) = side_effecting_function(word)
         {
-            classification = classification.max(found);
+            rating.raise(found, None);
         }
 
-        let found = match word.as_str() {
-            "USE" if is_use_query_hint(&lexemes, index) => continue,
-            "CONVERSATION" if is_end_conversation(&lexemes, index) => {
-                Some(ExecutionClassification::Write)
+        match word.as_str() {
+            "USE" if is_use_query_hint(lexemes, index) => {}
+            "CONVERSATION" if is_end_conversation(lexemes, index) => {
+                rating.raise(ExecutionClassification::Write, Some("END CONVERSATION"));
             }
-            "EXEC" | "EXECUTE" => Some(classify_procedure_name(called_procedure(following))),
-            _ => classify_word(word),
-        };
-
-        if let Some(found) = found {
-            classification = classification.max(found);
+            "EXEC" => rating.raise(
+                classify_procedure_name(called_procedure(following)),
+                Some("EXEC"),
+            ),
+            "EXECUTE" => rating.raise(
+                classify_procedure_name(called_procedure(following)),
+                Some("EXECUTE"),
+            ),
+            _ => {
+                if let Some((class, name)) = classify_word(word) {
+                    rating.raise(class, Some(name));
+                }
+            }
         }
     }
 
-    classification
+    rating
+}
+
+/// Rates `sql` by every word in it as SQL Server tokenizes it, for its language
+/// service to raise the shared class with. `Read` when nothing raises it.
+pub fn classify_tsql_execution(sql: &str) -> ExecutionClassification {
+    rate(&lex(sql)).class
+}
+
+/// Whether a batch opens with what reads as a query.
+fn opens_as_read(lexemes: &[Lexeme]) -> bool {
+    lexemes
+        .iter()
+        .find(|lexeme| !matches!(lexeme, Lexeme::Symbol(_)))
+        .is_some_and(
+            |lexeme| matches!(lexeme, Lexeme::Word(word) if word == "SELECT" || word == "WITH"),
+        )
+}
+
+/// The confirmation a batch needs when its first word says "read" and the rest
+/// says otherwise: the shared danger check only looks at the first keyword of
+/// each `;`-separated piece, and in T-SQL a statement can start at any word.
+///
+/// A batch the driver refuses for its implicit call needs no confirmation, as
+/// it would not run after one. A batch that opens with a write is plainly one.
+pub fn tsql_write_behind_read(sql: &str) -> Option<DangerousQueryKind> {
+    let lexed = lex(sql);
+
+    if !opens_as_read(&lexed.lexemes) || has_implicit_call(&lexed.lexemes) {
+        return None;
+    }
+
+    let Rating { class, word } = rate(&lexed);
+
+    (class != ExecutionClassification::Read).then_some(DangerousQueryKind::WriteBehindRead { word })
 }
 
 /// The last word of the unquoted, possibly qualified name in `lexemes`.
@@ -417,8 +576,11 @@ fn called_procedure(lexemes: &[Lexeme]) -> Option<&str> {
 /// procedure call and then run the rest of the batch after. The driver refuses
 /// these, since no such procedure is what anyone typing them meant.
 pub fn tsql_batch_has_implicit_call(sql: &str) -> bool {
-    lex(sql)
-        .lexemes
+    has_implicit_call(&lex(sql).lexemes)
+}
+
+fn has_implicit_call(lexemes: &[Lexeme]) -> bool {
+    lexemes
         .split(|lexeme| *lexeme == Lexeme::Symbol(';'))
         .any(opens_with_implicit_call)
 }

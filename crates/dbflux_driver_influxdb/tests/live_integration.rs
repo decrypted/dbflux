@@ -957,3 +957,203 @@ fn v1_database_other_than_the_default_lists_its_measurements() -> Result<(), DbE
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// The rating against what the server does
+// ---------------------------------------------------------------------------
+
+fn is_refused(conn: &dyn Connection, query: &str) -> bool {
+    !matches!(
+        dbflux_core::classify_query_for_governance(
+            &QueryLanguage::InfluxQuery,
+            query,
+            Some(conn.language_service()),
+        ),
+        dbflux_core::ExecutionClassification::Metadata | dbflux_core::ExecutionClassification::Read
+    )
+}
+
+/// These wrote on a real server while the rating saw a read, so a chart, a
+/// read-only profile and MCP `read_query` let them through. Each must both write
+/// and be refused, and what looks like them but reads must stay allowed.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v1_rating_refuses_the_influxql_the_server_writes_with() -> Result<(), DbError> {
+    containers::with_influxdb_v1(|cfg| {
+        let database = "testdb";
+        setup_v1_database(&cfg.endpoint, database)?;
+        write_v1_line_protocol(&cfg.endpoint, database, "cpu,host=a value=1 1700000000000")?;
+        std::thread::sleep(Duration::from_millis(500));
+
+        let conn = connect_v1(&cfg.endpoint, database)?;
+        let has_measurement = |name: &str| -> Result<bool, DbError> {
+            let shown = conn.execute(&QueryRequest::new("SHOW MEASUREMENTS"))?;
+            Ok(shown
+                .rows
+                .iter()
+                .flatten()
+                .any(|value| matches!(value, Value::Text(text) if text == name)))
+        };
+
+        for (name, template) in [
+            ("hit_plain", "SELECT value INTO {} FROM cpu"),
+            ("hit_lower", "select value into {} from cpu"),
+            ("hit_lines", "SeLeCt\tvalue\nInTo\n{}\nFROM\tcpu"),
+            ("hit_comment", "-- c\nSELECT value INTO {} FROM cpu"),
+            ("hit_block", "/* c */ SELECT value INTO {} FROM cpu"),
+            ("hit_quoted", "SELECT value INTO \"{}\" FROM cpu"),
+            (
+                "hit_escape",
+                "SELECT value FROM cpu WHERE host = 'x\\'' ; SELECT value INTO {} FROM cpu",
+            ),
+            (
+                "hit_regex",
+                "SELECT value FROM /'/ ; SELECT value INTO {} FROM cpu ; SELECT value FROM /'/",
+            ),
+            (
+                "hit_match",
+                "SELECT value FROM cpu WHERE host =~ /'/ ; SELECT value INTO {} FROM cpu ; SELECT value FROM /'/",
+            ),
+            (
+                "hit_show",
+                "SHOW SERIES FROM /'/ ; SELECT value INTO {} FROM cpu ; SELECT value FROM /'/",
+            ),
+        ] {
+            let query = template.replace("{}", name);
+
+            assert!(is_refused(&*conn, &query), "rated as a read: {query:?}");
+            assert!(!has_measurement(name)?, "{name} exists before {query:?}");
+            conn.execute(&QueryRequest::new(query.clone()))?;
+            assert!(has_measurement(name)?, "the server did not run {query:?}");
+        }
+
+        write_v1_line_protocol(&cfg.endpoint, database, "gone,host=a value=1 1700000000000")?;
+        std::thread::sleep(Duration::from_millis(500));
+
+        let behind_a_read = "SELECT value FROM /'/ ; DROP MEASUREMENT gone ; SELECT value FROM /'/";
+        assert!(is_refused(&*conn, behind_a_read));
+        assert!(has_measurement("gone")?);
+        conn.execute(&QueryRequest::new(behind_a_read))?;
+        assert!(!has_measurement("gone")?, "the server did not drop it");
+
+        for query in [
+            "SELECT value FROM cpu",
+            "SELECT \"into\" FROM cpu",
+            "SELECT value FROM cpu WHERE host = 'INTO hit_string'",
+            "SELECT value FROM cpu -- INTO hit_line",
+            "SELECT value FROM /into/",
+            "SELECT value / 2 FROM /cpu/",
+            "SHOW MEASUREMENTS",
+        ] {
+            assert!(!is_refused(&*conn, query), "refused {query:?}");
+            conn.execute(&QueryRequest::new(query))?;
+        }
+        assert!(!has_measurement("hit_string")? && !has_measurement("hit_line")?);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v2_rating_refuses_the_flux_the_server_writes_with() -> Result<(), DbError> {
+    containers::with_influxdb_v2(|cfg| {
+        write_v2_line_protocol(
+            &cfg.endpoint,
+            &cfg.token,
+            &cfg.org,
+            &cfg.bucket,
+            "cpu,host=a value=1,to=2 1700000000000",
+        )?;
+        std::thread::sleep(Duration::from_millis(500));
+
+        let conn = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
+        let bucket = &cfg.bucket;
+        let source = format!(
+            r#"from(bucket: "{bucket}") |> range(start: 0) |> filter(fn: (r) => r._measurement == "cpu")"#
+        );
+        let points_in = |name: &str| -> Result<usize, DbError> {
+            let query = format!(
+                r#"from(bucket: "{bucket}") |> range(start: 0) |> filter(fn: (r) => r._measurement == "{name}")"#
+            );
+            Ok(conn.execute(&flux_query_with_window(&query))?.rows.len())
+        };
+
+        for (name, template) in [
+            ("to_pipe", "{SOURCE} {SET} |> to(bucket: \"{BUCKET}\")"),
+            ("to_tight", "{SOURCE} {SET}|>to(bucket:\"{BUCKET}\")"),
+            ("to_space", "{SOURCE} {SET} |> to (bucket: \"{BUCKET}\")"),
+            (
+                "to_comment",
+                "{SOURCE} {SET} // it's\n |> to(bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_regex",
+                "{SOURCE} |> filter(fn: (r) => r.host =~ /\"/ or true) {SET} |> to(bucket: \"{BUCKET}\") |> filter(fn: (r) => r.host =~ /\"/)",
+            ),
+            (
+                "to_tables",
+                "to(tables: {SOURCE} {SET}, bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_name",
+                "f = to\n{SOURCE} {SET} |> f(bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_select",
+                "select = to\nselect(tables: {SOURCE} {SET}, bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_package",
+                "import \"influxdata/influxdb\"\n{SOURCE} {SET} |> influxdb.to(bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_member",
+                "import \"influxdata/influxdb\"\nm = influxdb\n{SOURCE} {SET} |> m.to(bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_index",
+                "import \"influxdata/influxdb\"\n{SOURCE} {SET} |> influxdb[\"to\"](bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_wide",
+                "import \"influxdata/influxdb\"\n{SOURCE} {SET} |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> influxdb.wideTo(bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_experimental",
+                "import \"experimental\"\n{SOURCE} {SET} |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> experimental.to(bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_alias",
+                "import e \"experimental\"\n{SOURCE} {SET} |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> e.to(bucket: \"{BUCKET}\")",
+            ),
+        ] {
+            let set = format!(r#"|> set(key: "_measurement", value: "{name}")"#);
+            let flux = template
+                .replace("{SOURCE}", &source)
+                .replace("{SET}", &set)
+                .replace("{BUCKET}", bucket);
+
+            assert!(is_refused(&*conn, &flux), "rated as a read: {flux:?}");
+            assert_eq!(points_in(name)?, 0, "{name} exists before {flux:?}");
+            conn.execute(&flux_query_with_window(&flux))?;
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(points_in(name)? > 0, "the server did not run {flux:?}");
+        }
+
+        for flux in [
+            format!("{source} |> limit(n: 1)"),
+            format!(r#"{source} |> map(fn: (r) => ({{r with to: "x"}}))"#),
+            format!(r#"{source} |> filter(fn: (r) => r._field == "to(")"#),
+            format!(r#"{source} |> filter(fn: (r) => r["to"] == "x" or true)"#),
+            format!(r#"{source} |> filter(fn: (r) => r.host =~ /to\(/ or true)"#),
+            format!(r#"{source} |> keep(columns: ["to", "_value"])"#),
+            format!("{source} // |> to(bucket: \"{bucket}\")"),
+        ] {
+            assert!(!is_refused(&*conn, &flux), "refused {flux:?}");
+            conn.execute(&flux_query_with_window(&flux))?;
+        }
+
+        Ok(())
+    })
+}

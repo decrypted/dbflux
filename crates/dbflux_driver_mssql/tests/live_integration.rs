@@ -976,6 +976,86 @@ fn mssql_rating_refuses_what_the_server_runs() -> Result<(), DbError> {
     })
 }
 
+/// A writable profile gets no help from a read-only refusal, so the confirmation
+/// is what stands in front of these. Each one deletes on a real server, and each
+/// one asks first, naming the word that gave it away. A read asks nothing.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_confirmation_asks_before_a_write_behind_a_read() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        let reset = "DROP TABLE IF EXISTS explain_test; CREATE TABLE explain_test (id INT); \
+                     INSERT INTO explain_test (id) VALUES (1), (2)";
+
+        for (sql, word) in [
+            ("SELECT 1 DELETE FROM explain_test WHERE id = 1", "DELETE"),
+            ("SELECT 1DELETE FROM explain_test WHERE id = 1", "DELETE"),
+            (
+                "SELECT 1 EXEC('DELETE FROM explain_test WHERE id = 1')",
+                "EXEC",
+            ),
+            (
+                "SELECT 1. EXECUTE('DELETE FROM explain_test WHERE id = 1')",
+                "EXECUTE",
+            ),
+            (
+                "WITH c AS (SELECT 1 AS a) SELECT a FROM c DELETE FROM explain_test WHERE id = 1",
+                "DELETE",
+            ),
+            (
+                "WITH c AS (SELECT 1 AS id) DELETE FROM explain_test WHERE id = 1",
+                "DELETE",
+            ),
+            (
+                "SELECT 1; SELECT 2 DELETE FROM explain_test WHERE id = 1",
+                "DELETE",
+            ),
+        ] {
+            connection.execute(&QueryRequest::new(reset))?;
+
+            assert_eq!(
+                connection.language_service().detect_dangerous(sql),
+                Some(dbflux_core::DangerousQueryKind::WriteBehindRead { word: Some(word) }),
+                "{sql}"
+            );
+
+            connection.execute(&QueryRequest::new(sql))?;
+            let remaining =
+                connection.execute(&QueryRequest::new("SELECT id FROM explain_test"))?;
+            assert_eq!(remaining.rows.len(), 1, "the server ran {sql}");
+        }
+
+        connection.execute(&QueryRequest::new(reset))?;
+
+        for sql in [
+            "SELECT id FROM explain_test",
+            "SELECT TOP 1 id FROM explain_test WITH (NOLOCK) ORDER BY id DESC",
+            "SELECT id, 'DELETE FROM explain_test' AS [delete] FROM explain_test",
+            "WITH c AS (SELECT id FROM explain_test) SELECT id FROM c",
+        ] {
+            assert_eq!(
+                connection.language_service().detect_dangerous(sql),
+                None,
+                "{sql}"
+            );
+            connection.execute(&QueryRequest::new(sql))?;
+        }
+
+        // These open with a write, so they keep the rule for what they open with.
+        assert_eq!(
+            connection
+                .language_service()
+                .detect_dangerous("DELETE FROM explain_test WHERE id = 1"),
+            None
+        );
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Describe
 // ---------------------------------------------------------------------------

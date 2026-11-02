@@ -772,6 +772,9 @@ pub(crate) fn dangerous_query_title(kind: dbflux_core::DangerousQueryKind) -> St
         DangerousQueryKind::Script => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.script.title")
         }
+        DangerousQueryKind::WriteBehindRead { .. } => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.write_behind_read.title")
+        }
         DangerousQueryKind::MongoDeleteMany => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_delete_many.title")
         }
@@ -833,6 +836,13 @@ pub(crate) fn dangerous_query_body(kind: dbflux_core::DangerousQueryKind) -> Str
         DangerousQueryKind::Script => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.script.body")
         }
+        DangerousQueryKind::WriteBehindRead { word: None } => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.write_behind_read.body")
+        }
+        DangerousQueryKind::WriteBehindRead { word: Some(word) } => dbflux_i18n::t!(
+            "document.code.dangerous_query.kind.write_behind_read.body_named",
+            word = word
+        ),
         DangerousQueryKind::MongoDeleteMany => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_delete_many.body")
         }
@@ -4056,6 +4066,7 @@ mod tests {
         DangerousQueryKind::Drop,
         DangerousQueryKind::Alter,
         DangerousQueryKind::Script,
+        DangerousQueryKind::WriteBehindRead { word: None },
         DangerousQueryKind::MongoDeleteMany,
         DangerousQueryKind::MongoUpdateMany,
         DangerousQueryKind::MongoDropCollection,
@@ -4722,6 +4733,25 @@ mod tests {
     }
 
     #[test]
+    fn write_behind_read_body_names_the_word_in_every_locale() {
+        let body = dangerous_query_body(DangerousQueryKind::WriteBehindRead {
+            word: Some("DELETE"),
+        });
+        assert!(body.contains("DELETE"), "{body}");
+        assert!(!body.contains("%{"), "{body}");
+
+        for locale in ["en", "es", "pt_BR", "ko", "zh_Hans"] {
+            let named = dbflux_i18n::t!(
+                "document.code.dangerous_query.kind.write_behind_read.body_named",
+                locale = locale,
+                word = "EXEC"
+            );
+            assert!(named.contains("EXEC"), "{locale}: {named}");
+            assert!(!named.contains("%{"), "{locale}: {named}");
+        }
+    }
+
+    #[test]
     fn dangerous_query_copy_differs_between_locales() {
         // Titles for pure SQL/Redis command names (TRUNCATE, DROP, ALTER,
         // FLUSHALL, FLUSHDB) are legitimately identical across locales —
@@ -4796,6 +4826,9 @@ mod tests {
             DangerousQueryKind::Drop => "document.code.dangerous_query.kind.drop.title",
             DangerousQueryKind::Alter => "document.code.dangerous_query.kind.alter.title",
             DangerousQueryKind::Script => "document.code.dangerous_query.kind.script.title",
+            DangerousQueryKind::WriteBehindRead { .. } => {
+                "document.code.dangerous_query.kind.write_behind_read.title"
+            }
             DangerousQueryKind::MongoDeleteMany => {
                 "document.code.dangerous_query.kind.mongo_delete_many.title"
             }
@@ -4841,6 +4874,12 @@ mod tests {
             DangerousQueryKind::Drop => "document.code.dangerous_query.kind.drop.body",
             DangerousQueryKind::Alter => "document.code.dangerous_query.kind.alter.body",
             DangerousQueryKind::Script => "document.code.dangerous_query.kind.script.body",
+            DangerousQueryKind::WriteBehindRead { word: None } => {
+                "document.code.dangerous_query.kind.write_behind_read.body"
+            }
+            DangerousQueryKind::WriteBehindRead { word: Some(_) } => {
+                "document.code.dangerous_query.kind.write_behind_read.body_named"
+            }
             DangerousQueryKind::MongoDeleteMany => {
                 "document.code.dangerous_query.kind.mongo_delete_many.body"
             }

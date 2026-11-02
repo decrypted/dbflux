@@ -200,7 +200,7 @@ flowchart TD
 
 - 自动检测至少需要一个 `Timestamp` 列才能选出 X 轴；若没有，`detect_chart_columns` 会返回 `NoTimeColumn`，且“将此查询制作成图表”不可用。从编辑器的图表按钮打开的图表会改为要求选择 Y 列，并相对于数值 X 列绘制，该列被归类为 `AxisKind::Numeric` 轴。
 - 带有 `ColumnKind::Unknown` 的列完全被排除在自动检测之外。
-- 图表拒绝查询分类器判定为写入的内容，因此其准确性取决于该分类器。在 InfluxDB 上，`SELECT ... INTO` 和 Flux `to()` 会写入数据，但被判定为读取，不会被拦截。
+- 图表拒绝查询分类器判定为写入的内容，因此其准确性取决于该分类器。它无法看到存储过程或函数的实际行为，也无法识别 Flux 在此版本之后新增的包。
 - 来源为 `Collection` 的已保存图表无法作为 `ChartDocument` 打开；它们会改为以图表模式重新打开底层的 `DataDocument`。将 `Collection` 来源传给 `ChartDocument::from_saved` 会返回错误。
 - 在本版本中 `AxisSpec.unit` 始终为 `None`；驱动程序尚未提供单位元数据。
 - 每个 `ChartSpec` 构造函数（`from_detection`、`from_bindings`、`from_manual_selection`）生成的规格均为 `kind = ChartKind::Line`；其他图表类型在构造之后选择。

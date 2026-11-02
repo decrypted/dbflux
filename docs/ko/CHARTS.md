@@ -277,8 +277,8 @@ flowchart TD
   없습니다. 편집기의 차트 버튼으로 연 차트는 대신 Y 열을 요청하고 숫자 X 열에 대해 그리며,
   이 X 열은 `AxisKind::Numeric` 축으로 분류됩니다.
 - `ColumnKind::Unknown`인 열은 자동 감지에서 완전히 제외됩니다.
-- 차트는 쿼리 분류기가 쓰기로 판단한 것을 거부하므로 그 분류기만큼만 정확합니다. InfluxDB에서
-  `SELECT ... INTO`와 Flux `to()`는 쓰기를 수행하지만 읽기로 판단되어 걸러지지 않습니다.
+- 차트는 쿼리 분류기가 쓰기로 판단한 것을 거부하므로 그 분류기만큼만 정확합니다. 저장 프로시저나
+  함수가 하는 일, 그리고 이 버전 이후 Flux에 추가된 패키지는 볼 수 없습니다.
 - `Collection` 소스의 저장된 차트는 `ChartDocument`로 열 수 없으며, 대신 기반
   `DataDocument`를 차트 모드로 다시 엽니다. `ChartDocument::from_saved`에 `Collection`
   소스를 전달하면 오류가 반환됩니다.

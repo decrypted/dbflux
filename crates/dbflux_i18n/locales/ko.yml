@@ -1500,6 +1500,10 @@ document:
         raw_expression_in_set:
           title: SET 절의 원시 SQL 표현식
           body: SET 절에 원시 SQL 표현식이 있습니다 — 매개변수 바인딩을 우회합니다
+        write_behind_read:
+          title: "읽기 뒤에 숨은 쓰기"
+          body: "이 배치는 읽기처럼 시작하지만 그 뒤의 문이 데이터를 변경할 수 있습니다"
+          body_named: "이 배치는 읽기처럼 시작하지만 그 뒤의 %{word}이(가) 데이터를 변경할 수 있습니다"
     context_bar:
       pane_actions: 작업
       file:

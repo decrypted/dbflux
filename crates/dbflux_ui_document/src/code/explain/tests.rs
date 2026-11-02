@@ -983,6 +983,99 @@ mod document {
         );
     }
 
+    /// A writable profile has only the confirmation in front of this shape: Run
+    /// stops at it, Run anyway sends the text, "Don't ask again" holds for the
+    /// session, a read asks nothing, and a plan of it asks nothing and runs nothing.
+    #[gpui::test]
+    fn a_writable_sql_server_profile_asks_before_a_write_behind_a_read(cx: &mut TestAppContext) {
+        const HIDDEN: &str = "SELECT 1 DELETE FROM t WHERE id = 1";
+
+        let driver = FakeDriver::new(DbKind::SqlServer)
+            .with_language_service(&dbflux_driver_mssql::TSqlLanguageService)
+            .with_explain_planner("EXPLAIN");
+        let profile = memory_profile();
+        let connection = driver.connect_arc(&profile).expect("fake connection");
+        let (document, _toasts, _state, window) = open_on(
+            cx,
+            profile,
+            connection,
+            QueryLanguage::Sql,
+            HIDDEN,
+            FIRST_LINE,
+        );
+        let run = |window: &mut VisualTestContext| {
+            window.update(|window, cx| {
+                document.update(cx, |document, cx| document.run_query(window, cx));
+            });
+            settle(window);
+        };
+        let pending_kind = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                document
+                    .read(cx)
+                    .pending
+                    .dangerous_query
+                    .as_ref()
+                    .map(|pending| pending.kind)
+            })
+        };
+        let hidden_delete = dbflux_core::DangerousQueryKind::WriteBehindRead {
+            word: Some("DELETE"),
+        };
+
+        run(window);
+        assert!(sent(&driver).is_empty(), "stops at the confirmation");
+        assert_eq!(pending_kind(window), Some(hidden_delete));
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.confirm_dangerous_query(true, window, cx);
+            });
+        });
+        settle(window);
+        assert_eq!(sent(&driver), vec![HIDDEN]);
+        assert_eq!(pending_kind(window), None);
+
+        run(window);
+        assert_eq!(pending_kind(window), None, "\"Don't ask again\" holds");
+        assert_eq!(sent(&driver), vec![HIDDEN, HIDDEN]);
+
+        explain(window, &document);
+        assert_eq!(pending_kind(window), None, "a plan asks nothing");
+        assert_eq!(
+            sent(&driver),
+            vec![
+                HIDDEN.to_string(),
+                HIDDEN.to_string(),
+                format!("EXPLAIN {HIDDEN}"),
+            ],
+            "a plan sends only the planned text"
+        );
+    }
+
+    #[gpui::test]
+    fn a_sql_server_read_and_a_plain_delete_ask_as_they_did(cx: &mut TestAppContext) {
+        for sql in [
+            "SELECT TOP 1 * FROM t WITH (NOLOCK)",
+            "DELETE FROM t WHERE id = 1",
+        ] {
+            let driver = FakeDriver::new(DbKind::SqlServer)
+                .with_language_service(&dbflux_driver_mssql::TSqlLanguageService);
+            let profile = memory_profile();
+            let connection = driver.connect_arc(&profile).expect("fake connection");
+            let (document, _toasts, _state, window) =
+                open_on(cx, profile, connection, QueryLanguage::Sql, sql, FIRST_LINE);
+
+            window.update(|window, cx| {
+                document.update(cx, |document, cx| document.run_query(window, cx));
+            });
+            settle(window);
+
+            assert!(window.update(|_, cx| document.read(cx).pending.dangerous_query.is_none()));
+            assert_eq!(sent(&driver), vec![sql]);
+        }
+    }
+
     /// The plan's text view must not stick to the tab: the next run is a table
     /// again, in the same tab.
     #[gpui::test]

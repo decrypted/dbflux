@@ -15,6 +15,7 @@ pub mod connection;
 pub mod driver;
 pub mod error_formatter;
 pub mod http;
+mod influx_safety;
 pub mod injection;
 pub mod instance_catalog;
 pub mod language_service;

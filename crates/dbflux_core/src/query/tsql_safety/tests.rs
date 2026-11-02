@@ -1,6 +1,7 @@
 use dbflux_policy::ExecutionClassification::{self, Admin, Destructive, Read, Write};
 
-use super::{classify_tsql_execution, tsql_batch_has_implicit_call};
+use super::{classify_tsql_execution, tsql_batch_has_implicit_call, tsql_write_behind_read};
+use crate::DangerousQueryKind;
 
 const D: &str = "DELETE FROM t WHERE id = 1";
 const X: &str = "EXEC('DELETE FROM t WHERE id = 1')";
@@ -291,4 +292,141 @@ fn a_bare_name_the_shared_rating_reads_as_a_keyword_stays_refused() {
         ),
         Read
     );
+}
+
+/// What the confirmation on a writable profile names. `SELECT 1 EXEC(...)` holds
+/// its `DELETE` in a string, so the `EXEC` is what shows.
+#[test]
+fn a_write_behind_a_read_asks_and_names_the_word() {
+    for (sql, word) in [
+        ("SELECT 1 DELETE FROM t WHERE id = 1", Some("DELETE")),
+        ("SELECT 1 DELETE FROM t", Some("DELETE")),
+        ("SELECT 1DELETE FROM t WHERE id = 1", Some("DELETE")),
+        ("select 1 delete from t where id = 1", Some("DELETE")),
+        ("SELECT 1 EXEC('DELETE FROM t WHERE id = 1')", Some("EXEC")),
+        ("SELECT 1. EXECUTE('DELETE FROM t')", Some("EXECUTE")),
+        ("SELECT 1 EXEC sp_executesql N'DELETE FROM t'", Some("EXEC")),
+        ("SELECT 1 EXEC master.dbo.xp_cmdshell 'dir'", Some("EXEC")),
+        ("SELECT 1 UPDATE t SET a = 1 WHERE id = 1", Some("UPDATE")),
+        ("SELECT 1 INSERT t VALUES (1)", Some("INSERT")),
+        ("SELECT 1 DROP TABLE t", Some("DROP")),
+        ("SELECT 1 TRUNCATE TABLE t", Some("TRUNCATE")),
+        ("SELECT 1 KILL 55", Some("KILL")),
+        ("SELECT 1 SHUTDOWN", Some("SHUTDOWN")),
+        ("SELECT 1 END CONVERSATION @h", Some("END CONVERSATION")),
+        ("SELECT 1; RECEIVE * FROM q", Some("RECEIVE")),
+        ("SELECT * INTO copy FROM t", Some("INTO")),
+        (
+            "SELECT * FROM OPENROWSET(BULK 'x', SINGLE_BLOB) AS b",
+            Some("OPENROWSET"),
+        ),
+        ("(SELECT 1) DELETE FROM t", Some("DELETE")),
+        ("/* a */ SELECT 1 --b\rDELETE FROM t", Some("DELETE")),
+        (
+            "WITH c AS (SELECT 1 AS a) SELECT a FROM c DELETE FROM t",
+            Some("DELETE"),
+        ),
+        (
+            "WITH c AS (SELECT 1 AS id) DELETE FROM t WHERE id = 1",
+            Some("DELETE"),
+        ),
+        (
+            "SELECT 1; SELECT 2 DELETE FROM t WHERE id = 1",
+            Some("DELETE"),
+        ),
+        ("SELECT 1; DELETE FROM t WHERE id = 1", Some("DELETE")),
+        // The strongest word is the one to name.
+        ("SELECT 1 DELETE FROM t DROP TABLE t", Some("DROP")),
+        ("SELECT 1 EXEC x KILL 55", Some("KILL")),
+        // The scan cannot see the end of these, so there is no word to name.
+        ("SELECT 'unterminated", None),
+        ("SELECT 1 /* unterminated", None),
+    ] {
+        assert_eq!(
+            tsql_write_behind_read(sql),
+            Some(DangerousQueryKind::WriteBehindRead { word }),
+            "{sql:?}"
+        );
+    }
+}
+
+/// A batch opening with a write is plainly one, and keeps the prompts it had. One
+/// with an implicit call never runs, as the driver refuses it.
+#[test]
+fn only_a_batch_that_opens_as_a_read_is_asked_about() {
+    for sql in [
+        "DELETE FROM t WHERE id = 1",
+        "UPDATE t SET a = 1 WHERE id = 1",
+        "INSERT INTO t VALUES (1)",
+        "EXEC sp_who",
+        "EXEC('DELETE FROM t')",
+        "CREATE TABLE t (a INT)",
+        "DECLARE @a INT",
+        "SET NOCOUNT ON",
+        "BEGIN TRAN",
+        "COMMIT",
+        "[SELECT] 1 DELETE FROM t",
+        "EXPLAIN SELECT 1",
+        "DESCRIBE x DELETE FROM t",
+        "SHOW x; DELETE FROM t",
+        "SELECT 1; EXPLAIN DELETE FROM t",
+        "",
+        "-- only a comment",
+    ] {
+        assert_eq!(tsql_write_behind_read(sql), None, "{sql:?}");
+    }
+}
+
+/// Everything `reads_stay_reads` lists runs with no prompt, so the two lists have
+/// to agree. This reads the list from the test's source, not a copy of it, so a
+/// read added there is covered here.
+#[test]
+fn no_read_is_asked_about() {
+    let source = include_str!("tests.rs");
+    let start = source
+        .find("fn reads_stay_reads")
+        .expect("the list of reads");
+    let body = &source[start..];
+    let end = body.find("\n}\n").expect("the end of the list");
+    let mut checked = 0;
+
+    for line in body[..end].lines() {
+        let line = line.trim();
+        let Some(quoted) = line
+            .strip_prefix('"')
+            .and_then(|rest| rest.strip_suffix("\","))
+        else {
+            continue;
+        };
+        let sql = quoted.replace("\\\"", "\"").replace("\\n", "\n");
+
+        assert_eq!(tsql_write_behind_read(&sql), None, "{sql:?}");
+        checked += 1;
+    }
+
+    assert!(checked > 50, "read {checked} reads");
+}
+
+/// "Don't ask again" on another kind must not silence this one, nor the reverse,
+/// and the word it found does not make it a kind of its own.
+#[test]
+fn dont_ask_again_is_kept_per_kind() {
+    use crate::DangerousQuerySuppressions;
+
+    let hidden = DangerousQueryKind::WriteBehindRead {
+        word: Some("DELETE"),
+    };
+    let other_word = DangerousQueryKind::WriteBehindRead { word: Some("EXEC") };
+
+    let mut suppressions = DangerousQuerySuppressions::default();
+    suppressions.set_suppressed(DangerousQueryKind::Script);
+    suppressions.set_suppressed(DangerousQueryKind::Drop);
+    assert!(!suppressions.is_suppressed(hidden));
+
+    let mut suppressions = DangerousQuerySuppressions::default();
+    suppressions.set_suppressed(hidden);
+    assert!(suppressions.is_suppressed(hidden));
+    assert!(suppressions.is_suppressed(other_word));
+    assert!(!suppressions.is_suppressed(DangerousQueryKind::Script));
+    assert!(!suppressions.is_suppressed(DangerousQueryKind::Drop));
 }

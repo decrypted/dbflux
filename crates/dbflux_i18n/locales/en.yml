@@ -1500,6 +1500,10 @@ document:
         raw_expression_in_set:
           title: Raw SQL expression in SET
           body: SET clause contains a raw SQL expression — bypasses parameter binding
+        write_behind_read:
+          title: "Write behind a read"
+          body: "This batch starts like a read, but a statement behind it can change data"
+          body_named: "This batch starts like a read, but %{word} behind it can change data"
     context_bar:
       pane_actions: Actions
       file:

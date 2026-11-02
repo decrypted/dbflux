@@ -1500,6 +1500,10 @@ document:
         raw_expression_in_set:
           title: SET 中的原生 SQL 表达式
           body: SET 子句包含原生 SQL 表达式 — 绕过参数绑定
+        write_behind_read:
+          title: "读取之后隐藏的写入"
+          body: "此批处理以读取开头，但其后的语句可能更改数据"
+          body_named: "此批处理以读取开头，但其后的 %{word} 可能更改数据"
     context_bar:
       pane_actions: 操作
       file:

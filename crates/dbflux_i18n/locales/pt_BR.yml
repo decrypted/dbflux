@@ -1500,6 +1500,10 @@ document:
         raw_expression_in_set:
           title: Expressão SQL bruta em SET
           body: A cláusula SET contém uma expressão SQL bruta — ignora a vinculação de parâmetros
+        write_behind_read:
+          title: "Escrita atrás de uma leitura"
+          body: "Este lote começa como uma leitura, mas uma instrução depois dela pode alterar dados"
+          body_named: "Este lote começa como uma leitura, mas %{word} depois dela pode alterar dados"
     context_bar:
       pane_actions: Ações
       file:

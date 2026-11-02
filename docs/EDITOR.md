@@ -142,6 +142,13 @@ off, a `WHERE` clause can be required for `DELETE`/`UPDATE`, and Redis
 `FLUSHALL`/`FLUSHDB` can be disabled entirely (in which case those commands are
 blocked rather than confirmed).
 
+On SQL Server a statement can start at any word, so a batch that opens with
+`SELECT` or `WITH` and holds more than a read, such as `SELECT 1 DELETE FROM t
+WHERE id = 1` or `SELECT 1 EXEC('...')`, also asks first, and the message names the
+word it found. **Don't ask again** on that message applies to this kind only, until
+you restart. On InfluxDB the check finds `DROP`, `ALTER` and a `DELETE` without a
+`WHERE` behind comments and in any statement of a batch.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/editor/dangerous-query-dark.webp">
   <img src="images/editor/dangerous-query-light.webp" alt="The dangerous-query confirmation for a DELETE without a WHERE clause">

@@ -159,14 +159,22 @@ Driver de InfluxDB para DBFlux.
   por defecto.
 - **Identidad del cliente** — cada request HTTP reporta `dbflux/<versión>` como
   header `User-Agent`, visible en los logs de request del lado del servidor.
-- **Detección de queries peligrosas sensible al dialecto** — `InfluxLanguageService`
+- **Detección de queries peligrosas sensible al dialecto**: `InfluxLanguageService`
   detecta si el texto es InfluxQL o Flux (Flux tiene forma de pipeline o empieza
-  con `import`) y marca `DROP DATABASE/MEASUREMENT/SERIES/RETENTION POLICY/SHARD`
-  y `DELETE` sin cláusula `WHERE` en InfluxQL, y llamadas a `delete()`/
-  `influxdb.delete()` en Flux, antes de ejecutar. `classify_execution` reporta
-  `SELECT`/`SHOW` como lectura y `DELETE`/`DROP`/`delete()` de Flux como
-  destructivo, para que las políticas de gobernanza vean el impacto real en vez
-  de una escritura genérica. `validate` es una verificación sintáctica básica
+  con `import` o una asignación), lee cada uno con sus propias reglas (comentarios,
+  cadenas y regex) y marca `DROP`, `ALTER` y `DELETE` sin cláusula `WHERE` en
+  cualquier sentencia de InfluxQL, y llamadas a `delete()`/`influxdb.delete()` en
+  Flux, antes de ejecutar. `classify_execution` reporta `SELECT` como lectura,
+  `SHOW` y `EXPLAIN` como metadatos, `SELECT ... INTO` de InfluxQL como escritura,
+  `CREATE`/`GRANT`/`REVOKE`/`SET`/`KILL` como administración y
+  `DELETE`/`DROP`/`ALTER`/`delete()` de Flux como destructivo. Un programa Flux es
+  escritura cuando llega a `to()`, `experimental.to()`, `influxdb.wideTo()`,
+  `sql.to()`, `sql.from()`, `kafka.to()`, `mqtt.to()`, `http.post()`, `requests.*`,
+  `slack.message()`, `pagerduty.sendEvent()`, `monitor.check()`, `monitor.notify()`
+  u otro miembro que escribe o envía una petición, con cualquier nombre, o importa
+  un paquete fuera de la biblioteca estándar de Flux. Una columna, clave o cadena
+  llamada `to` sigue siendo lectura. Lo que el análisis no puede ubicar se califica
+  hacia arriba. `validate` es una verificación sintáctica básica
   (paréntesis y comillas balanceados), no un parser completo.
 - **Sondeo de privilegio de escritura (solo v2)** — tras conectar, hace
   `GET /api/v2/authorizations` e inspecciona los permisos propios del token
@@ -188,9 +196,9 @@ Driver de InfluxDB para DBFlux.
   API de queries de solo lectura.
 - **Flux no soportado en v1** — intentar ejecutar una query Flux contra una
   conexión v1 devuelve un error de inmediato, sin realizar una llamada HTTP.
-- **Sin INSERT/UPDATE/DELETE** — la API de queries de InfluxDB es de solo
-  lectura. La ingesta de datos usa la Line Protocol write API, que este driver
-  no expone.
+- **Sin INSERT/UPDATE**: el driver no edita filas. La ingesta de datos usa la Line
+  Protocol write API, que este driver no expone. Una query sí puede escribir:
+  `SELECT ... INTO` y `DELETE` en InfluxQL, `to()` en Flux.
 - **Sin transacciones** — InfluxDB no soporta transacciones.
 - **InfluxQL requiere un bucket** — las queries InfluxQL incrustan el bucket en
   la URL (`?db=<bucket>`). Si ni el desplegable de source-context ni el valor

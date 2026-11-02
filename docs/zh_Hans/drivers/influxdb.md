@@ -78,7 +78,7 @@
 - **存储桶上的「新建查询」右键菜单** —— 右键点击存储桶/数据库节点会显示「新建查询」，打开一个已激活该连接的空白代码文档。
 - **读取模板生成** —— `InfluxQueryGenerator` 为 InfluxQL 与 Flux 生成「查询全部」以及按测量的读取模板（供右键菜单动作与「复制为查询」使用），并依据连接所配置的版本与默认存储桶感知版本差异。
 - **客户端身份** —— 每个 HTTP 请求都以 `dbflux/<version>` 作为 `User-Agent` 头，可在服务器端的请求日志中看到。
-- **感知方言的危险查询检测** —— `InfluxLanguageService` 会从查询文本判别是 InfluxQL 还是 Flux（Flux 呈管道形状，或以 `import` 开头），并在执行前标记出 InfluxQL 中的 `DROP DATABASE/MEASUREMENT/SERIES/RETENTION POLICY/SHARD`、不带 `WHERE` 子句的 `DELETE`，以及 Flux 中的 `delete()`/`influxdb.delete()` 调用。`classify_execution` 把 `SELECT`/`SHOW` 报告为读取，把 `DELETE`/`DROP` 与 Flux 的 `delete()` 报告为破坏性操作，因此治理策略看到的是准确的影响级别，而不是笼统的「写入」。`validate` 只是语法层面的健全性检查（括号与引号是否配平），并非完整的解析器。
+- **感知方言的危险查询检测**：`InfluxLanguageService` 会从查询文本判别是 InfluxQL 还是 Flux（Flux 呈管道形状，或以 `import` 或赋值开头），按各自的规则（注释、字符串、正则表达式）读取，并在执行前标记出任一语句中的 InfluxQL `DROP`、`ALTER`、不带 `WHERE` 子句的 `DELETE`，以及 Flux 中的 `delete()`/`influxdb.delete()` 调用。`classify_execution` 把 `SELECT` 报告为读取，把 `SHOW` 和 `EXPLAIN` 报告为元数据，把 InfluxQL 的 `SELECT ... INTO` 报告为写入，把 `CREATE`/`GRANT`/`REVOKE`/`SET`/`KILL` 报告为管理操作，把 `DELETE`/`DROP`/`ALTER` 与 Flux 的 `delete()` 报告为破坏性操作。Flux 程序只要以任何名称用到 `to()`、`experimental.to()`、`influxdb.wideTo()`、`sql.to()`、`sql.from()`、`kafka.to()`、`mqtt.to()`、`http.post()`、`requests.*`、`slack.message()`、`pagerduty.sendEvent()`、`monitor.check()`、`monitor.notify()` 或其他会写入或发送请求的成员，或导入 Flux 标准库之外的包，就报告为写入。名为 `to` 的列、键或字符串仍是读取。无法判断的内容按更高等级评定。`validate` 只是语法层面的健全性检查（括号与引号是否配平），并非完整的解析器。
 - **写入权限探测（仅 v2）** —— 连接后请求 `GET /api/v2/authorizations`，检查连接所用令牌自身的权限：`buckets` 上有任何 `write` 权限即判定为可写，只有 `read` 权限则判定为只读；请求失败或被拒绝时（令牌通常不具备 `read:authorizations`），解析出的变更策略保持不变。v1 没有等价的、按令牌作用域的 API，因此从不做探测。
 - **实例指标与检查器（仅 v2）** —— `InstanceCatalog` 的图表序列与表格快照来自服务器自身的 `GET /metrics` 端点（Prometheus 文本暴露格式），而不是 `_monitoring` 存储桶：`_monitoring` 存放的是由 Tasks 与 Checks 系统写入的告警检查/通知记录，在默认安装下是空的；`/metrics` 才是 InfluxDB 真正的遥测面。指标覆盖 Go 运行时内存、goroutine 与操作系统线程数、服务器运行时长与存储桶数量、BoltDB 的读写计数器，以及 HTTP API 的请求计数；跨标签组合拆分的 Prometheus 样本（例如按 handler/path/status 拆分的 `http_api_requests_total`）会被加总为每个指标的单一取值。对外提供两个检查器：`influx.health`（`GET /health` 的快照）与 `influx.metrics`（完整的 Prometheus 抓取结果，以名称/标签/取值构成的表格）。另有精选的 `DefaultInstanceDashboard` 把两者组合起来。
 
@@ -89,7 +89,7 @@
 - **不支持查询取消** —— `cancel()` 返回 `NotSupported`；进行中的查询无法从界面中止（未声明 `QUERY_CANCELLATION`）。
 - **不生成变更语句** —— `QueryGenerator::generate_mutation` 始终返回 `None`；只生成读取模板，这与只读的查询 API 一致。
 - **v1 不支持 Flux** —— 对 v1 连接运行 Flux 查询会立即返回错误，不会发出 HTTP 请求。
-- **不支持 INSERT/UPDATE/DELETE** —— InfluxDB 的查询 API 是只读的。数据写入使用的是 Line Protocol 写入 API，本驱动程序未暴露它。
+- **不支持 INSERT/UPDATE**：驱动程序没有行编辑功能。数据写入使用的是 Line Protocol 写入 API，本驱动程序未暴露它。查询仍然可以写入：InfluxQL 的 `SELECT ... INTO` 和 `DELETE`，以及 Flux 的 `to()`。
 - **不支持事务** —— InfluxDB 本身不支持事务。
 - **InfluxQL 需要一个存储桶** —— InfluxQL 查询把存储桶嵌在 URL 中（`?db=<bucket>`）。如果源上下文下拉框与配置默认值都没有提供存储桶，执行会被拒绝，并给出要求用户选择一个存储桶的明确错误。
 - **基于正则的时间谓词检测** —— 驱动程序使用正则表达式判断查询是否已包含时间谓词。当带引号的字符串字面量碰巧含有匹配 `time <`、`time >` 或 `|> range(` 的文本时，可能会误判。

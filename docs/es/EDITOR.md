@@ -153,6 +153,14 @@ para `DELETE`/`UPDATE`, y `FLUSHALL`/`FLUSHDB` de Redis se puede deshabilitar
 por completo (en cuyo caso esos comandos quedan bloqueados en lugar de
 confirmados).
 
+En SQL Server una sentencia puede empezar en cualquier palabra, así que un lote que
+abre con `SELECT` o `WITH` y contiene algo más que una lectura, como `SELECT 1
+DELETE FROM t WHERE id = 1` o `SELECT 1 EXEC('...')`, también pregunta primero, y el
+mensaje nombra la palabra encontrada. **No volver a preguntar** en ese mensaje solo
+afecta a este tipo, hasta que reinicies. En InfluxDB la comprobación encuentra
+`DROP`, `ALTER` y un `DELETE` sin `WHERE` detrás de comentarios y en cualquier
+sentencia de un lote.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/editor/dangerous-query-dark.webp">
   <img src="../images/editor/dangerous-query-light.webp" alt="La confirmación de query peligrosa para un DELETE sin cláusula WHERE">

@@ -359,8 +359,8 @@ These limitations are grounded in the current code, not assumptions:
   `AxisKind::Numeric` axis.
 - Columns with `ColumnKind::Unknown` are excluded from auto-detection entirely.
 - A chart refuses what the query classifier rates as a write, so it is only as
-  good as that classifier. On InfluxDB, `SELECT ... INTO` and Flux `to()` write but
-  rate as reads, and are not caught.
+  good as that classifier. It cannot see what a stored procedure or function does,
+  or a package that Flux adds after this version.
 - `Collection`-source saved charts cannot be opened as a `ChartDocument`; they
   re-open the underlying `DataDocument` in chart mode instead. Passing a
   `Collection` source to `ChartDocument::from_saved` returns an error.

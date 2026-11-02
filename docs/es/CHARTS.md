@@ -220,13 +220,17 @@ muestra "límite de filas alcanzado".
 
 Un gráfico ejecuta su query por sí solo, al abrirse y en cada refresco, así que
 acepta una sola sentencia que lea. Cada ejecución lo comprueba, incluidos los
-gráficos guardados y los paneles de dashboard, con el clasificador de queries
-cuando el lenguaje tiene uno (SQL, MongoDB, Redis y los drivers que clasifican su
-propio lenguaje) y con la comprobación de peligro del driver en caso contrario.
-Desde el editor, una sentencia rechazada o un límite de transacción recibe un aviso
-y no abre ningún gráfico. Un gráfico abierto que se rechaza muestra el motivo en su
-área y deja de refrescarse, también cuando el perfil de la conexión pasó a solo
-lectura después de guardar el gráfico.
+gráficos guardados y los paneles de dashboard, en el lenguaje en que está escrita
+la query: el del modo de query cuando el driver tiene modos (el predeterminado de
+una conexión CloudWatch es Logs Insights) o, si no, el de la conexión. Decide el
+clasificador de queries cuando el lenguaje tiene uno (SQL, MongoDB, Redis y los
+drivers que clasifican su propio lenguaje) y, en caso contrario, la comprobación de
+peligro del driver. Desde el editor, una sentencia rechazada o un límite de
+transacción recibe un aviso y no abre ningún gráfico. Un gráfico abierto que se
+rechaza muestra el motivo en su área, también cuando el perfil de la conexión pasó
+a solo lectura después de guardar el gráfico. Una pestaña de gráfico deja entonces
+de refrescarse. Un panel de dashboard muestra el motivo con un solo aviso, y el
+dashboard sigue refrescando sus demás paneles.
 
 ### Chart this query
 

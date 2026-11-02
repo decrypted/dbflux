@@ -208,12 +208,15 @@ toast says so and the toolbar's point count shows "row limit reached".
 
 A chart runs its query on its own, on opening and on every refresh, so it takes
 one statement that reads. Every run checks this, saved charts and dashboard panels
-included, with the query classifier where the language has one (SQL, MongoDB,
-Redis and the drivers that classify their own language) and the driver's danger
-check otherwise. From the editor, a refused statement or a transaction boundary
-gets a notice and opens no chart. An open chart that is refused shows the reason
-in its area and stops auto-refreshing, also when the connection's profile turned
-read-only after the chart was saved.
+included, in the language the query is written in: the query mode's when the
+driver has modes (a CloudWatch connection's default is Logs Insights), otherwise
+the connection's. The query classifier decides where the language has one (SQL,
+MongoDB, Redis and the drivers that classify their own language), and the driver's
+danger check otherwise. From the editor, a refused statement or a transaction
+boundary gets a notice and opens no chart. An open chart that is refused shows the
+reason in its area, also when the connection's profile turned read-only after the
+chart was saved. A chart tab then stops auto-refreshing. A dashboard panel shows
+the reason with one notice, and the dashboard goes on refreshing its other panels.
 
 ### Chart this query
 

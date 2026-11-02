@@ -303,6 +303,24 @@ fn escape_warns_once_before_closing_over_changed_settings(cx: &mut TestAppContex
     assert_eq!(answer_escape(&chart, window), EscapeClose::Close);
 }
 
+/// Save does not keep hidden series, so a warning offering to save them would
+/// be untrue; the Y scale it does keep counts.
+#[gpui::test]
+fn escape_warns_about_the_y_scale_but_not_hidden_series(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    window.simulate_keystrokes("space");
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Close);
+
+    let shell = window.update(|_, cx| chart.read(cx).chart_shell_for_test().clone());
+    window.update(|_, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_y_scale(dbflux_components::chart::YScale::Log, cx);
+        });
+    });
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Handled);
+}
+
 /// A key in between means the user went on working: the warning starts over.
 #[gpui::test]
 fn another_key_withdraws_the_escape_warning(cx: &mut TestAppContext) {

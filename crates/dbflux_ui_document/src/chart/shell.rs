@@ -592,6 +592,7 @@ impl ChartShell {
             && let Some(mut spec) = ChartSpec::from_manual_selection(manual, columns, 10_000)
         {
             spec.kind = self.chart_kind;
+            spec.y_scale = self.y_scale;
             return spec;
         }
 
@@ -601,6 +602,7 @@ impl ChartShell {
                 ChartSpec::from_detection(*time_col, self.chart_default_y.clone(), columns, 10_000)
         {
             spec.kind = self.chart_kind;
+            spec.y_scale = self.y_scale;
             return spec;
         }
 
@@ -618,7 +620,7 @@ impl ChartShell {
             decimation_threshold: 10_000,
             binding: self.active_bindings(),
             track_source_indices: false,
-            y_scale: dbflux_components::chart::YScale::Linear,
+            y_scale: self.y_scale,
         }
     }
 

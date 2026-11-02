@@ -136,7 +136,6 @@ struct ChartSettings {
     selection: Option<ManualChartSelection>,
     kind: ChartKind,
     y_scale: YScale,
-    hidden_series: Vec<usize>,
 }
 
 /// State for the name-prompt modal shown during Save.
@@ -531,12 +530,15 @@ impl ChartDocument {
             });
         }
         let kind = saved.chart_spec.kind;
-        doc.chart_shell
-            .update(cx, |shell, cx| shell.set_chart_kind(kind, cx));
+        let y_scale = saved.chart_spec.y_scale;
+        doc.chart_shell.update(cx, |shell, cx| {
+            shell.set_chart_kind(kind, cx);
+            shell.set_y_scale(y_scale, cx);
+        });
         doc.settings_baseline = ChartSettings {
             selection: doc.saved_selection.clone(),
             kind,
-            ..ChartSettings::default()
+            y_scale,
         };
 
         Ok(doc)
@@ -877,8 +879,6 @@ impl ChartDocument {
     /// The settings on screen, to compare against `settings_baseline`.
     fn current_settings(&self, cx: &App) -> ChartSettings {
         let shell = self.chart_shell.read(cx);
-        let mut hidden_series: Vec<usize> = shell.chart_hidden_series.iter().copied().collect();
-        hidden_series.sort_unstable();
 
         ChartSettings {
             selection: shell
@@ -887,7 +887,6 @@ impl ChartDocument {
                 .or_else(|| self.saved_selection.clone()),
             kind: shell.chart_kind(),
             y_scale: shell.y_scale(),
-            hidden_series,
         }
     }
 
@@ -896,8 +895,9 @@ impl ChartDocument {
     /// picker, or the samples only this session collected.
     ///
     /// A chart with its default settings is safe: it opens again from its
-    /// query or from the saved list. The time range and the refresh interval
-    /// do not count, since Save does not keep them either.
+    /// query or from the saved list. The time range, the refresh interval and
+    /// hidden series do not count: Save does not keep them either, so a warning
+    /// offering to save them would be untrue.
     fn closing_loses_work(&self, cx: &App) -> bool {
         let collected_samples = self.data_source.is_accumulating()
             && self

@@ -5,7 +5,7 @@ use crate::chart_document::ChartDocument;
 use crate::data_grid_panel::DataGridEvent;
 use crate::handle::DocumentEvent;
 use crate::keyboard_test_support::init_keyboard_runtime;
-use dbflux_components::chart::{BindingSpec, ChartKind, ChartSpec};
+use dbflux_components::chart::{BindingSpec, ChartKind, ChartSpec, YScale};
 use dbflux_components::controls::InputPosition;
 use dbflux_components::saved_chart::SavedChart;
 use dbflux_core::{
@@ -758,6 +758,7 @@ fn a_saved_chart_reopens_with_its_columns_and_kind(cx: &mut TestAppContext) {
                 .clone()
                 .update(cx, |shell, cx| {
                     shell.set_chart_kind(ChartKind::Bar, cx);
+                    shell.set_y_scale(YScale::Log, cx);
                 });
         });
 
@@ -791,5 +792,11 @@ fn a_saved_chart_reopens_with_its_columns_and_kind(cx: &mut TestAppContext) {
             .window
             .update(|_, cx| reopened.read(cx).chart_kind(cx)),
         ChartKind::Bar
+    );
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| reopened.read(cx).chart_shell_for_test().read(cx).y_scale()),
+        YScale::Log
     );
 }

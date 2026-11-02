@@ -134,16 +134,28 @@ pub fn classify_sql_execution(sql: &str) -> ExecutionClassification {
 /// whenever one is available, so driver-owned dialects (`InfluxQuery`, `Flux`,
 /// `Custom(_)`, `MongoQuery`, and the CloudWatch/OpenSearch trio) are
 /// classified by the driver instead of a conservative default. `None`
-/// preserves the language-keyed fallback classification for those dialects —
+/// preserves the language-keyed fallback classification for those dialects:
 /// for `MongoQuery` that fallback is the pre-existing core text heuristic
-/// (`classify_mongo_query`), unchanged. `Sql` and `RedisCommands` always use
-/// the shared core heuristic regardless of `service`.
+/// (`classify_mongo_query`), unchanged. `Sql` uses the shared core heuristic,
+/// which `service` can only make stricter, so it matters on a SQL Server
+/// connection. `RedisCommands` always uses the shared core heuristic.
 pub fn classify_query_for_governance(
     query_language: &QueryLanguage,
     query: &str,
     service: Option<&dyn LanguageService>,
 ) -> ExecutionClassification {
     classify_query_for_language_with_service(query_language, query, service)
+}
+
+/// Whether `sql` opens with the `EXPLAIN` keyword in any dialect's reading of
+/// its leading comments.
+pub fn starts_with_explain(sql: &str) -> bool {
+    DIALECT_RULES.iter().any(|rules| {
+        skip_leading_symbols(&tokenize(sql, rules))
+            .first()
+            .and_then(Token::word)
+            == Some("EXPLAIN")
+    })
 }
 
 pub fn is_safe_read_query(sql: &str) -> bool {
@@ -300,7 +312,13 @@ fn classify_procedure_call(tokens: &[Token]) -> ExecutionClassification {
         .filter_map(Token::word)
         .last();
 
-    match procedure {
+    classify_procedure_name(procedure)
+}
+
+/// The class of a call to the procedure `name`, uppercased and without its
+/// qualifiers; `None` when the name is not plain text.
+pub(super) fn classify_procedure_name(name: Option<&str>) -> ExecutionClassification {
+    match name {
         Some(name)
             if name.starts_with("XP_")
                 || matches!(
@@ -329,7 +347,7 @@ fn classify_procedure_call(tokens: &[Token]) -> ExecutionClassification {
 /// Read-only transactions do not stop most of these (PostgreSQL still runs
 /// `pg_terminate_backend` and `dblink_exec` inside `BEGIN READ ONLY`), so the
 /// classifier has to.
-fn side_effecting_function(name: &str) -> Option<ExecutionClassification> {
+pub(super) fn side_effecting_function(name: &str) -> Option<ExecutionClassification> {
     use ExecutionClassification::{Admin, Write};
 
     let class = match name {
@@ -756,7 +774,9 @@ fn tokenize(sql: &str, rules: &LexRules) -> Vec<Token> {
             }
 
             ScanState::LineComment => {
-                if current == '\n' {
+                // PostgreSQL and SQL Server also end it at `\r`, and classification
+                // keeps what any dialect reads as code.
+                if matches!(current, '\n' | '\r') {
                     state = ScanState::Normal;
                 }
 
@@ -827,6 +847,38 @@ mod tests {
         classify_query_for_governance, classify_sql_execution, contains_compound_block,
         is_safe_read_query,
     };
+
+    /// A dialect that ends a line comment at `\r` reads what follows as code, so
+    /// a statement cannot hide behind one.
+    #[test]
+    fn a_carriage_return_ends_a_line_comment() {
+        assert_eq!(
+            classify_sql_execution("SELECT 1 -- c\r; DELETE FROM t"),
+            ExecutionClassification::Write
+        );
+        assert_eq!(
+            classify_sql_execution("SELECT 1 -- c\rDELETE FROM t"),
+            ExecutionClassification::Write
+        );
+        assert_eq!(
+            classify_sql_execution("SELECT 1 -- DELETE FROM t"),
+            ExecutionClassification::Read
+        );
+    }
+
+    /// The first keyword is all the shared heuristic has for these, and other
+    /// dialects need it to stay that way.
+    #[test]
+    fn the_shared_rating_of_an_explain_is_untouched_by_the_tsql_one() {
+        assert_eq!(
+            classify_sql_execution("EXPLAIN DELETE FROM t"),
+            ExecutionClassification::Metadata
+        );
+        assert_eq!(
+            classify_query_for_governance(&QueryLanguage::Sql, "EXPLAIN DELETE FROM t", None),
+            ExecutionClassification::Metadata
+        );
+    }
 
     #[test]
     fn allows_basic_read_queries() {

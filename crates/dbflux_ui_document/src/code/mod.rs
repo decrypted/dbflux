@@ -70,6 +70,7 @@ mod diagnostics;
 mod execution;
 pub(crate) use execution::chart_refusal;
 mod execution_session;
+mod explain;
 mod file_ops;
 mod file_persistence;
 mod focus;
@@ -645,6 +646,8 @@ struct PendingQueryResult {
     result_grid: Option<gpui::EntityId>,
     /// Where the query ran; `None` for a script.
     origin: Option<ResultOrigin>,
+    /// Whether `query` was run or only planned.
+    run: explain::StatementRun,
 }
 
 pub(super) struct ActiveQueryTask {

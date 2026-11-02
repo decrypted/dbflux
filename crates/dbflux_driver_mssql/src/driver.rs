@@ -15,9 +15,9 @@ use dbflux_core::{
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DdlRejection, DeploymentClass, DescribeRequest, DocumentConnection,
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest,
-    ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
-    FormSection, FormTab, FormValues, FormattedError, Icon, IdentitySpec, IndexData, IndexInfo,
-    InstanceCatalog, IsolationLevel, KeyValueConnection, MetadataCompleteness,
+    ExecutionSourceContext, ExplainFormat, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo,
+    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IdentitySpec, IndexData,
+    IndexInfo, InstanceCatalog, IsolationLevel, KeyValueConnection, MetadataCompleteness,
     MissingCreationMetadata, MutationCapabilities, PaginationStyle, PlaceholderStyle,
     PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryHandle,
     QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
@@ -1744,6 +1744,36 @@ fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
     }
 }
 
+/// Runs one batch on `client` and reads all of its result sets.
+async fn run_collected_batch(
+    client: &mut TiberiusClient,
+    sql: String,
+) -> Result<Vec<CollectedSet>, DbError> {
+    let mut stream = client
+        .simple_query(sql)
+        .await
+        .map_err(|e| format_mssql_query_error(&e))?;
+
+    collect_result_sets(&mut stream, &mut None).await
+}
+
+/// One table of what `SET SHOWPLAN_TEXT ON` returned, in batch order. It sends
+/// the statement text and its plan as separate result sets with the same
+/// single column, which only read as a plan together.
+fn build_text_plan(collected: Vec<CollectedSet>, total_time: std::time::Duration) -> QueryResult {
+    let mut columns = Vec::new();
+    let mut rows = Vec::new();
+
+    for set in collected {
+        if columns.is_empty() {
+            columns = set.columns;
+        }
+        rows.extend(set.rows);
+    }
+
+    QueryResult::table(columns, rows, None, total_time)
+}
+
 /// Splits a list of result sets into a primary `QueryResult` plus additional
 /// sets, mirroring the multi-result-set contract on
 /// `QueryResult::additional_results`.
@@ -1965,6 +1995,16 @@ impl Connection for MssqlConnection {
         }
         // SQL Server has no read-only transaction mode to apply per request.
         req.refuse_read_only_enforcement("SQL Server")?;
+
+        // T-SQL reads an unknown first word as a call to a procedure of that
+        // name and the rest as the next statement: the call fails, the batch
+        // goes on, and `DESCRIBE x DELETE ...` deletes. On a writable profile
+        // nothing else stops it, since no prompt looks past the first keyword.
+        if dbflux_core::tsql_batch_has_implicit_call(&req.sql) {
+            return Err(DbError::NotSupported(
+                "SQL Server has no EXPLAIN, DESCRIBE or SHOW statement, and the text after one would run; use Explain for a plan, or EXEC to call a procedure of that name. The request was rejected before execution".to_string(),
+            ));
+        }
 
         if req.limit.is_some()
             && let Some(source) = req
@@ -3080,12 +3120,12 @@ impl Connection for MssqlConnection {
     }
 
     fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
-        // SQL Server requires SET SHOWPLAN_XML to be the only statement in
-        // its batch, so we run three separate batches: turn it on, run the
-        // query (which compiles but does not execute, returning the plan
-        // as a single nvarchar(max) row), then turn it off. We unset
-        // SHOWPLAN even if the middle batch fails so the session state
-        // does not leak.
+        // SQL Server requires SET SHOWPLAN to be the only statement in its
+        // batch, so three separate batches run: turn it on, run the query
+        // (which compiles but does not execute, returning the plan), turn it
+        // off. The client stays locked across them: any other request on this
+        // session while SHOWPLAN is on would be planned instead of run and
+        // would still report success.
 
         // Mirror `execute()`'s poison/cleanup pattern: a prior cancel may
         // have left the underlying tiberius client dead. Without this an
@@ -3093,6 +3133,10 @@ impl Connection for MssqlConnection {
         // surface a protocol-level error instead of triggering reconnect.
         if self.poisoned.load(Ordering::SeqCst) {
             self.cleanup_after_cancel()?;
+        }
+
+        if let Some(database) = request.database.as_deref() {
+            self.set_active_database(Some(database))?;
         }
 
         let query = match &request.query {
@@ -3103,21 +3147,56 @@ impl Connection for MssqlConnection {
             ),
         };
 
-        self.execute_simple("SET SHOWPLAN_XML ON")?;
-        let plan_result = self.execute_simple(&query);
+        let showplan = match request.format {
+            ExplainFormat::Structured => "SHOWPLAN_XML",
+            ExplainFormat::Readable => "SHOWPLAN_TEXT",
+        };
+
+        let start = Instant::now();
+        let as_cancelled = |error: DbError| {
+            if self.cancelled.load(Ordering::SeqCst) || is_kill_error(&error) {
+                DbError::Cancelled
+            } else {
+                error
+            }
+        };
+
+        let (plan_batch, off_batch) = self
+            .with_client(|runtime, client| {
+                runtime.block_on(async move {
+                    run_collected_batch(client, format!("SET {showplan} ON")).await?;
+                    let plan_batch = run_collected_batch(client, query).await;
+                    let off_batch =
+                        run_collected_batch(client, format!("SET {showplan} OFF")).await;
+                    Ok((plan_batch, off_batch))
+                })
+            })
+            .map_err(as_cancelled)?;
+
         // If the cleanup batch fails, every subsequent query on this session
-        // keeps returning XML plan rows instead of real data (SHOWPLAN is
+        // keeps returning plan rows instead of real data (SHOWPLAN is
         // session-scoped). Mark the connection poisoned so the next
         // `execute()` rebuilds the tiberius client via `cleanup_after_cancel`,
         // which starts a fresh session with SHOWPLAN off.
-        if let Err(off_err) = self.execute_simple("SET SHOWPLAN_XML OFF") {
+        if let Err(off_err) = off_batch {
             log::error!(
-                "[EXPLAIN] SET SHOWPLAN_XML OFF failed, poisoning session: {}",
+                "[EXPLAIN] SET {} OFF failed, poisoning session: {}",
+                showplan,
                 off_err
             );
             self.poisoned.store(true, Ordering::SeqCst);
         }
-        plan_result
+
+        let collected = plan_batch.map_err(as_cancelled)?;
+
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(DbError::Cancelled);
+        }
+
+        Ok(match request.format {
+            ExplainFormat::Structured => build_multi_result(collected, start.elapsed()),
+            ExplainFormat::Readable => build_text_plan(collected, start.elapsed()),
+        })
     }
 
     fn dialect(&self) -> &dyn SqlDialect {

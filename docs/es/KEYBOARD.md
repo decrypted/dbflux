@@ -343,7 +343,7 @@ tecla líder escribe como siempre.
 |--------|--------|
 | `Leader a` | Abre el menú de acciones del panel, como `Shift+F10` |
 | `Leader r` | Ejecuta la consulta |
-| `Leader e` | Explica la consulta (editor de código) |
+| `Leader e` | Muestra el plan de la selección o de la sentencia bajo el cursor, sin ejecutarla (editor de código) |
 | `Leader s` | Guarda |
 | `Leader f` | Abre el panel de búsqueda del editor, como `/` |
 | `Leader h` / `Leader l` | Pestaña anterior / siguiente del panel, como `Alt+h` / `Alt+l` |

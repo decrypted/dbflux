@@ -1390,6 +1390,7 @@ document:
       formatter_unavailable: Formateador no disponible
       query_history: Historial de consultas
       explain_query: Explicar consulta
+      explain_tooltip: Muestra el plan de la selección o de la sentencia bajo el cursor, sin ejecutarla
       open_in_chart: Abrir la consulta actual en un documento de gráfico
       run_in_new_tab: Ejecutar en una pestaña nueva
       auto_refresh_interval: "Intervalo de actualización automática…"
@@ -1419,6 +1420,7 @@ document:
       truncated: "(truncado a %{limit} líneas)"
     result:
       statement_lines: "Sentencia L%{start}–%{end}"
+      explain_caption: Explain
       search_placeholder: Buscar en los resultados
       count:
         one: "%{count} resultado"
@@ -1527,8 +1529,11 @@ document:
         no_active_connection: No hay ninguna conexión activa
         connection_not_found: Conexión no encontrada
         auto_refresh_blocked: "Actualización automática bloqueada: la consulta modifica datos"
-        explain_unavailable: Explain no está disponible para scripts
+        explain_unavailable: Explain solo está disponible para SQL
         enter_query_to_explain: Escribe una consulta para analizar con Explain
+        explain_several_statements: "Selecciona una sola sentencia para explicar: esta selección contiene %{count}. No se envió nada."
+        explain_would_execute: "Esto ejecutaría la sentencia: EXPLAIN ANALYZE ejecuta lo que explica. Explain solo planifica, así que usa Ejecutar para ello."
+        explain_transaction_control: "Esta sentencia solo abre o termina una transacción y no tiene plan que mostrar."
         enter_script_content: Escribe contenido del script para ejecutar
         write_query_first: Escribe primero una consulta para abrirla en una gráfica
         chart_not_a_query: "Esta sentencia no devuelve filas que dibujar. Pon el cursor en una consulta o selecciona una."
@@ -1539,6 +1544,7 @@ document:
         read_only_profile: "El perfil de esta conexión está configurado como solo lectura. Aquí solo se ejecutan sentencias que leen datos."
       result_title:
         query_failed: Consulta fallida
+        explain_failed: No se pudo explicar la sentencia
         script_failed: Script fallido
       task:
         run_script: "Ejecutar script %{name}"

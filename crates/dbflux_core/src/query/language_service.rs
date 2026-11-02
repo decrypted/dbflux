@@ -298,8 +298,11 @@ pub fn classify_query_for_language(
 /// Classify a query's execution impact, optionally delegating driver-owned
 /// languages to the driver's own [`LanguageService`].
 ///
-/// `Sql` and `RedisCommands` have a shared heuristic in core and are
-/// classified directly from the language, ignoring `service`. `MongoQuery`
+/// `RedisCommands` has a shared heuristic in core and is classified directly
+/// from the language, ignoring `service`. `Sql` has one too, written for what
+/// its dialects share, and a driver whose dialect runs more than that text
+/// suggests rates it through `service`: the stricter class wins, so a driver
+/// can raise the shared rating and never lower it. `MongoQuery`
 /// consults `service.classify_execution` first — this is how a mongosh-style
 /// script's dispatch-boundary classification (computed method names, ops
 /// reached only inside a loop or conditional) reaches governance instead of
@@ -320,7 +323,13 @@ pub fn classify_query_for_language_with_service(
     service: Option<&dyn LanguageService>,
 ) -> ExecutionClassification {
     match query_language {
-        QueryLanguage::Sql => classify_sql_execution(query),
+        QueryLanguage::Sql => {
+            let shared = classify_sql_execution(query);
+
+            service
+                .and_then(|service| service.classify_execution(query))
+                .map_or(shared, |driver| shared.max(driver))
+        }
 
         // These languages are fixed (non-`Custom`) variants, but like `Custom`
         // they are driver-owned dialects with no shared heuristic in core. A
@@ -2680,20 +2689,53 @@ END $$;"#;
         );
     }
 
+    /// A SQL dialect can run more than the shared rating sees, so its service
+    /// may raise the class. It can never lower it, and without one nothing
+    /// changes.
     #[test]
-    fn sql_variant_is_unaffected_by_service_delegation() {
-        // Sql keeps its own core heuristic and never consults the service,
-        // even when one is supplied and would otherwise classify this query
-        // as Destructive.
-        let service = DestructiveOnDropService;
+    fn a_sql_service_raises_the_shared_rating_and_never_lowers_it() {
+        struct MetadataService;
+        impl LanguageService for MetadataService {
+            fn validate(&self, _query: &str) -> ValidationResult {
+                ValidationResult::Valid
+            }
+            fn detect_dangerous(&self, _query: &str) -> Option<DangerousQueryKind> {
+                None
+            }
+            fn classify_execution(&self, _query: &str) -> Option<ExecutionClassification> {
+                Some(ExecutionClassification::Metadata)
+            }
+        }
+
+        let read = "SELECT * FROM t WHERE note = 'DROP'";
 
         assert_eq!(
             classify_query_for_language_with_service(
                 &QueryLanguage::Sql,
-                "SELECT * FROM t WHERE note = 'DROP'",
-                Some(&service),
+                read,
+                Some(&DestructiveOnDropService),
+            ),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(&QueryLanguage::Sql, read, None),
+            ExecutionClassification::Read
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::Sql,
+                read,
+                Some(&NeverOverridesService),
             ),
             ExecutionClassification::Read
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::Sql,
+                "DELETE FROM t",
+                Some(&MetadataService),
+            ),
+            ExecutionClassification::Write
         );
     }
 

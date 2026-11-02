@@ -693,3 +693,60 @@ fn clickhouse_table_views_read_metadata_partitions_estimates_and_samples() -> Re
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn clickhouse_plan_only_explain_runs_nothing() -> Result<(), DbError> {
+    containers::with_clickhouse(|config| {
+        let connection = connect(&config)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE dbflux_live_explain (id UInt64) ENGINE = MergeTree ORDER BY id",
+        ))?;
+        let _cleanup = TableCleanup {
+            connection: connection.as_ref(),
+            table: "dbflux_live_explain",
+        };
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO dbflux_live_explain VALUES (1), (2)",
+        ))?;
+        let rows = |connection: &dyn Connection| -> Result<usize, DbError> {
+            Ok(connection
+                .execute(&QueryRequest::new("SELECT id FROM dbflux_live_explain"))?
+                .rows
+                .len())
+        };
+
+        let plan = dbflux_core::explain_plan_only(
+            connection.as_ref(),
+            &QueryRequest::new("SELECT id FROM dbflux_live_explain"),
+        )?;
+        assert_eq!(plan.columns.len(), 1);
+        assert!(!plan.rows.is_empty());
+
+        // ClickHouse explains SELECT only, so the plan of a write is the server's
+        // refusal, and the row stays.
+        assert!(
+            dbflux_core::explain_plan_only(
+                connection.as_ref(),
+                &QueryRequest::new("INSERT INTO dbflux_live_explain SELECT 3"),
+            )
+            .is_err()
+        );
+        assert_eq!(rows(connection.as_ref())?, 2);
+
+        // Unlike SQL Server, where the batch goes on after the failed call,
+        // ClickHouse fails the whole statement.
+        for sql in [
+            "SHOW x INSERT INTO dbflux_live_explain SELECT 3",
+            "DESCRIBE x INSERT INTO dbflux_live_explain SELECT 3",
+        ] {
+            assert!(
+                connection.execute(&QueryRequest::new(sql)).is_err(),
+                "{sql}"
+            );
+            assert_eq!(rows(connection.as_ref())?, 2, "{sql}");
+        }
+
+        Ok(())
+    })
+}

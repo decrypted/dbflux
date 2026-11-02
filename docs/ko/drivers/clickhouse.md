@@ -32,6 +32,7 @@ HTTP를 통한 열 지향 분석 데이터베이스입니다.
 - 스키마 로딩은 데이터베이스별로 지연 수행되므로, 데이터베이스가 많은 서버도 연결 시점에 모든 데이터베이스에 대한 비용을 치르지 않습니다.
 - SQL은 수정 없이 HTTP로 전송됩니다. 기존 `offset` 요청 값은 HTTP URL 매개변수로 전송되며, 여기서는 서버에서의 동작을 보증하지 않습니다.
 - ClickHouse의 식별자와 리터럴 인용 규칙을 사용하는 읽기 전용 시각적 SELECT 생성.
+- 쿼리 계획(`Connection::explain`): `readonly = 2`로 `EXPLAIN <문>`을 실행하고 텍스트 줄로 표시합니다. ClickHouse는 문을 분석하는 동안 스칼라 서브쿼리를 평가하므로 계획이 데이터를 읽을 수 있습니다. ClickHouse는 `SELECT`만 설명하므로 쓰기 문의 계획은 서버가 거부합니다.
 - 쿼리 결과로 차트 작성, CSV 및 JSON 내보내기.
 - 모든 HTTP 요청은 `User-Agent` 헤더로 `dbflux/<version>`을 보고하며, 서버 측 요청 로그에서 확인할 수 있습니다.
 - 위험한 쿼리 감지는 공유 `SqlLanguageService`를 사용합니다(ClickHouse 전용 재정의 없음): `ALTER TABLE ... DELETE WHERE ...`와 `ALTER TABLE ... UPDATE ... WHERE ...`는 이미 `Alter`로 감지되고(하위 명령과 무관하게 `ALTER`로 시작하는 모든 문이 표시됨), `TRUNCATE`/`DROP`도 평소와 같이 감지됩니다. `KILL QUERY`/`KILL MUTATION`과 `OPTIMIZE TABLE ... FINAL`은 표시되지 않습니다 — 둘 다 행을 삭제하거나 테이블 구조를 변경하지 않습니다 — 이는 다른 관계형 드라이버가 유사한 비파괴적 관리 문을 다루는 방식과 일치합니다.

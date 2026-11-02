@@ -37,7 +37,7 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 - 不支持基于 IAM/SSO 的身份认证。仅支持用户名/密码（可选经 SSH 隧道）；Redshift 基于 IAM 的 `GetClusterCredentials` 与浏览器 SSO 流程均未实现。
 - 用于双向 TLS 的客户端证书必须以 PEM 证书加 PKCS#8 PEM 私钥的形式提供（两者配置为不同的文件路径）；不接受合并的 PKCS#12 包。根 CA / 客户端证书加载路径的 PEM 解析与错误处理由单元测试覆盖，但针对由私有 CA 前置或要求客户端证书的集群，端到端的 TLS 握手只由一个 `#[ignore]` 的真实集成测试（`redshift_live_verify_full_with_private_ca_and_client_cert`）验证，因为不存在本地或基于 Docker 的 Redshift 引擎。
 - 不支持 `COPY`/`UNLOAD`，也没有 Redshift 专属的数据传输/批量导出集成。
-- 没有查询计划可视化（不解析也不渲染 `EXPLAIN` 的输出）。
+- 查询计划来自 `EXPLAIN`（`Connection::explain`），以文本行显示。由于所有写操作都在线路层被拒绝，写操作的计划也会被拒绝，计划本身不解析也不绘制成树。尚未在真实集群上运行。
 - 没有实例指标与实例检查器（未声明 `INSTANCE_METRICS`/`INSTANCE_INSPECTOR`）。
 - 没有写入权限探测：`Connection::probe_write_privilege` 有意保持 trait 默认值（`WritePrivilege::Unknown`），因为该驱动程序已在线协议层拒绝所有变更语句，与所连角色的实际授权无关。
 - `SUPER`/`VARBYTE`/`GEOMETRY`/`GEOGRAPHY`/`HLLSKETCH` 所用的扩展类型 OID 取值，以及用于获取存储提示的 `SVV_TABLE_INFO`/`PG_TABLE_DEF` 查询形状，只由 `#[ignore]` 的真实集成测试（`crates/dbflux_driver_redshift/tests/live_integration.rs`）验证，因为不存在本地或基于 Docker 的 Redshift 引擎。可针对真实集群显式运行：`cargo nextest run -p dbflux_driver_redshift --run-ignored all`。

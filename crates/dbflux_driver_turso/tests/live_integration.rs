@@ -667,3 +667,47 @@ fn turso_test_connection_and_close() -> Result<(), DbError> {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires Docker daemon or TURSO_TEST_URL"]
+fn turso_plan_only_explain_runs_nothing() -> Result<(), DbError> {
+    containers::with_libsql_server(|url| {
+        let connection = connect(&url)?;
+        let table = unique_table("explain_write");
+        let _cleanup = TableCleanup {
+            connection: connection.as_ref(),
+            tables: vec![table.clone()],
+        };
+
+        connection.execute(&QueryRequest::new(format!(
+            "CREATE TABLE {table} (id INTEGER PRIMARY KEY)"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "INSERT INTO {table} (id) VALUES (1), (2)"
+        )))?;
+        let rows = |connection: &dyn Connection| -> Result<usize, DbError> {
+            Ok(connection
+                .execute(&QueryRequest::new(format!("SELECT id FROM {table}")))?
+                .rows
+                .len())
+        };
+
+        let plan = dbflux_core::explain_plan_only(
+            connection.as_ref(),
+            &QueryRequest::new(format!("DELETE FROM {table} WHERE id = 1")),
+        )?;
+        assert!(plan.columns.iter().any(|column| column.name == "detail"));
+        assert_eq!(rows(connection.as_ref())?, 2);
+
+        assert!(
+            dbflux_core::explain_plan_only(
+                connection.as_ref(),
+                &QueryRequest::new(format!("SELECT 1; DELETE FROM {table}")),
+            )
+            .is_err()
+        );
+        assert_eq!(rows(connection.as_ref())?, 2);
+
+        Ok(())
+    })
+}

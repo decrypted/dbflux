@@ -1,5 +1,6 @@
 use dbflux_core::{
-    DangerousQueryKind, EditorDiagnostic, LanguageService, ValidationResult, detect_dangerous_sql,
+    DangerousQueryKind, EditorDiagnostic, ExecutionClassification, LanguageService,
+    ValidationResult, classify_tsql_execution, detect_dangerous_sql,
 };
 
 /// Language service for T-SQL (Microsoft SQL Server).
@@ -12,6 +13,11 @@ use dbflux_core::{
 /// table hints like `WITH (NOLOCK)`, `OFFSET … ROWS FETCH NEXT … ROWS ONLY`,
 /// etc. The server is the source of truth for syntax validity; surfacing parser
 /// false-positives in the editor only adds noise.
+///
+/// It also raises the shared execution class: a T-SQL batch needs no `;` between
+/// statements and treats an unknown first word as a procedure call, so what looks
+/// like a read from its first keyword can hold a write
+/// ([`classify_tsql_execution`]).
 pub struct TSqlLanguageService;
 
 impl LanguageService for TSqlLanguageService {
@@ -26,11 +32,58 @@ impl LanguageService for TSqlLanguageService {
     fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
         Vec::new()
     }
+
+    fn classify_execution(&self, query: &str) -> Option<ExecutionClassification> {
+        Some(classify_tsql_execution(query))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::{QueryLanguage, classify_query_for_governance};
+
+    /// Read-only profiles and MCP ask this question, with this service.
+    #[test]
+    fn governance_refuses_what_sql_server_would_run_behind_a_read() {
+        let service = TSqlLanguageService;
+
+        for sql in [
+            "EXPLAIN DELETE FROM t WHERE id = 1",
+            "DESCRIBE x DELETE FROM t WHERE id = 1",
+            "SHOW x DELETE FROM t WHERE id = 1",
+            "SHOW x; DELETE FROM t WHERE id = 1",
+            "/* /* */ */ EXPLAIN DELETE FROM t WHERE id = 1",
+            "SELECT 1 EXEC('DELETE FROM t WHERE id = 1')",
+            "SELECT 1. EXEC('DELETE FROM t WHERE id = 1')",
+            "SELECT 1DELETE FROM t WHERE id = 1",
+            "SELECT 1 FROM # EXEC('DELETE FROM t WHERE id = 1')",
+            "SELECT 1--c\rEXEC('DELETE FROM t WHERE id = 1')",
+        ] {
+            assert!(
+                !matches!(
+                    classify_query_for_governance(&QueryLanguage::Sql, sql, Some(&service)),
+                    ExecutionClassification::Metadata | ExecutionClassification::Read
+                ),
+                "{sql}"
+            );
+        }
+
+        for sql in [
+            "SELECT TOP 1 * FROM t WITH (NOLOCK)",
+            "SELECT * FROM sys.fn_get_audit_file('x*.sqlaudit', DEFAULT, DEFAULT)",
+            "SELECT * FROM dbo.Conversation",
+            "SELECT c.Dialog FROM dbo.Chat c",
+            "SELECT * FROM dbo.Call",
+            "SELECT id AS Gehäuse FROM t",
+        ] {
+            assert_eq!(
+                classify_query_for_governance(&QueryLanguage::Sql, sql, Some(&service)),
+                ExecutionClassification::Read,
+                "{sql}"
+            );
+        }
+    }
 
     #[test]
     fn validate_returns_valid_for_any_input() {

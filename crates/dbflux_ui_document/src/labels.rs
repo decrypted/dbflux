@@ -4532,6 +4532,7 @@ mod tests {
             "document.code.toolbar.formatter_unavailable",
             "document.code.toolbar.query_history",
             "document.code.toolbar.explain_query",
+            "document.code.toolbar.explain_tooltip",
             "document.code.toolbar.open_in_chart",
             "document.code.output.running",
             "document.code.output.stopped",

@@ -78,6 +78,48 @@ lo hace.
 
 Cuando la ejecución omite filas efectivamente, el editor muestra una advertencia por consulta y la cuadrícula señala el conjunto de resultados afectado, aunque no se haya conservado ninguna fila. Un resultado que alcanza exactamente el límite sin omitir filas no genera la advertencia. Un límite de filas conservadas solo restringe las filas almacenadas; los límites de bytes y tiempo son controles de ejecución independientes. Esto no implica que el editor tenga un límite de filas predeterminado.
 
+### Explicar una sentencia
+
+**Explain** muestra cómo ejecutaría la base de datos una sentencia, sin
+ejecutarla. Es el botón de información de la barra de acciones del editor, la
+entrada Explain del menú de acciones del panel y del menú contextual del editor,
+y el comando **Explain query** de la paleta; `Leader e` en el modo Normal de Vim.
+
+Planifica lo que ejecutaría una ejecución: la selección o, sin ella, la sentencia
+bajo el cursor, según las reglas anteriores. Una selección de varias sentencias se
+rechaza con un mensaje y no se envía nada, porque ningún plan único la responde, y
+lo mismo ocurre con un buffer con un bloque compuesto. Una sentencia que solo abre
+o cierra una transacción no tiene plan que mostrar.
+
+El plan viene del driver y la sentencia nunca se ejecuta, así que una escritura se
+planifica sin confirmación, también en una conexión de solo lectura. Dos bases de
+datos muestran el motivo en lugar del plan de una escritura: Redshift, cuyas conexiones
+de DBFlux solo ejecutan lecturas, y ClickHouse, que solo explica `SELECT`.
+
+| Base de datos | Pide el plan con |
+|---|---|
+| PostgreSQL, MySQL, MariaDB, DuckDB, Redshift, ClickHouse | `EXPLAIN` |
+| SQLite, Turso | `EXPLAIN QUERY PLAN` |
+| SQL Server | `SET SHOWPLAN_TEXT ON` |
+
+No se usa `ANALYZE`, que ejecutaría la sentencia. Una sentencia que ya escribiste
+como `EXPLAIN`, por ejemplo `EXPLAIN (COSTS OFF) SELECT ...`, se ejecuta tal cual.
+Una que ejecutaría lo que explica, como `EXPLAIN ANALYZE ...`, se rechaza: usa Run
+para ella. SQL Server no tiene sentencias `EXPLAIN`, `DESCRIBE` ni `SHOW`: leería la
+palabra como una llamada a un procedimiento y luego ejecutaría el resto del lote, así
+que rechaza una sentencia que empiece por una de ellas, y una conexión de solo lectura
+o MCP valoran ese texto por todo lo que contiene. ClickHouse evalúa las subconsultas escalares
+mientras planifica, así que allí un plan puede leer datos.
+
+Explain se ofrece solo para SQL. En una conexión cuyo driver no tiene explain lo
+indica y no envía nada. El resultado lleva el título **Explain** seguido del título
+de la sentencia. Un plan hecho de líneas de texto, o con una celda de muchas líneas,
+se abre en la vista Text con su sangría intacta; un plan que es una tabla real, como
+en MySQL y SQLite, se abre en la cuadrícula. El historial de queries guarda la
+sentencia bajo un comentario `-- Explain (plan only)`. Al elegirla allí se carga en el
+editor, donde Explain la vuelve a planificar; Run la ejecutaría, con las comprobaciones
+de siempre.
+
 ## Scripts multi-statement
 
 Para ejecutar varias sentencias como script, selecciónalas (`Ctrl+A`

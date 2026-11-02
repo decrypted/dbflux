@@ -210,3 +210,43 @@ fn script_run_requires_runnable_lifecycle() {
     let result = handler.run_script(&engine, "agent-a", "conn-a", script.id);
     assert!(matches!(result, Err(ScriptHandlerError::NotRunnable)));
 }
+
+/// On SQL Server a statement can follow the first word with no `;`, so the
+/// driver's service sees writes the shared SQL rating cannot. `read_query`
+/// must take its word for it, and a service can never lower the rating.
+#[test]
+fn a_sql_drivers_service_raises_the_rating_of_read_query_and_never_lowers_it() {
+    let engine = allow_engine("read_query", ExecutionClassification::Read);
+    let service = DestructiveOverrideLanguageService;
+    let request = |query: &str| QueryExecutionRequest {
+        actor_id: "agent-a".to_string(),
+        connection_id: "conn-a".to_string(),
+        tool_id: "read_query".to_string(),
+        query_language: QueryLanguage::Sql,
+        query: query.to_string(),
+    };
+
+    assert!(matches!(
+        handle_query_tool(&request("SELECT 1"), Some(&service), &engine),
+        Err(QueryHandlerError::PolicyDenied)
+    ));
+    assert!(handle_query_tool(&request("SELECT 1"), None, &engine).is_ok());
+
+    struct LenientService;
+    impl LanguageService for LenientService {
+        fn validate(&self, _query: &str) -> ValidationResult {
+            ValidationResult::Valid
+        }
+        fn detect_dangerous(&self, _query: &str) -> Option<DangerousQueryKind> {
+            None
+        }
+        fn classify_execution(&self, _query: &str) -> Option<ExecutionClassification> {
+            Some(ExecutionClassification::Metadata)
+        }
+    }
+
+    assert!(matches!(
+        handle_query_tool(&request("DELETE FROM t"), Some(&LenientService), &engine),
+        Err(QueryHandlerError::PolicyDenied)
+    ));
+}

@@ -1544,3 +1544,19 @@ fn database_category_variants_keep_their_postcard_indices() {
         assert_eq!(decoded, category);
     }
 }
+
+/// External drivers built against an older protocol read this positionally,
+/// so what the console adds to a request must not reach the wire.
+#[test]
+fn explain_format_and_database_stay_off_the_wire() {
+    let plain = ExplainRequest::new(TableRef::new("users")).with_query("SELECT 1");
+    let console = plain
+        .clone()
+        .with_format(dbflux_core::ExplainFormat::Readable)
+        .with_database(Some("db".to_string()));
+
+    assert_eq!(
+        postcard::to_allocvec(&plain).expect("encode"),
+        postcard::to_allocvec(&console).expect("encode"),
+    );
+}

@@ -193,8 +193,18 @@ Requires the `VIEW SERVER STATE` permission.
 ### Query planning
 
 - `explain()` runs the query under `SET SHOWPLAN_XML ON` and returns the
-  query plan as XML. The driver always runs `SET SHOWPLAN_XML OFF` afterward
-  so session state does not leak.
+  query plan as XML, or under `SET SHOWPLAN_TEXT ON` as text lines when the
+  request asks for the readable form. The driver always turns SHOWPLAN off
+  afterward so session state does not leak, and holds the session across the
+  three batches so no other request is planned instead of run.
+- `execute()` refuses a statement that starts with `EXPLAIN`, `DESC`, `DESCRIBE` or
+  `SHOW`. SQL Server has no such statements: it reads the word as a call to a
+  procedure and, when the call fails, runs the rest of the batch. Use `EXEC` to call
+  a procedure of that name.
+- `TSqlLanguageService` rates a batch by all of its words, since a statement needs
+  no `;` before it, so a read-only profile and MCP refuse a write that follows a
+  read keyword. A writable profile still runs `SELECT 1 DELETE FROM t`, as SQL
+  Server does, and no confirmation looks past the first keyword.
 - `version_query()` returns `SELECT @@VERSION`.
 
 ### Dialect

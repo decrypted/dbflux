@@ -1411,6 +1411,47 @@ mod tests {
             .unwrap()
     }
 
+    /// DuckDB prepares what it is given and executes every statement but the
+    /// last while doing so, so a plain `explain` of two statements would run
+    /// the first prefixed and the second for real.
+    #[test]
+    fn plan_only_explain_runs_nothing() {
+        let connection = connect();
+        connection
+            .execute(&QueryRequest::new(
+                "CREATE TABLE explain_write AS SELECT * FROM range(2) t(id)",
+            ))
+            .unwrap();
+        let rows = |connection: &dyn Connection| {
+            connection
+                .execute(&QueryRequest::new("SELECT id FROM explain_write"))
+                .unwrap()
+                .rows
+                .len()
+        };
+
+        let plan = dbflux_core::explain_plan_only(
+            connection.as_ref(),
+            &QueryRequest::new("DELETE FROM explain_write"),
+        )
+        .unwrap();
+        assert!(!plan.rows.is_empty());
+        assert_eq!(rows(connection.as_ref()), 2);
+
+        for statement in [
+            "SELECT 1; DELETE FROM explain_write",
+            "ANALYZE DELETE FROM explain_write",
+            "(ANALYZE) DELETE FROM explain_write",
+        ] {
+            assert!(
+                dbflux_core::explain_plan_only(connection.as_ref(), &QueryRequest::new(statement),)
+                    .is_err(),
+                "{statement}"
+            );
+            assert_eq!(rows(connection.as_ref()), 2, "{statement}");
+        }
+    }
+
     /// The version probe must stay byte-for-byte identical while the trait
     /// default moves to `Result`. DuckDB runs locally, no server needed.
     #[test]

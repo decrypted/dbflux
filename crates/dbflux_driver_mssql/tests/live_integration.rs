@@ -751,6 +751,231 @@ fn mssql_explain_returns_xml_plan() -> Result<(), DbError> {
     })
 }
 
+/// SHOWPLAN compiles without running, for a write and for several statements
+/// in one batch, and the readable form is the plan as one table of text lines.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_plan_only_explain_reads_as_text_and_runs_nothing() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new("CREATE TABLE explain_test (id INT)"))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO explain_test (id) VALUES (1), (2)",
+        ))?;
+        let rows = |connection: &dyn Connection| -> Result<usize, DbError> {
+            Ok(connection
+                .execute(&QueryRequest::new("SELECT id FROM explain_test"))?
+                .rows
+                .len())
+        };
+
+        let plan = dbflux_core::explain_plan_only(
+            &*connection,
+            &QueryRequest::new("DELETE FROM explain_test WHERE id = 1"),
+        )?;
+        assert_eq!(plan.columns.len(), 1);
+        assert_eq!(plan.columns[0].name, "StmtText");
+        assert!(plan.rows.len() > 1, "the statement, then its plan");
+        assert!(!plan.has_additional_results());
+        assert_eq!(rows(&*connection)?, 2);
+
+        // The splitter sees one statement here; T-SQL sees two.
+        dbflux_core::explain_plan_only(
+            &*connection,
+            &QueryRequest::new("SELECT 1 DELETE FROM explain_test"),
+        )?;
+        assert_eq!(rows(&*connection)?, 2);
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+/// T-SQL reads an unknown first word as a procedure call, carries on after it
+/// fails and runs the rest of the batch. Run, and the checks a read-only
+/// profile and MCP make, must all keep the row.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_keeps_the_row_behind_a_word_it_would_call() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new("CREATE TABLE explain_test (id INT)"))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO explain_test (id) VALUES (1), (2)",
+        ))?;
+        let rows = |connection: &dyn Connection| -> Result<usize, DbError> {
+            Ok(connection
+                .execute(&QueryRequest::new("SELECT id FROM explain_test"))?
+                .rows
+                .len())
+        };
+        let delete = "DELETE FROM explain_test WHERE id = 1";
+
+        for sql in [
+            format!("EXPLAIN {delete}"),
+            format!("DESCRIBE {delete}"),
+            format!("DESCRIBE x {delete}"),
+            format!("DESC x {delete}"),
+            format!("SHOW {delete}"),
+            format!("SHOW x {delete}"),
+            format!("SHOW x; {delete}"),
+            format!("/* /* */ */ EXPLAIN {delete}"),
+            format!("-- why\nEXPLAIN {delete}"),
+            format!("SELECT 1; EXPLAIN {delete}"),
+        ] {
+            let class = dbflux_core::classify_query_for_governance(
+                &dbflux_core::QueryLanguage::Sql,
+                &sql,
+                Some(connection.language_service()),
+            );
+            assert!(
+                !matches!(
+                    class,
+                    dbflux_core::ExecutionClassification::Metadata
+                        | dbflux_core::ExecutionClassification::Read
+                ),
+                "{sql}: {class:?}"
+            );
+
+            let refused = connection.execute(&QueryRequest::new(sql.clone()));
+            assert!(matches!(refused, Err(DbError::NotSupported(_))), "{sql}");
+            assert_eq!(rows(&*connection)?, 2, "{sql}");
+        }
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+/// These ran a write on a real server while the rating saw a read. The rating
+/// has to keep up with what the server's tokenizer accepts, so this checks both:
+/// the row goes, and a read-only profile or MCP would have refused it.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_rating_refuses_what_the_server_runs() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+        connection.execute(&QueryRequest::new("CREATE TABLE # (a INT)"))?;
+
+        let delete = "DELETE FROM explain_test WHERE id = 1";
+        let exec = format!("EXEC('{delete}')");
+
+        for sql in [
+            format!("SELECT 1. {exec}"),
+            format!("SELECT 1.e5{exec}"),
+            format!("SELECT 1e5{exec}"),
+            format!("SELECT $1.{exec}"),
+            format!("SELECT $1{exec}"),
+            format!("SELECT $.5{exec}"),
+            format!("SELECT 1E{exec}"),
+            format!("SELECT 1{delete}"),
+            format!("SELECT $1{delete}"),
+            format!("SELECT 1e5{delete}"),
+            format!("SELECT .5{delete}"),
+            format!("SELECT 'a'{exec}"),
+            format!("SELECT 1 [a]{exec}"),
+            format!("SELECT 1--c\r{exec}"),
+            format!("SELECT 1./*c*/{exec}"),
+            format!("SELECT 1. --c\n{exec}"),
+            format!("SELECT 1 FROM # {exec}"),
+            format!("SELECT 1. EXECUTE('{delete}')"),
+            format!("SELECT 1.{}{exec}", '\u{00A0}'),
+            format!("SELECT 1{}{exec}", '\u{200B}'),
+        ] {
+            connection.execute(&QueryRequest::new(
+                "DROP TABLE IF EXISTS explain_test; CREATE TABLE explain_test (id INT); \
+                 INSERT INTO explain_test (id) VALUES (1), (2)",
+            ))?;
+
+            let class = dbflux_core::classify_query_for_governance(
+                &dbflux_core::QueryLanguage::Sql,
+                &sql,
+                Some(connection.language_service()),
+            );
+            assert!(
+                !matches!(
+                    class,
+                    dbflux_core::ExecutionClassification::Metadata
+                        | dbflux_core::ExecutionClassification::Read
+                ),
+                "{sql:?}: {class:?}"
+            );
+
+            connection.execute(&QueryRequest::new(sql.clone()))?;
+            let remaining =
+                connection.execute(&QueryRequest::new("SELECT id FROM explain_test"))?;
+            assert_eq!(remaining.rows.len(), 1, "the server ran {sql:?}");
+        }
+
+        connection.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS Conversation; \
+             CREATE TABLE Conversation (id INT, dialog INT, send INT, receive INT, conversation INT)",
+        ))?;
+
+        for sql in [
+            "SELECT id FROM explain_test OPTION (USE HINT('ENABLE_PARALLEL_PLAN_PREFERENCE'))",
+            "SELECT id FROM explain_test OPTION (RECOMPILE, USE HINT('DISABLE_TSQL_SCALAR_UDF_INLINING'))",
+            "SELECT * FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, DEFAULT)",
+            "SELECT * FROM dbo.Conversation",
+            "SELECT c.dialog, c.send, c.receive, c.conversation FROM dbo.Conversation c",
+            "SELECT receive FROM Conversation",
+            "SELECT id receive FROM Conversation",
+            "SELECT CASE WHEN 1 = 1 THEN 1 END conversation",
+        ] {
+            assert_eq!(
+                dbflux_core::classify_query_for_governance(
+                    &dbflux_core::QueryLanguage::Sql,
+                    sql,
+                    Some(connection.language_service()),
+                ),
+                dbflux_core::ExecutionClassification::Read,
+                "{sql}"
+            );
+            connection.execute(&QueryRequest::new(sql))?;
+        }
+
+        // The server parses this one with no `;` before it, and only fails on the
+        // handle at run time, so a real handle would end the conversation.
+        let end_conversation = "SELECT 1 END CONVERSATION 'x'";
+        assert_eq!(
+            dbflux_core::classify_query_for_governance(
+                &dbflux_core::QueryLanguage::Sql,
+                end_conversation,
+                Some(connection.language_service()),
+            ),
+            dbflux_core::ExecutionClassification::Write
+        );
+        let refused = connection
+            .execute(&QueryRequest::new(end_conversation))
+            .expect_err("no such conversation");
+        assert!(
+            refused.to_string().contains("Conversion failed"),
+            "{refused}"
+        );
+
+        // These need a `;` before them, unlike every reserved word.
+        for sql in [
+            "SELECT 1 RECEIVE * FROM explain_test",
+            "SELECT 1 SEND ON CONVERSATION 'x'",
+            "SELECT 1 GET CONVERSATION GROUP 'x' FROM explain_test",
+        ] {
+            let refused = connection
+                .execute(&QueryRequest::new(sql))
+                .expect_err("does not compile");
+            assert!(refused.to_string().contains("syntax"), "{sql}: {refused}");
+        }
+
+        connection.execute(&QueryRequest::new("DROP TABLE Conversation"))?;
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Describe
 // ---------------------------------------------------------------------------

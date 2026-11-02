@@ -70,18 +70,39 @@ impl ExecutionSessionBinding {
 
     /// Runs `request` unless `cancel_token` is cancelled before it reaches the
     /// driver, in which case it returns `None` without running it.
-    ///
-    /// The statement can wait here for the slot (another statement of the same
-    /// document is still running) or for the session to open. The editor is
-    /// released as soon as its task is cancelled, so the token is checked
-    /// after each wait and right before the driver call. A session opened
-    /// during the wait stays installed for the next statement.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the closure returns the driver's own error unchanged"
+    )]
     pub(crate) fn execute_unless_cancelled(
         &self,
         root: Arc<dyn Connection>,
         database: Option<String>,
         request: &QueryRequest,
         cancel_token: &CancelToken,
+    ) -> Option<SessionExecution> {
+        self.run_unless_cancelled(root, database, &request.sql, cancel_token, |connection| {
+            connection.execute(request)
+        })
+    }
+
+    /// Calls `operation` for the statement `sql` with the connection the
+    /// editor runs on, the session's when the driver offers one, unless
+    /// `cancel_token` is cancelled before it reaches the driver, in which case
+    /// it returns `None` without calling it.
+    ///
+    /// The statement can wait here for the slot (another statement of the same
+    /// document is still running) or for the session to open. The editor is
+    /// released as soon as its task is cancelled, so the token is checked
+    /// after each wait and right before the driver call. A session opened
+    /// during the wait stays installed for the next statement.
+    pub(crate) fn run_unless_cancelled(
+        &self,
+        root: Arc<dyn Connection>,
+        database: Option<String>,
+        sql: &str,
+        cancel_token: &CancelToken,
+        operation: impl FnOnce(&dyn Connection) -> Result<QueryResult, DbError>,
     ) -> Option<SessionExecution> {
         let generation = self.generation.load(Ordering::Acquire);
         let mut slot = match self.slot.lock() {
@@ -95,13 +116,13 @@ impl ExecutionSessionBinding {
 
         let Some(factory) = root.execution_session_factory() else {
             return Some(SessionExecution {
-                result: root.execute(request),
+                result: operation(root.as_ref()),
                 isolated: false,
             });
         };
 
         if matches!(
-            classify_sql_transaction_control(&request.sql),
+            classify_sql_transaction_control(sql),
             TransactionControl::Unsupported
         ) {
             return Some(failure(
@@ -187,7 +208,7 @@ impl ExecutionSessionBinding {
             return None;
         }
 
-        let result = session.connection().execute(request);
+        let result = operation(session.connection().as_ref());
 
         if generation != self.generation.load(Ordering::Acquire) || session.is_closed() {
             let stale = match std::mem::replace(&mut *slot, SessionSlot::Closed { generation }) {
@@ -834,6 +855,29 @@ mod tests {
 
         assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
         assert_eq!(isolated.queries.load(Ordering::SeqCst), 4);
+    }
+
+    /// A plan has to see what the statement would: the session's temp tables
+    /// and open transaction, on the session's connection.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "the closure returns the driver's own error unchanged"
+    )]
+    fn an_operation_runs_on_the_session_rather_than_the_root() {
+        let (root, factory, isolated) = factory_backed_root();
+        let binding = ExecutionSessionBinding::new();
+
+        let execution = binding
+            .run_unless_cancelled(root, None, "SELECT 1", &CancelToken::new(), |connection| {
+                connection.execute(&QueryRequest::new("EXPLAIN SELECT 1"))
+            })
+            .expect("not cancelled");
+
+        assert!(execution.result.is_ok());
+        assert!(execution.isolated);
+        assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(isolated.queries.load(Ordering::SeqCst), 1);
     }
 
     #[test]

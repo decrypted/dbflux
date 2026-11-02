@@ -3935,6 +3935,7 @@ dependencies = [
  "dbflux_delimited",
  "dbflux_driver_mongodb",
  "dbflux_driver_mssql",
+ "dbflux_driver_sqlite",
  "dbflux_export",
  "dbflux_i18n",
  "dbflux_mcp",

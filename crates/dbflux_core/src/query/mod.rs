@@ -1,5 +1,6 @@
 pub(crate) mod column_kind;
 pub(crate) mod document_query;
+pub(crate) mod explain;
 pub(crate) mod generator;
 pub(crate) mod join_condition;
 pub(crate) mod keyset;
@@ -14,6 +15,7 @@ pub(crate) mod sql_context;
 pub(crate) mod table_browser;
 pub(crate) mod time_macros;
 pub(crate) mod transfer;
+pub(crate) mod tsql_safety;
 pub(crate) mod tx_vocab;
 pub(crate) mod types;
 pub(crate) mod visual_query;
@@ -27,6 +29,7 @@ pub use document_query::{
     DocumentSortDirection, DocumentSortKey, DocumentSpecProblem, DocumentValue,
     UnrepresentableClause,
 };
+pub use explain::{explain_plan_only, is_plan_only_explain};
 pub use generator::{
     CollectionTemplateRequest, CreateTableSpec, GeneratedMutation, GeneratedQuery, GeneratorError,
     MutationCategory, MutationTemplateOperation, MutationTemplateRequest, QueryGenError,
@@ -50,7 +53,7 @@ pub use name_suggestion::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, sugge
 pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
 pub use safety::{
     classify_query_for_governance, classify_sql_execution, contains_compound_block,
-    is_safe_read_query,
+    is_safe_read_query, starts_with_explain,
 };
 pub use script_operation::{
     ScriptMethod, ScriptOperation, ScriptOperationCounts, ScriptOperationHost,
@@ -68,11 +71,12 @@ pub use sql_context::{
 };
 pub use table_browser::{
     CollectionBrowseRequest, CollectionCountEstimate, CollectionCountRequest, CollectionRef,
-    ColumnRef, DescribeRequest, ExplainRequest, OrderByColumn, Pagination, SortDirection,
-    TableBrowseRequest, TableCountRequest, TableRef,
+    ColumnRef, DescribeRequest, ExplainFormat, ExplainRequest, OrderByColumn, Pagination,
+    SortDirection, TableBrowseRequest, TableCountRequest, TableRef,
 };
 pub use time_macros::{contains_time_macros, substitute_time_macros};
 pub use transfer::TransferColumn;
+pub use tsql_safety::{classify_tsql_execution, tsql_batch_has_implicit_call};
 pub use tx_vocab::TransactionVocab;
 pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,

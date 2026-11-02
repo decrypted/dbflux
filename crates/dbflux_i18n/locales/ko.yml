@@ -1390,6 +1390,7 @@ document:
       formatter_unavailable: 포매터를 사용할 수 없음
       query_history: 쿼리 기록
       explain_query: 쿼리 실행 계획
+      explain_tooltip: 선택 영역이나 커서 아래 문의 계획을 실행하지 않고 보여 줍니다
       open_in_chart: 현재 쿼리를 차트 문서에서 열기
       run_in_new_tab: 새 탭에서 실행
       auto_refresh_interval: "자동 새로고침 간격…"
@@ -1419,6 +1420,7 @@ document:
       truncated: "(%{limit}줄에서 잘림)"
     result:
       statement_lines: "문 L%{start}–%{end}"
+      explain_caption: Explain
       search_placeholder: 결과에서 검색
       count:
         one: "결과 %{count}개"
@@ -1527,8 +1529,11 @@ document:
         no_active_connection: 활성 연결이 없습니다
         connection_not_found: 연결을 찾을 수 없습니다
         auto_refresh_blocked: "자동 새로고침이 차단되었습니다: 쿼리가 데이터를 변경합니다"
-        explain_unavailable: 스크립트에는 Explain을 사용할 수 없습니다
+        explain_unavailable: Explain은 SQL에서만 사용할 수 있습니다
         enter_query_to_explain: 실행 계획을 볼 쿼리를 입력하세요
+        explain_several_statements: "실행 계획을 볼 문을 하나만 선택하세요. 이 선택에는 %{count}개의 문이 있습니다. 아무것도 전송되지 않았습니다."
+        explain_would_execute: "이 문이 실행됩니다. EXPLAIN ANALYZE는 설명하는 문을 실행합니다. Explain은 계획만 보여 주므로 실행하려면 실행을 사용하세요."
+        explain_transaction_control: "이 문은 트랜잭션을 시작하거나 끝내기만 하므로 보여 줄 계획이 없습니다."
         enter_script_content: 실행할 스크립트 내용을 입력하세요
         write_query_first: 차트로 열려면 먼저 쿼리를 작성하세요
         chart_not_a_query: "이 문은 차트로 그릴 행을 반환하지 않습니다. 커서를 쿼리에 두거나 쿼리를 선택하세요."
@@ -1539,6 +1544,7 @@ document:
         read_only_profile: "이 연결의 프로필이 읽기 전용으로 설정되어 있습니다. 여기서는 데이터를 읽는 문만 실행됩니다."
       result_title:
         query_failed: 쿼리 실패
+        explain_failed: 문의 실행 계획을 가져오지 못했습니다
         script_failed: 스크립트 실패
       task:
         run_script: "%{name} 스크립트 실행"

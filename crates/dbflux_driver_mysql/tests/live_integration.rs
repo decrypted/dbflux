@@ -451,6 +451,53 @@ fn mysql_explain() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn mysql_plan_only_explain_reads_as_a_table_and_runs_nothing() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE explain_write (id INT PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO explain_write (id) VALUES (1), (2)",
+        ))?;
+        let rows = |connection: &dyn dbflux_core::Connection| -> Result<usize, DbError> {
+            Ok(connection
+                .execute(&QueryRequest::new("SELECT id FROM explain_write"))?
+                .rows
+                .len())
+        };
+
+        let plan = dbflux_core::explain_plan_only(
+            &*connection,
+            &QueryRequest::new("DELETE FROM explain_write WHERE id = 1"),
+        )?;
+        assert!(
+            plan.columns.len() > 1,
+            "the table form, not one JSON cell: {:?} {:?}",
+            plan.columns,
+            plan.rows
+        );
+        assert_eq!(rows(&*connection)?, 2);
+
+        for statement in [
+            "SELECT 1; DELETE FROM explain_write",
+            "ANALYZE DELETE FROM explain_write",
+        ] {
+            assert!(
+                dbflux_core::explain_plan_only(&*connection, &QueryRequest::new(statement))
+                    .is_err(),
+                "{statement}"
+            );
+            assert_eq!(rows(&*connection)?, 2, "{statement}");
+        }
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn mysql_describe_table() -> Result<(), DbError> {
     containers::with_mysql_url(|uri| {
         let (connection, _) = connect_mysql(uri)?;

@@ -1390,6 +1390,7 @@ document:
       formatter_unavailable: 格式化程序不可用
       query_history: 查询历史
       explain_query: 解释查询
+      explain_tooltip: 显示选区或光标所在语句的计划，而不运行它
       open_in_chart: 在图表文档中打开当前查询
       run_in_new_tab: 在新标签页中运行
       auto_refresh_interval: 自动刷新间隔…
@@ -1419,6 +1420,7 @@ document:
       truncated: "（在 %{limit} 行处截断）"
     result:
       statement_lines: "语句 L%{start}–%{end}"
+      explain_caption: Explain
       search_placeholder: 在结果中搜索
       count:
         one: "%{count} 个结果"
@@ -1527,8 +1529,11 @@ document:
         no_active_connection: 无活动连接
         connection_not_found: 未找到连接
         auto_refresh_blocked: 已阻止自动刷新：查询会修改数据
-        explain_unavailable: 脚本不支持 Explain
+        explain_unavailable: Explain 仅适用于 SQL
         enter_query_to_explain: 输入要解释的查询
+        explain_several_statements: "请只选择一条语句来解释：此选区包含 %{count} 条语句。未发送任何内容。"
+        explain_would_execute: "这会运行该语句：EXPLAIN ANALYZE 会执行它所解释的语句。Explain 只生成计划，如需执行请使用运行。"
+        explain_transaction_control: "此语句只是开始或结束事务，没有可显示的计划。"
         enter_script_content: 输入要执行的脚本内容
         write_query_first: 请先编写查询才能在图表中打开
         chart_not_a_query: "此语句不返回可绘制的行。请将光标放在查询上或选中一个查询。"
@@ -1539,6 +1544,7 @@ document:
         read_only_profile: "此连接的配置文件设为只读。此处只执行读取数据的语句。"
       result_title:
         query_failed: 查询失败
+        explain_failed: 无法解释该语句
         script_failed: 脚本失败
       task:
         run_script: "执行 %{name} 脚本"

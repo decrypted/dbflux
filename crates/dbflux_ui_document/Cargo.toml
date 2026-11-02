@@ -62,6 +62,7 @@ dbflux_components = { workspace = true, features = ["test-support"] }
 dbflux_ui_base = { workspace = true, features = ["test-support"] }
 dbflux_driver_mssql = { workspace = true }
 dbflux_driver_mongodb = { workspace = true }
+dbflux_driver_sqlite = { workspace = true }
 dbflux_test_support = { workspace = true }
 flate2.workspace = true
 rmp-serde.workspace = true

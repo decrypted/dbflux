@@ -292,13 +292,15 @@ fn fallback_explain_classification(
     };
 
     let language = &connection.metadata().query_language;
-    let text = if *language == QueryLanguage::Sql {
-        format!("EXPLAIN {query}")
-    } else {
-        query.to_string()
-    };
 
-    classify_query_for_governance(language, &text, Some(connection.language_service()))
+    // The prefixed SQL is only what the check reads, not what every driver
+    // sends: SQL Server plans through SHOWPLAN, and its own service rightly
+    // rates a real `EXPLAIN ...` as a write. So that service stays out of it.
+    if *language == QueryLanguage::Sql {
+        return classify_query_for_governance(language, &format!("EXPLAIN {query}"), None);
+    }
+
+    classify_query_for_governance(language, query, Some(connection.language_service()))
 }
 
 /// Runs a planned explain. A plan classified `Read` executes its statement
@@ -671,6 +673,22 @@ mod tests {
         .expect_err("driver language service must be consulted and reject the preview");
 
         assert!(error.contains("non-read-only preview query"));
+    }
+
+    /// SQL Server's service rates a real `EXPLAIN ...` as a write, which it is
+    /// there. Its explain is SHOWPLAN, so that must not refuse the plan.
+    #[tokio::test]
+    async fn a_sql_drivers_rating_of_the_prefix_does_not_refuse_its_own_explain() {
+        let connection =
+            Arc::new(TestConnection::new(None, true).with_destructive_language_service());
+
+        DbFluxServer::run_explain_request(
+            connection,
+            ExplainRequest::new(TableRef::new("t")).with_query("SELECT 1"),
+            "Explain",
+        )
+        .await
+        .expect("the driver's own explain runs");
     }
 
     #[tokio::test]

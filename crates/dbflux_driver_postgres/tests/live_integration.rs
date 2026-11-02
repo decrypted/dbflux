@@ -962,6 +962,48 @@ fn postgres_explain() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn postgres_plan_only_explain_reads_as_text_and_runs_nothing() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE explain_write AS SELECT generate_series(1, 2) AS id",
+        ))?;
+        let rows = |connection: &dyn dbflux_core::Connection| -> Result<usize, DbError> {
+            Ok(connection
+                .execute(&QueryRequest::new("SELECT id FROM explain_write"))?
+                .rows
+                .len())
+        };
+
+        let plan = dbflux_core::explain_plan_only(
+            &*connection,
+            &QueryRequest::new("DELETE FROM explain_write"),
+        )?;
+        assert_eq!(plan.columns.len(), 1);
+        assert_eq!(plan.columns[0].name, "QUERY PLAN");
+        assert!(plan.rows.len() > 1, "text lines, not one JSON cell");
+        assert_eq!(rows(&*connection)?, 2);
+
+        for statement in [
+            "SELECT 1; DELETE FROM explain_write",
+            "ANALYZE DELETE FROM explain_write",
+            "(ANALYZE) DELETE FROM explain_write",
+        ] {
+            assert!(
+                dbflux_core::explain_plan_only(&*connection, &QueryRequest::new(statement))
+                    .is_err(),
+                "{statement}"
+            );
+            assert_eq!(rows(&*connection)?, 2, "{statement}");
+        }
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn postgres_describe_table() -> Result<(), DbError> {
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;

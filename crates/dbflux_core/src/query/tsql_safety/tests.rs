@@ -92,7 +92,22 @@ fn other_writes_rate_by_what_they_do() {
         ("SELECT 1 IF 1 = 1 PRINT 'x'", Write),
         ("SELECT 1 WAITFOR DELAY '00:01'", Write),
         ("SELECT 1 COMMIT", Write),
-        ("SELECT 1 {call dbo.p}", Write),
+        ("SELECT 1 INSERT t DEFAULT VALUES", Write),
+        ("SELECT 1 UPDATE t SET a = DEFAULT", Write),
+        ("SELECT 1 END CONVERSATION @h", Write),
+        ("SELECT 1 END CONVERSATION 'x'", Write),
+        ("SELECT 1. END CONVERSATION @h WITH CLEANUP", Write),
+        ("RECEIVE * FROM q", Write),
+        ("RECEIVE TOP (1) * FROM q", Write),
+        ("SELECT 1; RECEIVE * FROM q", Write),
+        ("SELECT 1 /* c */ ; /* c */ SEND ON CONVERSATION @h", Write),
+        ("SEND ON CONVERSATION @h", Write),
+        ("SELECT 1; MOVE CONVERSATION @h TO @g", Write),
+        ("SELECT 1; GET CONVERSATION GROUP @g FROM q", Write),
+        (
+            "SELECT 1 BEGIN DIALOG @h FROM SERVICE a TO SERVICE 'b'",
+            Write,
+        ),
         ("SELECT 1; EXPLAIN DELETE FROM t", Write),
         ("EXPLAIN SELECT 1", Write),
         ("/* /* */ */ EXPLAIN SELECT 1", Write),
@@ -113,8 +128,6 @@ fn other_writes_rate_by_what_they_do() {
 #[test]
 fn what_cannot_be_told_rates_up() {
     for sql in [
-        "SELECT 1 x\u{0345}KILL 55",
-        "SELECT 1 \u{0661}KILL 55",
         "SELECT 'unterminated",
         "SELECT [unterminated",
         "SELECT 1 /* unterminated",
@@ -171,6 +184,37 @@ fn reads_stay_reads() {
         "SELECT * FROM t OPTION (RECOMPILE,/*c*/use--c\nhint('X'))",
         "SELECT * FROM t OPTION (USE PLAN N'<x/>')",
         "SELECT 1 EXPLAIN, 2 SHOW",
+        // `DEFAULT` as a value.
+        "SELECT dbo.f(DEFAULT)",
+        "SELECT * FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, DEFAULT)",
+        "SELECT * FROM sys.fn_get_audit_file('x*.sqlaudit', DEFAULT, DEFAULT)",
+        // Unreserved words as names, each of which runs on a real server.
+        "SELECT * FROM dbo.Conversation",
+        "SELECT * FROM Conversation",
+        "SELECT * FROM Dialog",
+        "SELECT * FROM Send",
+        "SELECT * FROM Receive",
+        "SELECT c.dialog, c.send, c.receive, c.conversation FROM dbo.t c",
+        "SELECT send FROM t",
+        "SELECT receive FROM t",
+        "SELECT dialog FROM t",
+        "SELECT conversation FROM t",
+        "SELECT id, receive FROM t",
+        "SELECT receive, id FROM t",
+        "SELECT id receive FROM t",
+        "SELECT 1 AS receive",
+        "SELECT 1 receive",
+        "SELECT receive * 2 FROM t",
+        "SELECT id FROM t WHERE receive = 1",
+        "SELECT id FROM t receive WHERE id = 1",
+        "SELECT a.id FROM t a JOIN u send ON a.id = send.id",
+        "SELECT id FROM t ORDER BY receive",
+        "SELECT CASE WHEN 1 = 1 THEN 1 END conversation",
+        "SELECT CASE WHEN 1 = 1 THEN 1 END conversation FROM t",
+        "SELECT CASE WHEN 1 = 1 THEN 1 END conversation, 2 FROM t",
+        // Letters and marks stay in the identifier on a real server.
+        "SELECT id AS Gehäuse FROM t",
+        "SELECT id AS Procédure FROM Dossier",
     ] {
         assert_eq!(classify_tsql_execution(sql), Read, "{sql:?}");
     }
@@ -222,4 +266,29 @@ fn the_implicit_call_is_found_in_any_statement_behind_any_comment() {
     ] {
         assert!(!tsql_batch_has_implicit_call(sql), "{sql:?}");
     }
+}
+
+/// What the shared rating adds for words this pass leaves as names. A name the
+/// two cannot tell from a statement stays refused, as it was before this module.
+#[test]
+fn a_bare_name_the_shared_rating_reads_as_a_keyword_stays_refused() {
+    use crate::{QueryLanguage, classify_query_for_language_with_service};
+
+    for sql in ["SELECT call FROM t", "SELECT * FROM Call"] {
+        assert_eq!(classify_tsql_execution(sql), Read, "{sql}");
+        assert_eq!(
+            classify_query_for_language_with_service(&QueryLanguage::Sql, sql, None),
+            Write,
+            "{sql}"
+        );
+    }
+
+    assert_eq!(
+        classify_query_for_language_with_service(
+            &QueryLanguage::Sql,
+            "SELECT * FROM dbo.Call",
+            None
+        ),
+        Read
+    );
 }

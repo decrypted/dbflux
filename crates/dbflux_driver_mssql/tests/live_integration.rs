@@ -912,9 +912,20 @@ fn mssql_rating_refuses_what_the_server_runs() -> Result<(), DbError> {
             assert_eq!(remaining.rows.len(), 1, "the server ran {sql:?}");
         }
 
+        connection.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS Conversation; \
+             CREATE TABLE Conversation (id INT, dialog INT, send INT, receive INT, conversation INT)",
+        ))?;
+
         for sql in [
             "SELECT id FROM explain_test OPTION (USE HINT('ENABLE_PARALLEL_PLAN_PREFERENCE'))",
             "SELECT id FROM explain_test OPTION (RECOMPILE, USE HINT('DISABLE_TSQL_SCALAR_UDF_INLINING'))",
+            "SELECT * FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, DEFAULT)",
+            "SELECT * FROM dbo.Conversation",
+            "SELECT c.dialog, c.send, c.receive, c.conversation FROM dbo.Conversation c",
+            "SELECT receive FROM Conversation",
+            "SELECT id receive FROM Conversation",
+            "SELECT CASE WHEN 1 = 1 THEN 1 END conversation",
         ] {
             assert_eq!(
                 dbflux_core::classify_query_for_governance(
@@ -928,6 +939,38 @@ fn mssql_rating_refuses_what_the_server_runs() -> Result<(), DbError> {
             connection.execute(&QueryRequest::new(sql))?;
         }
 
+        // The server parses this one with no `;` before it, and only fails on the
+        // handle at run time, so a real handle would end the conversation.
+        let end_conversation = "SELECT 1 END CONVERSATION 'x'";
+        assert_eq!(
+            dbflux_core::classify_query_for_governance(
+                &dbflux_core::QueryLanguage::Sql,
+                end_conversation,
+                Some(connection.language_service()),
+            ),
+            dbflux_core::ExecutionClassification::Write
+        );
+        let refused = connection
+            .execute(&QueryRequest::new(end_conversation))
+            .expect_err("no such conversation");
+        assert!(
+            refused.to_string().contains("Conversion failed"),
+            "{refused}"
+        );
+
+        // These need a `;` before them, unlike every reserved word.
+        for sql in [
+            "SELECT 1 RECEIVE * FROM explain_test",
+            "SELECT 1 SEND ON CONVERSATION 'x'",
+            "SELECT 1 GET CONVERSATION GROUP 'x' FROM explain_test",
+        ] {
+            let refused = connection
+                .execute(&QueryRequest::new(sql))
+                .expect_err("does not compile");
+            assert!(refused.to_string().contains("syntax"), "{sql}: {refused}");
+        }
+
+        connection.execute(&QueryRequest::new("DROP TABLE Conversation"))?;
         cleanup_test_tables(&*connection);
         Ok(())
     })

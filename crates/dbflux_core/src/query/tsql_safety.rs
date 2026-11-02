@@ -9,11 +9,12 @@
 //! - An unknown first word is a call to a procedure of that name, and when the
 //!   call fails the batch goes on, so `DESCRIBE x DELETE FROM t` deletes.
 //!
-//! So this lexes by T-SQL's own rules and rates by every word. It is built to
-//! fail closed: a word it cannot place rates up, and only reserved words known
-//! to belong in a read are let through. It is lexical, not a parser, and cannot
-//! see what a called procedure or function does, so a database role without
-//! write privileges stays the real boundary.
+//! So this lexes by T-SQL's own rules and rates by every word. What it rates up:
+//! the reserved words outside the read grammar, wherever they appear, the
+//! statement forms of a few unreserved words, and text with no end. Any other
+//! word passes, as it is a name or an alias in a read. It is lexical, not a
+//! parser, and cannot see what a called procedure or function does, so a
+//! database role without write privileges stays the real boundary.
 
 use dbflux_policy::ExecutionClassification;
 
@@ -47,19 +48,9 @@ fn ends_line_comment(character: char) -> bool {
     )
 }
 
-/// Pushes the word of `chars`. A non-ASCII character in it may be one the server
-/// splits words at, as it does at U+200B, so each ASCII run counts as well.
 fn push_word(chars: &[char], lexemes: &mut Vec<Lexeme>) {
     let word: String = chars.iter().collect();
     lexemes.push(Lexeme::Word(word.to_uppercase()));
-
-    if !word.is_ascii() {
-        for piece in word.split(|character: char| !character.is_ascii()) {
-            if !piece.is_empty() {
-                lexemes.push(Lexeme::Word(piece.to_uppercase()));
-            }
-        }
-    }
 }
 
 fn lex(sql: &str) -> Lexed {
@@ -250,6 +241,67 @@ fn opens_with_implicit_call(lexemes: &[Lexeme]) -> bool {
         .is_some_and(|lexeme| matches!(lexeme, Lexeme::Word(word) if is_implicit_call_word(word)))
 }
 
+/// Whether `lexemes` opens a statement with an unreserved word that opens one
+/// in Service Broker. The server requires a `;` before these: `SELECT 1 RECEIVE *
+/// FROM q` does not compile, since `RECEIVE` reads as an alias. So only this
+/// position counts, and a table or column of that name stays a read.
+fn opens_with_unreserved_statement(lexemes: &[Lexeme]) -> bool {
+    lexemes
+        .iter()
+        .find(|lexeme| !matches!(lexeme, Lexeme::Symbol(_)))
+        .is_some_and(|lexeme| {
+            matches!(lexeme, Lexeme::Word(word) if matches!(word.as_str(), "SEND" | "RECEIVE" | "MOVE" | "GET"))
+        })
+}
+
+/// Whether the `CONVERSATION` at `index` is the statement `END CONVERSATION`,
+/// which needs no `;` before it, as `END` is reserved. It is an alias when what
+/// follows shows that (`CASE ... END conversation FROM t`); anything else counts.
+fn is_end_conversation(lexemes: &[Lexeme], index: usize) -> bool {
+    let after_end = index
+        .checked_sub(1)
+        .and_then(|previous| lexemes.get(previous))
+        .is_some_and(|previous| matches!(previous, Lexeme::Word(word) if word == "END"));
+
+    let is_alias = match lexemes.get(index + 1) {
+        None => true,
+        Some(Lexeme::Opaque) => false,
+        Some(Lexeme::Symbol(symbol)) => *symbol != '(',
+        Some(Lexeme::Word(word)) => matches!(
+            word.as_str(),
+            "FROM"
+                | "WHERE"
+                | "GROUP"
+                | "ORDER"
+                | "HAVING"
+                | "UNION"
+                | "EXCEPT"
+                | "INTERSECT"
+                | "OPTION"
+                | "FOR"
+                | "JOIN"
+                | "INNER"
+                | "LEFT"
+                | "RIGHT"
+                | "FULL"
+                | "CROSS"
+                | "OUTER"
+                | "ON"
+                | "AND"
+                | "OR"
+                | "AS"
+                | "WHEN"
+                | "THEN"
+                | "ELSE"
+                | "END"
+                | "ASC"
+                | "DESC"
+        ),
+    };
+
+    after_end && !is_alias
+}
+
 /// `USE` only counts as a query hint where no statement can start: right after
 /// the `(` or `,` of an option list, and followed by `HINT` or `PLAN`. Measured:
 /// `SELECT 1 USE HINT` looks for a database named `HINT`.
@@ -267,12 +319,14 @@ fn is_use_query_hint(lexemes: &[Lexeme], index: usize) -> bool {
 
 /// The class of `word`, or `None` for a word a read may hold.
 ///
-/// Every T-SQL reserved word is a word no name can use without quotes, also
-/// after a `.` (measured: `SELECT t.exec FROM t` does not compile), so a listed
-/// word is always the keyword. The list is the reserved words outside the read
-/// grammar, plus the few statement openers that are not reserved. The reserved
-/// words left out are `SELECT`'s own, so a statement nobody thought of here
-/// still rates up through its other words.
+/// All of these are T-SQL reserved words, so no name can use one without quotes,
+/// also after a `.` (measured: `SELECT t.exec FROM t` does not compile), and a
+/// listed word is always the keyword. They are the reserved words outside the
+/// read grammar. `DEFAULT` is left out as well, since it is a value in a call
+/// (`fn(DEFAULT)`) and every write using it holds a listed word.
+///
+/// Unreserved words are not here, as they are legal names. See
+/// [`opens_with_unreserved_statement`] and [`is_end_conversation`].
 fn classify_word(word: &str) -> Option<ExecutionClassification> {
     use ExecutionClassification::{Admin, Destructive, Write};
 
@@ -287,12 +341,11 @@ fn classify_word(word: &str) -> Option<ExecutionClassification> {
         | "WHILE" | "GOTO" | "RETURN" | "PRINT" | "RAISERROR" | "BREAK" | "CONTINUE" | "EXIT"
         | "OPEN" | "CLOSE" | "DEALLOCATE" | "CURSOR" | "ADD" | "AUTHORIZATION" | "CASCADE"
         | "CHECK" | "CLUSTERED" | "NONCLUSTERED" | "COLUMN" | "COMPUTE" | "CONSTRAINT"
-        | "DATABASE" | "DEFAULT" | "DISK" | "ERRLVL" | "EXTERNAL" | "FILE" | "FILLFACTOR"
-        | "FOREIGN" | "FUNCTION" | "IDENTITY_INSERT" | "LINENO" | "NOCHECK" | "OFF" | "OFFSETS"
-        | "PRIMARY" | "PROC" | "PROCEDURE" | "PUBLIC" | "READ" | "REFERENCES" | "REPLICATION"
-        | "RESTRICT" | "ROWCOUNT" | "RULE" | "SCHEMA" | "SECURITYAUDIT" | "STATISTICS"
-        | "TABLE" | "TEXTSIZE" | "TRIGGER" | "TSEQUAL" | "UNIQUE" | "VIEW" | "SEND" | "RECEIVE"
-        | "CONVERSATION" | "DIALOG" | "CALL" => Write,
+        | "DATABASE" | "DISK" | "ERRLVL" | "EXTERNAL" | "FILE" | "FILLFACTOR" | "FOREIGN"
+        | "FUNCTION" | "IDENTITY_INSERT" | "LINENO" | "NOCHECK" | "OFF" | "OFFSETS" | "PRIMARY"
+        | "PROC" | "PROCEDURE" | "PUBLIC" | "READ" | "REFERENCES" | "REPLICATION" | "RESTRICT"
+        | "ROWCOUNT" | "RULE" | "SCHEMA" | "SECURITYAUDIT" | "STATISTICS" | "TABLE"
+        | "TEXTSIZE" | "TRIGGER" | "TSEQUAL" | "UNIQUE" | "VIEW" => Write,
         _ => return None,
     };
 
@@ -312,7 +365,9 @@ pub fn classify_tsql_execution(sql: &str) -> ExecutionClassification {
     if unterminated
         || lexemes
             .split(|lexeme| *lexeme == Lexeme::Symbol(';'))
-            .any(opens_with_implicit_call)
+            .any(|statement| {
+                opens_with_implicit_call(statement) || opens_with_unreserved_statement(statement)
+            })
     {
         classification = classification.max(ExecutionClassification::Write);
     }
@@ -331,6 +386,9 @@ pub fn classify_tsql_execution(sql: &str) -> ExecutionClassification {
 
         let found = match word.as_str() {
             "USE" if is_use_query_hint(&lexemes, index) => continue,
+            "CONVERSATION" if is_end_conversation(&lexemes, index) => {
+                Some(ExecutionClassification::Write)
+            }
             "EXEC" | "EXECUTE" => Some(classify_procedure_name(called_procedure(following))),
             _ => classify_word(word),
         };

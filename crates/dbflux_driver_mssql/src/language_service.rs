@@ -69,14 +69,20 @@ mod tests {
             );
         }
 
-        assert_eq!(
-            classify_query_for_governance(
-                &QueryLanguage::Sql,
-                "SELECT TOP 1 * FROM t WITH (NOLOCK)",
-                Some(&service),
-            ),
-            ExecutionClassification::Read
-        );
+        for sql in [
+            "SELECT TOP 1 * FROM t WITH (NOLOCK)",
+            "SELECT * FROM sys.fn_get_audit_file('x*.sqlaudit', DEFAULT, DEFAULT)",
+            "SELECT * FROM dbo.Conversation",
+            "SELECT c.Dialog FROM dbo.Chat c",
+            "SELECT * FROM dbo.Call",
+            "SELECT id AS Gehäuse FROM t",
+        ] {
+            assert_eq!(
+                classify_query_for_governance(&QueryLanguage::Sql, sql, Some(&service)),
+                ExecutionClassification::Read,
+                "{sql}"
+            );
+        }
     }
 
     #[test]

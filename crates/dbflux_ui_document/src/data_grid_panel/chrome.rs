@@ -184,8 +184,50 @@ impl DataGridPanel {
             return;
         }
 
+        if mode == ResultViewMode::Chart {
+            self.chrome.previous_result_view = Some(self.chrome.result_view_mode);
+        }
+
         self.chrome.result_view_mode = mode;
         cx.notify();
+    }
+
+    /// Escape in the Chart view once the chart has nothing left to dismiss:
+    /// closes its rail, else returns to the view it was entered from, or to
+    /// the first view of the result, with the keyboard in the results.
+    /// False outside the Chart view: Table + Chart leaves Escape to the table.
+    pub(super) fn leave_chart_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.chrome.result_view_mode != ResultViewMode::Chart {
+            return false;
+        }
+
+        if let Some(shell) = self.chart.chart_shell.clone()
+            && shell.read(cx).chart_rail_open
+        {
+            shell.update(cx, |shell, cx| {
+                shell.chart_rail_open = false;
+                cx.notify();
+            });
+            return true;
+        }
+
+        let modes = self.available_result_view_modes(cx);
+        let Some(target) = self
+            .chrome
+            .previous_result_view
+            .filter(|mode| modes.contains(mode))
+            .or_else(|| {
+                modes
+                    .iter()
+                    .copied()
+                    .find(|mode| *mode != ResultViewMode::Chart)
+            })
+        else {
+            return false;
+        };
+
+        self.show_result_view(target, window, cx);
+        true
     }
 
     /// Shows `mode` from the keyboard and keeps the keyboard in the grid:

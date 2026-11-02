@@ -946,7 +946,7 @@ impl DataGridPanel {
                     return true;
                 }
 
-                false
+                self.leave_chart_view(window, cx)
             }
             Command::SelectNext | Command::FocusDown => {
                 self.select_next(cx);

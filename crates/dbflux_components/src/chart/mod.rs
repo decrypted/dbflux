@@ -30,7 +30,7 @@ pub use data_source::{
     ChartSourceDescription, ChartSourceError, InstanceMetricSource, MetricSource, TimeWindow,
     resolve_source,
 };
-pub use detect::{ChartDetection, detect_chart_columns};
+pub use detect::{ChartDetection, default_series_columns, detect_chart_columns};
 pub use engine::{ChartBuildError, ChartView, format_x_value, format_y_value};
 pub use legend::legend_element;
 pub use point_inspector::{DataPointRef, SourceRowRef, point_inspector_element};

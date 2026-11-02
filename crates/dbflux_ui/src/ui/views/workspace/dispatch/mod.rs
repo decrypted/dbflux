@@ -274,9 +274,54 @@ impl Workspace {
             return true;
         }
 
+        // A document may close on Escape once nothing is left to dismiss, but
+        // only while it owns the keyboard: Escape in the sidebar or the tasks
+        // panel reaches this method too and must not close the active tab.
+        if self.focus_target == FocusTarget::Document {
+            let keyboard_free =
+                self.focus_handle.is_focused(window) || window.focused(cx).is_none();
+            let answer = self.tab_manager.update(cx, |mgr, cx| {
+                mgr.active_tab()
+                    .map_or(crate::ui::document::pane::EscapeClose::Declined, |tab| {
+                        tab.as_pane().answer_escape(keyboard_free, window, cx)
+                    })
+            });
+
+            match answer {
+                crate::ui::document::pane::EscapeClose::Close => {
+                    self.close_active_tab_to_its_source(window, cx);
+                    return true;
+                }
+                crate::ui::document::pane::EscapeClose::Handled => return true,
+                crate::ui::document::pane::EscapeClose::Declined => {}
+            }
+        }
+
         // Always focus workspace to blur any input and enable keyboard navigation
         self.focus_handle.focus(window, cx);
         true
+    }
+}
+
+impl Workspace {
+    /// Closes the active tab through the normal close path and, when it
+    /// closed, goes back to the tab it was opened from if that is still open.
+    fn close_active_tab_to_its_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let source = {
+            let manager = self.tab_manager.read(cx);
+            manager.active_id().and_then(|id| manager.source_of(id))
+        };
+
+        if !self.close_active_tab(window, cx) {
+            return;
+        }
+
+        self.tab_manager.update(cx, |manager, cx| {
+            if let Some(source) = source {
+                manager.activate(source, cx);
+            }
+            manager.focus_active(window, cx);
+        });
     }
 }
 

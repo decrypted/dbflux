@@ -317,6 +317,10 @@ pub struct TabManager {
 
     /// Subscriptions per document (for cleanup on close).
     subscriptions: HashMap<DocumentId, Subscription>,
+    /// The tab each document was opened from, for the ones that have one (see
+    /// [`Self::open_from`]). Escape returns there; closing leaves the next tab
+    /// to the usual order.
+    opened_from: HashMap<DocumentId, DocumentId>,
 }
 
 /// The shared inspector rail's per-tab state, carried from the outgoing
@@ -334,7 +338,22 @@ impl TabManager {
             active_index: None,
             mru_order: Vec::new(),
             subscriptions: HashMap::new(),
+            opened_from: HashMap::new(),
         }
+    }
+
+    /// Opens a document that `source` asked for and activates it.
+    pub fn open_from(&mut self, doc: Tab, source: DocumentId, cx: &mut Context<Self>) {
+        self.opened_from.insert(doc.id(), source);
+        self.open(doc, cx);
+    }
+
+    /// The tab `id` was opened from, while that tab is still open.
+    pub fn source_of(&self, id: DocumentId) -> Option<DocumentId> {
+        self.opened_from
+            .get(&id)
+            .copied()
+            .filter(|source| self.index_of(*source).is_some())
     }
 
     /// Opens a new document and activates it.
@@ -385,10 +404,13 @@ impl TabManager {
                 DocumentEvent::ChartThisQuery {
                     query,
                     connection_id,
+                    context,
                 } => {
                     cx.emit(TabManagerEvent::ChartThisQuery {
                         query: query.clone(),
                         connection_id: *connection_id,
+                        context: context.clone(),
+                        source_tab: id,
                     });
                 }
                 DocumentEvent::RequestAddPanel { dashboard_id } => {
@@ -470,6 +492,7 @@ impl TabManager {
     fn remove_document(&mut self, idx: usize, id: DocumentId, cx: &mut Context<Self>) {
         let previous_active_id = self.active_id();
         let rail = self.capture_rail_state(cx);
+        self.opened_from.remove(&id);
 
         self.documents.remove(idx);
         self.subscriptions.remove(&id);
@@ -878,6 +901,9 @@ pub enum TabManagerEvent {
     ChartThisQuery {
         query: String,
         connection_id: Option<uuid::Uuid>,
+        context: dbflux_core::ExecutionContext,
+        /// The tab that asked, which Escape in the chart returns to.
+        source_tab: DocumentId,
     },
     /// Dashboard document requested the workspace to open the "Add Panel" picker.
     RequestAddPanel {
@@ -1086,6 +1112,50 @@ mod close_activation_tests {
         harness.window.run_until_parked();
 
         harness.events.borrow().clone()
+    }
+
+    fn open_code_tab_from(harness: &mut Harness<'_>, source: DocumentId) -> DocumentId {
+        let app_state = harness.app_state.clone();
+        let manager = harness.manager.clone();
+
+        harness.window.update(|window, cx| {
+            let document = cx.new(|cx| {
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+            });
+            let document_id = document.read(cx).id();
+
+            let pane = CodeDocument::into_pane(document, cx);
+            manager.update(cx, |manager, cx| {
+                manager.open_from(Tab::Pane(Box::new(pane)), source, cx);
+            });
+
+            document_id
+        })
+    }
+
+    /// The source is known while it is open. Closing itself leaves the next tab
+    /// to the usual order: only Escape returns to the source.
+    #[gpui::test]
+    fn the_source_tab_is_known_while_it_is_open(cx: &mut TestAppContext) {
+        let mut harness = harness(cx);
+        let source = open_code_tab(&mut harness);
+        let opened = open_code_tab_from(&mut harness, source);
+        let other = open_code_tab(&mut harness);
+
+        let manager = harness.manager.clone();
+        let source_of = |harness: &mut Harness<'_>| {
+            harness
+                .window
+                .update(|_, cx| manager.read(cx).source_of(opened))
+        };
+        assert_eq!(source_of(&mut harness), Some(source));
+
+        close_and_record(&mut harness, source);
+        assert_eq!(source_of(&mut harness), None);
+
+        close_and_record(&mut harness, other);
+        let active = harness.window.update(|_, cx| manager.read(cx).active_id());
+        assert_eq!(active, Some(opened));
     }
 
     /// Closing the active tab hands activation to the tab that takes over,

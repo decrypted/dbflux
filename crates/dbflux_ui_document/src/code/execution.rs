@@ -72,12 +72,24 @@ pub(crate) fn evaluate_dangerous_with_effective_settings(
 /// driver-owned dialects are rated by their driver. Only the profile setting
 /// is enforced here; a server that rejects writes reports them itself.
 fn is_refused_by_read_only_profile(connected: &dbflux_core::ConnectedProfile, query: &str) -> bool {
+    read_only_profile_refuses(
+        connected,
+        &connected.connection.metadata().query_language,
+        query,
+    )
+}
+
+fn read_only_profile_refuses(
+    connected: &dbflux_core::ConnectedProfile,
+    language: &QueryLanguage,
+    query: &str,
+) -> bool {
     if connected.read_only_reason != Some(dbflux_core::ReadOnlyReason::ProfileSetting) {
         return false;
     }
 
     let classification = dbflux_core::classify_query_for_language_with_service(
-        &connected.connection.metadata().query_language,
+        language,
         query,
         Some(connected.connection.language_service()),
     );
@@ -86,6 +98,83 @@ fn is_refused_by_read_only_profile(connected: &dbflux_core::ConnectedProfile, qu
         classification,
         dbflux_core::ExecutionClassification::Metadata | dbflux_core::ExecutionClassification::Read
     )
+}
+
+/// The language a chart's query is written in. A driver with query modes names
+/// it per mode, and its metadata can say something else entirely: CloudWatch's
+/// says SQL while the default mode is Logs Insights.
+fn chart_query_language(
+    connected: &dbflux_core::ConnectedProfile,
+    source: Option<&ExecutionSourceContext>,
+) -> QueryLanguage {
+    let metadata = connected.connection.metadata().query_language.clone();
+
+    let Some(spec) = connected.connection.source_context_spec() else {
+        return metadata;
+    };
+
+    let mode = match source {
+        Some(ExecutionSourceContext::CollectionWindow {
+            query_mode: Some(mode),
+            ..
+        }) => Some(mode.as_str()),
+        _ => spec.default_query_mode.as_deref(),
+    };
+
+    mode.and_then(|mode| spec.query_modes.iter().find(|known| known.value == mode))
+        .map_or(metadata, |mode| mode.query_language.clone())
+}
+
+/// Why a chart must not run `query`, or `None` when it may. A chart runs its
+/// query with nobody watching, on opening and on every refresh, so it takes one
+/// statement that reads.
+///
+/// A language the classifier knows is held to its answer. Where it would only
+/// fall back to "write" because neither core nor the driver can tell, every
+/// query of that language would be refused, so there the driver's own danger
+/// check decides.
+pub(crate) fn chart_refusal(
+    connected: &dbflux_core::ConnectedProfile,
+    query: &str,
+    source: Option<&ExecutionSourceContext>,
+) -> Option<String> {
+    let language = chart_query_language(connected, source);
+    let service = connected.connection.language_service();
+
+    if language.statement_count(query) > 1 {
+        return Some(dbflux_i18n::t!(
+            "document.code.execution.toast.chart_one_statement"
+        ));
+    }
+
+    if read_only_profile_refuses(connected, &language, query) {
+        return Some(dbflux_i18n::t!(
+            "document.code.execution.toast.read_only_profile"
+        ));
+    }
+
+    let classification = match &language {
+        QueryLanguage::Sql
+        | QueryLanguage::MongoQuery
+        | QueryLanguage::RedisCommands
+        | QueryLanguage::CloudWatchLogsInsightsQl
+        | QueryLanguage::OpenSearchPpl
+        | QueryLanguage::OpenSearchSql => Some(
+            dbflux_core::classify_query_for_language_with_service(&language, query, Some(service)),
+        ),
+        _ => service.classify_execution(query),
+    };
+
+    let reads = match classification {
+        Some(classification) => matches!(
+            classification,
+            dbflux_core::ExecutionClassification::Metadata
+                | dbflux_core::ExecutionClassification::Read
+        ),
+        None => service.detect_dangerous(query).is_none(),
+    };
+
+    (!reads).then(|| dbflux_i18n::t!("document.code.execution.toast.chart_reads_only"))
 }
 
 fn show_read_only_profile_toast(cx: &mut App) {
@@ -128,7 +217,7 @@ impl CodeDocument {
         self.selected_query_text(cx)
     }
 
-    fn selected_query_text(&self, cx: &App) -> Option<String> {
+    pub(super) fn selected_query_text(&self, cx: &App) -> Option<String> {
         let state = self.editor.input_state.read(cx);
         let ranges = state.selected_nonempty_ranges();
         if ranges.is_empty() {
@@ -1986,10 +2075,11 @@ impl CodeDocument {
                 DataGridEvent::CloseInspector => {
                     cx.emit(DocumentEvent::CloseInspector);
                 }
-                DataGridEvent::ChartThisQuery { .. } => {
-                    // CodeDocument result tabs use QueryResult sources created without an
-                    // original_query, so can_chart_from_context_menu is always false for them.
-                    // This arm exists only for exhaustiveness.
+                DataGridEvent::ChartThisQuery {
+                    query,
+                    connection_id,
+                } => {
+                    this.chart_result_of(&grid, query.clone(), *connection_id, cx);
                 }
                 DataGridEvent::RefreshPolicyReset(_) => {
                     // ResultPanel for result tabs has no refresh dropdown

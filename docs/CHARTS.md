@@ -87,6 +87,18 @@ these rules, in order, to a `QueryResult`:
 The outcome is the `ChartDetection` enum, whose variants are `Ok`,
 `NoTimeColumn`, `NoNumericSeries`, and `EmptyResult`.
 
+Detection reports every numeric column, and the Y picker lists them all. Until
+the user picks, `default_series_columns` draws only the measures: it leaves out
+a primary key and an integer column that strictly grows or shrinks over the
+rows, as a key does in a table's own order, and prefers floats when there are
+any. A growing integer that is the only numeric column is drawn after all, and
+a result with nothing but primary keys draws nothing until a Y column is picked.
+
+With no time column the X axis defaults to the first numeric column, and picking
+a Y column draws the chart on a numeric axis. While a chart cannot draw, its
+area says why and what to do next: pick a Y column, change the query to return a
+numeric column, or that the query returned no rows or failed.
+
 ### Why `type_name` and driver IDs are never inspected
 
 The module-level documentation in `detect.rs` states that the detection module
@@ -189,6 +201,23 @@ Any query that produces tabular results can be charted. In the action strip on
 the query editor's left edge, click the chart button (tooltip: "Open current query in a chart
 document") to open the current query in a chart document.
 
+The chart runs what Run would run: the selection, or else the statement under
+the cursor, in the database and schema the editor runs in and with the same row
+limit, so a `SELECT *` reads the same rows as Run. When the limit cuts them, a
+toast says so and the toolbar's point count shows "row limit reached".
+
+A chart runs its query on its own, on opening and on every refresh, so it takes
+one statement that reads. Every run checks this, saved charts and dashboard panels
+included, in the language the query is written in: the query mode's when the
+driver has modes (a CloudWatch connection's default is Logs Insights), otherwise
+the connection's. The query classifier decides where the language has one (SQL,
+MongoDB, Redis and the drivers that classify their own language), and the driver's
+danger check otherwise. From the editor, a refused statement or a transaction
+boundary gets a notice and opens no chart. An open chart that is refused shows the
+reason in its area, also when the connection's profile turned read-only after the
+chart was saved. A chart tab then stops auto-refreshing. A dashboard panel shows
+the reason with one notice, and the dashboard goes on refreshing its other panels.
+
 ### Chart this query
 
 A data grid's context menu offers a "Chart this query" item. The item is gated
@@ -200,9 +229,12 @@ requires both:
 2. `detect_chart_columns` on the current result returns `Ok`.
 
 Selecting the item calls `Workspace::open_chart_from_query`, which constructs a
-`ChartDocument::new` seeded with the query and connection, wraps it in a
-`PaneHandle` via `ChartDocument::into_pane`, and opens it as a new tab. A
-non-empty query causes the document to auto-execute on its first render.
+`ChartDocument::new` seeded with the query, connection and execution context,
+wraps it in a `PaneHandle` via `ChartDocument::into_pane`, and opens it as a new
+tab. A non-empty query causes the document to auto-execute on its first render.
+From a query editor's result the chart runs in the database that result came
+from, even if the editor has moved on since, and from a data document in that
+document's database.
 
 ### Open chart...
 
@@ -244,14 +276,44 @@ taken from `QueryGenerator::collection_browse_query`, so the label is written in
 the connection's own query language. A driver that does not implement that
 method keeps the generic label.
 
+### Closing with Escape
+
+`Escape` works in layers, one per press: an open axis picker, popover or the save
+prompt, then the highlighted point, then the stats rail. A text field keeps its
+`Escape`; the press only takes the keyboard off it. With nothing left to dismiss:
+
+- A chart tab closes through the normal close path and returns to the tab it was
+  opened from when that tab is still open, otherwise to the next tab. The tab's
+  close button and the close shortcut keep the usual next tab. Every close cancels
+  a run still in progress.
+- The chart view of a result returns to the view it was entered from, or to the
+  first view, with the keyboard in the results.
+- A chart panel in a dashboard leaves the panel, and the dashboard stays open.
+- Table + Chart keeps `Escape` with the table; the chart above the grid is a view
+  of the result with no state of its own to collapse.
+
+A chart tab has no reopen, so closing drops what only it holds: the columns, chart
+type and Y scale changed since it opened or was saved, a metric swapped in the
+picker, and the samples an instance metric chart collected. With any of those, the
+first `Escape` warns and the second closes. A chart still on its defaults closes at
+once, since it opens again from its query or the saved list. The time range, the
+refresh interval and hidden series do not count, since saving does not keep them
+either. Closing with the tab's close button or the close shortcut does not ask.
+
 ### Saving
 
 Inside a `ChartDocument`, the Save toolbar button opens a name prompt and then
-calls `confirm_save`, which builds a `ChartSpec` from the last result (using
-`detect_chart_columns` / `ChartSpec::from_detection` when detection succeeds)
-and upserts a `SavedChart` into the app state's `saved_charts` manager. Saving
-reuses the existing `saved_chart_id` when present so the record is overwritten
-rather than duplicated.
+calls `confirm_save`, which keeps what the chart shows now, the picked columns,
+chart type and Y scale included, and upserts a `SavedChart` into the app state's
+`saved_charts` manager. A saved chart reopens with those. Saving reuses the
+existing `saved_chart_id` when present so the record is overwritten rather than
+duplicated.
+
+The database is not saved. A reopened chart or dashboard panel sends no database
+and runs on the connection's own, whatever the sidebar selects, so a chart saved
+from another database of the connection needs its table qualified. Saved query
+charts and dashboard panels take the editor row limit; metric and instance metric
+sources do not.
 
 ```mermaid
 flowchart TD
@@ -292,10 +354,13 @@ These limitations are grounded in the current code, not assumptions:
 
 - Auto-detection requires at least one `Timestamp` column to pick an X axis;
   without one, `detect_chart_columns` returns `NoTimeColumn` and "Chart this
-  query" is unavailable. (Manual selection through `BindingSpec` /
-  `ChartSpec::from_bindings` can use a non-timestamp X column, which is then
-  classified as an `AxisKind::Numeric` axis.)
+  query" is unavailable. A chart opened from the editor's chart button asks for
+  a Y column instead and plots it against a numeric X column, classified as an
+  `AxisKind::Numeric` axis.
 - Columns with `ColumnKind::Unknown` are excluded from auto-detection entirely.
+- A chart refuses what the query classifier rates as a write, so it is only as
+  good as that classifier. On InfluxDB, `SELECT ... INTO` and Flux `to()` write but
+  rate as reads, and are not caught.
 - `Collection`-source saved charts cannot be opened as a `ChartDocument`; they
   re-open the underlying `DataDocument` in chart mode instead. Passing a
   `Collection` source to `ChartDocument::from_saved` returns an error.

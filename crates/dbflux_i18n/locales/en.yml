@@ -1294,6 +1294,7 @@ document:
       points:
         one: "%{count} pt"
         many: "%{count} pts"
+        row_limit: "%{points}, row limit reached"
     shell:
       save: Save
       cancel: Cancel
@@ -1302,8 +1303,11 @@ document:
         loading_metric: "Loading metric data…"
         no_data_points: "No data points for the selected window."
         run_query: "Run the query to populate the chart."
-        no_time_column: "No time column detected in result."
-        no_numeric_series: "No numeric series detected in result."
+        running: "Running the query…"
+        no_rows: "The query returned no rows."
+        no_numeric_series: "This result has no numeric column to plot. Change the query to return one."
+        pick_y: "Pick a Y column to draw the chart."
+        pick_y_no_time: "This result has no time column. Pick a Y column to plot it against %{x}."
         build_failed: "Chart build failed."
       custom_range:
         apply: Apply
@@ -1325,13 +1329,14 @@ document:
     status:
       task_label: Chart query
     toast:
+      escape_loses_settings: "This chart has unsaved changes. Press Escape again to close it, or %{save} to save it."
+      rows_truncated: "The chart shows the first %{rows} rows: the query returned more than the row limit."
       chart_saved: Chart saved
       save_failed: "Failed to save chart: %{error}"
     error:
       source: "Chart source error: %{error}"
       no_connection_selected: No connection selected
       connection_not_found: Connection not found
-      connection_error: "Connection error: %{error}"
       collection_source_unsupported: "Collection source not supported in ChartDocument; open via DataDocument"
     metric_picker:
       apply: Apply
@@ -1526,6 +1531,9 @@ document:
         enter_query_to_explain: Enter a query to explain
         enter_script_content: Enter script content to run
         write_query_first: Write a query first to open it in a chart
+        chart_not_a_query: "This statement returns no rows to chart. Put the cursor on a query or select one."
+        chart_one_statement: "A chart draws one statement. Put the cursor on it or select it."
+        chart_reads_only: "A chart runs its query on its own, so it only takes queries that read data."
         connecting: "Connecting to database '%{database}', please wait…"
         redis_flush_disabled: FLUSHALL / FLUSHDB is disabled in settings
         read_only_profile: "This connection's profile is set to read-only. Only statements that read data run here."

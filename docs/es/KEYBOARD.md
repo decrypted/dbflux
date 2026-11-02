@@ -521,7 +521,7 @@ inspector de puntos. Mover el puntero sobre el gráfico lo reemplaza.
 | `g` / `Shift+g` (o `Home` / `End`) | Resaltar el primer / último punto |
 | `j` / `k` (o `Down` / `Up`) | Llevar el punto resaltado a la serie visible siguiente / anterior, en la X más cercana |
 | `Space` | Ocultar o mostrar la serie enfocada, como su entrada de la leyenda |
-| `Escape` | Quitar el punto resaltado, o cerrar un selector de eje abierto |
+| `Escape` | Una capa por pulsación: cerrar un selector de eje abierto, un popover o el prompt de guardado, luego quitar el punto resaltado, luego cerrar el panel de estadísticas. Sin nada más que descartar, la vista de gráfico de un resultado vuelve a la vista desde la que se entró con el teclado en los resultados, y una pestaña de gráfico se cierra y vuelve a la pestaña desde la que se abrió. Un gráfico con cambios sin guardar avisa en la primera pulsación y se cierra en la segunda. Un panel de gráfico en un dashboard sale del panel; Table + Chart deja `Escape` a la tabla |
 | `Alt+l` / `Alt+h` | Tipo de gráfico siguiente / anterior (pestaña de gráfico) |
 | `]` / `[` | Rango de tiempo siguiente / anterior, Personalizado incluido (pestaña de gráfico) |
 | `F5` | Volver a ejecutar el gráfico (pestaña de gráfico) |

@@ -1658,8 +1658,17 @@ impl Workspace {
                     TabManagerEvent::ChartThisQuery {
                         query,
                         connection_id,
+                        context,
+                        source_tab,
                     } => {
-                        this.open_chart_from_query(query.clone(), *connection_id, window, cx);
+                        this.open_chart_from_query(
+                            query.clone(),
+                            *connection_id,
+                            context.clone(),
+                            *source_tab,
+                            window,
+                            cx,
+                        );
                     }
                     TabManagerEvent::OpenReferencedRow { target } => {
                         this.open_table_at_referenced_row(target.clone(), window, cx);

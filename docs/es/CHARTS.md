@@ -88,6 +88,20 @@ estas reglas, en orden, a un `QueryResult`:
 El resultado es el enum `ChartDetection`, cuyas variantes son `Ok`,
 `NoTimeColumn`, `NoNumericSeries` y `EmptyResult`.
 
+La detección informa de todas las columnas numéricas, y el selector Y las lista
+todas. Hasta que el usuario elige, `default_series_columns` dibuja solo las
+medidas: deja fuera una clave primaria y una columna entera que crece o decrece
+estrictamente a lo largo de las filas, como hace una clave en el orden propio de
+la tabla, y prefiere los flotantes cuando los hay. Un entero creciente que es la
+única columna numérica se dibuja igualmente, y un resultado con solo claves
+primarias no dibuja nada hasta elegir una columna Y.
+
+Sin columna de tiempo, el eje X usa por defecto la primera columna numérica, y al
+elegir una columna Y el gráfico se dibuja sobre un eje numérico. Mientras un
+gráfico no puede dibujarse, su área dice por qué y qué hacer: elegir una columna
+Y, cambiar la query para que devuelva una columna numérica, o que la query no
+devolvió filas o falló.
+
 ### Por qué nunca se inspeccionan `type_name` ni los IDs de driver
 
 La documentación a nivel de módulo en `detect.rs` indica que el módulo de
@@ -198,6 +212,26 @@ barra de acciones del borde izquierdo del editor de queries, haz clic en el bot�
 current query in a chart document") para abrir la query actual en un documento
 de gráfico.
 
+El gráfico ejecuta lo que ejecutaría Run: la selección, o si no la sentencia bajo
+el cursor, en la base de datos y el esquema en que se ejecuta el editor y con el
+mismo límite de filas, así que un `SELECT *` lee las mismas filas que Run. Cuando
+el límite las recorta, un aviso lo indica y el recuento de puntos de la toolbar
+muestra "límite de filas alcanzado".
+
+Un gráfico ejecuta su query por sí solo, al abrirse y en cada refresco, así que
+acepta una sola sentencia que lea. Cada ejecución lo comprueba, incluidos los
+gráficos guardados y los paneles de dashboard, en el lenguaje en que está escrita
+la query: el del modo de query cuando el driver tiene modos (el predeterminado de
+una conexión CloudWatch es Logs Insights) o, si no, el de la conexión. Decide el
+clasificador de queries cuando el lenguaje tiene uno (SQL, MongoDB, Redis y los
+drivers que clasifican su propio lenguaje) y, en caso contrario, la comprobación de
+peligro del driver. Desde el editor, una sentencia rechazada o un límite de
+transacción recibe un aviso y no abre ningún gráfico. Un gráfico abierto que se
+rechaza muestra el motivo en su área, también cuando el perfil de la conexión pasó
+a solo lectura después de guardar el gráfico. Una pestaña de gráfico deja entonces
+de refrescarse. Un panel de dashboard muestra el motivo con un solo aviso, y el
+dashboard sigue refrescando sus demás paneles.
+
 ### Chart this query
 
 El menú contextual de un data grid ofrece un elemento "Chart this query". El
@@ -209,10 +243,13 @@ ambas condiciones:
 2. `detect_chart_columns` sobre el resultado actual devuelve `Ok`.
 
 Seleccionar el elemento llama a `Workspace::open_chart_from_query`, que
-construye un `ChartDocument::new` sembrado con la query y la conexión, lo
-envuelve en un `PaneHandle` a través de `ChartDocument::into_pane`, y lo abre
-como una nueva pestaña. Una query no vacía hace que el documento se auto-ejecute
-en su primer render.
+construye un `ChartDocument::new` sembrado con la query, la conexión y el contexto
+de ejecución, lo envuelve en un `PaneHandle` a través de
+`ChartDocument::into_pane`, y lo abre como una nueva pestaña. Una query no vacía
+hace que el documento se auto-ejecute en su primer render. Desde un resultado del
+editor de queries, el gráfico se ejecuta en la base de datos de la que vino ese
+resultado, aunque el editor haya cambiado después, y desde un documento de datos en
+la base de datos de ese documento.
 
 ### Open chart...
 
@@ -257,15 +294,49 @@ ejecuta el driver, tomada de `QueryGenerator::collection_browse_query`, así que
 la etiqueta está escrita en el lenguaje de query de la propia conexión. Un
 driver que no implementa ese método conserva la etiqueta genérica.
 
+### Cerrar con Escape
+
+`Escape` funciona por capas, una por pulsación: un selector de eje abierto, un
+popover o el prompt de guardado, luego el punto resaltado, luego el panel de
+estadísticas. Un campo de texto conserva su `Escape`; la pulsación solo le quita
+el teclado. Sin nada más que descartar:
+
+- Una pestaña de gráfico se cierra por la ruta normal de cierre y vuelve a la
+  pestaña desde la que se abrió si sigue abierta, o si no a la siguiente. El botón
+  de la pestaña y el atajo de cierre mantienen la siguiente pestaña habitual. Todo
+  cierre cancela una ejecución en curso.
+- La vista de gráfico de un resultado vuelve a la vista desde la que se entró, o a
+  la primera, con el teclado en los resultados.
+- Un panel de gráfico en un dashboard sale del panel, y el dashboard sigue abierto.
+- Table + Chart deja `Escape` a la tabla; el gráfico sobre la grilla es una vista
+  del resultado sin estado propio que colapsar.
+
+Una pestaña de gráfico no se puede reabrir, así que cerrarla descarta lo que solo
+ella tiene: las columnas, el tipo de gráfico y la escala Y cambiados desde que se
+abrió o se guardó, una métrica cambiada en el selector y las muestras que recogió
+un gráfico de métrica de instancia. Con cualquiera de ellas, el primer `Escape`
+avisa y el segundo cierra. Un gráfico con sus valores por defecto se cierra de
+inmediato, porque se abre de nuevo desde su query o la lista de guardados. El rango
+de tiempo, el intervalo de refresco y las series ocultas no cuentan, porque guardar
+tampoco los conserva. Cerrar con el botón de la pestaña o el atajo de cierre no
+pregunta.
+
 ### Guardar
 
 Dentro de un `ChartDocument`, el botón Save de la toolbar abre un prompt de
-nombre y luego llama a `confirm_save`, que construye un `ChartSpec` a partir del
-último resultado (usando `detect_chart_columns` / `ChartSpec::from_detection`
-cuando la detección tiene éxito) y hace upsert de un `SavedChart` en el gestor
-`saved_charts` del estado de la app. Guardar reutiliza el `saved_chart_id`
+nombre y luego llama a `confirm_save`, que conserva lo que el gráfico muestra
+ahora, incluidas las columnas elegidas, el tipo de gráfico y la escala Y, y hace
+upsert de un `SavedChart` en el gestor `saved_charts` del estado de la app. Un
+gráfico guardado se reabre con ellos. Guardar reutiliza el `saved_chart_id`
 existente cuando está presente, así que el registro se sobrescribe en lugar de
 duplicarse.
+
+La base de datos no se guarda. Un gráfico reabierto o un panel de dashboard no envía
+ninguna base de datos y se ejecuta en la propia de la conexión, sea cual sea la que
+seleccione la barra lateral, así que un gráfico guardado desde otra base de datos de
+la conexión necesita su tabla cualificada. Los gráficos de query guardados y los
+paneles de dashboard aplican el límite de filas del editor; las fuentes de métrica y
+de métrica de instancia no.
 
 ```mermaid
 flowchart TD
@@ -306,11 +377,14 @@ Estas limitaciones están fundamentadas en el código actual, no son suposicione
 
 - La auto-detección requiere al menos una columna `Timestamp` para elegir un eje
   X; sin ella, `detect_chart_columns` devuelve `NoTimeColumn` y "Chart this
-  query" no está disponible. (La selección manual a través de `BindingSpec` /
-  `ChartSpec::from_bindings` puede usar una columna X que no sea de timestamp,
-  que entonces se clasifica como un eje `AxisKind::Numeric`.)
+  query" no está disponible. Un gráfico abierto desde el botón de gráfico del
+  editor pide en su lugar una columna Y y la dibuja frente a una columna X numérica,
+  clasificada como un eje `AxisKind::Numeric`.
 - Las columnas con `ColumnKind::Unknown` quedan excluidas por completo de la
   auto-detección.
+- Un gráfico rechaza lo que el clasificador de queries califica como escritura, así
+  que es tan fiable como ese clasificador. En InfluxDB, `SELECT ... INTO` y Flux
+  `to()` escriben pero se califican como lecturas, y no se detectan.
 - Los saved charts de fuente `Collection` no se pueden abrir como un
   `ChartDocument`; en su lugar reabren el `DataDocument` subyacente en modo
   chart. Pasar una fuente `Collection` a `ChartDocument::from_saved` devuelve un

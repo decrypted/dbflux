@@ -789,9 +789,53 @@ impl Connection for FakeConnection {
         Ok(CrudResult::new(1, None))
     }
 
+    /// The query modes of the real drivers, whose metadata language does not
+    /// name what a query is written in.
+    fn source_context_spec(&self) -> Option<dbflux_core::SourceContextSpec> {
+        let (default_mode, modes) = match self.kind {
+            DbKind::CloudWatchLogs => (
+                "cwli",
+                vec![
+                    ("cwli", QueryLanguage::CloudWatchLogsInsightsQl),
+                    ("ppl", QueryLanguage::OpenSearchPpl),
+                    ("sql", QueryLanguage::OpenSearchSql),
+                ],
+            ),
+            DbKind::InfluxDB => (
+                "influxql",
+                vec![
+                    ("influxql", QueryLanguage::InfluxQuery),
+                    ("flux", QueryLanguage::Flux),
+                ],
+            ),
+            _ => return None,
+        };
+
+        Some(dbflux_core::SourceContextSpec {
+            targets_label: "Targets".to_string(),
+            targets_placeholder: String::new(),
+            default_target: None,
+            start_label: "Start".to_string(),
+            end_label: "End".to_string(),
+            query_mode_label: Some("Syntax".to_string()),
+            query_modes: modes
+                .into_iter()
+                .map(|(value, query_language)| dbflux_core::SourceQueryMode {
+                    value: value.to_string(),
+                    label: value.to_string(),
+                    query_language,
+                })
+                .collect(),
+            default_query_mode: Some(default_mode.to_string()),
+        })
+    }
+
     fn language_service(&self) -> &dyn dbflux_core::LanguageService {
         match self.kind {
             DbKind::Redis => &REDIS_LANGUAGE_SERVICE,
+            DbKind::CloudWatchLogs => &CLOUDWATCH_LANGUAGE_SERVICE,
+            DbKind::InfluxDB => &INFLUX_LANGUAGE_SERVICE,
+            DbKind::MongoDB => &MONGO_LANGUAGE_SERVICE,
             _ => &SQL_LANGUAGE_SERVICE,
         }
     }
@@ -932,6 +976,12 @@ fn mutex_lock<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
 static DEFAULT_SQL_DIALECT: DefaultSqlDialect = DefaultSqlDialect;
 static SQL_LANGUAGE_SERVICE: SqlLanguageService = SqlLanguageService;
 static REDIS_LANGUAGE_SERVICE: RedisLanguageService = RedisLanguageService;
+static CLOUDWATCH_LANGUAGE_SERVICE: dbflux_driver_cloudwatch::CloudWatchLanguageService =
+    dbflux_driver_cloudwatch::CloudWatchLanguageService;
+static INFLUX_LANGUAGE_SERVICE: dbflux_driver_influxdb::language_service::InfluxLanguageService =
+    dbflux_driver_influxdb::language_service::InfluxLanguageService;
+static MONGO_LANGUAGE_SERVICE: dbflux_driver_mongodb::MongoLanguageService =
+    dbflux_driver_mongodb::MongoLanguageService;
 
 static FAKE_POSTGRES_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "fake-postgres".into(),

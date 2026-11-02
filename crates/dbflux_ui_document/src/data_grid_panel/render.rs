@@ -2028,6 +2028,7 @@ impl DataGridPanel {
             refresh_dropdown: self.filter_bar.refresh_dropdown.clone(),
             time_range_panel: self.chart.chart_source_time_range_panel.clone(),
             row_count: self.result.row_count(),
+            rows_truncated: self.result.rows_truncated(),
             resolved_window,
             // Saving a chart stores its query; a table browse has none, so
             // `open_collection_chart_save` does nothing for it.
@@ -3189,12 +3190,8 @@ impl DataGridPanel {
                     let active_y_cols: Vec<usize> =
                         if let Some(manual) = &shell.chart_manual_selection {
                             manual.y_cols.clone()
-                        } else if let Some(ChartDetection::Ok { numeric_cols, .. }) =
-                            &shell.chart_detection
-                        {
-                            numeric_cols.clone()
                         } else {
-                            vec![]
+                            shell.chart_default_y.clone()
                         };
 
                     let detection_ok =

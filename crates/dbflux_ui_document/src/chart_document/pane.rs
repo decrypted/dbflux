@@ -124,6 +124,23 @@ impl ChartDocument {
             },
         );
 
+        pane.escape_close = Some({
+            let e = entity.clone();
+            Box::new(move |keyboard_free, window, cx| {
+                e.update(cx, |d, cx| d.escape_close(keyboard_free, window, cx))
+            })
+        });
+
+        // Closing a chart mid-run must not leave its query on the connection.
+        pane.on_close = Some({
+            let e = entity.clone();
+            Box::new(move |cx| {
+                e.update(cx, |d, cx| {
+                    d.runner.cancel_primary(cx);
+                });
+            })
+        });
+
         pane.pane_actions = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).pane_actions(&e, cx))

@@ -14,6 +14,9 @@
 //!   move its highlighted row, H and L switch to the neighboring picker,
 //!   Enter picks the row, Space toggles a Y column and keeps the picker open,
 //!   Escape closes it.
+//! - Escape clears the highlighted point. With nothing left to dismiss the
+//!   host decides: a chart tab closes, the Chart view of a result returns to
+//!   the previous view, a dashboard leaves the panel.
 //!
 //! Column roles come from `ColumnKind` only; nothing here knows a driver.
 

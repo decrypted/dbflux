@@ -286,7 +286,7 @@ impl DataDocument {
     /// and `ViewHandle::current_mode` closures are called by `ResultPanel` on every
     /// render frame, so the chrome row always reflects the current state.
     fn on_grid_event(
-        _this: &mut Self,
+        this: &mut Self,
         _grid: Entity<DataGridPanel>,
         event: &DataGridEvent,
         cx: &mut Context<Self>,
@@ -325,6 +325,10 @@ impl DataDocument {
                 cx.emit(DocumentEvent::ChartThisQuery {
                     query: query.clone(),
                     connection_id: *connection_id,
+                    context: dbflux_core::ExecutionContext {
+                        database: this.database(cx),
+                        ..dbflux_core::ExecutionContext::default()
+                    },
                 });
             }
             DataGridEvent::RefreshPolicyReset(_policy) => {
@@ -611,6 +615,57 @@ mod console_tests {
     #[gpui::test]
     fn sql_tables_dock_the_console_their_driver_offers(cx: &mut gpui::TestAppContext) {
         assert!(table_has_console(cx, dbflux_core::DbKind::Postgres));
+    }
+
+    /// The chart runs in the document's database, not the one active on the
+    /// connection, which may hold a same-named table.
+    #[gpui::test]
+    fn chart_this_query_carries_the_documents_database(cx: &mut gpui::TestAppContext) {
+        use crate::data_grid_panel::DataGridEvent;
+        use crate::handle::DocumentEvent;
+        use crate::keyboard_test_support::{connected_app_state, init_keyboard_runtime};
+        use dbflux_test_support::fake_driver::FakeDriver;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        init_keyboard_runtime(cx);
+        let driver = FakeDriver::new(dbflux_core::DbKind::MySQL);
+        let (app_state, profile_id) = connected_app_state(cx, &driver, "analytics");
+
+        let (document, window) = cx.add_window_view(move |window, cx| {
+            DataDocument::new_for_table(
+                profile_id,
+                TableRef::new("orders"),
+                Some("sales".to_string()),
+                app_state,
+                window,
+                cx,
+            )
+        });
+
+        let database: Rc<RefCell<Option<Option<String>>>> = Rc::default();
+        let sink = database.clone();
+        window.update(|_, cx| {
+            cx.subscribe(&document, move |_, event: &DocumentEvent, _| {
+                if let DocumentEvent::ChartThisQuery { context, .. } = event {
+                    sink.replace(Some(context.database.clone()));
+                }
+            })
+            .detach();
+        });
+
+        window.update(|_, cx| {
+            let grid = document.read(cx).data_grid_for_tests().clone();
+            grid.update(cx, |_, cx| {
+                cx.emit(DataGridEvent::ChartThisQuery {
+                    query: "select * from orders".to_string(),
+                    connection_id: Some(profile_id),
+                });
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(*database.borrow(), Some(Some("sales".to_string())));
     }
 
     #[gpui::test]

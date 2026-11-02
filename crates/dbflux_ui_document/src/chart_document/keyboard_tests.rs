@@ -3,7 +3,7 @@
 
 use super::ChartDocument;
 use crate::keyboard_test_support::{KeymapHost, host_document, init_keyboard_runtime};
-use crate::pane::PaneActionRun;
+use crate::pane::{EscapeClose, PaneActionRun};
 use dbflux_app::keymap::Command;
 use dbflux_components::chart::{AxisPill, ChartKind};
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
@@ -195,6 +195,197 @@ fn the_x_axis_picker_is_driven_by_the_keyboard(cx: &mut TestAppContext) {
         1,
         "column `a` is the X axis now"
     );
+}
+
+fn answer_escape(chart: &Entity<ChartDocument>, window: &mut VisualTestContext) -> EscapeClose {
+    window.update(|window, cx| chart.update(cx, |chart, cx| chart.escape_close(false, window, cx)))
+}
+
+/// One press per layer, innermost first: the picker, then the point, and only
+/// then does the chart answer that the tab may close.
+#[gpui::test]
+fn escape_closes_the_picker_then_the_point_then_the_tab(cx: &mut TestAppContext) {
+    let (host, chart, window) = chart_with_keyboard(cx);
+
+    window.simulate_keystrokes("l");
+    assert!(keyboard_point(&chart, window).is_some());
+
+    window.update(|_, cx| {
+        chart.update(cx, |chart, cx| chart.open_axis_picker(AxisPill::X, cx));
+    });
+    let picker_open = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            chart
+                .read(cx)
+                .chart_shell_for_test()
+                .read(cx)
+                .axis_open_pill
+                .is_some()
+        })
+    };
+    assert!(picker_open(window));
+
+    window.simulate_keystrokes("escape");
+    assert!(!picker_open(window), "the first press closes the picker");
+    assert!(
+        keyboard_point(&chart, window).is_some(),
+        "and leaves the point"
+    );
+
+    window.simulate_keystrokes("escape");
+    assert_eq!(
+        keyboard_point(&chart, window),
+        None,
+        "the second clears the point"
+    );
+
+    let handled = window.update(|window, cx| {
+        chart.update(cx, |chart, cx| {
+            chart.dispatch_command(Command::Cancel, window, cx)
+        })
+    });
+    assert!(!handled, "the chart's own keys have nothing left");
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Close);
+
+    assert_eq!(
+        window.update(|_, cx| host.read(cx).commands.clone()),
+        vec![Command::ColumnRight, Command::Cancel, Command::Cancel]
+    );
+}
+
+#[gpui::test]
+fn escape_in_the_save_prompt_only_closes_the_prompt(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    window.simulate_keystrokes("ctrl-s");
+    let prompt_open = |window: &mut VisualTestContext| {
+        window.update(|_, cx| chart.read(cx).is_name_prompt_open())
+    };
+    assert!(prompt_open(window));
+
+    window.simulate_keystrokes("escape");
+    assert!(!prompt_open(window));
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Close);
+}
+
+/// The stats rail is one more layer, drawn beside the chart.
+#[gpui::test]
+fn escape_closes_the_rail_before_the_tab(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    window.update(|_, cx| chart.update(cx, |chart, cx| chart.toggle_stats_rail(cx)));
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Handled);
+    assert!(!window.update(|_, cx| {
+        chart
+            .read(cx)
+            .chart_shell_for_test()
+            .read(cx)
+            .chart_rail_open
+    }));
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Close);
+}
+
+/// Changed settings are not lost to one press: the first warns, the second
+/// closes, and changing something in between warns again.
+#[gpui::test]
+fn escape_warns_once_before_closing_over_changed_settings(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    window.simulate_keystrokes("alt-l");
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Handled);
+
+    window.simulate_keystrokes("alt-l");
+    assert_eq!(
+        answer_escape(&chart, window),
+        EscapeClose::Handled,
+        "another change warns again"
+    );
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Close);
+}
+
+/// Save does not keep hidden series, so a warning offering to save them would
+/// be untrue; the Y scale it does keep counts.
+#[gpui::test]
+fn escape_warns_about_the_y_scale_but_not_hidden_series(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    window.simulate_keystrokes("space");
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Close);
+
+    let shell = window.update(|_, cx| chart.read(cx).chart_shell_for_test().clone());
+    window.update(|_, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_y_scale(dbflux_components::chart::YScale::Log, cx);
+        });
+    });
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Handled);
+}
+
+/// A key in between means the user went on working: the warning starts over.
+#[gpui::test]
+fn another_key_withdraws_the_escape_warning(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    window.simulate_keystrokes("alt-l");
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Handled);
+
+    window.simulate_keystrokes("l");
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Handled);
+}
+
+/// A control holding the keyboard, such as a text field, keeps Escape: the
+/// chart declines, the tab stays, and the workspace takes the focus off it.
+#[gpui::test]
+fn escape_with_another_control_focused_is_declined(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    let field = window.update(|window, cx| {
+        let field = cx.focus_handle();
+        field.focus(window, cx);
+        field
+    });
+    window.run_until_parked();
+    assert!(window.update(|window, _| field.is_focused(window)));
+
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Declined);
+
+    // With the keyboard free the same press is the chart's to answer.
+    assert_eq!(
+        window.update(|window, cx| {
+            chart.update(cx, |chart, cx| chart.escape_close(true, window, cx))
+        }),
+        EscapeClose::Close
+    );
+}
+
+/// In a dashboard panel Escape belongs to the dashboard.
+#[gpui::test]
+fn escape_never_closes_an_embedded_chart(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    window.update(|_, cx| chart.update(cx, |chart, cx| chart.set_embedded(true, cx)));
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Declined);
+}
+
+/// The toolbar's point count marks a cut result the whole time, and the toast
+/// comes back for a new window instead of staying silent for the tab's life.
+#[gpui::test]
+fn a_truncated_result_is_marked_and_a_new_window_reports_it_again(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+
+    let label = window.update(|_, cx| {
+        let shell = chart.read(cx).chart_shell_for_test().clone();
+        crate::chart::toolbar::chart_window_label(&shell, None, 10_000, true, cx)
+    });
+    assert!(label.contains("row limit"), "{label}");
+
+    window.update(|_, cx| {
+        chart.update(cx, |chart, cx| {
+            chart.truncation_reported = true;
+            chart.on_time_range_changed(Some(0), Some(1_000), cx);
+        });
+    });
+    assert!(!window.update(|_, cx| chart.read(cx).truncation_reported));
 }
 
 /// Every toolbar control of the chart is a pane action.

@@ -610,6 +610,25 @@ fn run_saved_chart(console: &mut Fixture<'_>, query: &str) -> Entity<ChartDocume
     chart
 }
 
+/// A saved chart stores no database. It keeps running where it always did, and
+/// never follows the database selected in the sidebar from one refresh to the
+/// next, which would draw a same-named table from somewhere else.
+#[gpui::test]
+fn a_saved_chart_does_not_follow_the_active_database(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    console.set_active_database("analytics");
+    let chart = run_saved_chart(&mut console, SECOND_STATEMENT);
+    console.set_active_database("other");
+    console.run_chart(&chart);
+
+    let requests = console.driver.stats().executed_requests;
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests.iter().all(|request| request.database.is_none()),
+        "{requests:?}"
+    );
+}
+
 /// The check sits where the chart runs, so nothing opens around it.
 #[gpui::test]
 fn a_saved_chart_that_changes_data_never_runs(cx: &mut TestAppContext) {

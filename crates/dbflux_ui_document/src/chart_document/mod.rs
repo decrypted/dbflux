@@ -173,8 +173,9 @@ pub struct ChartDocument {
     pending_result: Option<PendingResult>,
     pending_run_on_first_render: bool,
     /// Where the query runs: the database, schema and source of the document
-    /// the chart was asked for from. Empty for a saved chart, which then runs
-    /// on the connection's active database as a console does.
+    /// the chart was asked for from, fixed when it opened. Empty for a saved
+    /// chart: no database is stored with it, so it sends none and runs on the
+    /// connection's own, rather than follow whatever the sidebar selects.
     execution_context: ExecutionContext,
     /// Why the last run did not produce a result. A toast fades, so the chart
     /// area keeps saying it.
@@ -1334,25 +1335,17 @@ impl ChartDocument {
         }
 
         // Resolve the connection synchronously on the foreground thread.
+        let database = runs_user_query
+            .then(|| self.execution_context.database.clone())
+            .flatten();
         let resolved = {
             let state = self.app_state.read(cx);
-            state.connections().get(&profile_id).map(|connected| {
-                // The same database a console on this connection runs in.
-                let database = runs_user_query
-                    .then(|| {
-                        self.execution_context
-                            .database
-                            .clone()
-                            .or_else(|| connected.active_database.clone())
-                    })
-                    .flatten();
-
-                connected
-                    .resolve_connection_for_execution(database.as_deref())
-                    .map(|connection| (connection, database))
-            })
+            state
+                .connections()
+                .get(&profile_id)
+                .map(|connected| connected.resolve_connection_for_execution(database.as_deref()))
         };
-        let (conn, database) = match resolved {
+        let conn = match resolved {
             Some(Ok(resolved)) => resolved,
             Some(Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
                 database,
@@ -1822,8 +1815,7 @@ impl ChartDocument {
     // ---- ViewHandle construction ----
 
     /// Runs the query where the document it came from runs it: its database,
-    /// schema and source. Without this the chart uses the connection's active
-    /// database.
+    /// schema and source. Without this the chart sends no database.
     pub fn set_execution_context(&mut self, context: ExecutionContext) {
         self.execution_context = context;
     }

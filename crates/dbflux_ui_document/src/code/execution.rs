@@ -88,34 +88,55 @@ fn is_refused_by_read_only_profile(connected: &dbflux_core::ConnectedProfile, qu
     )
 }
 
-/// Why a chart must not run `query`, or `None` when it may: the connection's
-/// read-only profile refuses it, or it changes data. Languages without a shared
-/// classifier default to "write", so outside SQL only the driver's own danger
+/// Why a chart must not run `query`, or `None` when it may. A chart runs its
+/// query with nobody watching, on opening and on every refresh, so it takes one
+/// statement that reads.
+///
+/// A language the classifier knows is held to its answer. Where it would only
+/// fall back to "write" because neither core nor the driver can tell, every
+/// query of that language would be refused, so there the driver's own danger
 /// check decides.
-pub(super) fn chart_refusal(
+pub(crate) fn chart_refusal(
     connected: &dbflux_core::ConnectedProfile,
     query: &str,
 ) -> Option<String> {
+    let language = &connected.connection.metadata().query_language;
+    let service = connected.connection.language_service();
+
+    if language.statement_count(query) > 1 {
+        return Some(dbflux_i18n::t!(
+            "document.code.execution.toast.chart_one_statement"
+        ));
+    }
+
     if is_refused_by_read_only_profile(connected, query) {
         return Some(dbflux_i18n::t!(
             "document.code.execution.toast.read_only_profile"
         ));
     }
 
-    let language = &connected.connection.metadata().query_language;
-    let service = connected.connection.language_service();
-
-    let changes_data = if matches!(language, QueryLanguage::Sql) {
-        !matches!(
+    let classification = match language {
+        QueryLanguage::Sql
+        | QueryLanguage::MongoQuery
+        | QueryLanguage::RedisCommands
+        | QueryLanguage::CloudWatchLogsInsightsQl
+        | QueryLanguage::OpenSearchPpl
+        | QueryLanguage::OpenSearchSql => Some(
             dbflux_core::classify_query_for_language_with_service(language, query, Some(service)),
-            dbflux_core::ExecutionClassification::Metadata
-                | dbflux_core::ExecutionClassification::Read
-        )
-    } else {
-        service.detect_dangerous(query).is_some()
+        ),
+        _ => service.classify_execution(query),
     };
 
-    changes_data.then(|| dbflux_i18n::t!("document.code.execution.toast.chart_reads_only"))
+    let reads = match classification {
+        Some(classification) => matches!(
+            classification,
+            dbflux_core::ExecutionClassification::Metadata
+                | dbflux_core::ExecutionClassification::Read
+        ),
+        None => service.detect_dangerous(query).is_none(),
+    };
+
+    (!reads).then(|| dbflux_i18n::t!("document.code.execution.toast.chart_reads_only"))
 }
 
 fn show_read_only_profile_toast(cx: &mut App) {

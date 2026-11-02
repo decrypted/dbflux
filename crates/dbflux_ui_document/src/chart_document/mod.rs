@@ -1315,6 +1315,24 @@ impl ChartDocument {
 
         let runs_user_query = runs_user_query(&request);
 
+        // Every run comes through here: the first, a refresh, a saved chart and
+        // a dashboard panel, whose query nobody may have looked at since it was
+        // saved, on a profile that may have turned read-only since.
+        let refusal = runs_user_query
+            .then(|| {
+                let state = self.app_state.read(cx);
+                let connected = state.connections().get(&profile_id)?;
+                crate::code::chart_refusal(connected, &request.sql)
+            })
+            .flatten();
+        if let Some(message) = refusal {
+            self.exec_state = ExecState::Error;
+            self.state = DocumentState::Error;
+            self.stop_auto_refresh(cx);
+            self.report_failure(message, cx);
+            return;
+        }
+
         // Resolve the connection synchronously on the foreground thread.
         let resolved = {
             let state = self.app_state.read(cx);
@@ -1415,6 +1433,19 @@ impl ChartDocument {
             });
         })
         .detach();
+    }
+
+    /// A query the chart refuses stays refused, so the timer has nothing to do.
+    fn stop_auto_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.refresh_policy == RefreshPolicy::Manual {
+            return;
+        }
+
+        self.set_refresh_policy(RefreshPolicy::Manual, cx);
+        let manual = RefreshPolicy::Manual.index();
+        self.refresh_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_selected_index(Some(manual), cx);
+        });
     }
 
     /// Shows why a run produced nothing: a toast now, and the chart area until

@@ -70,6 +70,7 @@ mod completion_tests;
 mod context_bar;
 mod diagnostics;
 mod execution;
+pub(crate) use execution::chart_refusal;
 mod execution_session;
 mod file_ops;
 mod file_persistence;
@@ -1358,10 +1359,8 @@ impl CodeDocument {
         context
     }
 
-    /// Asks the workspace for a chart of `query`, unless it cannot run there.
-    ///
-    /// A chart runs its query unattended, on opening and on every refresh, with
-    /// no confirmation to stop on, so it takes reads only.
+    /// Asks the workspace for a chart of `query`, unless it cannot run there,
+    /// so a refused statement opens no tab. The chart checks again on every run.
     pub(super) fn request_chart(
         &mut self,
         query: String,
@@ -1377,7 +1376,7 @@ impl CodeDocument {
                 None => Some(dbflux_i18n::t!(
                     "document.code.execution.toast.connection_not_found"
                 )),
-                Some(connected) => execution::chart_refusal(connected, &query),
+                Some(connected) => chart_refusal(connected, &query),
             },
         };
 

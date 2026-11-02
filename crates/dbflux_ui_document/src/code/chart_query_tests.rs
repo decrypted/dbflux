@@ -5,12 +5,12 @@ use crate::chart_document::ChartDocument;
 use crate::data_grid_panel::DataGridEvent;
 use crate::handle::DocumentEvent;
 use crate::keyboard_test_support::init_keyboard_runtime;
-use dbflux_components::chart::{BindingSpec, ChartKind};
+use dbflux_components::chart::{BindingSpec, ChartKind, ChartSpec};
 use dbflux_components::controls::InputPosition;
 use dbflux_components::saved_chart::SavedChart;
 use dbflux_core::{
     ColumnKind, ColumnMeta, ConnectionProfile, DbConfig, DbKind, ExecutionContext, QueryLanguage,
-    QueryResult, Value,
+    QueryResult, RefreshPolicy, Value,
 };
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_test_support::fake_driver::{FakeDriver, FakeQueryOutcome};
@@ -585,6 +585,123 @@ fn a_missing_connection_stays_visible_in_the_chart(cx: &mut TestAppContext) {
     console.run_chart(&chart);
 
     assert!(console.message(&chart).contains("not found"));
+}
+
+/// Opens a chart of `query` the way a saved chart or a dashboard panel does,
+/// past the button's check, and runs it twice as a refresh would.
+fn run_saved_chart(console: &mut Fixture<'_>, query: &str) -> Entity<ChartDocument> {
+    let saved = SavedChart::new_query(
+        "saved".to_string(),
+        console.profile_id,
+        query.to_string(),
+        ChartSpec::from_detection(1, vec![3], &api_call_log_result().columns, 10_000)
+            .expect("a spec"),
+        BindingSpec::default(),
+    );
+    let app_state = console.app_state.clone();
+    let chart = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            ChartDocument::from_saved(&saved, app_state, window, cx).expect("a query chart")
+        })
+    });
+    console.run_chart(&chart);
+    console.run_chart(&chart);
+
+    chart
+}
+
+/// The check sits where the chart runs, so nothing opens around it.
+#[gpui::test]
+fn a_saved_chart_that_changes_data_never_runs(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let chart = run_saved_chart(&mut console, "delete from users where id = 1");
+
+    assert!(console.executed().is_empty());
+    assert!(console.message(&chart).contains("read data"));
+}
+
+/// An interval on a refused query would only repeat the refusal.
+#[gpui::test]
+fn a_refused_query_stops_auto_refresh(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let chart = run_saved_chart(&mut console, "delete from users where id = 1");
+
+    console.window.update(|_, cx| {
+        chart.update(cx, |chart, cx| {
+            chart.set_refresh_policy(RefreshPolicy::Interval { every_secs: 30 }, cx);
+        });
+    });
+    console.run_chart(&chart);
+
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| chart.read(cx).refresh_policy()),
+        RefreshPolicy::Manual
+    );
+    assert!(console.executed().is_empty());
+}
+
+/// A profile set to read-only after the chart was saved is asked too.
+#[gpui::test]
+fn a_saved_chart_is_held_to_a_read_only_profile(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let app_state = console.app_state.clone();
+    let profile_id = console.profile_id;
+    console.window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
+                connected.read_only_reason = Some(dbflux_core::ReadOnlyReason::ProfileSetting);
+            }
+        });
+    });
+    let chart = run_saved_chart(&mut console, "delete from users where id = 1");
+
+    assert!(console.executed().is_empty());
+    assert!(console.message(&chart).contains("read-only"));
+}
+
+/// A buffer saved whole before the chart took one statement drew only the
+/// first statement's rows, and cannot be told from a batch with a write.
+#[gpui::test]
+fn a_saved_chart_of_two_statements_says_why_it_stopped(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let chart = run_saved_chart(&mut console, &buffer());
+
+    assert!(console.executed().is_empty());
+    assert!(console.message(&chart).contains("one statement"));
+}
+
+/// Writes in the languages core can classify are refused like SQL writes, not
+/// only the ones the danger check calls dangerous.
+#[gpui::test]
+fn a_redis_write_is_not_charted(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::Redis, "");
+    for write in ["INCR page_hits", "SET k v", "EVAL \"return 1\" 0"] {
+        let chart = run_saved_chart(&mut console, write);
+        assert!(console.message(&chart).contains("read data"), "{write}");
+    }
+    assert!(console.executed().is_empty());
+
+    run_saved_chart(&mut console, "GET k");
+    assert!(!console.executed().is_empty(), "a read still runs");
+}
+
+#[gpui::test]
+fn a_mongo_write_is_not_charted(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::MongoDB, "");
+    for write in [
+        "db.users.insertOne({})",
+        "db.users.updateOne({}, {})",
+        "db.users.deleteOne({})",
+    ] {
+        let chart = run_saved_chart(&mut console, write);
+        assert!(console.message(&chart).contains("read data"), "{write}");
+    }
+    assert!(console.executed().is_empty());
+
+    run_saved_chart(&mut console, "db.users.find({})");
+    assert!(!console.executed().is_empty(), "a read still runs");
 }
 
 /// A driver with one connection per database may still be opening this one.

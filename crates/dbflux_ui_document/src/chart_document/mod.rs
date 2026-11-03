@@ -2027,6 +2027,10 @@ impl ChartDocument {
             Dropdown::new("chart-query-database")
                 .aria_label(dbflux_i18n::t!("document.chart.query.database"))
                 .placeholder(dbflux_i18n::t!("document.chart.query.database_default"))
+                .trigger_width_range(
+                    dbflux_components::tokens::ChartDocumentMetrics::QUERY_PICKER_MIN_WIDTH,
+                    dbflux_components::tokens::ChartDocumentMetrics::QUERY_PICKER_MAX_WIDTH,
+                )
         });
         let database_sub = cx.subscribe(
             &database,
@@ -3238,6 +3242,17 @@ impl ChartDocument {
                 section.database.read(cx).item_count(),
             )
         })
+    }
+
+    /// Opens the picker's menu.
+    #[cfg(test)]
+    pub(crate) fn open_picker_for_test(&mut self, cx: &mut Context<Self>) {
+        if let Some(section) = &self.query_section {
+            section
+                .database
+                .clone()
+                .update(cx, |dropdown, cx| dropdown.open(cx));
+        }
     }
 
     /// What the picker offers.

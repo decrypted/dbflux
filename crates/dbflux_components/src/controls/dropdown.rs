@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::actions::RunCommand;
@@ -157,6 +159,12 @@ pub struct Dropdown {
     mono_label: bool,
     leading_icon: Option<AppIcon>,
     label_environment: Option<ConnectionEnvironment>,
+    /// When set, the trigger takes its label's width within this range, not the
+    /// parent's width.
+    trigger_width_range: Option<(Pixels, Pixels)>,
+    /// The trigger's width in the last frame. An anchored menu has no parent to size
+    /// against, so it reads this to be at least as wide.
+    trigger_width: Rc<Cell<Pixels>>,
     menu_scroll_handle: ScrollHandle,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
     /// Created the first time the dropdown is focused from the keyboard
@@ -195,6 +203,8 @@ impl Dropdown {
             mono_label: false,
             leading_icon: None,
             label_environment: None,
+            trigger_width_range: None,
+            trigger_width: Rc::new(Cell::new(px(0.0))),
             menu_scroll_handle: ScrollHandle::new(),
             on_select: None,
             focus_handle: None,
@@ -205,6 +215,13 @@ impl Dropdown {
 
     pub fn items(mut self, items: Vec<DropdownItem>) -> Self {
         self.items = items;
+        self
+    }
+
+    /// Sizes the trigger to its label within `min` and `max`, for a dropdown in a row
+    /// with room to spare, which it would otherwise take all of.
+    pub fn trigger_width_range(mut self, min: Pixels, max: Pixels) -> Self {
+        self.trigger_width_range = Some((min, max));
         self
     }
 
@@ -746,7 +763,7 @@ impl Dropdown {
             .id("dropdown-menu")
             .debug_selector(move || menu_debug_selector.clone())
             .relative()
-            .min_w_full()
+            .min_w(self.trigger_width.get())
             .shadow_lg()
             .occlude()
             .on_mouse_down_out(cx.listener(Self::handle_mouse_down_out))
@@ -932,8 +949,15 @@ impl Render for Dropdown {
         let variant = self.trigger_variant();
         let keyboard_focused = self.is_focused(window);
         let trigger = self.render_trigger(label, disabled, keyboard_focused, cx);
+        let trigger_width = self.trigger_width.clone();
+        let width_range = self.trigger_width_range;
 
         div()
+            .on_children_prepainted(move |children, _window, _cx| {
+                if let Some(trigger) = children.first() {
+                    trigger_width.set(trigger.size.width);
+                }
+            })
             .id(self.id.clone())
             .debug_selector({
                 let id = self.id.to_string();
@@ -944,7 +968,10 @@ impl Render for Dropdown {
                 element.track_focus(handle)
             })
             .on_action(cx.listener(Self::handle_run_command))
-            .w_full()
+            .map(|root| match width_range {
+                Some((min, max)) => root.min_w(min).max_w(max),
+                None => root.w_full(),
+            })
             .when(
                 matches!(
                     variant,
@@ -1423,6 +1450,101 @@ mod tests {
                 .find(|id| id == "dropdown-trigger" || id.ends_with(".dropdown-trigger"))?;
 
             accessible_name(&frame, &id)
+        }
+
+        struct Row {
+            dropdown: Entity<Dropdown>,
+        }
+
+        impl Render for Row {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div()
+                    .flex()
+                    .w(gpui::px(900.0))
+                    .child(self.dropdown.clone())
+                    .child(div().flex_1())
+            }
+        }
+
+        /// The drawn width of the trigger, and of its menu once opened.
+        fn widths(
+            build: impl FnOnce() -> Dropdown + 'static,
+            cx: &mut TestAppContext,
+        ) -> (f32, f32) {
+            cx.update(crate::theme::init);
+
+            let (row, window) = cx.add_window_view(move |_window, cx| Row {
+                dropdown: cx.new(|_cx| build()),
+            });
+            window.run_until_parked();
+            let width = |window: &mut gpui::VisualTestContext, id: &'static str| {
+                f32::from(window.debug_bounds(id).expect(id).size.width)
+            };
+            let trigger = width(window, "sizing");
+
+            window.update(|_, cx| {
+                row.read(cx).dropdown.clone().update(cx, |dropdown, cx| {
+                    dropdown.open(cx);
+                });
+            });
+            window.run_until_parked();
+
+            (trigger, width(window, "sizing-menu"))
+        }
+
+        fn sized(label: &str) -> impl FnOnce() -> Dropdown + 'static {
+            let label = label.to_string();
+            move || {
+                Dropdown::new("sizing")
+                    .items(vec![DropdownItem::new("a"), DropdownItem::new(label)])
+                    .selected_index(Some(1))
+                    .trigger_width_range(gpui::px(160.0), gpui::px(320.0))
+            }
+        }
+
+        #[gpui::test]
+        fn a_sized_trigger_holds_a_short_name_at_its_least(cx: &mut TestAppContext) {
+            let (trigger, _) = widths(sized("shop"), cx);
+
+            assert_eq!(trigger, 160.0);
+        }
+
+        #[gpui::test]
+        fn a_sized_trigger_grows_with_its_name(cx: &mut TestAppContext) {
+            let (trigger, _) = widths(sized("gone_db (not on this)"), cx);
+
+            assert!(trigger > 160.0 && trigger < 320.0, "{trigger}");
+        }
+
+        #[gpui::test]
+        fn a_sized_trigger_stops_at_its_most(cx: &mut TestAppContext) {
+            let (trigger, menu) = widths(sized(&"a_very_long_database_name_".repeat(4)), cx);
+
+            assert_eq!(trigger, 320.0);
+            assert!(menu > trigger, "the menu shows the whole name: {menu}");
+        }
+
+        /// The menu is anchored, so nothing lays it out against the trigger but the
+        /// width the trigger reported.
+        #[gpui::test]
+        fn a_menu_is_at_least_as_wide_as_its_trigger(cx: &mut TestAppContext) {
+            let (sized_trigger, sized_menu) = widths(sized("shop"), cx);
+            assert!(sized_menu >= sized_trigger, "{sized_menu} {sized_trigger}");
+
+            let (trigger, menu) = widths(
+                || {
+                    Dropdown::new("sizing")
+                        .items(vec![DropdownItem::new("a")])
+                        .selected_index(Some(0))
+                },
+                cx,
+            );
+            assert_eq!(trigger, 900.0, "no range: it takes the row");
+            assert!(menu >= trigger, "{menu}");
         }
 
         #[gpui::test]

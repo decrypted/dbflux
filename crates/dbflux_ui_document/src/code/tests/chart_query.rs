@@ -4007,6 +4007,159 @@ fn a_name_a_fixed_database_driver_does_not_store_is_no_edit(cx: &mut TestAppCont
     );
 }
 
+/// What the Query bar draws at a window width, in logical pixels.
+#[derive(Debug)]
+struct QueryBar {
+    database: Option<f32>,
+    first_line: Option<f32>,
+    picker: Option<f32>,
+    menu: Option<f32>,
+}
+
+struct ShownChart(Entity<ChartDocument>);
+
+impl gpui::Render for ShownChart {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement as _, Styled as _};
+
+        gpui::div().size_full().child(self.0.clone())
+    }
+}
+
+/// Draws `chart` in a window of its own, with the section open when `open`, and the
+/// picker's menu too.
+fn query_bar(
+    console: &mut Fixture<'_>,
+    chart: &Entity<ChartDocument>,
+    window_width: f32,
+    open: bool,
+) -> QueryBar {
+    let host = ShownChart(chart.clone());
+    let (_, shown) = console.window.add_window_view(move |_, _| host);
+    shown.simulate_resize(gpui::size(gpui::px(window_width), gpui::px(800.0)));
+    shown.run_until_parked();
+
+    if open {
+        let handle = chart.clone();
+        shown.update(|window, cx| {
+            handle.update(cx, |chart, cx| {
+                chart.open_query_section_for_test(window, cx)
+            });
+        });
+        shown.run_until_parked();
+        let handle = chart.clone();
+        shown.update(|_, cx| {
+            handle.update(cx, |chart, cx| chart.open_picker_for_test(cx));
+        });
+        shown.run_until_parked();
+    }
+
+    let width = |shown: &mut gpui::VisualTestContext, id: &'static str| {
+        shown
+            .debug_bounds(id)
+            .map(|bounds| f32::from(bounds.size.width))
+    };
+
+    QueryBar {
+        database: width(shown, "chart-query-database-label"),
+        first_line: width(shown, "chart-query-first-line"),
+        picker: width(shown, "chart-query-database"),
+        menu: width(shown, "chart-query-database-menu"),
+    }
+}
+
+fn chart_on(console: &mut Fixture<'_>, database: &str, query: &str) -> Entity<ChartDocument> {
+    let mut saved = console.saved_with(database_context(database));
+    saved.source = dbflux_components::saved_chart::SavedChartSource::Query {
+        query: query.to_string(),
+    };
+    console.reopen(&saved)
+}
+
+const LONG_LINE: &str = "select ts, calls, runtime, errors, calls as a_very_long_column_alias, \
+    calls as another_very_long_column_alias, calls as yet_another_very_long_column_alias, \
+    calls as the_longest_column_alias_of_them_all, calls as one_more_for_the_widest_window, \
+    calls as and_one_more_for_a_very_wide_window, calls as this_one_makes_sure_of_it_all from t";
+
+/// The database is why the bar is there. A long first line takes what is left, not
+/// the room the database needs.
+#[gpui::test]
+fn the_closed_bar_keeps_the_database_next_to_a_long_line(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+
+    let short = chart_on(&mut console, "shop", "select 1");
+    let natural = query_bar(&mut console, &short, 1600.0, false);
+    let natural_width = natural.database.expect("a label");
+    assert!(natural_width > 0.0);
+
+    for window_width in [1600.0, 800.0] {
+        let long = chart_on(&mut console, "shop", LONG_LINE);
+        let bar = query_bar(&mut console, &long, window_width, false);
+
+        assert_eq!(bar.database, Some(natural_width), "at {window_width}");
+        assert!(
+            bar.first_line.expect("a line") > 200.0,
+            "at {window_width}: {bar:?}"
+        );
+    }
+}
+
+/// A very long database name stops at the cap and truncates, and the first line keeps
+/// the rest. Once the row is too narrow for both, the line still keeps its minimum.
+#[gpui::test]
+fn a_long_database_name_does_not_push_the_line_out(cx: &mut TestAppContext) {
+    use dbflux_components::tokens::ChartDocumentMetrics as Metrics;
+
+    let cap = f32::from(Metrics::QUERY_DATABASE_MAX_WIDTH);
+    let least = f32::from(Metrics::QUERY_FIRST_LINE_MIN_WIDTH);
+    let name = "a_database_with_a_very_long_name_".repeat(4);
+    let mut console = console_with(cx, "");
+
+    let wide = chart_on(&mut console, &name, LONG_LINE);
+    let bar = query_bar(&mut console, &wide, 1600.0, false);
+    assert_eq!(bar.database, Some(cap));
+    assert!(bar.first_line.expect("a line") > cap, "{bar:?}");
+
+    let narrow = chart_on(&mut console, &name, LONG_LINE);
+    let bar = query_bar(&mut console, &narrow, 400.0, false);
+    assert_eq!(bar.first_line, Some(least), "{bar:?}");
+    let database = bar.database.expect("a label");
+    assert!(database > 0.0 && database < cap, "{bar:?}");
+}
+
+/// The trigger takes the width of the name it shows, within its range, and the menu
+/// at least that, in a wide window and a narrow one.
+#[gpui::test]
+fn the_picker_fits_its_name_and_the_menu_fits_the_picker(cx: &mut TestAppContext) {
+    use dbflux_components::tokens::ChartDocumentMetrics as Metrics;
+
+    let least = f32::from(Metrics::QUERY_PICKER_MIN_WIDTH);
+    let most = f32::from(Metrics::QUERY_PICKER_MAX_WIDTH);
+    let mut console = console_with(cx, "");
+    console.list_databases(&["shop", "other"]);
+
+    for window_width in [1600.0, 800.0] {
+        let listed = chart_on(&mut console, "shop", "select 1");
+        let bar = query_bar(&mut console, &listed, window_width, true);
+        let trigger = bar.picker.expect("a picker");
+        assert_eq!(trigger, least, "at {window_width}: {bar:?}");
+        assert!(bar.menu.expect("a menu") >= trigger, "{bar:?}");
+
+        let missing = chart_on(&mut console, "gone_db", "select 1");
+        let bar = query_bar(&mut console, &missing, window_width, true);
+        let trigger = bar.picker.expect("a picker");
+        assert!(
+            trigger > least && trigger <= most,
+            "at {window_width}: {bar:?}"
+        );
+        assert!(bar.menu.expect("a menu") >= trigger, "{bar:?}");
+    }
+}
+
 /// A saved metric chart stays a metric chart.
 #[gpui::test]
 fn a_save_keeps_a_metric_source(cx: &mut TestAppContext) {

@@ -2284,6 +2284,13 @@ pub struct ChartDocumentMetrics;
 impl ChartDocumentMetrics {
     /// Axis row under the header. (46 px)
     pub const AXIS_ROW_HEIGHT: Rems = ui(46.0);
+    /// Query bar, closed: the most its database label takes, and the least the first
+    /// line of the SQL keeps once the row is too narrow for both.
+    pub const QUERY_DATABASE_MAX_WIDTH: Pixels = px(280.0);
+    pub const QUERY_FIRST_LINE_MIN_WIDTH: Pixels = px(96.0);
+    /// Query bar, open: the database picker's trigger, sized to the name it shows.
+    pub const QUERY_PICKER_MIN_WIDTH: Pixels = px(160.0);
+    pub const QUERY_PICKER_MAX_WIDTH: Pixels = px(320.0);
     /// Chart area: 24 px above, 28 px on the sides and below.
     pub const AREA_PADDING_TOP: Pixels = px(24.0);
     pub const AREA_PADDING: Pixels = px(28.0);

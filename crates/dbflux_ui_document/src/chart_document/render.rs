@@ -283,8 +283,10 @@ impl ChartDocument {
                 .log_err();
         });
 
-        let meta = |text: String| {
+        let meta = |id: &'static str, text: String| {
             div()
+                .id(id)
+                .debug_selector(move || id.to_string())
                 .min_w_0()
                 .truncate()
                 .text_size(DocumentMetrics::TABLE_META_FONT)
@@ -302,7 +304,12 @@ impl ChartDocument {
         let mut bar = document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx).child(toggle);
         bar = match picker {
             Some(picker) => bar.child(picker),
-            None => bar.child(meta(self.database_label(cx))),
+            // Its natural width, up to the cap: where the chart runs is why the bar is
+            // here. It gives way only once the SQL is down to its minimum.
+            None => bar.child(
+                meta("chart-query-database-label", self.database_label(cx))
+                    .max_w(ChartDocumentMetrics::QUERY_DATABASE_MAX_WIDTH),
+            ),
         };
 
         if open {
@@ -322,7 +329,14 @@ impl ChartDocument {
         } else {
             let query = self.query_in_box(cx);
             let first_line = query.lines().find(|line| !line.trim().is_empty());
-            bar = bar.child(meta(first_line.unwrap_or_default().trim().to_string()));
+            bar = bar.child(
+                meta(
+                    "chart-query-first-line",
+                    first_line.unwrap_or_default().trim().to_string(),
+                )
+                .flex_1()
+                .min_w(ChartDocumentMetrics::QUERY_FIRST_LINE_MIN_WIDTH),
+            );
         }
 
         Some(

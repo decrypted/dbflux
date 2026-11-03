@@ -338,7 +338,8 @@ panels take the editor row limit; metric and instance metric sources do not.
 A chart never moves the session an editor runs on. On MySQL, MariaDB and SQL Server,
 which keep the current database on one session, a chart runs on a connection of its
 own, opened when the first one runs (one more connection to the server). It therefore
-cannot see temporary tables, session variables or uncommitted changes of an editor. On
+cannot see temporary tables, session variables or uncommitted changes of an editor, and
+cancelling it, from its tab or the Tasks panel, stops only that chart. On
 DuckDB and Turso the editor has a session of its own, with the same effect, and there
 a chart opened while the editor has a transaction open says so in one line above its
 area. That line describes the moment the chart opened and stays if the editor commits

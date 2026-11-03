@@ -203,7 +203,7 @@ fn dispatch_statement(
     }
 }
 
-fn task_target_for_execution(
+pub(crate) fn task_target_for_execution(
     profile_id: Uuid,
     connected: &dbflux_core::ConnectedProfile,
     target_db: Option<&str>,

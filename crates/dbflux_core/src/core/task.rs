@@ -106,6 +106,36 @@ struct CancelState {
     wakers: Mutex<Vec<(u64, Waker)>>,
 }
 
+/// Runs `run` on this thread and calls `on_cancel` from another one if `cancel`
+/// fires meanwhile, for a blocking driver call that can only be stopped from
+/// outside. Returns once `on_cancel` has returned too, so whatever it sends cannot
+/// reach the next statement on the connection.
+pub fn run_watching_cancel<T>(
+    cancel: &CancelToken,
+    on_cancel: impl FnOnce() + Send,
+    run: impl FnOnce() -> T,
+) -> T {
+    const POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+    let finished = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let watcher = scope.spawn(|| {
+            while !finished.load(Ordering::SeqCst) {
+                if cancel.is_cancelled() {
+                    on_cancel();
+                    return;
+                }
+                std::thread::park_timeout(POLL);
+            }
+        });
+
+        let result = run();
+        finished.store(true, Ordering::SeqCst);
+        watcher.thread().unpark();
+        result
+    })
+}
+
 impl CancelToken {
     pub fn new() -> Self {
         Self {
@@ -201,6 +231,8 @@ pub struct Task {
     /// What the task waits for while it sits in a work queue, such as the
     /// connection whose query slots are all taken. `None` once it runs.
     pub waiting_for: Option<String>,
+    /// See [`TaskManager::mark_runs_apart`].
+    pub runs_apart: bool,
     cancel_token: CancelToken,
     /// Cleared by `TaskManager::mark_uncancellable` for work that never polls
     /// its token, such as a write already sent to the server.
@@ -258,6 +290,8 @@ pub struct TaskSnapshot {
     pub query_text: Option<Arc<str>>,
     /// Set while the task waits in a work queue; see [`Task::waiting_for`].
     pub waiting_for: Option<String>,
+    /// See [`TaskManager::mark_runs_apart`].
+    pub runs_apart: bool,
 }
 
 impl TaskSnapshot {
@@ -281,6 +315,7 @@ impl From<&Task> for TaskSnapshot {
             target: task.target.clone(),
             query_text: task.query_text.clone(),
             waiting_for: task.waiting_for.clone(),
+            runs_apart: task.runs_apart,
         }
     }
 }
@@ -343,6 +378,7 @@ impl TaskManager {
             waiting_for: None,
             cancel_token,
             accepts_cancel: true,
+            runs_apart: false,
             permit: None,
         };
 
@@ -357,6 +393,14 @@ impl TaskManager {
     pub fn mark_uncancellable(&mut self, id: TaskId) {
         if let Some(task) = self.tasks.get_mut(&id) {
             task.accepts_cancel = false;
+        }
+    }
+
+    /// Records that the task's query runs apart from what the connection's
+    /// `cancel_active` stops, so its cancel token alone stops it.
+    pub fn mark_runs_apart(&mut self, id: TaskId) {
+        if let Some(task) = self.tasks.get_mut(&id) {
+            task.runs_apart = true;
         }
     }
 
@@ -706,6 +750,39 @@ impl TaskSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_watched_run_stops_on_cancel_and_returns_only_after_the_call_on_cancel_made() {
+        let cancel = CancelToken::new();
+        let stopped = std::sync::atomic::AtomicBool::new(false);
+        let trigger = cancel.clone();
+
+        let saw_stop = run_watching_cancel(
+            &cancel,
+            || stopped.store(true, Ordering::SeqCst),
+            || {
+                trigger.cancel();
+                while !stopped.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                true
+            },
+        );
+
+        assert!(saw_stop);
+    }
+
+    #[test]
+    fn a_watched_run_that_is_not_cancelled_calls_nothing() {
+        let cancel = CancelToken::new();
+        let called = std::sync::atomic::AtomicBool::new(false);
+
+        assert_eq!(
+            run_watching_cancel(&cancel, || called.store(true, Ordering::SeqCst), || 7),
+            7
+        );
+        assert!(!called.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn import_and_migrate_labels() {

@@ -1509,6 +1509,8 @@ impl ChartDocument {
         request.sql =
             dbflux_core::substitute_time_macros(&request.sql, macro_window, query_language);
 
+        let database_for_target = database.clone();
+
         if runs_user_query {
             let row_limit = crate::code::enforces_request_row_limit(conn.as_ref())
                 .then(|| self.app_state.read(cx).general_settings().editor_row_limit);
@@ -1535,11 +1537,33 @@ impl ChartDocument {
             self.refusal_reported = None;
         }
 
-        let (task_id, cancel_token) = self.runner.start_primary(
+        // Named for the database it runs in: on a driver with one connection per
+        // database, a cancel goes to the connection the target names.
+        let task_target = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| {
+                crate::code::task_target_for_execution(
+                    profile_id,
+                    connected,
+                    database_for_target.as_deref(),
+                )
+            });
+        let (task_id, cancel_token) = self.runner.start_primary_for_target(
             dbflux_core::TaskKind::Query,
             dbflux_i18n::t!("document.chart.status.task_label"),
+            task_target,
             cx,
         );
+
+        let runs_apart = runs_user_query && conn.unattended_runs_apart();
+        if runs_apart {
+            self.app_state.update(cx, |state, _| {
+                state.tasks_mut().mark_runs_apart(task_id);
+            });
+        }
 
         self.exec_state = ExecState::Running;
         self.state = DocumentState::Executing;
@@ -1551,13 +1575,16 @@ impl ChartDocument {
             &self.app_state,
             dbflux_ui_base::work_queue::QueryWork::background(profile_id)
                 .for_task(task_id, &cancel_token),
-            async move {
-                // A driver's own metric dispatch has nothing to leave behind,
-                // and goes where it always went.
-                if runs_user_query {
-                    conn.execute_unattended(&request)
-                } else {
-                    conn.execute(&request)
+            {
+                let cancel = cancel_token.clone();
+                async move {
+                    // A driver's own metric dispatch has nothing to leave behind,
+                    // and goes where it always went.
+                    if runs_user_query {
+                        conn.execute_unattended(&request, &cancel)
+                    } else {
+                        conn.execute(&request)
+                    }
                 }
             },
             cx,
@@ -1567,19 +1594,24 @@ impl ChartDocument {
             let result = task.await;
 
             cx.update(|cx| {
-                let Some(entity) = this.upgrade() else {
+                // A run apart left the console's connection alone, and cleaning up
+                // there could end what the console is doing.
+                let clean_up = || {
                     if cancel_token.is_cancelled()
+                        && !runs_apart
                         && let Err(e) = conn_cleanup.cleanup_after_cancel()
                     {
                         log::warn!("[chart-doc] cleanup after cancel failed: {}", e);
                     }
+                };
+
+                let Some(entity) = this.upgrade() else {
+                    clean_up();
                     return;
                 };
 
                 if cancel_token.is_cancelled() {
-                    if let Err(e) = conn_cleanup.cleanup_after_cancel() {
-                        log::warn!("[chart-doc] cleanup after cancel failed: {}", e);
-                    }
+                    clean_up();
                     entity.update(cx, |_, cx| cx.emit(DocumentEvent::ExecutionFinished));
                     return;
                 }
@@ -1695,12 +1727,10 @@ impl ChartDocument {
 
         // The request also loads the database's schema, which a driver may not
         // offer (Redshift): the run only needs the connection, and it is there.
-        let connection_is_open = self
-            .app_state
-            .read(cx)
-            .connections()
-            .get(profile_id)
-            .is_some_and(|connected| connected.database_connection(database).is_some());
+        let connected = self.app_state.read(cx).connections().get(profile_id);
+        let connection_exists = connected.is_some();
+        let connection_is_open =
+            connected.is_some_and(|connected| connected.database_connection(database).is_some());
 
         let started = match &event.outcome {
             _ if connection_is_open => {
@@ -1714,6 +1744,16 @@ impl ChartDocument {
                     error = error
                 );
                 self.remember_database_failure(database.clone(), message, cx);
+                false
+            }
+            // The connection went: the user knows, and a dashboard would say so
+            // once per panel.
+            ObjectTreeOutcome::Cancelled | ObjectTreeOutcome::Rejected(_) if !connection_exists => {
+                let message = dbflux_i18n::t!(
+                    "document.chart.error.database_not_opened",
+                    database = database
+                );
+                self.show_database_failure(message, cx);
                 false
             }
             // Nothing reported these, and a panel out of view has no other way

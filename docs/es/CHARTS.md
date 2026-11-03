@@ -363,7 +363,8 @@ Un gráfico nunca mueve la sesión en la que se ejecuta un editor. En MySQL, Mar
 Server, que guardan la base de datos actual en una sola sesión, un gráfico se ejecuta en
 una conexión propia, abierta cuando se ejecuta el primero (una conexión más al servidor).
 Por eso no puede ver tablas temporales, variables de sesión ni cambios sin confirmar de
-un editor. En DuckDB y Turso el editor tiene sesión propia, con el mismo efecto, y allí
+un editor, y cancelarlo, desde su pestaña o el panel de tareas, detiene solo ese gráfico.
+En DuckDB y Turso el editor tiene sesión propia, con el mismo efecto, y allí
 un gráfico abierto mientras el editor tiene una transacción abierta lo dice en una línea
 sobre su área. Esa línea describe el momento en que se abrió el gráfico y sigue ahí si el
 editor confirma después. La app no sigue las transacciones abiertas en los demás drivers,

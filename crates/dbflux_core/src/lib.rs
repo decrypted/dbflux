@@ -122,7 +122,7 @@ pub use core::{
     SchemaSnapshotAuthority, ShutdownCoordinator, ShutdownPhase, SourceContextSpec,
     SourceQueryMode, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
     TransactionStateNote, Value, VersioningStatus, redact_connection_credentials,
-    redact_uri_credentials, sanitize_uri,
+    redact_uri_credentials, run_watching_cancel, sanitize_uri,
 };
 pub use core::{
     DEFAULT_MAX_CONCURRENT_QUERIES, DEFAULT_MAX_CONNECTION_TASKS, DEFAULT_MAX_QUEUED_QUERIES,

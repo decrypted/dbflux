@@ -68,7 +68,7 @@ mod completion_tests;
 mod context_bar;
 mod diagnostics;
 mod execution;
-pub(crate) use execution::chart_refusal;
+pub(crate) use execution::{chart_refusal, task_target_for_execution};
 mod execution_session;
 mod explain;
 mod file_ops;

@@ -1216,8 +1216,26 @@ pub trait Connection: Send + Sync {
     /// overrides this: `execute` moves that session to `req.database` and leaves
     /// it there, and a console that sends no database of its own would run its
     /// next statement, a write included, in the chart's database.
-    fn execute_unattended(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+    ///
+    /// `cancel` stops this run and nothing else. A driver that runs it apart also
+    /// answers `unattended_runs_apart`.
+    fn execute_unattended(
+        &self,
+        req: &QueryRequest,
+        cancel: &crate::CancelToken,
+    ) -> Result<QueryResult, DbError> {
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
+        }
+
         self.execute(req)
+    }
+
+    /// Whether `execute_unattended` runs apart from what `cancel_active` stops.
+    /// If so, `cancel_active` for such a run would stop the console's statement
+    /// instead, and the run's own `cancel` token is what stops it.
+    fn unattended_runs_apart(&self) -> bool {
+        false
     }
 
     /// Execute a query and return a handle for cancellation.

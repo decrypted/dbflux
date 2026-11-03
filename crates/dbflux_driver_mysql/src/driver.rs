@@ -1474,7 +1474,6 @@ impl MysqlDriver {
             query_connection_id,
             kill_opts: opts,
             cancelled: Arc::new(AtomicBool::new(false)),
-            unattended_cancelled: AtomicBool::new(false),
             kind: self.kind,
         }))
     }
@@ -1574,7 +1573,6 @@ impl MysqlDriver {
             query_connection_id,
             kill_opts: opts,
             cancelled: Arc::new(AtomicBool::new(false)),
-            unattended_cancelled: AtomicBool::new(false),
             kind: self.kind,
         }))
     }
@@ -1724,7 +1722,6 @@ impl MysqlDriver {
             query_connection_id,
             kill_opts: query_opts, // Use query tunnel's opts for KILL
             cancelled: Arc::new(AtomicBool::new(false)),
-            unattended_cancelled: AtomicBool::new(false),
             kind: self.kind,
         }))
     }
@@ -1954,9 +1951,6 @@ pub struct MysqlConnection {
 
     kill_opts: Opts,
     cancelled: Arc<AtomicBool>,
-    /// Apart from `cancelled`, which a run on `query_conn` clears and a cancel of
-    /// the console sets.
-    unattended_cancelled: AtomicBool,
     kind: DbKind,
 }
 
@@ -2316,7 +2310,11 @@ impl Connection for MysqlConnection {
     /// Runs on a connection of its own. Sharing `query_conn` would leave that
     /// session on the chart's database, and MySQL cannot go back to none, so a
     /// console that sends no database would run its next statement there.
-    fn execute_unattended(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+    fn execute_unattended(
+        &self,
+        req: &QueryRequest,
+        cancel: &dbflux_core::CancelToken,
+    ) -> Result<QueryResult, DbError> {
         check_request_is_honorable(req)?;
 
         if matches!(
@@ -2337,44 +2335,76 @@ impl Connection for MysqlConnection {
             Err(poison_err) => poison_err.into_inner(),
         };
 
-        // A request without a database runs on the connection's own, and there
-        // is no `USE` back to none.
-        if req.database.is_none()
-            && slot
-                .as_ref()
-                .is_some_and(|state| state.current_database != own_database)
+        // It may have waited for that lock behind another chart.
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
+        }
+
+        // Asked now, a connection the server dropped while idle costs nothing.
+        // Retrying after a failure could run a statement that already ran:
+        // `SELECT f()` reads as far as the classifier can tell, whatever `f` does.
+        if slot
+            .as_mut()
+            .is_some_and(|state| state.conn.ping().is_err())
         {
             *slot = None;
         }
 
-        // An idle connection the server dropped costs one retry, not a failed
-        // refresh. Chart queries read, so running one again is safe.
-        for attempt_left in [true, false] {
-            let state = match slot.as_mut() {
-                Some(state) => state,
-                None => slot.insert(QueryConnState {
-                    conn: Conn::new(self.kill_opts.clone())
-                        .map_err(|error| format_mysql_query_error(&error))?,
-                    current_database: own_database.clone(),
-                    table_locks_possible: false,
-                }),
-            };
-
-            let result =
-                mysql_run_on_session(state, req, Instant::now(), &self.unattended_cancelled);
-            if result.is_ok() || state.conn.ping().is_ok() {
-                return result;
-            }
-
+        // A request without a database runs on the connection's own, and there
+        // is no `USE` back to none.
+        if req.database.is_none()
+            && own_database.is_none()
+            && slot
+                .as_ref()
+                .is_some_and(|state| state.current_database.is_some())
+        {
             *slot = None;
-            if !attempt_left {
-                return result;
-            }
         }
 
-        Err(DbError::query_failed(
-            "MySQL/MariaDB: no connection for the chart",
-        ))
+        let state = match slot.as_mut() {
+            Some(state) => state,
+            None => slot.insert(QueryConnState {
+                conn: Conn::new(self.kill_opts.clone())
+                    .map_err(|error| format_mysql_query_error(&error))?,
+                current_database: own_database.clone(),
+                table_locks_possible: false,
+            }),
+        };
+
+        let on_own_database;
+        let request = if req.database.is_none() && own_database.is_some() {
+            on_own_database = req.clone().with_database(own_database);
+            &on_own_database
+        } else {
+            req
+        };
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let kill = MysqlCancelHandle {
+            kill_opts: self.kill_opts.clone(),
+            query_connection_id: u64::from(state.conn.connection_id()),
+            cancelled: cancelled.clone(),
+        };
+        let result = dbflux_core::run_watching_cancel(
+            cancel,
+            || {
+                if let Err(error) = kill.cancel() {
+                    log::warn!("[CANCEL] Could not stop the chart's query: {error}");
+                }
+            },
+            || mysql_run_on_session(state, request, Instant::now(), &cancelled),
+        );
+
+        // A kill can land after the statement ended, or take the connection along.
+        if cancel.is_cancelled() {
+            *slot = None;
+        }
+
+        result
+    }
+
+    fn unattended_runs_apart(&self) -> bool {
+        true
     }
 
     fn cancel_active(&self) -> Result<(), DbError> {
@@ -3628,12 +3658,6 @@ fn settle_failed_transaction(
     }
 }
 
-/// Executes a single MySQL statement and returns its result set.
-///
-/// SELECT/SHOW/DESCRIBE statements return rows; everything else reports the
-/// affected-row count. This is the per-statement unit used both for a lone
-/// query and for each statement of a multi-statement batch (a script), since
-/// the prepared-statement protocol rejects multi-command batches.
 /// A prepared statement keeps the database it was prepared in. Left in the
 /// connection's cache, the same text run later in another database would read the
 /// first one, so a chart or a console that moved reads the wrong table.
@@ -3643,6 +3667,12 @@ fn close_prepared(conn: &mut Conn, stmt: mysql::Statement) {
     }
 }
 
+/// Executes a single MySQL statement and returns its result set.
+///
+/// SELECT/SHOW/DESCRIBE statements return rows; everything else reports the
+/// affected-row count. This is the per-statement unit used both for a lone
+/// query and for each statement of a multi-statement batch (a script), since
+/// the prepared-statement protocol rejects multi-command batches.
 fn mysql_execute_one_statement(
     conn: &mut Conn,
     sql: &str,
@@ -5431,7 +5461,6 @@ mod tests {
                 query_connection_id: 0,
                 kill_opts: opts,
                 cancelled: cancelled.clone(),
-                unattended_cancelled: AtomicBool::new(false),
                 kind: DbKind::MySQL,
             };
 

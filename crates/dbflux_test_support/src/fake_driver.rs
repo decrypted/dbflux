@@ -92,6 +92,7 @@ struct FakeDriverState {
     refuse_read_only: AtomicBool,
     offers_execution_sessions: AtomicBool,
     opens_per_database_connections: AtomicBool,
+    unattended_apart: AtomicBool,
     delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
     dialect: RwLock<Option<&'static dyn SqlDialect>>,
@@ -145,6 +146,13 @@ impl FakeDriver {
         self.state
             .offers_execution_sessions
             .store(true, Ordering::Relaxed);
+        self
+    }
+
+    /// Runs `execute_unattended` apart from what `cancel_active` stops, the way
+    /// MySQL and SQL Server do.
+    pub fn with_unattended_apart(self) -> Self {
+        self.state.unattended_apart.store(true, Ordering::Relaxed);
         self
     }
 
@@ -802,9 +810,17 @@ impl Connection for FakeConnection {
         self.execute_internal(req).map_err(|error| *error)
     }
 
-    fn execute_unattended(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+    fn execute_unattended(
+        &self,
+        req: &QueryRequest,
+        _cancel: &dbflux_core::CancelToken,
+    ) -> Result<QueryResult, DbError> {
         mutex_lock(&self.state.unattended_requests).push(req.clone());
         self.execute_internal(req).map_err(|error| *error)
+    }
+
+    fn unattended_runs_apart(&self) -> bool {
+        self.state.unattended_apart.load(Ordering::Relaxed)
     }
 
     fn execute_with_handle(

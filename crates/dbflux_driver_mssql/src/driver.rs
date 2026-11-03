@@ -1948,51 +1948,78 @@ impl Connection for MssqlConnection {
     /// Runs on a connection of its own. `execute` leaves this session on the
     /// request's database, and a `USE` back afterwards could not stop a console's
     /// statement landing between the two, since each takes the client lock alone.
-    fn execute_unattended(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+    fn execute_unattended(
+        &self,
+        req: &QueryRequest,
+        cancel: &dbflux_core::CancelToken,
+    ) -> Result<QueryResult, DbError> {
         let mut slot = self
             .unattended
             .lock()
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
-        // An idle connection the server dropped costs one retry, not a failed
-        // refresh. Chart queries read, so running one again is safe.
-        for attempt_left in [true, false] {
-            if slot.is_none() {
-                let endpoint = (*self.reconnect_config).clone();
-                let address = endpoint.config.get_addr();
-                let (host, port) = address
-                    .rsplit_once(':')
-                    .unwrap_or((address.as_str(), "1433"));
-                let session =
-                    establish_mssql_session(endpoint.clone(), host, port.parse().unwrap_or(1433))?;
-                let own_database = session.database.clone();
-                let connection = build_mssql_connection(session, own_database.clone(), None);
-                *slot = Some((Box::new(connection), own_database));
-            }
-            let Some((connection, own_database)) = slot.as_ref() else {
-                continue;
-            };
-
-            // A request without a database runs on the connection's own.
-            let result = if req.database.is_none() && own_database.is_some() {
-                connection.execute(&req.clone().with_database(own_database.clone()))
-            } else {
-                connection.execute(req)
-            };
-
-            if result.is_ok() || connection.ping().is_ok() {
-                return result;
-            }
-
-            *slot = None;
-            if !attempt_left {
-                return result;
-            }
+        // It may have waited for that lock behind another chart.
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
         }
 
-        Err(DbError::query_failed(
-            "SQL Server: no connection for the chart",
-        ))
+        // Asked now, a connection the server dropped while idle costs nothing.
+        // Retrying after a failure could run a statement that already ran.
+        if slot
+            .as_ref()
+            .is_some_and(|(connection, _)| connection.ping().is_err())
+        {
+            *slot = None;
+        }
+
+        if slot.is_none() {
+            let endpoint = (*self.reconnect_config).clone();
+            let address = endpoint.config.get_addr();
+            let (host, port) = address
+                .rsplit_once(':')
+                .unwrap_or((address.as_str(), "1433"));
+            let session =
+                establish_mssql_session(endpoint.clone(), host, port.parse().unwrap_or(1433))?;
+            let own_database = session.database.clone();
+            let connection = build_mssql_connection(session, own_database.clone(), None);
+            *slot = Some((Box::new(connection), own_database));
+        }
+        let Some((connection, own_database)) = slot.as_ref() else {
+            return Err(DbError::query_failed(
+                "SQL Server: no connection for the chart",
+            ));
+        };
+
+        // A request without a database runs on the connection's own.
+        let on_own_database;
+        let request = if req.database.is_none() && own_database.is_some() {
+            on_own_database = req.clone().with_database(own_database.clone());
+            &on_own_database
+        } else {
+            req
+        };
+
+        let kill = connection.cancel_handle();
+        let result = dbflux_core::run_watching_cancel(
+            cancel,
+            || {
+                if let Err(error) = kill.cancel() {
+                    log::warn!("[CANCEL] Could not stop the chart's query: {error}");
+                }
+            },
+            || connection.execute(request),
+        );
+
+        // KILL ends the whole session, and can land after the statement ended.
+        if cancel.is_cancelled() {
+            *slot = None;
+        }
+
+        result
+    }
+
+    fn unattended_runs_apart(&self) -> bool {
+        true
     }
 
     fn language_service(&self) -> &dyn dbflux_core::LanguageService {

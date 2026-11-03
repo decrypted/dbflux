@@ -2046,6 +2046,141 @@ fn saving_does_not_put_a_live_chart_under_the_list_check(cx: &mut TestAppContext
     assert!(console.message(&reopened).contains("created_just_now"));
 }
 
+fn running_chart_task(console: &mut Fixture<'_>) -> dbflux_core::TaskSnapshot {
+    let app_state = console.app_state.clone();
+    let profile_id = console.profile_id;
+    console.window.update(|_, cx| {
+        app_state
+            .read(cx)
+            .running_query_tasks(Some(profile_id))
+            .into_iter()
+            .next()
+            .expect("the chart's task is running")
+    })
+}
+
+/// What the Tasks panel does to a query task. It runs on its own thread in the
+/// app, so this waits for it.
+fn cancel_as_tasks_panel_does(console: &mut Fixture<'_>, task_id: dbflux_core::TaskId) {
+    let app_state = console.app_state.clone();
+    console.window.update(|_, cx| {
+        app_state.read(cx).cancel_query_for_task(task_id);
+    });
+    std::thread::sleep(Duration::from_millis(200));
+}
+
+/// A chart apart from the console: `cancel_active` would stop the console's
+/// statement and leave the chart running, so the Tasks panel must not call it.
+#[gpui::test]
+fn cancelling_a_chart_apart_does_not_reach_the_consoles_connection(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::MySQL).with_unattended_apart();
+    let mut console = console_for_driver(cx, driver, SECOND_STATEMENT);
+    let saved = console.saved_with(database_context("analytics"));
+
+    let chart = console.reopen(&saved);
+    console.request(&chart);
+    let task = running_chart_task(&mut console);
+    assert!(task.runs_apart);
+
+    cancel_as_tasks_panel_does(&mut console, task.id);
+    assert_eq!(console.driver.stats().cancel_active_calls, 0);
+    console.window.run_until_parked();
+}
+
+/// A driver whose charts share the console's connection has only `cancel_active`
+/// to stop one with.
+#[gpui::test]
+fn cancelling_a_chart_on_a_shared_connection_still_reaches_it(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::Postgres, "");
+    let saved = console.saved_with(SavedChartContext::default());
+
+    let chart = console.reopen(&saved);
+    console.request(&chart);
+    let task = running_chart_task(&mut console);
+    assert!(!task.runs_apart);
+
+    cancel_as_tasks_panel_does(&mut console, task.id);
+    assert_eq!(console.driver.stats().cancel_active_calls, 1);
+    console.window.run_until_parked();
+}
+
+/// A connection per database: the task names the database, so a cancel goes to
+/// that connection and not to the primary one, which may be running something else.
+#[gpui::test]
+fn a_charts_task_names_the_connection_it_runs_on(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    console.register_driver();
+    console.list_databases(&["app", "analytics"]);
+    let saved = console.saved_with(database_context("analytics"));
+
+    let chart = console.reopen(&saved);
+    console.request(&chart);
+    console.window.run_until_parked();
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
+    });
+
+    console.request(&chart);
+    let task = running_chart_task(&mut console);
+    assert_eq!(
+        task.target.and_then(|target| target.database).as_deref(),
+        Some("analytics")
+    );
+    console.window.run_until_parked();
+}
+
+/// A disconnect settles every waiting panel at once. The user did that or saw it,
+/// so each panel says so in place without a report of its own.
+#[gpui::test]
+fn a_disconnect_while_waiting_is_shown_without_a_report_per_panel(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    console.register_driver();
+    let saved = console.saved_with(database_context("analytics"));
+
+    let app_state = console.app_state.clone();
+    let reports: Rc<RefCell<usize>> = Rc::default();
+    let sink = reports.clone();
+    console.window.update(|_, cx| {
+        cx.set_global(dbflux_ui_base::AppStateGlobal {
+            entity: app_state.clone(),
+        });
+        cx.subscribe(
+            &app_state,
+            move |_, _: &dbflux_ui_base::UserErrorReported, _| {
+                *sink.borrow_mut() += 1;
+            },
+        )
+        .detach();
+    });
+
+    let chart = console.reopen(&saved);
+    let finishes = finishes_of(&mut console, &chart);
+    console.request(&chart);
+
+    let key = dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseSchema {
+        profile_id: console.profile_id,
+        database: "analytics".to_string(),
+    };
+    let profile_id = console.profile_id;
+    console.window.update(|_, cx| {
+        app_state.update(cx, |state, cx| {
+            state.connections_mut().remove(&profile_id);
+            state.object_tree_cancel(&key, cx);
+        });
+    });
+    console.window.run_until_parked();
+
+    assert_eq!(*finishes.borrow(), 1);
+    assert_eq!(*reports.borrow(), 0);
+    assert!(console.message(&chart).contains("analytics"));
+}
+
 /// A chart without the flag shows no note, a saved one included.
 #[gpui::test]
 fn a_chart_without_the_flag_shows_no_note(cx: &mut TestAppContext) {

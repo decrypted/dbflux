@@ -1462,7 +1462,7 @@ fn create_chart_databases(setup: &dyn dbflux_core::Connection) -> Result<(), DbE
             "CREATE TABLE {database}.t (id INT PRIMARY KEY, src VARCHAR(16))"
         )))?;
         setup.execute(&QueryRequest::new(format!(
-            "INSERT INTO {database}.t VALUES (0, \'{database}\')"
+            "INSERT INTO {database}.t VALUES (0, '{database}')"
         )))?;
     }
     Ok(())
@@ -1489,26 +1489,29 @@ fn a_chart_does_not_move_the_session_a_console_runs_on() -> Result<(), DbError> 
 
         // A profile with a default database.
         let (console, _) = connect_mysql(format!("{base}chart_a"))?;
-        let chart = console.execute_unattended(&unattended("chart_b", "SELECT src FROM t"))?;
+        let chart = console.execute_unattended(
+            &unattended("chart_b", "SELECT src FROM t"),
+            &dbflux_core::CancelToken::new(),
+        )?;
         assert_eq!(chart.rows, vec![vec![Value::Text("chart_b".to_string())]]);
         assert_eq!(mysql_text(&*console, None, DATABASE_NAME), "chart_a");
-        console.execute(&QueryRequest::new("INSERT INTO t VALUES (1, \'console\')"))?;
+        console.execute(&QueryRequest::new("INSERT INTO t VALUES (1, 'console')"))?;
         assert_eq!(mysql_ids(&*setup, "chart_a"), "0,1");
         assert_eq!(mysql_ids(&*setup, "chart_b"), "0");
 
         // With a transaction open: the chart is not inside it either.
         console.execute(&QueryRequest::new("START TRANSACTION"))?;
-        console.execute(&QueryRequest::new("INSERT INTO t VALUES (2, \'tx\')"))?;
-        let chart = console.execute_unattended(&unattended(
-            "chart_b",
-            "SELECT CAST(COUNT(*) AS CHAR) FROM chart_a.t",
-        ))?;
+        console.execute(&QueryRequest::new("INSERT INTO t VALUES (2, 'tx')"))?;
+        let chart = console.execute_unattended(
+            &unattended("chart_b", "SELECT CAST(COUNT(*) AS CHAR) FROM chart_a.t"),
+            &dbflux_core::CancelToken::new(),
+        )?;
         assert_eq!(
             first_cell(&chart),
             "2",
             "the chart does not see the third row"
         );
-        console.execute(&QueryRequest::new("INSERT INTO t VALUES (3, \'tx\')"))?;
+        console.execute(&QueryRequest::new("INSERT INTO t VALUES (3, 'tx')"))?;
         console.execute(&QueryRequest::new("ROLLBACK"))?;
         assert_eq!(mysql_ids(&*setup, "chart_a"), "0,1");
         assert_eq!(mysql_ids(&*setup, "chart_b"), "0");
@@ -1516,22 +1519,34 @@ fn a_chart_does_not_move_the_session_a_console_runs_on() -> Result<(), DbError> 
         // No default database: MySQL has no way back to none, so a shared session
         // could not be restored.
         let (console, _) = connect_mysql(base.clone())?;
-        console.execute_unattended(&unattended("chart_b", "SELECT src FROM t"))?;
+        console.execute_unattended(
+            &unattended("chart_b", "SELECT src FROM t"),
+            &dbflux_core::CancelToken::new(),
+        )?;
         assert_eq!(mysql_text(&*console, None, DATABASE_NAME), "none");
-        let refused = console.execute(&QueryRequest::new("INSERT INTO t VALUES (4, \'x\')"));
+        let refused = console.execute(&QueryRequest::new("INSERT INTO t VALUES (4, 'x')"));
         assert!(refused.is_err(), "no database is selected");
         assert_eq!(mysql_ids(&*setup, "chart_b"), "0");
 
         // A database typed by hand stays too.
         console.execute(&QueryRequest::new("USE chart_a"))?;
-        console.execute_unattended(&unattended("chart_b", "SELECT src FROM t"))?;
+        console.execute_unattended(
+            &unattended("chart_b", "SELECT src FROM t"),
+            &dbflux_core::CancelToken::new(),
+        )?;
         assert_eq!(mysql_text(&*console, None, DATABASE_NAME), "chart_a");
 
         // A chart that stores no database runs on the connection's own, whichever
         // database the chart before it read.
         let (console, _) = connect_mysql(format!("{base}chart_a"))?;
-        console.execute_unattended(&unattended("chart_b", "SELECT src FROM t"))?;
-        let own = console.execute_unattended(&QueryRequest::new("SELECT src FROM t"))?;
+        console.execute_unattended(
+            &unattended("chart_b", "SELECT src FROM t"),
+            &dbflux_core::CancelToken::new(),
+        )?;
+        let own = console.execute_unattended(
+            &QueryRequest::new("SELECT src FROM t"),
+            &dbflux_core::CancelToken::new(),
+        )?;
         assert_eq!(first_cell(&own), "chart_a");
 
         Ok(())
@@ -1570,9 +1585,159 @@ fn the_same_statement_reads_the_database_it_runs_in() -> Result<(), DbError> {
         );
 
         for database in ["chart_a", "chart_b", "chart_a"] {
-            let chart = connection.execute_unattended(&unattended(database, sql))?;
+            let chart = connection
+                .execute_unattended(&unattended(database, sql), &dbflux_core::CancelToken::new())?;
             assert_eq!(chart.rows, vec![vec![Value::Text(database.to_string())]]);
         }
+
+        Ok(())
+    })
+}
+
+/// Stopping a chart stops the chart. The console's statement and transaction go
+/// on, and the next chart does not wait behind the stopped one.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn cancelling_a_chart_stops_it_and_leaves_the_console_running() -> Result<(), DbError> {
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    containers::with_mysql_url(|uri| {
+        let (setup, _) = connect_mysql(uri.clone())?;
+        let (console, _) = connect_mysql(uri)?;
+        let console: Arc<dyn dbflux_core::Connection> = Arc::from(console);
+        assert!(console.unattended_runs_apart());
+
+        console.execute(&QueryRequest::new(
+            "CREATE TABLE chart_tx (id INT PRIMARY KEY)",
+        ))?;
+        console.execute(&QueryRequest::new("START TRANSACTION"))?;
+        console.execute(&QueryRequest::new("INSERT INTO chart_tx VALUES (1)"))?;
+
+        let started = Instant::now();
+        let console_run = {
+            let console = console.clone();
+            std::thread::spawn(move || {
+                let result = console.execute(&QueryRequest::new("SELECT SLEEP(5) AS console"));
+                (first_cell(&result.unwrap()), started.elapsed())
+            })
+        };
+
+        let cancel = dbflux_core::CancelToken::new();
+        let chart_run = {
+            let (console, cancel) = (console.clone(), cancel.clone());
+            std::thread::spawn(move || {
+                let result = console
+                    .execute_unattended(&QueryRequest::new("SELECT SLEEP(30) AS chart"), &cancel);
+                (result, started.elapsed())
+            })
+        };
+
+        std::thread::sleep(Duration::from_secs(1));
+        cancel.cancel();
+
+        let (chart, chart_took) = chart_run.join().unwrap();
+        assert!(chart_took < Duration::from_secs(4), "{chart_took:?}");
+        // SLEEP answers 1 when its query is killed, 0 when it ran its time.
+        if let Ok(chart) = chart {
+            assert_eq!(first_cell(&chart), "1");
+        }
+
+        // Right after, not at the 30 seconds the stopped query asked for.
+        let refresh = Instant::now();
+        let later = console.execute_unattended(
+            &QueryRequest::new("SELECT 'later'"),
+            &dbflux_core::CancelToken::new(),
+        )?;
+        assert_eq!(first_cell(&later), "later");
+        assert!(
+            refresh.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            refresh.elapsed()
+        );
+
+        let (console_result, console_took) = console_run.join().unwrap();
+        assert_eq!(
+            console_result, "0",
+            "the console's statement was not killed"
+        );
+        assert!(console_took >= Duration::from_secs(4), "{console_took:?}");
+
+        console.execute(&QueryRequest::new("COMMIT"))?;
+        assert_eq!(
+            mysql_text(&*setup, None, "SELECT CAST(COUNT(*) AS CHAR) FROM chart_tx"),
+            "1",
+            "the console's transaction survived"
+        );
+
+        // A chart whose cancel came before it had its turn sends nothing.
+        let already = dbflux_core::CancelToken::new();
+        already.cancel();
+        assert!(matches!(
+            console.execute_unattended(&QueryRequest::new("SELECT 1"), &already),
+            Err(DbError::Cancelled)
+        ));
+
+        Ok(())
+    })
+}
+
+/// `SELECT f()` reads as far as the read check can tell, whatever `f` does, so a
+/// connection lost mid-statement must not run it again. A connection lost while
+/// idle costs nothing.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn a_chart_statement_runs_once_when_its_connection_is_lost() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (setup, _) = connect_mysql(uri.clone())?;
+        let mut raw = mysql::Conn::new(mysql::Opts::from_url(&uri).unwrap()).unwrap();
+        raw.query_drop("SET GLOBAL log_bin_trust_function_creators = 1")
+            .unwrap();
+        raw.query_drop("CREATE TABLE f_runs (id INT AUTO_INCREMENT PRIMARY KEY) ENGINE=MyISAM")
+            .unwrap();
+        raw.query_drop(
+            "CREATE FUNCTION f_with_effect() RETURNS INT NOT DETERMINISTIC MODIFIES SQL DATA \
+             BEGIN INSERT INTO f_runs VALUES (NULL); DO SLEEP(3); RETURN 1; END",
+        )
+        .unwrap();
+
+        let (console, _) = connect_mysql(uri.clone())?;
+        let console: std::sync::Arc<dyn dbflux_core::Connection> = std::sync::Arc::from(console);
+        let chart = {
+            let console = console.clone();
+            std::thread::spawn(move || {
+                console.execute_unattended(
+                    &QueryRequest::new("SELECT f_with_effect()"),
+                    &dbflux_core::CancelToken::new(),
+                )
+            })
+        };
+
+        std::thread::sleep(Duration::from_secs(1));
+        let id: u64 = raw
+            .query_first(
+                "SELECT id FROM information_schema.processlist \
+                 WHERE info LIKE '%SLEEP(3)%' AND info NOT LIKE '%processlist%'",
+            )
+            .unwrap()
+            .expect("the chart is running");
+        raw.query_drop(format!("KILL {id}")).unwrap();
+
+        let chart = chart.join().unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+        assert_eq!(
+            mysql_text(&*setup, None, "SELECT CAST(COUNT(*) AS CHAR) FROM f_runs"),
+            "1",
+            "the statement ran once"
+        );
+        assert!(chart.is_err(), "the failure reaches the chart");
+
+        // The next run finds the lost connection before sending anything.
+        let next = console.execute_unattended(
+            &QueryRequest::new("SELECT 'next'"),
+            &dbflux_core::CancelToken::new(),
+        )?;
+        assert_eq!(first_cell(&next), "next");
 
         Ok(())
     })

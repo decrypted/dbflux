@@ -619,21 +619,38 @@ impl Connection for DuckDbConnection {
         self.run(&request.sql, &request.params, request.limit)
     }
 
-    /// `execute` runs in the active catalog whatever `request.database` names, and
-    /// moving the root would move every other tab on it, so another catalog gets a
-    /// connection of its own for this run.
-    fn execute_unattended(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
-        let Some(database) = request
-            .database
-            .as_deref()
-            .filter(|database| self.active_database().as_deref() != Some(database))
-        else {
-            return self.execute(request);
-        };
+    /// A connection of its own for this run. `execute` runs in the active catalog
+    /// whatever `request.database` names, moving the root would move every other
+    /// tab on it, and the root's `cancel_active` interrupts the sessions as well.
+    fn execute_unattended(
+        &self,
+        request: &QueryRequest,
+        cancel: &dbflux_core::CancelToken,
+    ) -> Result<QueryResult, DbError> {
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
+        }
 
         let connection = DuckDbConnection::open(fork_instance(&self.shared)?, false)?;
-        connection.set_active_database(Some(database))?;
-        connection.execute(request)
+        let catalog = request.database.clone().or_else(|| self.active_database());
+        if catalog.is_some() && catalog != connection.active_database() {
+            connection.set_active_database(catalog.as_deref())?;
+        }
+
+        let kill = connection.cancel_handle();
+        dbflux_core::run_watching_cancel(
+            cancel,
+            || {
+                if let Err(error) = kill.cancel() {
+                    log::warn!("DuckDB: could not stop the chart's query: {error}");
+                }
+            },
+            || connection.execute(request),
+        )
+    }
+
+    fn unattended_runs_apart(&self) -> bool {
+        true
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -1659,9 +1676,11 @@ mod tests {
             .unwrap();
         let active = connection.active_database();
 
+        let cancel = dbflux_core::CancelToken::new();
         let result = connection
             .execute_unattended(
                 &QueryRequest::new("SELECT src FROM t").with_database(Some("other".to_string())),
+                &cancel,
             )
             .unwrap();
         assert_eq!(result.rows, vec![vec![Value::Text("other".to_string())]]);
@@ -1674,8 +1693,56 @@ mod tests {
 
         let missing = connection.execute_unattended(
             &QueryRequest::new("SELECT src FROM t").with_database(Some("gone".to_string())),
+            &cancel,
         );
         assert!(missing.is_err_and(|error| error.to_string().contains("gone")));
+    }
+
+    /// Cancelling a chart stops the chart. The root's `cancel_active` would also
+    /// interrupt the editor's session.
+    #[test]
+    fn cancelling_an_unattended_run_stops_it_and_leaves_a_session_running() {
+        let connection: std::sync::Arc<dyn Connection> = connect().into();
+        let long = "SELECT count(*) FROM range(100000000000) a";
+
+        let session = connection
+            .execution_session_factory()
+            .unwrap()
+            .open()
+            .unwrap();
+        let console = {
+            let session = session.connection();
+            std::thread::spawn(move || {
+                session.execute(&QueryRequest::new("SELECT count(*) FROM range(1500000000)"))
+            })
+        };
+
+        let cancel = dbflux_core::CancelToken::new();
+        let chart = {
+            let (connection, cancel) = (connection.clone(), cancel.clone());
+            std::thread::spawn(move || {
+                connection.execute_unattended(&QueryRequest::new(long), &cancel)
+            })
+        };
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let started = std::time::Instant::now();
+        cancel.cancel();
+        assert!(chart.join().unwrap().is_err(), "the chart stopped");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+        assert!(
+            console.join().unwrap().is_ok(),
+            "the console's statement went on"
+        );
+        assert!(connection.unattended_runs_apart());
+
+        let already = dbflux_core::CancelToken::new();
+        already.cancel();
+        assert!(matches!(
+            connection.execute_unattended(&QueryRequest::new("SELECT 1"), &already),
+            Err(DbError::Cancelled)
+        ));
     }
 
     #[test]

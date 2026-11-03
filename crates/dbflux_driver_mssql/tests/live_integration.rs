@@ -1792,6 +1792,7 @@ fn a_chart_does_not_move_the_session_a_console_runs_on() -> Result<(), DbError> 
 
         let chart = console.execute_unattended(
             &QueryRequest::new("SELECT DB_NAME()").with_database(Some("chart_b".to_string())),
+            &dbflux_core::CancelToken::new(),
         )?;
         assert_eq!(chart.rows, vec![vec![Value::Text("chart_b".to_string())]]);
         assert_eq!(name(&*console)?, own);
@@ -1799,15 +1800,94 @@ fn a_chart_does_not_move_the_session_a_console_runs_on() -> Result<(), DbError> 
         // A chart that stores no database runs on the one the connection opened
         // on, whichever database the chart before it read. The test's connection
         // helper moved the console itself afterwards.
-        let chart = console.execute_unattended(&QueryRequest::new("SELECT DB_NAME()"))?;
+        let chart = console.execute_unattended(
+            &QueryRequest::new("SELECT DB_NAME()"),
+            &dbflux_core::CancelToken::new(),
+        )?;
         assert_eq!(chart.rows, vec![vec![Value::Text("master".to_string())]]);
 
         // A failing chart leaves it alone too, and the next one still runs.
         let gone = console.execute_unattended(
             &QueryRequest::new("SELECT 1").with_database(Some("no_such_db".to_string())),
+            &dbflux_core::CancelToken::new(),
         );
         assert!(gone.is_err());
         assert_eq!(name(&*console)?, own);
+
+        Ok(())
+    })
+}
+
+/// Stopping a chart stops the chart. KILL on the console's session would end its
+/// statement and transaction, and the next chart would wait behind the stopped one.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn cancelling_a_chart_stops_it_and_leaves_the_console_running() -> Result<(), DbError> {
+    use std::time::Instant;
+
+    containers::with_mssql_url(|uri| {
+        let (console, _) = connect_mssql(uri)?;
+        let console: Arc<dyn Connection> = Arc::from(console);
+        assert!(console.unattended_runs_apart());
+
+        console.execute(&QueryRequest::new(
+            "CREATE TABLE chart_tx (id INT PRIMARY KEY)",
+        ))?;
+        console.execute(&QueryRequest::new("BEGIN TRANSACTION"))?;
+        console.execute(&QueryRequest::new("INSERT INTO chart_tx VALUES (1)"))?;
+
+        let started = Instant::now();
+        let console_run = {
+            let console = console.clone();
+            thread::spawn(move || {
+                let result = console.execute(&QueryRequest::new(
+                    "WAITFOR DELAY '00:00:06'; SELECT @@TRANCOUNT",
+                ));
+                (result, started.elapsed())
+            })
+        };
+
+        let cancel = dbflux_core::CancelToken::new();
+        let chart_run = {
+            let (console, cancel) = (console.clone(), cancel.clone());
+            thread::spawn(move || {
+                let result = console.execute_unattended(
+                    &QueryRequest::new("WAITFOR DELAY '00:00:30'; SELECT 1"),
+                    &cancel,
+                );
+                (result, started.elapsed())
+            })
+        };
+
+        thread::sleep(Duration::from_secs(2));
+        cancel.cancel();
+
+        let (chart, chart_took) = chart_run.join().unwrap();
+        assert!(chart.is_err(), "the chart stopped");
+        assert!(chart_took < Duration::from_secs(6), "{chart_took:?}");
+
+        let refresh = Instant::now();
+        let later = console.execute_unattended(
+            &QueryRequest::new("SELECT 'later'"),
+            &dbflux_core::CancelToken::new(),
+        )?;
+        assert_eq!(later.rows, vec![vec![Value::Text("later".to_string())]]);
+        assert!(
+            refresh.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            refresh.elapsed()
+        );
+
+        let (console_result, console_took) = console_run.join().unwrap();
+        let console_result = console_result?;
+        assert_eq!(
+            console_result.rows,
+            vec![vec![Value::Int(1)]],
+            "still in its transaction"
+        );
+        assert!(console_took >= Duration::from_secs(5), "{console_took:?}");
+
+        console.execute(&QueryRequest::new("COMMIT"))?;
 
         Ok(())
     })

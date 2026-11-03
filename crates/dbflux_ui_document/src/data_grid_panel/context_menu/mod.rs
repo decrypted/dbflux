@@ -6,7 +6,9 @@ use super::{
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::detect_chart_columns;
 use dbflux_components::components::data_table::ROW_NUMBER_WIDTH;
-use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
+use dbflux_components::components::data_table::{
+    ContextMenuAction, DataTableState, FilterOperator,
+};
 use dbflux_components::composites::{MenuItem, render_menu_header};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
@@ -105,17 +107,29 @@ pub(super) fn step_export_selection(
     from
 }
 
-/// Where a menu opened from the keyboard hangs: `left` and `top` from the
-/// grid's corner, kept inside `grid` for a cell scrolled out of view, which
-/// has no place on screen.
-pub(super) fn keyboard_menu_anchor(
-    grid: Bounds<Pixels>,
-    left: Pixels,
+/// Where a menu opened from the keyboard for column `col` hangs: `top` below
+/// the table's top edge, just inside the column. A cell scrolled out of view
+/// has no place on screen, so the anchor stays where cells can be seen, off
+/// the header, the pinned strip and the scrollbars. A table not drawn yet has
+/// no place at all, so the menu opens at the panel's corner.
+fn keyboard_menu_anchor(
+    table: &DataTableState,
+    col: usize,
     top: Pixels,
+    panel_origin: Point<Pixels>,
+    cx: &App,
 ) -> Point<Pixels> {
+    let bounds = table.viewport_bounds();
+    if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
+        return panel_origin;
+    }
+
+    let area = table.cell_area(col, cx);
+    let left = table.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH) + px(20.0);
+
     Point {
-        x: (grid.left() + left).min(grid.right()).max(grid.left()),
-        y: (grid.top() + top).min(grid.bottom()).max(grid.top()),
+        x: (bounds.left() + left).min(area.right()).max(area.left()),
+        y: (bounds.top() + top).min(area.bottom()).max(area.top()),
     }
 }
 
@@ -161,13 +175,8 @@ impl DataGridPanel {
                 .map(|c| (c.row, c.col))
                 .unwrap_or((0, 0));
 
-            let cell_left = ts.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH);
-
-            let position = keyboard_menu_anchor(
-                ts.viewport_bounds(),
-                cell_left + px(20.0),
-                ts.row_screen_top(row, cx),
-            );
+            let position =
+                keyboard_menu_anchor(ts, col, ts.row_screen_top(row, cx), self.panel_origin, cx);
 
             (row, col, position)
         };

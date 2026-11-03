@@ -12,7 +12,7 @@ use crate::keyboard_test_support::{KeymapHost, host_document, init_keyboard_runt
 use dbflux_app::keymap::ContextId;
 use dbflux_components::components::data_table::selection::CellCoord;
 use dbflux_components::components::data_table::{
-    ContextMenuAction, DataTableState, ROW_NUMBER_WIDTH,
+    ContextMenuAction, DataTableState, ROW_NUMBER_WIDTH, TableModel,
 };
 use dbflux_components::fonts;
 use gpui::{
@@ -247,6 +247,19 @@ fn keys(window: &mut VisualTestContext, keystrokes: &str) {
     }
 }
 
+/// Presses `keystrokes` with no pause for a frame between them, as when they
+/// arrive faster than the window draws. The anchor needs the scroll a key asked
+/// for to have landed, and it has: the window draws before it dispatches a key.
+fn keys_in_one_batch(window: &mut VisualTestContext, keystrokes: &[&str]) {
+    window.update(|window, cx| {
+        for keystroke in keystrokes {
+            let keystroke = gpui::Keystroke::parse(keystroke).expect("a valid keystroke");
+            window.dispatch_keystroke(keystroke, cx);
+        }
+    });
+    window.run_until_parked();
+}
+
 fn resize(window: &mut VisualTestContext, to: Size<Pixels>) {
     window.simulate_resize(to);
     window.run_until_parked();
@@ -308,14 +321,13 @@ fn assert_anchor_is_on(
     expected: CellCoord,
 ) {
     let at = anchor(panel, window);
-    let row_height = window.update(|_, cx| fonts::grid_row_height(cx));
     close_menu(panel, window);
     let table = table_state(panel, window);
     let elsewhere = CellCoord::new(expected.row.saturating_sub(1), expected.col + 1);
     window.update(|_, cx| table.update(cx, |state, cx| state.select_cell(elsewhere, cx)));
     window.run_until_parked();
 
-    window.simulate_click(at + point(px(0.0), row_height / 2.0), Modifiers::default());
+    window.simulate_click(at + point(px(0.0), px(2.0)), Modifiers::default());
     window.run_until_parked();
 
     let active = window.update(|_, cx| table.read(cx).selection().active);
@@ -482,8 +494,8 @@ fn a_menu_row_past_the_panels_edge_takes_the_click(cx: &mut TestAppContext) {
     assert_ne!(path(window), before, "the click reached the row");
 }
 
-/// The bug: `row * row_height` with no scroll in it lies a table's height
-/// below the grid. Row 95 of a grid scrolled to row 90 is drawn sixth.
+/// Row 95 of a grid scrolled to row 90 is drawn sixth, so the anchor has to
+/// follow the vertical scroll to land on it.
 #[gpui::test]
 fn keyboard_menu_on_a_scrolled_grid_hangs_off_the_selected_row(cx: &mut TestAppContext) {
     let slot = slot_at(0.0, 0.0, 1000.0, 400.0);
@@ -513,7 +525,8 @@ fn keyboard_menu_on_a_table_low_in_the_window_hangs_off_the_selected_row(cx: &mu
     assert_anchor_is_on(&panel, window, cell);
 }
 
-/// A grid not scrolled at all, for the rows the old formula got close to.
+/// A grid not scrolled at all, with no toolbar estimate between the header
+/// and the row.
 #[gpui::test]
 fn keyboard_menu_on_an_unscrolled_grid_hangs_off_the_selected_row(cx: &mut TestAppContext) {
     let slot = slot_at(50.0, 200.0, 800.0, 500.0);
@@ -526,15 +539,14 @@ fn keyboard_menu_on_an_unscrolled_grid_hangs_off_the_selected_row(cx: &mut TestA
     assert_anchor_is_on(&panel, window, cell);
 }
 
-/// The real keys on the case that showed the bug: down to the last row with
-/// `Ctrl+End`, then `m` and `Shift+F10`.
+/// `Shift+g` to the last row, then `m` and `Shift+F10` each open on that row.
 #[gpui::test]
 fn the_menu_keys_on_the_last_row_of_a_long_grid_open_on_that_row(cx: &mut TestAppContext) {
     let slot = slot_at(0.0, 0.0, 1000.0, 400.0);
     let (_host, panel, window) = result_in_slot(cx, 200, 3, slot, window_of(1000.0, 800.0));
     let table = table_state(&panel, window);
 
-    keys(window, "j ctrl-end");
+    keys(window, "j shift-g");
     let active = window
         .update(|_, cx| table.read(cx).selection().active)
         .expect("a cell is selected");
@@ -549,62 +561,229 @@ fn the_menu_keys_on_the_last_row_of_a_long_grid_open_on_that_row(cx: &mut TestAp
     }
 }
 
-/// A selected row scrolled out of view has no place on screen, so the anchor
-/// stays in the grid, on the side the row went.
+/// A move and `m` pressed together open on the row the move went to.
 #[gpui::test]
-fn keyboard_menu_for_a_row_scrolled_out_of_view_stays_inside_the_grid(cx: &mut TestAppContext) {
+fn the_menu_keys_in_one_batch_with_the_move_open_on_the_new_row(cx: &mut TestAppContext) {
+    let slot = slot_at(0.0, 0.0, 1000.0, 400.0);
+    let (_host, panel, window) = result_in_slot(cx, 200, 3, slot, window_of(1000.0, 800.0));
+    let table = table_state(&panel, window);
+
+    keys_in_one_batch(window, &["j", "shift-g", "m"]);
+
+    let active = window
+        .update(|_, cx| table.read(cx).selection().active)
+        .expect("a cell is selected");
+    assert_eq!(active.row, 199);
+
+    // The last row is what a clamp to the rows' bottom edge would also land
+    // on, so the anchor has to be at the row's top, a whole row above the
+    // table's bottom edge.
+    let grid = grid_bounds(&panel, window);
+    let row_height = window.update(|_, cx| fonts::grid_row_height(cx));
+    let at = anchor(&panel, window);
+    assert!(
+        at.y + row_height <= grid.bottom() + px(1.0),
+        "{at:?} in {grid:?}"
+    );
+    assert_anchor_is_on(&panel, window, active);
+}
+
+/// The same across, to the last column of a grid narrower than its columns.
+#[gpui::test]
+fn the_menu_keys_in_one_batch_with_a_sideways_move_open_on_the_new_column(cx: &mut TestAppContext) {
+    let slot = slot_at(100.0, 100.0, 400.0, 500.0);
+    let (_host, panel, window) = result_in_slot(cx, 200, 30, slot, window_of(1000.0, 800.0));
+    let table = table_state(&panel, window);
+
+    keys_in_one_batch(window, &["j", "ctrl-end", "m"]);
+
+    let active = window
+        .update(|_, cx| table.read(cx).selection().active)
+        .expect("a cell is selected");
+    assert_eq!((active.row, active.col), (199, 29));
+
+    // The column's own left edge, not the right edge a clamp would land on.
+    let column = window
+        .debug_bounds("header-col-29")
+        .expect("the column is drawn");
+    let at = anchor(&panel, window);
+    assert!(
+        close_to(at.x, column.left() + px(20.0)),
+        "{at:?} in {column:?}"
+    );
+    assert_anchor_is_on(&panel, window, active);
+}
+
+/// A table that has not been drawn has no bounds, so the menu opens at the
+/// panel and not at the window's corner.
+#[gpui::test]
+fn keyboard_menu_on_a_table_not_drawn_yet_opens_at_the_panel(cx: &mut TestAppContext) {
+    let slot = slot_at(120.0, 250.0, 800.0, 500.0);
+    let (_host, panel, window) = result_in_slot(cx, 20, 3, slot, window_of(1000.0, 800.0));
+
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            let model = Arc::new(TableModel::from(&numbers(30, 4)));
+            panel.grid_table.table_state = Some(cx.new(|cx| DataTableState::new(model, cx)));
+            panel.open_context_menu_at_selection(window, cx);
+        })
+    });
+
+    let at = anchor(&panel, window);
+    assert!(
+        close_to(at.x, slot.left()) && close_to(at.y, slot.top()),
+        "{at:?} at {slot:?}"
+    );
+}
+
+/// A selected row scrolled out of view has no place on screen, so the anchor
+/// stays among the rows, on the side the row went, off the header and the
+/// scrollbar: a click there still lands on a row in view.
+#[gpui::test]
+fn keyboard_menu_for_a_row_scrolled_out_of_view_stays_among_the_rows(cx: &mut TestAppContext) {
     let slot = slot_at(50.0, 100.0, 800.0, 400.0);
     let (_host, panel, window) = result_in_slot(cx, 200, 3, slot, window_of(1000.0, 800.0));
+    let table = table_state(&panel, window);
+    let active = |window: &mut VisualTestContext| {
+        window
+            .update(|_, cx| table.read(cx).selection().active)
+            .expect("a cell is selected")
+    };
 
     select_and_scroll(&panel, window, CellCoord::new(199, 0), 0);
     open_from_keyboard(&panel, window);
-    let grid = grid_bounds(&panel, window);
     let below = anchor(&panel, window);
-    assert!(close_to(below.y, grid.bottom()), "{below:?} in {grid:?}");
-
     close_menu(&panel, window);
+    window.simulate_click(below - point(px(0.0), px(1.0)), Modifiers::default());
+    window.run_until_parked();
+    assert!(
+        active(window).row < 199,
+        "{below:?} lands on {:?}",
+        active(window)
+    );
+
     select_and_scroll(&panel, window, CellCoord::new(0, 0), 150);
     open_from_keyboard(&panel, window);
     let above = anchor(&panel, window);
-    assert!(close_to(above.y, grid.top()), "{above:?} in {grid:?}");
+    let header = window.debug_bounds("table-header").expect("the header");
+    assert!(
+        close_to(above.y, header.bottom()),
+        "{above:?} under {header:?}"
+    );
+    close_menu(&panel, window);
+    window.simulate_click(above + point(px(0.0), px(1.0)), Modifiers::default());
+    window.run_until_parked();
+    assert_eq!(active(window).row, 150, "{above:?}");
 }
 
 /// The same across: the active column scrolled out to either side of a grid
-/// narrower than its columns.
+/// narrower than its columns, with the anchor still on a cell.
 #[gpui::test]
-fn keyboard_menu_for_a_column_scrolled_out_of_view_stays_inside_the_grid(cx: &mut TestAppContext) {
+fn keyboard_menu_for_a_column_scrolled_out_of_view_stays_among_the_cells(cx: &mut TestAppContext) {
     let slot = slot_at(100.0, 100.0, 400.0, 500.0);
     let (_host, panel, window) = result_in_slot(cx, 20, 30, slot, window_of(1000.0, 800.0));
     let table = table_state(&panel, window);
+    let active = |window: &mut VisualTestContext| {
+        window
+            .update(|_, cx| table.read(cx).selection().active)
+            .expect("a cell is selected")
+    };
+    let row_height = window.update(|_, cx| fonts::grid_row_height(cx));
 
     window
         .update(|_, cx| table.update(cx, |state, cx| state.select_cell(CellCoord::new(1, 29), cx)));
     window.run_until_parked();
     open_from_keyboard(&panel, window);
-    let grid = grid_bounds(&panel, window);
-    let at = anchor(&panel, window);
-    assert!(within(at, grid), "column to the right: {at:?} in {grid:?}");
-
+    let to_the_right = anchor(&panel, window);
     close_menu(&panel, window);
+    window.simulate_click(
+        to_the_right + point(px(-1.0), row_height / 2.0),
+        Modifiers::default(),
+    );
+    window.run_until_parked();
+    assert!(
+        active(window).col < 29,
+        "{to_the_right:?} lands on {:?}",
+        active(window)
+    );
+
+    scroll_right_with_column_active(&table, window, CellCoord::new(1, 0));
+    open_from_keyboard(&panel, window);
+    let to_the_left = anchor(&panel, window);
+    close_menu(&panel, window);
+    window.simulate_click(
+        to_the_left + point(px(1.0), row_height / 2.0),
+        Modifiers::default(),
+    );
+    window.run_until_parked();
+    assert!(
+        active(window).col > 0,
+        "{to_the_left:?} lands on {:?}",
+        active(window)
+    );
+}
+
+/// Selects `coord` with the grid scrolled to its last column.
+fn scroll_right_with_column_active(
+    table: &Entity<DataTableState>,
+    window: &mut VisualTestContext,
+    coord: CellCoord,
+) {
     window.update(|_, cx| {
         table.update(cx, |state, cx| {
-            state.scroll_to_column(29);
-            state.select_cell(CellCoord::new(1, 0), cx);
+            let last = state.visible_columns().len() - 1;
+            state.scroll_to_column(last);
+            state.select_cell(coord, cx);
             cx.notify();
         })
     });
     window.run_until_parked();
-    // The horizontal offset syncs from the handle when the grid is drawn.
+    // The grid takes the offset from the handle when it is drawn.
     window.update(|_, cx| table.update(cx, |_, cx| cx.notify()));
     window.run_until_parked();
     assert!(
         window.update(|_, cx| table.read(cx).horizontal_offset()) > px(0.0),
         "the grid scrolled"
     );
+}
 
+/// A column that scrolls passes under the pinned strip, so its anchor stops at
+/// the strip's right edge and the menu does not hang over a pinned column. A
+/// pinned column stays where it is drawn, scrolled or not.
+#[gpui::test]
+fn keyboard_menu_stays_off_the_pinned_strip_for_a_column_that_scrolls(cx: &mut TestAppContext) {
+    let slot = slot_at(100.0, 100.0, 800.0, 500.0);
+    let (_host, panel, window) = result_in_slot(cx, 20, 30, slot, window_of(1000.0, 800.0));
+    let table = table_state(&panel, window);
+
+    window.update(|_, cx| {
+        table.update(cx, |state, cx| {
+            assert!(state.pin_column(0, cx));
+            assert!(state.pin_column(1, cx));
+        })
+    });
+    window.run_until_parked();
+
+    scroll_right_with_column_active(&table, window, CellCoord::new(1, 5));
+    open_from_keyboard(&panel, window);
+    let strip = window
+        .debug_bounds("pinned-columns")
+        .expect("the pinned strip is drawn");
+    let at = anchor(&panel, window);
+    // The strip ends in a 2px border, which is all the anchor may touch.
+    assert!(
+        at.x >= strip.right() - px(2.0) && at.x <= strip.right(),
+        "{at:?} at the right of {strip:?}"
+    );
+    close_menu(&panel, window);
+
+    scroll_right_with_column_active(&table, window, CellCoord::new(1, 1));
     open_from_keyboard(&panel, window);
     let at = anchor(&panel, window);
-    assert!(within(at, grid), "column to the left: {at:?} in {grid:?}");
+    assert!(
+        at.x > strip.left() && at.x < strip.right(),
+        "{at:?} on the pinned column in {strip:?}"
+    );
 }
 
 /// The record view has no rows to scroll to, and the anchor stays in it.

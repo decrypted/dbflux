@@ -163,15 +163,12 @@ impl DataGridPanel {
             let state = table_state.read(cx);
             let active = state.selection().active;
             let (row, col) = active.map_or((0, 0), |cell| (cell.row, cell.col));
-            let Some(column_left) = state.column_screen_left(col) else {
+            if state.column_screen_left(col).is_none() {
                 return false;
-            };
+            }
 
-            let position = keyboard_menu_anchor(
-                state.viewport_bounds(),
-                column_left + px(20.0),
-                state.header_height(cx),
-            );
+            let position =
+                keyboard_menu_anchor(state, col, state.header_height(cx), self.panel_origin, cx);
 
             (row, col, position)
         };

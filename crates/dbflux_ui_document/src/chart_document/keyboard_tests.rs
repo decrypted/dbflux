@@ -502,9 +502,6 @@ fn chart_pane_action_labels_resolve_in_every_locale() {
     }
 }
 
-/// The chart tab's toolbar and axis bar, its save prompt, an axis picker
-/// and the stats rail. The keyboard tests above prove the chart keys, and
-/// `m` opens the pane actions.
 fn open_query_box(chart: &Entity<ChartDocument>, window: &mut VisualTestContext) {
     window.update(|window, cx| {
         chart.update(cx, |chart, cx| chart.toggle_query_section(window, cx));
@@ -593,6 +590,10 @@ fn the_run_key_runs_from_the_box(cx: &mut TestAppContext) {
     );
 }
 
+/// The chart tab's toolbar and axis bar, its save prompt, an axis picker
+/// and the stats rail. The keyboard tests above prove the chart keys, and
+/// `m` opens the pane actions.
+/// The Query section's controls are covered with it open.
 #[gpui::test]
 fn the_chart_tab_is_covered(cx: &mut TestAppContext) {
     use crate::keyboard_coverage::CHART;

@@ -1635,7 +1635,7 @@ fn dashboard_panels_use_the_stored_context_and_free_their_slots(cx: &mut TestApp
         let admitted: Vec<Entity<ChartDocument>> = console.window.update(|_, cx| {
             charts
                 .iter()
-                .filter(|chart| chart.read(cx).has_pending_reexecute_for_test())
+                .filter(|chart| chart.read(cx).has_pending_reexecute())
                 .cloned()
                 .collect()
         });
@@ -2005,7 +2005,7 @@ fn the_dashboard_timer_does_not_retry_a_database_but_refresh_does(cx: &mut TestA
         let panel = chart.clone();
         let marked = console
             .window
-            .update(|_, cx| panel.read(cx).has_pending_reexecute_for_test());
+            .update(|_, cx| panel.read(cx).has_pending_reexecute());
         assert!(marked, "the timer asked the panel");
     };
 
@@ -2468,6 +2468,79 @@ fn the_picker_shows_a_stored_database_that_is_missing(cx: &mut TestAppContext) {
     assert_eq!(console.last_request().database.as_deref(), Some("billing"));
 }
 
+/// Nothing listed is nothing to pick from: the bar shows the database as text, and
+/// the picker appears once the connection lists some. A closed section is not filled.
+#[gpui::test]
+fn the_picker_waits_for_a_list_and_is_filled_only_while_open(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let saved = console.saved_with(database_context("analytics"));
+    let chart = console.reopen(&saved);
+
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| chart.read(cx).database_choices_for_test(cx)),
+        None
+    );
+    let handle = chart.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |chart, cx| {
+            chart.open_query_section_for_test(window, cx)
+        });
+    });
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| chart.read(cx).picker_for_test(cx)),
+        Some((false, 0))
+    );
+
+    console.list_databases(&["analytics", "billing"]);
+    let app_state = console.app_state.clone();
+    let notify_change = |console: &mut Fixture<'_>| {
+        console.window.update(|_, cx| {
+            app_state.update(cx, |_, cx| cx.emit(dbflux_ui_base::AppStateChanged));
+        });
+        console.window.run_until_parked();
+    };
+    notify_change(&mut console);
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| chart.read(cx).picker_for_test(cx)),
+        Some((true, 3)),
+        "the default and the two listed"
+    );
+
+    let handle = chart.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |chart, cx| chart.toggle_query_section(window, cx));
+    });
+    console.list_databases(&["analytics", "billing", "new"]);
+    notify_change(&mut console);
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| chart.read(cx).picker_for_test(cx)),
+        Some((true, 3)),
+        "closed, it is left alone"
+    );
+
+    let handle = chart.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |chart, cx| {
+            chart.open_query_section_for_test(window, cx)
+        });
+    });
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| chart.read(cx).picker_for_test(cx)),
+        Some((true, 4)),
+        "and caught up on opening"
+    );
+}
+
 /// A driver with one fixed database has nothing to pick, and stores none.
 #[gpui::test]
 fn a_driver_with_one_database_has_no_picker_and_stores_none(cx: &mut TestAppContext) {
@@ -2647,6 +2720,56 @@ fn a_pick_while_another_database_opens_reports_the_run_it_replaced(cx: &mut Test
     assert_eq!(console.last_request().database.as_deref(), Some("billing"));
 }
 
+/// A pick that needs no opening ends the wait on the other database just the same:
+/// the chart stops saying it is connecting there, the old open cannot start another
+/// run or a failure about a database it left, and the run that waited reports.
+#[gpui::test]
+fn a_pick_of_an_open_database_ends_the_wait_on_another(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    console.register_driver();
+    console.list_databases(&["app", "analytics"]);
+    console.driver.set_query_outcome(
+        CALLS_QUERY,
+        FakeQueryOutcome::success(api_call_log_result()),
+    );
+    let saved = console.saved_with(database_context("analytics"));
+    let chart = console.reopen(&saved);
+    let finishes = finishes_of(&mut console, &chart);
+
+    console.request(&chart);
+    assert_eq!(*finishes.borrow(), 0);
+
+    // Before "analytics" has had time to open. The connection's own runs at once.
+    let handle = chart.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |chart, cx| {
+            chart.pick_database_for_test("", window, cx);
+        });
+    });
+    let handle = chart.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |chart, cx| chart.run_by_hand(window, cx));
+    });
+    assert_eq!(*finishes.borrow(), 1, "the run that waited reports");
+
+    console.window.run_until_parked();
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
+    });
+
+    assert_eq!(*finishes.borrow(), 2, "and the one that ran");
+    assert_eq!(
+        console.executed(),
+        [CALLS_QUERY],
+        "no extra run when it opened"
+    );
+    assert_eq!(console.last_request().database, None);
+    assert!(!console.message(&chart).contains("analytics"));
+}
+
 /// An edit is something closing would lose, like a picked column. It warns once,
 /// closes on the second press, and saving makes it safe.
 #[gpui::test]
@@ -2796,6 +2919,242 @@ fn a_picked_column_the_edit_lost_goes_back_to_detection_and_says_so(cx: &mut Tes
     );
 }
 
+const REORDERED_QUERY: &str = "select runtime, ts, calls from api_call_log";
+
+fn calls_columns() -> QueryResult {
+    QueryResult::table(
+        vec![
+            column("ts", ColumnKind::Timestamp),
+            column("calls", ColumnKind::Integer),
+            column("runtime", ColumnKind::Float),
+        ],
+        vec![vec![Value::Int(1), Value::Int(2), Value::Float(3.0)]],
+        None,
+        Duration::ZERO,
+    )
+}
+
+fn reordered_columns() -> QueryResult {
+    QueryResult::table(
+        vec![
+            column("runtime", ColumnKind::Float),
+            column("ts", ColumnKind::Timestamp),
+            column("calls", ColumnKind::Integer),
+        ],
+        vec![vec![Value::Float(3.0), Value::Int(1), Value::Int(2)]],
+        None,
+        Duration::ZERO,
+    )
+}
+
+/// A chart plotting `calls`, the middle column, with the reordered query on offer.
+fn chart_picking_calls<'a>(console: &mut Fixture<'a>) -> Entity<ChartDocument> {
+    console
+        .driver
+        .set_query_outcome(CALLS_QUERY, FakeQueryOutcome::success(calls_columns()));
+    console.driver.set_query_outcome(
+        REORDERED_QUERY,
+        FakeQueryOutcome::success(reordered_columns()),
+    );
+
+    let mut saved = console.saved_with(SavedChartContext::default());
+    saved.bindings = BindingSpec {
+        x: 0,
+        y: vec![1],
+        ..BindingSpec::default()
+    };
+    let chart = console.reopen(&saved);
+    console.run_chart(&chart);
+    assert_eq!(console.bindings(&chart).y, vec![1]);
+    chart
+}
+
+/// Saved without a run, the record has no result to read columns from. Reopened
+/// before one comes, detection decides: the old picks at those positions would plot
+/// `ts` against `runtime`.
+#[gpui::test]
+fn a_chart_saved_without_a_run_does_not_reopen_on_the_wrong_columns(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let chart = chart_picking_calls(&mut console);
+
+    console.type_query(&chart, REORDERED_QUERY);
+    let stored = console.save(&chart, "saved");
+    assert!(stored.bindings.y.is_empty(), "{:?}", stored.bindings);
+
+    let reopened = console.reopen(&stored);
+    console.run_chart(&reopened);
+
+    let bindings = console.bindings(&reopened);
+    assert_eq!((bindings.x, bindings.y), (1, vec![0]), "ts against runtime");
+}
+
+/// The run Save starts finds the picked column by name and stores where it is now,
+/// so the pick survives. Nothing is then left to warn about.
+#[gpui::test]
+fn the_run_after_a_save_stores_where_the_picked_columns_went(cx: &mut TestAppContext) {
+    use crate::pane::EscapeClose;
+
+    let mut console = console_with(cx, "");
+    let chart = chart_picking_calls(&mut console);
+
+    console.type_query(&chart, REORDERED_QUERY);
+    let saved_id = console.save(&chart, "saved").id;
+    console.apply_marked_run(&chart);
+
+    let stored = console.window.update(|_, cx| {
+        console
+            .app_state
+            .read(cx)
+            .saved_charts
+            .chart_by_id(saved_id)
+            .cloned()
+            .expect("stored")
+    });
+    assert_eq!((stored.bindings.x, stored.bindings.y.clone()), (1, vec![2]));
+    assert_eq!(console.escape(&chart), EscapeClose::Close);
+
+    let reopened = console.reopen(&stored);
+    console.run_chart(&reopened);
+    let bindings = console.bindings(&reopened);
+    assert_eq!((bindings.x, bindings.y), (1, vec![2]), "ts against calls");
+}
+
+/// A run that failed leaves the edited query without a result too.
+#[gpui::test]
+fn a_chart_saved_after_a_failed_run_holds_no_columns(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let chart = chart_picking_calls(&mut console);
+    console
+        .driver
+        .set_query_outcome(REORDERED_QUERY, FakeQueryOutcome::Error("no".into()));
+
+    console.type_query(&chart, REORDERED_QUERY);
+    console.run_by_hand(&chart);
+
+    let stored = console.save(&chart, "saved");
+    assert!(stored.bindings.y.is_empty(), "{:?}", stored.bindings);
+}
+
+/// Saving without an edit keeps the picks, as it always did.
+#[gpui::test]
+fn saving_without_an_edit_keeps_the_picked_columns(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let chart = chart_picking_calls(&mut console);
+
+    let stored = console.save(&chart, "saved");
+
+    assert_eq!(stored.bindings.y, vec![1]);
+}
+
+/// "Failed to save" means the chart is where it was: on what it ran, not running
+/// what did not save, and nobody is told anything changed.
+#[gpui::test]
+fn a_failed_save_leaves_the_chart_on_what_it_ran(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    console.list_databases(&["app", "billing"]);
+    console.driver.set_query_outcome(
+        CALLS_QUERY,
+        FakeQueryOutcome::success(api_call_log_result()),
+    );
+    let saved = console.saved_with(SavedChartContext::default());
+    let chart = console.reopen(&saved);
+    console.run_chart(&chart);
+
+    console.type_query(&chart, EDITED_QUERY);
+    console.pick_database(&chart, "billing");
+
+    let app_state = console.app_state.clone();
+    let changes: Rc<RefCell<usize>> = Rc::default();
+    let sink = changes.clone();
+    console.window.update(|_, cx| {
+        cx.subscribe(
+            &app_state,
+            move |_, _: &dbflux_ui_base::AppStateChanged, _| {
+                *sink.borrow_mut() += 1;
+            },
+        )
+        .detach();
+    });
+
+    // The fixture's profile has no row yet, which the record's key refuses.
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| chart.save_as("saved".to_string(), cx));
+    });
+    console.window.run_until_parked();
+
+    let toast = console
+        .window
+        .update(|_, cx| chart.read(cx).pending_toast_for_test())
+        .expect("a toast");
+    assert!(
+        toast.starts_with(&dbflux_i18n::t!(
+            "document.chart.toast.save_failed",
+            error = ""
+        )),
+        "{toast}"
+    );
+    assert_eq!(*changes.borrow(), 0);
+
+    let (query, context, _) = console.applied(&chart);
+    assert_eq!(query, CALLS_QUERY);
+    assert_eq!(context.database, None);
+    assert!(
+        !console
+            .window
+            .update(|_, cx| chart.read(cx).has_pending_reexecute())
+    );
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| chart.read(cx).query_in_box(cx)),
+        EDITED_QUERY,
+        "the edit is still in the box"
+    );
+}
+
+/// A query applied by hand is recorded, fingerprinted like the editor's. A refresh
+/// of the same query is not an edit.
+#[gpui::test]
+fn an_applied_edit_is_recorded_in_the_audit_log(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    console.driver.set_query_outcome(
+        CALLS_QUERY,
+        FakeQueryOutcome::success(api_call_log_result()),
+    );
+    console.driver.set_query_outcome(
+        EDITED_QUERY,
+        FakeQueryOutcome::success(api_call_log_result()),
+    );
+    let saved = console.saved_with(SavedChartContext::default());
+    let chart = console.reopen(&saved);
+
+    let edits = |console: &mut Fixture<'_>| -> usize {
+        let app_state = console.app_state.clone();
+        console.window.update(|_, cx| {
+            app_state
+                .read(cx)
+                .audit_service()
+                .query_extended(&dbflux_audit::query::AuditQueryFilter::default())
+                .expect("the log reads")
+                .iter()
+                .filter(|event| event.action.as_deref() == Some("chart_query_edited"))
+                .count()
+        })
+    };
+
+    console.run_by_hand(&chart);
+    assert_eq!(edits(&mut console), 0, "nothing edited");
+
+    console.type_query(&chart, EDITED_QUERY);
+    assert_eq!(edits(&mut console), 0, "typing is not an edit yet");
+
+    console.run_by_hand(&chart);
+    assert_eq!(edits(&mut console), 1);
+    console.run_by_hand(&chart);
+    assert_eq!(edits(&mut console), 1, "the same query again");
+}
+
 /// An edited query with nothing to draw says what is missing, as any chart does.
 #[gpui::test]
 fn an_edit_with_nothing_to_draw_says_why(cx: &mut TestAppContext) {
@@ -2889,46 +3248,120 @@ fn only_a_query_chart_outside_a_panel_can_be_edited(cx: &mut TestAppContext) {
     assert_eq!(editable(&mut console, &query_chart), (false, false));
 }
 
-/// An open dashboard panel follows its chart when a tab edits and saves it.
+/// An open panel takes on what a tab saved, as reopening would: query, database,
+/// columns, chart type and scale. Its run goes through the dashboard's cap. And no
+/// toast sends a panel user to an axis bar a panel does not have.
 #[gpui::test]
-fn a_dashboard_panel_follows_an_edit_saved_in_a_tab(cx: &mut TestAppContext) {
+fn a_dashboard_panel_follows_a_save_through_its_cap(cx: &mut TestAppContext) {
+    use crate::dashboard::{DashboardDocument, DashboardPanelSlot, PanelGridPos};
+    use dbflux_components::common::time_range::view::TimeRangePanel;
+    use dbflux_components::saved_chart::SavedChartRefreshPolicy;
+
     let mut console = console_with(cx, "");
     console.list_databases(&["app", "billing"]);
+    console
+        .driver
+        .set_query_outcome(CALLS_QUERY, FakeQueryOutcome::success(calls_columns()));
     console.driver.set_query_outcome(
-        CALLS_QUERY,
-        FakeQueryOutcome::success(api_call_log_result()),
-    );
-    console.driver.set_query_outcome(
-        EDITED_QUERY,
-        FakeQueryOutcome::success(api_call_log_result()),
+        REORDERED_QUERY,
+        FakeQueryOutcome::success(reordered_columns()),
     );
 
-    let saved = console.saved_with(database_context("app"));
+    let mut saved = console.saved_with(database_context("app"));
+    saved.bindings = BindingSpec {
+        x: 0,
+        y: vec![1],
+        ..BindingSpec::default()
+    };
     let tab = console.reopen(&saved);
-    console.save(&tab, "saved");
-
+    console.run_chart(&tab);
     let stored = console.save(&tab, "saved");
+
     let panel = console.reopen(&stored);
     let handle = panel.clone();
     console.window.update(|_, cx| {
         handle.update(cx, |panel, cx| panel.set_embedded(true, cx));
     });
     console.run_chart(&panel);
-    let runs_before = console.executed().len();
 
-    console.type_query(&tab, EDITED_QUERY);
+    let app_state = console.app_state.clone();
+    let slot_panel = panel.clone();
+    let dashboard = console.window.update(|window, cx| {
+        let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+        cx.new(|cx| {
+            DashboardDocument::new(
+                Uuid::new_v4(),
+                "Dashboard".to_string(),
+                vec![DashboardPanelSlot::Loaded {
+                    panel: slot_panel,
+                    grid_pos: PanelGridPos {
+                        grid_row: 0,
+                        grid_column: 0,
+                        grid_width: 6,
+                        grid_height: 2,
+                    },
+                    title_override: None,
+                }],
+                shared_time_range,
+                None,
+                SavedChartRefreshPolicy::Off,
+                false,
+                app_state,
+                cx,
+            )
+        })
+    });
+    let inflight = |console: &mut Fixture<'_>| {
+        console
+            .window
+            .update(|_, cx| dashboard.read(cx).inflight_reexec_count_for_testing())
+    };
+    assert_eq!(inflight(&mut console), 0);
+
+    console.type_query(&tab, REORDERED_QUERY);
     console.pick_database(&tab, "billing");
+    let handle = tab.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| {
+            chart
+                .chart_shell_for_test()
+                .clone()
+                .update(cx, |shell, cx| {
+                    shell.set_chart_kind(ChartKind::Bar, cx);
+                });
+        });
+    });
     console.save(&tab, "saved");
     console.window.run_until_parked();
 
     let (query, context, stored_flag) = console.applied(&panel);
-    assert_eq!(query, EDITED_QUERY);
+    assert_eq!(query, REORDERED_QUERY);
     assert_eq!(context.database.as_deref(), Some("billing"));
     assert!(stored_flag);
+    assert_eq!(
+        console.window.update(|_, cx| panel.read(cx).chart_kind(cx)),
+        ChartKind::Bar
+    );
+    assert_eq!(inflight(&mut console), 1, "admitted by the dashboard");
 
+    // The tab's run stores the columns, which the panel follows too. Its first run
+    // has not started yet, so that one run answers for both changes and takes one
+    // slot: two slots and one report would keep a slot for good.
+    console.apply_marked_run(&tab);
+    console.window.run_until_parked();
+    assert_eq!(inflight(&mut console), 1, "no second slot for the same run");
     console.apply_marked_run(&panel);
-    assert!(console.executed().len() > runs_before);
-    assert_eq!(console.last_request().sql, EDITED_QUERY);
+    console.window.run_until_parked();
+
+    assert_eq!(console.last_request().sql, REORDERED_QUERY);
+    assert_eq!(console.bindings(&panel).y, vec![2], "the saved columns");
+    assert_eq!(
+        console
+            .window
+            .update(|_, cx| panel.read(cx).pending_toast_for_test()),
+        None
+    );
+    assert_eq!(inflight(&mut console), 0, "every admitted run reported");
 }
 
 /// A chart without the flag shows no note, a saved one included.

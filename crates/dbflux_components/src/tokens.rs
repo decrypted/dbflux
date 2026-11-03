@@ -2284,8 +2284,6 @@ pub struct ChartDocumentMetrics;
 impl ChartDocumentMetrics {
     /// Axis row under the header. (46 px)
     pub const AXIS_ROW_HEIGHT: Rems = ui(46.0);
-    /// Height of the Query box in a chart tab: a few lines, so the chart keeps its space.
-    pub const QUERY_EDITOR_HEIGHT: Rems = ui(120.0);
     /// Chart area: 24 px above, 28 px on the sides and below.
     pub const AREA_PADDING_TOP: Pixels = px(24.0);
     pub const AREA_PADDING: Pixels = px(28.0);

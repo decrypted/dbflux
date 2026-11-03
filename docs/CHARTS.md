@@ -295,8 +295,8 @@ prompt, then the highlighted point, then the stats rail. A text field keeps its
   of the result with no state of its own to collapse.
 
 A chart tab has no reopen, so closing drops what only it holds: the columns, chart
-type and Y scale changed since it opened or was saved, a metric swapped in the
-picker, and the samples an instance metric chart collected. With any of those, the
+type, Y scale, query and database changed since it opened or was saved, a metric
+swapped in the picker, and the samples an instance metric chart collected. With any of those, the
 first `Escape` warns and the second closes. A chart still on its defaults closes at
 once, since it opens again from its query or the saved list. The time range, the
 refresh interval and hidden series do not count, since saving does not keep them
@@ -336,34 +336,6 @@ qualified until a database is picked in the Query section and saved. Saved query
 charts and dashboard panels take the editor row limit; metric and instance metric
 sources do not.
 
-### Query section
-
-A chart with a query has a Query section above the chart area, closed by default so
-the chart keeps its space: closed, it shows the database and the first line of the
-SQL. Open it with its button or from the pane actions. Open, it holds a box with the
-SQL, a database picker and Run. Metric, instance metric and collection charts have no
-section, and neither does a dashboard panel, whose host owns the chrome: open the chart
-from the saved list to edit it, and an open panel follows the change when it is saved.
-
-Typing runs nothing. Run, its shortcut in the box (`Ctrl+Enter`, `Cmd+Enter` on macOS)
-and the toolbar's Refresh apply the box and the picker and run. A timer refresh keeps
-running what was last run. Save applies them too, runs, and overwrites the same chart.
-Whatever is in the box goes through the same read check as any chart, on every run, so
-a statement that changes data is stored if saved but never runs.
-
-The picker appears on a driver with more than one database. It lists the connection's
-databases and "Connection's default", which is how no stored database shows and which
-stores none. A stored database the connection does not list stays on the list, marked,
-so it can be seen and changed. Picking another database drops the stored schema and
-container, which belonged to the old one. Once saved, a picked database is checked like
-any stored one.
-
-An edit counts as something closing would lose, so the first `Escape` warns. In the box,
-`Escape` leaves the box first and keeps the text.
-
-After an edit, picked columns follow their names to where the new result has them. If one
-is gone, the chart goes back to the columns detection finds and says so.
-
 A chart never moves the session an editor runs on. On MySQL, MariaDB and SQL Server,
 which keep the current database on one session, a chart runs on a connection of its
 own, opened when the first one runs (one more connection to the server). It therefore
@@ -387,6 +359,36 @@ flowchart TD
     CD -->|Save| SC[SavedChart in saved_charts.json]
     SC -->|Open chart...| CD
 ```
+
+### Query section
+
+A chart with a query has a Query section above the chart area, closed by default so
+the chart keeps its space: closed, it shows the database and the first line of the
+SQL. Open it with its button or from the pane actions. Open, it holds a box with the
+SQL, a database picker and Run. Metric, instance metric and collection charts have no
+section, and neither does a dashboard panel, whose host owns the chrome: open the chart
+from the saved list to edit it. An open panel takes on what is saved, as reopening would.
+
+Typing runs nothing. Run, its shortcut in the box (`Ctrl+Enter`, `Cmd+Enter` on macOS)
+and the toolbar's Refresh apply the box and the picker and run. A timer refresh keeps
+running what was last run. Save applies them too, runs, and overwrites the same chart.
+Whatever is in the box goes through the same read check as any chart, on every run, so
+a statement that changes data is stored if saved but never runs.
+
+The picker appears on a driver with more than one database. It lists the connection's
+databases and "Connection's default", which is how no stored database shows and which
+stores none. A stored database the connection does not list stays on the list, marked,
+so it can be seen and changed. Picking another database drops the stored schema and
+container, which belonged to the old one. Once saved, a picked database is checked like
+any stored one.
+
+An edit counts as something closing would lose, so the first `Escape` warns. In the box,
+`Escape` leaves the box first and keeps the text.
+
+After an edit, picked columns follow their names to where the new result has them. If one
+is gone, the chart goes back to the columns detection finds and says so. Columns are stored
+by position, so Save of a query with no result yet stores none, and the run it starts stores
+them. Reopened before that run ended, the chart uses the columns detection finds.
 
 ## Point inspector
 

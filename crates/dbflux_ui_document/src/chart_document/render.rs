@@ -271,6 +271,7 @@ impl ChartDocument {
             "chart-query-toggle",
             dbflux_i18n::t!("document.chart.query.title"),
         )
+        .aria_expanded(open)
         .icon(if open {
             AppIcon::ChevronDown
         } else {
@@ -292,8 +293,10 @@ impl ChartDocument {
         };
 
         let section = self.query_section().filter(|_| open);
+        // The box's lines are in the editor's font, not the interface's.
+        let editor_line_height = dbflux_components::fonts::editor_line_height(cx);
         let picker = section
-            .filter(|_| self.database_choices(cx).is_some())
+            .filter(|section| section.has_database_choices)
             .map(|section| section.database.clone());
 
         let mut bar = document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx).child(toggle);
@@ -332,7 +335,9 @@ impl ChartDocument {
                     el.child(
                         div()
                             .id("chart-query-editor")
-                            .h(ChartDocumentMetrics::QUERY_EDITOR_HEIGHT)
+                            .h(editor_line_height * 6.0)
+                            .font_family(dbflux_components::fonts::editor_family(cx))
+                            .text_size(dbflux_components::fonts::editor_font_size(cx))
                             .border_b_1()
                             .border_color(theme.border)
                             .child(Editor::new(&section.editor).appearance(false).h_full()),

@@ -4183,7 +4183,7 @@ mod tests {
 /// `details_json` of an editor audit event: the query text and the
 /// driver-provided extra fields, without the server notices, which are user
 /// output rather than audit context and can carry row values.
-fn audit_details_json(
+pub(crate) fn audit_details_json(
     query: Option<&str>,
     metadata_extra: Option<&std::collections::HashMap<String, serde_json::Value>>,
 ) -> Option<String> {

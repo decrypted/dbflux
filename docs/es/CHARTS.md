@@ -314,8 +314,8 @@ el teclado. Sin nada más que descartar:
   del resultado sin estado propio que colapsar.
 
 Una pestaña de gráfico no se puede reabrir, así que cerrarla descarta lo que solo
-ella tiene: las columnas, el tipo de gráfico y la escala Y cambiados desde que se
-abrió o se guardó, una métrica cambiada en el selector y las muestras que recogió
+ella tiene: las columnas, el tipo de gráfico, la escala Y, la consulta y la base de
+datos cambiados desde que se abrió o se guardó, una métrica cambiada en el selector y las muestras que recogió
 un gráfico de métrica de instancia. Con cualquiera de ellas, el primer `Escape`
 avisa y el segundo cierra. Un gráfico con sus valores por defecto se cierra de
 inmediato, porque se abre de nuevo desde su query o la lista de guardados. El rango
@@ -360,37 +360,6 @@ datos en la sección Consulta y se guarde. Los gráficos de query guardados y lo
 de dashboard aplican el límite de filas del editor; las fuentes de métrica y de métrica
 de instancia no.
 
-### Sección Consulta
-
-Un gráfico con una consulta tiene una sección Consulta sobre el área del gráfico, cerrada
-por defecto para que el gráfico conserve su espacio: cerrada, muestra la base de datos y
-la primera línea del SQL. Se abre con su botón o desde las acciones del panel. Abierta,
-tiene un cuadro con el SQL, un selector de base de datos y Ejecutar. Los gráficos de
-métrica, de métrica de instancia y de colección no tienen sección, ni tampoco un panel de
-dashboard, cuyo anfitrión controla la interfaz: abre el gráfico desde la lista de guardados
-para editarlo, y un panel abierto sigue el cambio cuando se guarda.
-
-Escribir no ejecuta nada. Ejecutar, su atajo en el cuadro (`Ctrl+Enter`, `Cmd+Enter` en
-macOS) y Refresh de la barra aplican el cuadro y el selector y ejecutan. Un refresco por
-temporizador sigue ejecutando lo último que se ejecutó. Guardar también los aplica, ejecuta
-y sobrescribe el mismo gráfico. Lo que haya en el cuadro pasa la misma comprobación de
-lectura que cualquier gráfico, en cada ejecución, así que una sentencia que cambia datos se
-guarda si se guarda pero nunca se ejecuta.
-
-El selector aparece en un driver con más de una base de datos. Lista las bases de datos de
-la conexión y "La predeterminada de la conexión", que es como se muestra que no hay base de
-datos guardada y que no guarda ninguna. Una base de datos guardada que la conexión no lista
-sigue en la lista, marcada, para poder verla y cambiarla. Elegir otra base de datos descarta
-el esquema y el contenedor guardados, que eran de la anterior. Una vez guardada, una base de
-datos elegida se comprueba como cualquier otra guardada.
-
-Una edición cuenta como algo que cerrar perdería, así que el primer `Escape` avisa. En el
-cuadro, `Escape` primero sale del cuadro y conserva el texto.
-
-Tras una edición, las columnas elegidas siguen a su nombre hasta donde las tenga el nuevo
-resultado. Si falta alguna, el gráfico vuelve a las columnas que encuentra la detección y lo
-dice.
-
 Un gráfico nunca mueve la sesión en la que se ejecuta un editor. En MySQL, MariaDB y SQL
 Server, que guardan la base de datos actual en una sola sesión, un gráfico se ejecuta en
 una conexión propia, abierta cuando se ejecuta el primero (una conexión más al servidor).
@@ -415,6 +384,38 @@ flowchart TD
     CD --&gt;|Save| SC[SavedChart in saved_charts.json]
     SC --&gt;|Open chart...| CD
 ```
+
+### Sección Consulta
+
+Un gráfico con una consulta tiene una sección Consulta sobre el área del gráfico, cerrada
+por defecto para que el gráfico conserve su espacio: cerrada, muestra la base de datos y
+la primera línea del SQL. Se abre con su botón o desde las acciones del panel. Abierta,
+tiene un cuadro con el SQL, un selector de base de datos y Ejecutar. Los gráficos de
+métrica, de métrica de instancia y de colección no tienen sección, ni tampoco un panel de
+dashboard, cuyo anfitrión controla la interfaz: abre el gráfico desde la lista de guardados
+para editarlo. Un panel abierto adopta lo que se guarda, como al reabrirlo.
+
+Escribir no ejecuta nada. Ejecutar, su atajo en el cuadro (`Ctrl+Enter`, `Cmd+Enter` en
+macOS) y Actualizar de la barra aplican el cuadro y el selector y ejecutan. Un refresco por
+temporizador sigue ejecutando lo último que se ejecutó. Guardar también los aplica, ejecuta
+y sobrescribe el mismo gráfico. Lo que haya en el cuadro pasa la misma comprobación de
+lectura que cualquier gráfico, en cada ejecución, así que una sentencia que cambia datos puede guardarse, pero nunca se ejecuta.
+
+El selector aparece en un driver con más de una base de datos. Lista las bases de datos de
+la conexión y "La predeterminada de la conexión", que es como se muestra que no hay base de
+datos guardada y que no guarda ninguna. Una base de datos guardada que la conexión no lista
+sigue en la lista, marcada, para poder verla y cambiarla. Elegir otra base de datos descarta
+el esquema y el contenedor guardados, que eran de la anterior. Una vez guardada, una base de
+datos elegida se comprueba como cualquier otra guardada.
+
+Una edición cuenta como algo que cerrar perdería, así que el primer `Escape` avisa. En el
+cuadro, `Escape` primero sale del cuadro y conserva el texto.
+
+Tras una edición, las columnas elegidas siguen a su nombre hasta donde las tenga el nuevo
+resultado. Si falta alguna, el gráfico vuelve a las columnas que encuentra la detección y lo
+dice. Las columnas se guardan por posición, así que guardar una consulta sin resultado todavía no
+guarda ninguna, y la ejecución que inicia las guarda. Si se reabre antes de que termine, el
+gráfico usa las columnas que encuentra la detección.
 
 ## Inspector de puntos
 

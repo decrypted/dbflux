@@ -71,6 +71,8 @@ pub const MCP_TOOL_EXECUTE_FAILED: AuditAction = AuditAction::new("mcp_tool_exec
 
 /// Query executed successfully.
 pub const QUERY_EXECUTE: AuditAction = AuditAction::new("query_execute");
+/// The SQL of a chart was changed in its Query section and applied.
+pub const CHART_QUERY_EDITED: AuditAction = AuditAction::new("chart_query_edited");
 /// Query execution failed.
 pub const QUERY_EXECUTE_FAILED: AuditAction = AuditAction::new("query_execute_failed");
 /// Query was cancelled.

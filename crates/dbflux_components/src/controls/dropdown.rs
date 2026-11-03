@@ -284,6 +284,11 @@ impl Dropdown {
         }
     }
 
+    /// How many items the list holds.
+    pub fn item_count(&self) -> usize {
+        self.items.len()
+    }
+
     pub fn set_items(&mut self, items: Vec<DropdownItem>, cx: &mut Context<Self>) {
         self.items = items;
         if let Some(selected) = self.selected_index

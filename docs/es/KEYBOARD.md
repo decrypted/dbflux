@@ -524,10 +524,13 @@ inspector de puntos. Mover el puntero sobre el gráfico lo reemplaza.
 | `Escape` | Una capa por pulsación: cerrar un selector de eje abierto, un popover o el prompt de guardado, luego quitar el punto resaltado, luego cerrar el panel de estadísticas. Sin nada más que descartar, la vista de gráfico de un resultado vuelve a la vista desde la que se entró con el teclado en los resultados, y una pestaña de gráfico se cierra y vuelve a la pestaña desde la que se abrió. Un gráfico con cambios sin guardar avisa en la primera pulsación y se cierra en la segunda. Un panel de gráfico en un dashboard sale del panel; Table + Chart deja `Escape` a la tabla |
 | `Alt+l` / `Alt+h` | Tipo de gráfico siguiente / anterior (pestaña de gráfico) |
 | `]` / `[` | Rango de tiempo siguiente / anterior, Personalizado incluido (pestaña de gráfico) |
-| `F5` | Volver a ejecutar el gráfico (pestaña de gráfico) |
+| `F5` | Volver a ejecutar el gráfico, aplicando la sección Consulta (pestaña de gráfico) |
+| `Ctrl+Enter` / `Cmd+Enter` | Aplicar la sección Consulta y ejecutar el gráfico (pestaña de gráfico) |
 | `Ctrl+s` / `Cmd+s` | Guardar el gráfico; en el diálogo del nombre `Enter` guarda y `Escape` cancela (pestaña de gráfico) |
-| `m` (o `Shift+F10`) | Acciones del panel (pestaña de gráfico): actualizar, intervalo de actualización automática, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar mientras está elegido Personalizado, tipo de gráfico siguiente / anterior, los selectores X, Y, Agrupar y Agregación, Estadísticas, el selector de métricas y sus controles en un gráfico de métrica, Guardar gráfico |
+| `m` (o `Shift+F10`) | Acciones del panel (pestaña de gráfico): actualizar, intervalo de actualización automática, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar mientras está elegido Personalizado, tipo de gráfico siguiente / anterior, la sección Consulta y su selector de base de datos, los selectores X, Y, Agrupar y Agregación, Estadísticas, el selector de métricas y sus controles en un gráfico de métrica, Guardar gráfico |
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Enfocar el panel en esa dirección |
+
+En el cuadro de la sección Consulta, las letras son texto y `Escape` sale del cuadro conservando su contenido; la siguiente pulsación es del gráfico.
 
 Un selector de eje abierto desde el menú toma estas teclas hasta cerrarse:
 `j` / `k` recorren sus filas, `h` / `l` pasan al selector vecino (X, Y,

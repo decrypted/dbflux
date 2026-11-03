@@ -499,10 +499,13 @@ chart replaces it.
 | `Escape` | One layer per press: close an open axis picker, popover or the save prompt, then clear the highlighted point, then close the stats rail. With nothing left to dismiss, the chart view of a result returns to the view it was entered from with the keyboard in the results, and a chart tab closes and returns to the tab it was opened from. A chart with unsaved changes warns on the first press and closes on the second. A chart panel in a dashboard leaves the panel instead; Table + Chart keeps `Escape` with the table |
 | `Alt+l` / `Alt+h` | Next / previous chart type (chart tab) |
 | `]` / `[` | Next / previous time range, Custom included (chart tab) |
-| `F5` | Run the chart again (chart tab) |
+| `F5` | Run the chart again, applying the Query section (chart tab) |
+| `Ctrl+Enter` / `Cmd+Enter` | Apply the Query section and run the chart (chart tab) |
 | `Ctrl+s` / `Cmd+s` | Save the chart; in the name prompt `Enter` saves and `Escape` cancels (chart tab) |
-| `m` (or `Shift+F10`) | Pane actions (chart tab): refresh, auto-refresh interval, next / previous time range, the custom range controls and Apply while Custom is selected, next / previous chart type, the X, Y, Group and Aggregation pickers, Stats, the metric picker and its controls for a metric chart, Save chart |
+| `m` (or `Shift+F10`) | Pane actions (chart tab): refresh, auto-refresh interval, next / previous time range, the custom range controls and Apply while Custom is selected, next / previous chart type, the Query section and its database picker, the X, Y, Group and Aggregation pickers, Stats, the metric picker and its controls for a metric chart, Save chart |
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Focus the panel in that direction |
+
+In the Query section's box, letters are text and `Escape` leaves the box, keeping what it holds; the next press is the chart's.
 
 An axis picker opened from the menu takes these keys until it closes: `j` / `k`
 move through its rows, `h` / `l` switch to the neighboring picker (X, Y, Group,

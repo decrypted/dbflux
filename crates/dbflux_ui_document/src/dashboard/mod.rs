@@ -522,6 +522,7 @@ impl DashboardDocument {
         let app_state_sub =
             cx.subscribe(&app_state, |this: &mut Self, _, _: &AppStateChanged, cx| {
                 this.pending_panels_sync = true;
+                this.follow_saved_charts(cx);
                 cx.notify();
             });
         subscriptions.push(app_state_sub);
@@ -1323,6 +1324,30 @@ impl DashboardDocument {
         }
 
         self.request_all_loaded_panels(cx);
+    }
+
+    /// Panels take on saved charts another tab changed. Their runs go through the
+    /// cap like any other.
+    fn follow_saved_charts(&mut self, cx: &mut Context<Self>) {
+        let changed: Vec<usize> = self
+            .panel_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, slot)| match slot {
+                // A panel already marked to run will run the change, and reports once.
+                DashboardPanelSlot::Loaded { panel, .. } => panel
+                    .update(cx, |doc, cx| {
+                        let already_marked = doc.has_pending_reexecute();
+                        doc.follow_saved_chart(cx) && !already_marked
+                    })
+                    .then_some(idx),
+                _ => None,
+            })
+            .collect();
+
+        for idx in changed {
+            self.request_reexec_for_slot(idx, cx);
+        }
     }
 
     /// Requests a run of every panel that has one. Orphan slots are ignored. Each

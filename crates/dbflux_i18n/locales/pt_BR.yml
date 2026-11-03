@@ -1334,7 +1334,7 @@ document:
       chart_saved: Gráfico salvo
       save_failed: "Falha ao salvar o gráfico: %{error}"
     note:
-      console_transaction: "Este gráfico é executado em uma conexão separada e não mostra as alterações não confirmadas do console em que foi aberto."
+      console_transaction: "O console de origem deste gráfico tinha uma transação aberta quando o gráfico foi aberto. O gráfico é executado em uma conexão separada e não mostra alterações não confirmadas."
     error:
       source: "Erro na origem do gráfico: %{error}"
       no_connection_selected: Nenhuma conexão selecionada

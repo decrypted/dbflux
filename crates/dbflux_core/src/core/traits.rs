@@ -1210,6 +1210,16 @@ pub trait Connection: Send + Sync {
     /// to support cancellation.
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError>;
 
+    /// Runs a query nobody is watching, such as a chart's refresh, without
+    /// leaving anything behind that a later request of this connection would
+    /// run under. A driver that keeps its current database on one session
+    /// overrides this: `execute` moves that session to `req.database` and leaves
+    /// it there, and a console that sends no database of its own would run its
+    /// next statement, a write included, in the chart's database.
+    fn execute_unattended(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        self.execute(req)
+    }
+
     /// Execute a query and return a handle for cancellation.
     ///
     /// The default implementation delegates to `execute()` and returns

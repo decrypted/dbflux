@@ -2011,10 +2011,12 @@ impl CodeDocument {
         if let Some(tab) =
             target_index.and_then(|index| self.result_tabs.result_tabs.get_mut(index))
         {
+            let chart_context = origin.as_ref().map(ResultOrigin::execution_context);
             tab.origin = origin;
             tab.grid.update(cx, |g, cx| {
                 g.set_query_result(result, query.clone(), profile_id, cx);
                 g.set_result_caption(caption, cx);
+                g.set_result_context(chart_context);
             });
         } else {
             self.create_result_tab(result, query, caption, origin, window, cx);

@@ -1283,7 +1283,7 @@ impl DashboardDocument {
                         if !doc.auto_refresh_tick_allowed(cx) {
                             return;
                         }
-                        doc.refresh_all_loaded_panels(cx);
+                        doc.request_all_loaded_panels(cx);
                     });
                     true
                 });
@@ -1312,10 +1312,23 @@ impl DashboardDocument {
 
     /// Request a re-execution for every loaded panel in the dashboard.
     ///
-    /// Used by the toolbar's manual Refresh action. Orphan slots are ignored.
-    /// Each `Loaded` slot is fed through `request_reexec_for_slot`, which
-    /// already respects the per-dashboard concurrency cap.
+    /// Used by the toolbar's manual Refresh action, which also tries again a
+    /// database a panel could not open. The timer does not: it would report that
+    /// failure again on every tick.
     pub fn refresh_all_loaded_panels(&mut self, cx: &mut Context<Self>) {
+        for slot in &self.panel_slots {
+            if let DashboardPanelSlot::Loaded { panel, .. } = slot {
+                panel.update(cx, |doc, _| doc.retry_database_on_next_run());
+            }
+        }
+
+        self.request_all_loaded_panels(cx);
+    }
+
+    /// Requests a run of every panel that has one. Orphan slots are ignored. Each
+    /// slot is fed through `request_reexec_for_slot`, which already respects the
+    /// per-dashboard concurrency cap.
+    pub(crate) fn request_all_loaded_panels(&mut self, cx: &mut Context<Self>) {
         let refreshable_indices: Vec<usize> = self
             .panel_slots
             .iter()
@@ -1330,9 +1343,6 @@ impl DashboardDocument {
             .collect();
 
         for idx in refreshable_indices {
-            if let Some(DashboardPanelSlot::Loaded { panel, .. }) = self.panel_slots.get(idx) {
-                panel.update(cx, |doc, _| doc.retry_database_on_next_run());
-            }
             self.request_reexec_for_slot(idx, cx);
         }
     }

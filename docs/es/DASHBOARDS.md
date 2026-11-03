@@ -110,6 +110,8 @@ La cabecera tiene:
 - Un botón split de **refresh**: haz clic para refrescar todos los panels ahora;
   el desplegable establece un intervalo de auto-refresh (o Off / refresh al
   abrir).
+  Un panel cuya base de datos guardada no se puede abrir lo dice en el panel. El
+  temporizador no la vuelve a intentar; este botón sí.
 
 > **Las conexiones desconectadas se gestionan con elegancia.** Cuando la
 > conexión de un panel se cierra, su tick de refresh se salta — el timer sigue

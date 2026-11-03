@@ -105,6 +105,8 @@ The header has:
   at once.
 - A **refresh** split-button: click to refresh all panels now; the dropdown sets
   an auto-refresh interval (or Off / refresh-on-open).
+  A panel whose stored database cannot be opened says so in the panel. The timer
+  does not try it again; this button does.
 
 > **Disconnected connections are handled gracefully.** When a panel's connection
 > is closed, its refresh tick is skipped — the timer stays alive and resumes

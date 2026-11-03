@@ -1463,6 +1463,7 @@ impl MysqlDriver {
         let initial_database = initial_database_from_opts(&opts);
         Ok(Box::new(MysqlConnection {
             catalog_conn: Arc::new(Mutex::new(catalog_conn)),
+            unattended_conn: Mutex::new(None),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: initial_database,
@@ -1473,6 +1474,7 @@ impl MysqlDriver {
             query_connection_id,
             kill_opts: opts,
             cancelled: Arc::new(AtomicBool::new(false)),
+            unattended_cancelled: AtomicBool::new(false),
             kind: self.kind,
         }))
     }
@@ -1561,6 +1563,7 @@ impl MysqlDriver {
         let initial_database = initial_database_from_opts(&opts);
         Ok(Box::new(MysqlConnection {
             catalog_conn: Arc::new(Mutex::new(catalog_conn)),
+            unattended_conn: Mutex::new(None),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: initial_database,
@@ -1571,6 +1574,7 @@ impl MysqlDriver {
             query_connection_id,
             kill_opts: opts,
             cancelled: Arc::new(AtomicBool::new(false)),
+            unattended_cancelled: AtomicBool::new(false),
             kind: self.kind,
         }))
     }
@@ -1709,6 +1713,7 @@ impl MysqlDriver {
         let initial_database = initial_database_from_opts(&query_opts);
         Ok(Box::new(MysqlConnection {
             catalog_conn: Arc::new(Mutex::new(catalog_conn)),
+            unattended_conn: Mutex::new(None),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
                 current_database: initial_database,
@@ -1719,6 +1724,7 @@ impl MysqlDriver {
             query_connection_id,
             kill_opts: query_opts, // Use query tunnel's opts for KILL
             cancelled: Arc::new(AtomicBool::new(false)),
+            unattended_cancelled: AtomicBool::new(false),
             kind: self.kind,
         }))
     }
@@ -1931,6 +1937,10 @@ pub struct MysqlConnection {
     /// Connection for query execution (editor queries, table browser).
     query_conn: Mutex<QueryConnState>,
 
+    /// Connection for requests nobody is watching (charts), opened when the first
+    /// one runs. See `execute_unattended`.
+    unattended_conn: Mutex<Option<QueryConnState>>,
+
     /// SSH tunnel for catalog connection (kept alive while connection exists).
     #[allow(dead_code)]
     ssh_catalog_tunnel: Option<Arc<std::sync::Mutex<SshTunnel>>>,
@@ -1944,6 +1954,9 @@ pub struct MysqlConnection {
 
     kill_opts: Opts,
     cancelled: Arc<AtomicBool>,
+    /// Apart from `cancelled`, which a run on `query_conn` clears and a cancel of
+    /// the console sets.
+    unattended_cancelled: AtomicBool,
     kind: DbKind,
 }
 
@@ -2252,43 +2265,7 @@ impl Connection for MysqlConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        // Execution-safety preflight: reject requests this driver cannot honor
-        // before any SQL reaches the server, so a rejection never carries side
-        // effects. A requested statement deadline cannot be honored safely yet
-        // (max_execution_time applies to SELECT only; no watchdog and no
-        // session-level SET), and a bounded request cannot reach the
-        // instance-catalog dispatch paths, which run whole buffered catalog
-        // queries with no cap seam.
-        if req.statement_timeout.is_some() {
-            return Err(DbError::NotSupported(
-                "MySQL/MariaDB: the requested statement timeout cannot be honored safely by this driver; the request was rejected before execution".to_string(),
-            ));
-        }
-        if req.limit.is_some()
-            && let Some(source) = req
-                .execution_context
-                .as_ref()
-                .and_then(|ctx| ctx.source.as_ref())
-        {
-            match source {
-                ExecutionSourceContext::InstanceMetricQuery { .. } => {
-                    return Err(DbError::NotSupported(
-                        "MySQL/MariaDB: a row limit cannot be applied to an instance metric query; the request was rejected before execution".to_string(),
-                    ));
-                }
-                ExecutionSourceContext::InstanceInspectorQuery { .. } => {
-                    return Err(DbError::NotSupported(
-                        "MySQL/MariaDB: a row limit cannot be applied to an instance inspector query; the request was rejected before execution".to_string(),
-                    ));
-                }
-                _ => {}
-            }
-        }
-
-        req.refuse_read_only_for_instance_catalog("MySQL/MariaDB")?;
-        if req.read_only.is_required() {
-            ensure_read_only_statements(&QueryLanguage::Sql.split_statements(&req.sql))?;
-        }
+        check_request_is_honorable(req)?;
 
         self.cancelled.store(false, Ordering::SeqCst);
 
@@ -2333,70 +2310,71 @@ impl Connection for MysqlConnection {
             }
         };
 
-        // Switch database if needed (USE statement)
-        if let Some(ref db) = req.database
-            && state.current_database.as_ref() != Some(db)
-        {
-            log::debug!("[USE] Switching to database: {}", db);
-            state
-                .conn
-                .query_drop(use_database_statement(db))
-                .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
-            state.current_database = Some(db.clone());
+        mysql_run_on_session(&mut state, req, start, &self.cancelled)
+    }
+
+    /// Runs on a connection of its own. Sharing `query_conn` would leave that
+    /// session on the chart's database, and MySQL cannot go back to none, so a
+    /// console that sends no database would run its next statement there.
+    fn execute_unattended(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        check_request_is_honorable(req)?;
+
+        if matches!(
+            req.execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.source.as_ref()),
+            Some(
+                ExecutionSourceContext::InstanceMetricQuery { .. }
+                    | ExecutionSourceContext::InstanceInspectorQuery { .. }
+            )
+        ) {
+            return self.execute(req);
         }
 
-        let statements = QueryLanguage::Sql.split_statements(&req.sql);
+        let own_database = initial_database_from_opts(&self.kill_opts);
+        let mut slot = match self.unattended_conn.lock() {
+            Ok(guard) => guard,
+            Err(poison_err) => poison_err.into_inner(),
+        };
 
-        if req.read_only.is_required() {
-            if state.table_locks_possible {
-                return Err(DbError::NotSupported(
-                    "MySQL/MariaDB: read-only execution cannot run while this session may hold LOCK TABLES locks, which START TRANSACTION would release; run UNLOCK TABLES first. The request was rejected before execution".to_string(),
-                ));
+        // A request without a database runs on the connection's own, and there
+        // is no `USE` back to none.
+        if req.database.is_none()
+            && slot
+                .as_ref()
+                .is_some_and(|state| state.current_database != own_database)
+        {
+            *slot = None;
+        }
+
+        // An idle connection the server dropped costs one retry, not a failed
+        // refresh. Chart queries read, so running one again is safe.
+        for attempt_left in [true, false] {
+            let state = match slot.as_mut() {
+                Some(state) => state,
+                None => slot.insert(QueryConnState {
+                    conn: Conn::new(self.kill_opts.clone())
+                        .map_err(|error| format_mysql_query_error(&error))?,
+                    current_database: own_database.clone(),
+                    table_locks_possible: false,
+                }),
+            };
+
+            let result =
+                mysql_run_on_session(state, req, Instant::now(), &self.unattended_cancelled);
+            if result.is_ok() || state.conn.ping().is_ok() {
+                return result;
             }
 
-            return mysql_execute_read_only(
-                &mut state.conn,
-                lone_statement_sql(&req.sql, &statements),
-                &statements,
-                start,
-                &self.cancelled,
-                req.limit,
-            );
+            *slot = None;
+            if !attempt_left {
+                return result;
+            }
         }
 
-        let in_transaction_before = if statements
-            .iter()
-            .any(|statement| may_open_transaction(statement))
-        {
-            probe_in_transaction(&mut state.conn)
-        } else {
-            None
-        };
-
-        let result = if statements.len() > 1 {
-            mysql_execute_script(
-                &mut state.conn,
-                &statements,
-                start,
-                &self.cancelled,
-                req.limit,
-            )
-        } else {
-            mysql_execute_request(
-                &mut state.conn,
-                lone_statement_sql(&req.sql, &statements),
-                start,
-                &self.cancelled,
-                req.limit,
-            )
-        };
-
-        state.table_locks_possible =
-            table_locks_after(state.table_locks_possible, &statements, result.is_ok());
-
-        result.map_err(|error| {
-            settle_failed_transaction(&mut state.conn, in_transaction_before, error)
-        })
+        Err(DbError::query_failed(
+            "MySQL/MariaDB: no connection for the chart",
+        ))
     }
 
     fn cancel_active(&self) -> Result<(), DbError> {
@@ -3199,6 +3177,113 @@ fn lone_statement_sql<'a>(sql: &'a str, statements: &'a [String]) -> &'a str {
     }
 }
 
+/// Execution-safety preflight: rejects a request this driver cannot honor before
+/// any SQL reaches the server, so a rejection never carries side effects.
+fn check_request_is_honorable(req: &QueryRequest) -> Result<(), DbError> {
+    // A requested statement deadline cannot be honored safely yet
+    // (max_execution_time applies to SELECT only; no watchdog and no
+    // session-level SET), and a bounded request cannot reach the
+    // instance-catalog dispatch paths, which run whole buffered catalog
+    // queries with no cap seam.
+    if req.statement_timeout.is_some() {
+        return Err(DbError::NotSupported(
+            "MySQL/MariaDB: the requested statement timeout cannot be honored safely by this driver; the request was rejected before execution".to_string(),
+        ));
+    }
+    if req.limit.is_some()
+        && let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+    {
+        match source {
+            ExecutionSourceContext::InstanceMetricQuery { .. } => {
+                return Err(DbError::NotSupported(
+                    "MySQL/MariaDB: a row limit cannot be applied to an instance metric query; the request was rejected before execution".to_string(),
+                ));
+            }
+            ExecutionSourceContext::InstanceInspectorQuery { .. } => {
+                return Err(DbError::NotSupported(
+                    "MySQL/MariaDB: a row limit cannot be applied to an instance inspector query; the request was rejected before execution".to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    req.refuse_read_only_for_instance_catalog("MySQL/MariaDB")?;
+    if req.read_only.is_required() {
+        ensure_read_only_statements(&QueryLanguage::Sql.split_statements(&req.sql))?;
+    }
+
+    Ok(())
+}
+
+/// Runs `req` on the session `state` holds, moving it to `req.database` first.
+fn mysql_run_on_session(
+    state: &mut QueryConnState,
+    req: &QueryRequest,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    // Switch database if needed (USE statement)
+    if let Some(ref db) = req.database
+        && state.current_database.as_ref() != Some(db)
+    {
+        log::debug!("[USE] Switching to database: {}", db);
+        state
+            .conn
+            .query_drop(use_database_statement(db))
+            .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
+        state.current_database = Some(db.clone());
+    }
+
+    let statements = QueryLanguage::Sql.split_statements(&req.sql);
+
+    if req.read_only.is_required() {
+        if state.table_locks_possible {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: read-only execution cannot run while this session may hold LOCK TABLES locks, which START TRANSACTION would release; run UNLOCK TABLES first. The request was rejected before execution".to_string(),
+            ));
+        }
+
+        return mysql_execute_read_only(
+            &mut state.conn,
+            lone_statement_sql(&req.sql, &statements),
+            &statements,
+            start,
+            cancelled,
+            req.limit,
+        );
+    }
+
+    let in_transaction_before = if statements
+        .iter()
+        .any(|statement| may_open_transaction(statement))
+    {
+        probe_in_transaction(&mut state.conn)
+    } else {
+        None
+    };
+
+    let result = if statements.len() > 1 {
+        mysql_execute_script(&mut state.conn, &statements, start, cancelled, req.limit)
+    } else {
+        mysql_execute_request(
+            &mut state.conn,
+            lone_statement_sql(&req.sql, &statements),
+            start,
+            cancelled,
+            req.limit,
+        )
+    };
+
+    state.table_locks_possible =
+        table_locks_after(state.table_locks_possible, &statements, result.is_ok());
+
+    result.map_err(|error| settle_failed_transaction(&mut state.conn, in_transaction_before, error))
+}
+
 /// Runs a multi-statement script, stopping at the first failing statement.
 ///
 /// The mysql prepared-statement protocol rejects a batch with more than one
@@ -3549,6 +3634,15 @@ fn settle_failed_transaction(
 /// affected-row count. This is the per-statement unit used both for a lone
 /// query and for each statement of a multi-statement batch (a script), since
 /// the prepared-statement protocol rejects multi-command batches.
+/// A prepared statement keeps the database it was prepared in. Left in the
+/// connection's cache, the same text run later in another database would read the
+/// first one, so a chart or a console that moved reads the wrong table.
+fn close_prepared(conn: &mut Conn, stmt: mysql::Statement) {
+    if let Err(error) = conn.close(stmt) {
+        log::debug!("[QUERY] Could not close a prepared statement: {error}");
+    }
+}
+
 fn mysql_execute_one_statement(
     conn: &mut Conn,
     sql: &str,
@@ -3579,6 +3673,7 @@ fn mysql_execute_one_statement(
 
     // Execute the prepared statement
     let result: Result<Vec<mysql::Row>, mysql::Error> = conn.exec(&stmt, ());
+    close_prepared(conn, stmt);
 
     let query_time = start.elapsed();
 
@@ -3772,11 +3867,13 @@ fn mysql_execute_statement_sets_bounded(
         Err(error) => return Err(format_mysql_query_error(&error)),
     };
 
-    let stream = conn
-        .exec_iter(&stmt, ())
-        .map_err(|error| mysql_stream_error(&error, cancelled))?;
+    let result_sets = match conn.exec_iter(&stmt, ()) {
+        Ok(stream) => mysql_collect_result_sets(stream, start, cancelled, remaining),
+        Err(error) => Err(mysql_stream_error(&error, cancelled)),
+    };
+    close_prepared(conn, stmt);
 
-    mysql_collect_result_sets(stream, start, cancelled, remaining)
+    result_sets
 }
 
 /// Drains a statement's result-set stream under the shared remaining-row
@@ -5323,6 +5420,7 @@ mod tests {
             let cancelled = Arc::new(AtomicBool::new(true));
             let connection = MysqlConnection {
                 catalog_conn: Arc::new(Mutex::new(catalog_conn)),
+                unattended_conn: Mutex::new(None),
                 query_conn: Mutex::new(QueryConnState {
                     conn: query_conn,
                     current_database: Some("testdb".to_string()),
@@ -5333,6 +5431,7 @@ mod tests {
                 query_connection_id: 0,
                 kill_opts: opts,
                 cancelled: cancelled.clone(),
+                unattended_cancelled: AtomicBool::new(false),
                 kind: DbKind::MySQL,
             };
 

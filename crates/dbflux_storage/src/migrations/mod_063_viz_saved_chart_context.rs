@@ -9,7 +9,7 @@
 //! the data folder keeps working: it selects and inserts by column name.
 //!
 //! Keyed by name only: it checks for its own columns and does not depend on any
-//! migration after 014b, which gave `viz_saved_charts` its final shape.
+//! migration after 012, the last rebuild of `viz_saved_charts`.
 
 use rusqlite::Transaction;
 

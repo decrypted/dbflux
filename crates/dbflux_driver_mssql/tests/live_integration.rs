@@ -1764,3 +1764,51 @@ fn mssql_probe_write_privilege_sa_is_writable() -> Result<(), DbError> {
         Ok(())
     })
 }
+
+/// A console that sends no database runs where the session is. A chart on another
+/// database must not move that session.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn a_chart_does_not_move_the_session_a_console_runs_on() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (setup, _) = connect_mssql(uri.clone())?;
+        setup.execute(&QueryRequest::new("CREATE DATABASE chart_b"))?;
+        setup.execute(
+            &QueryRequest::new("CREATE TABLE t (id INT PRIMARY KEY)")
+                .with_database(Some("chart_b".to_string())),
+        )?;
+
+        let name = |connection: &dyn Connection| -> Result<String, DbError> {
+            let result = connection.execute(&QueryRequest::new("SELECT DB_NAME()"))?;
+            match result.rows.first().and_then(|row| row.first()) {
+                Some(Value::Text(text)) => Ok(text.clone()),
+                other => panic!("{other:?}"),
+            }
+        };
+
+        let (console, _) = connect_mssql(uri)?;
+        let own = name(&*console)?;
+        assert_ne!(own, "chart_b");
+
+        let chart = console.execute_unattended(
+            &QueryRequest::new("SELECT DB_NAME()").with_database(Some("chart_b".to_string())),
+        )?;
+        assert_eq!(chart.rows, vec![vec![Value::Text("chart_b".to_string())]]);
+        assert_eq!(name(&*console)?, own);
+
+        // A chart that stores no database runs on the one the connection opened
+        // on, whichever database the chart before it read. The test's connection
+        // helper moved the console itself afterwards.
+        let chart = console.execute_unattended(&QueryRequest::new("SELECT DB_NAME()"))?;
+        assert_eq!(chart.rows, vec![vec![Value::Text("master".to_string())]]);
+
+        // A failing chart leaves it alone too, and the next one still runs.
+        let gone = console.execute_unattended(
+            &QueryRequest::new("SELECT 1").with_database(Some("no_such_db".to_string())),
+        );
+        assert!(gone.is_err());
+        assert_eq!(name(&*console)?, own);
+
+        Ok(())
+    })
+}

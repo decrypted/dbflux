@@ -166,7 +166,7 @@ Un `SavedChart` persiste:
   ejecutado dentro de un `ChartDocument`) o `Collection { collection_ref,
   time_window }` (una fuente de exploración de colección).
 - `context`: dónde se ejecuta una fuente `Query`, un `SavedChartContext`; consulta
-  la sección de guardado.
+  [Guardar](#guardar).
 - `chart_spec` y `bindings` — la configuración de renderizado completa
   (`ChartSpec` y `BindingSpec`).
 - `time_range_preset`, `refresh_policy`, `created_at`, `updated_at`.
@@ -350,19 +350,27 @@ gráfico abre la conexión que necesita. Una base de datos guardada que la conex
 lista detiene el gráfico con un mensaje que la nombra, y nada se ejecuta en otra base
 de datos. Esa comprobación lee la lista de la última vez que la conexión se conectó o
 se actualizó, así que una base de datos creada después cuenta como ausente hasta
-actualizar. Un grupo de logs que ya no existe recibe el error del propio driver en el
-área del gráfico. Un gráfico guardado antes de que los gráficos guardaran esto no
+actualizar. Una base de datos que no se puede abrir también se nombra en el gráfico, lo
+que además detiene su actualización automática; el temporizador de un dashboard no la
+vuelve a intentar, una actualización a mano sí. Un grupo de logs que ya no existe recibe
+el error del propio driver en el área del gráfico. Un gráfico guardado antes de que los gráficos guardaran esto no
 tiene contexto: no envía ninguna base de datos y se ejecuta en la propia de la
 conexión, así que su tabla necesita estar cualificada, y volver a guardarlo no añade
 ninguna. Los gráficos de query guardados y los paneles de dashboard aplican el límite
 de filas del editor; las fuentes de métrica y de métrica de instancia no.
 
-Un gráfico se ejecuta en la conexión, no en la sesión del editor del que vino. En un
-driver cuyo editor tiene sesión propia (DuckDB, Turso), el gráfico no puede ver lo que
-ese editor no ha confirmado. Un gráfico abierto mientras el editor tiene una
-transacción abierta lo dice en una línea sobre su área. En los demás drivers el editor
-se ejecuta en esa misma conexión, así que un gráfico abierto durante su transacción se
-ejecuta dentro de ella y sí ve esas filas, hasta que el editor confirme o revierta.
+Un gráfico nunca mueve la sesión en la que se ejecuta un editor. En MySQL, MariaDB y SQL
+Server, que guardan la base de datos actual en una sola sesión, un gráfico se ejecuta en
+una conexión propia, abierta cuando se ejecuta el primero (una conexión más al servidor).
+Por eso no puede ver tablas temporales, variables de sesión ni cambios sin confirmar de
+un editor. En DuckDB y Turso el editor tiene sesión propia, con el mismo efecto, y allí
+un gráfico abierto mientras el editor tiene una transacción abierta lo dice en una línea
+sobre su área. Esa línea describe el momento en que se abrió el gráfico y sigue ahí si el
+editor confirma después. La app no sigue las transacciones abiertas en los demás drivers,
+así que no muestran esa línea. En PostgreSQL y Redshift un gráfico se ejecuta en la
+conexión de su base de datos, que comparte con un editor en esa base de datos: allí un
+gráfico abierto durante una transacción se ejecuta dentro de ella y sí ve esas filas,
+hasta que el editor confirme o revierta.
 
 ```mermaid
 flowchart TD

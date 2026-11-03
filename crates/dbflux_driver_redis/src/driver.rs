@@ -378,6 +378,7 @@ impl RedisDriver {
                     cluster_connection,
                 )))),
                 active_database: Mutex::new(None),
+                opened_on: 0,
                 _ssh_tunnel: params.ssh_tunnel,
             }));
         }
@@ -424,6 +425,7 @@ impl RedisDriver {
                         Mutex::new(connection),
                     )))),
                     active_database: Mutex::new(params.database),
+                    opened_on: u32::try_from(client.get_connection_info().redis.db).unwrap_or(0),
                     _ssh_tunnel: params.ssh_tunnel,
                 }))
             }
@@ -445,6 +447,7 @@ impl RedisDriver {
                         cluster_connection,
                     )))),
                     active_database: Mutex::new(None),
+                    opened_on: 0,
                     _ssh_tunnel: params.ssh_tunnel,
                 }))
             }
@@ -513,6 +516,7 @@ impl RedisDriver {
                     cluster_connection,
                 )))),
                 active_database: Mutex::new(None),
+                opened_on: 0,
                 _ssh_tunnel: None,
             }));
         }
@@ -544,6 +548,7 @@ impl RedisDriver {
                         Mutex::new(connection),
                     )))),
                     active_database: Mutex::new(database),
+                    opened_on: u32::try_from(client.get_connection_info().redis.db).unwrap_or(0),
                     _ssh_tunnel: None,
                 }))
             }
@@ -576,6 +581,7 @@ impl RedisDriver {
                         cluster_connection,
                     )))),
                     active_database: Mutex::new(None),
+                    opened_on: 0,
                     _ssh_tunnel: None,
                 }))
             }
@@ -1221,6 +1227,9 @@ fn non_empty(s: &str) -> Option<&str> {
 pub struct RedisConnection {
     connection: Arc<Mutex<RedisTransport>>,
     active_database: Mutex<Option<u32>>,
+    /// The keyspace the session opened on, which a request for another one has
+    /// to leave it on when no keyspace was ever made active.
+    opened_on: u32,
     _ssh_tunnel: Option<SshTunnel>,
 }
 
@@ -1269,11 +1278,8 @@ impl RedisConnection {
             let result = f(conn);
 
             // Restore the active database if we temporarily switched to a different one
-            if keyspace.is_some()
-                && keyspace != active
-                && let Some(db) = active
-            {
-                let _ = select_db(conn, db);
+            if keyspace.is_some() && keyspace != active {
+                let _ = select_db(conn, active.unwrap_or(self.opened_on));
             }
 
             result
@@ -3530,6 +3536,7 @@ fn connect_sentinel_master(
             resolver: Mutex::new(resolver),
         })),
         active_database: Mutex::new(database),
+        opened_on: 0,
         _ssh_tunnel: ssh_tunnel,
     }))
 }

@@ -233,7 +233,8 @@ pub struct ChartDocument {
     /// connection's own.
     execution_context: ExecutionContext,
     /// The database of `execution_context` came from storage, where nothing has
-    /// checked that it still exists.
+    /// checked that it still exists. A chart saved just now keeps running where it
+    /// just ran, even on a list that has not caught up.
     database_is_stored: bool,
     /// The connection per database this chart asked to open, which its run
     /// waits for. Holds that run's report to the dashboard.
@@ -246,7 +247,8 @@ pub struct ChartDocument {
     /// a refresh by hand tries again.
     database_open_failure: Option<(String, String)>,
     /// The console this chart was opened from had a transaction open on its own
-    /// session, whose uncommitted rows the chart cannot see.
+    /// session when it opened. A snapshot: the note says when, since the console
+    /// may commit while the chart stays.
     console_transaction_note: bool,
     /// Why the last run did not produce a result. A toast fades, so the chart
     /// area keeps saying it.
@@ -1549,7 +1551,15 @@ impl ChartDocument {
             &self.app_state,
             dbflux_ui_base::work_queue::QueryWork::background(profile_id)
                 .for_task(task_id, &cancel_token),
-            async move { conn.execute(&request) },
+            async move {
+                // A driver's own metric dispatch has nothing to leave behind,
+                // and goes where it always went.
+                if runs_user_query {
+                    conn.execute_unattended(&request)
+                } else {
+                    conn.execute(&request)
+                }
+            },
             cx,
         );
 
@@ -1630,12 +1640,19 @@ impl ChartDocument {
             return false;
         }
 
+        // The coordinator had no complaint, so nothing has told the user yet.
         if self.opened_database.take().as_ref() == Some(&database) {
-            let message = dbflux_i18n::t!(
-                "document.chart.error.database_not_opened",
-                database = database
+            self.stop_auto_refresh(cx);
+            self.report_failure(
+                UserFacingError::new(
+                    ErrorKind::Network,
+                    dbflux_i18n::t!(
+                        "document.chart.error.database_not_opened",
+                        database = database
+                    ),
+                ),
+                cx,
             );
-            self.remember_database_failure(database, message, cx);
             return false;
         }
 
@@ -1658,7 +1675,7 @@ impl ChartDocument {
     }
 
     /// Continues the run that waited for its database. The coordinator already
-    /// reported a failure to the user, so this only keeps it in the chart area.
+    /// reported a `Failed` to the user, so that one only stays in the chart area.
     fn on_object_tree_settled(&mut self, event: &ObjectTreeEvent, cx: &mut Context<Self>) {
         let ObjectTreeRequestKey::DatabaseSchema {
             profile_id,
@@ -1686,9 +1703,9 @@ impl ChartDocument {
             .is_some_and(|connected| connected.database_connection(database).is_some());
 
         let started = match &event.outcome {
-            _ if connection_is_open => self.run_after_opening(database.clone(), cx),
-            ObjectTreeOutcome::Applied | ObjectTreeOutcome::Cached => {
-                self.run_after_opening(database.clone(), cx)
+            _ if connection_is_open => {
+                self.opened_database = Some(database.clone());
+                self.start_run(cx)
             }
             ObjectTreeOutcome::Failed(error) => {
                 let message = dbflux_i18n::t!(
@@ -1699,12 +1716,22 @@ impl ChartDocument {
                 self.remember_database_failure(database.clone(), message, cx);
                 false
             }
-            ObjectTreeOutcome::Cancelled | ObjectTreeOutcome::Rejected(_) => {
-                let message = dbflux_i18n::t!(
-                    "document.chart.error.database_not_opened",
-                    database = database
+            // Nothing reported these, and a panel out of view has no other way
+            // to say so.
+            ObjectTreeOutcome::Applied
+            | ObjectTreeOutcome::Cached
+            | ObjectTreeOutcome::Cancelled
+            | ObjectTreeOutcome::Rejected(_) => {
+                self.report_failure(
+                    UserFacingError::new(
+                        ErrorKind::Network,
+                        dbflux_i18n::t!(
+                            "document.chart.error.database_not_opened",
+                            database = database
+                        ),
+                    ),
+                    cx,
                 );
-                self.show_database_failure(message, cx);
                 false
             }
         };
@@ -1713,11 +1740,6 @@ impl ChartDocument {
             cx.emit(DocumentEvent::ExecutionFinished);
         }
         cx.notify();
-    }
-
-    fn run_after_opening(&mut self, database: String, cx: &mut Context<Self>) -> bool {
-        self.opened_database = Some(database);
-        self.start_run(cx)
     }
 
     fn remember_database_failure(
@@ -2115,9 +2137,7 @@ impl ChartDocument {
             SavedChart::new_query(name.clone(), profile_id, self.query.clone(), spec, bindings);
         // Preserve the ID so upsert overwrites the existing record.
         saved.id = id;
-        let context = self.context_to_save(cx);
-        let stores_database = context.database.is_some();
-        saved.context = context;
+        saved.context = self.context_to_save(cx);
 
         let persist_result = self.app_state.update(cx, |state, _cx| {
             state.saved_charts.upsert(saved).inspect_err(|e| {
@@ -2134,7 +2154,6 @@ impl ChartDocument {
         match persist_result {
             Ok(_) => {
                 self.saved_chart_id = Some(id);
-                self.database_is_stored = stores_database;
                 self.title = name;
                 self.settings_baseline = self.current_settings(cx);
                 self.source_replaced = false;
@@ -2378,6 +2397,12 @@ impl ChartDocument {
         });
         self.last_result = Some(result);
         cx.notify();
+    }
+
+    /// Gives the chart a time window, as its first render would.
+    #[cfg(test)]
+    pub(crate) fn stage_window_for_test(&mut self, start_ms: i64, end_ms: i64) {
+        self.pending_time_window = Some((start_ms, end_ms));
     }
 
     /// Whether a dashboard marked this panel to run, which the next render does.

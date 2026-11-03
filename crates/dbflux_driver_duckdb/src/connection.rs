@@ -619,6 +619,23 @@ impl Connection for DuckDbConnection {
         self.run(&request.sql, &request.params, request.limit)
     }
 
+    /// `execute` runs in the active catalog whatever `request.database` names, and
+    /// moving the root would move every other tab on it, so another catalog gets a
+    /// connection of its own for this run.
+    fn execute_unattended(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
+        let Some(database) = request
+            .database
+            .as_deref()
+            .filter(|database| self.active_database().as_deref() != Some(database))
+        else {
+            return self.execute(request);
+        };
+
+        let connection = DuckDbConnection::open(fork_instance(&self.shared)?, false)?;
+        connection.set_active_database(Some(database))?;
+        connection.execute(request)
+    }
+
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
         self.cancel_active()
     }
@@ -1627,6 +1644,38 @@ mod tests {
         assert_eq!(schema_foreign_keys.len(), 1);
         assert_eq!(schema_foreign_keys[0].table_name, "orders");
         assert_eq!(schema_foreign_keys[0].referenced_table, "customers");
+    }
+
+    /// `execute` runs in the active catalog whatever the request names, which for
+    /// a saved chart would be a silent read of another catalog's table.
+    #[test]
+    fn an_unattended_run_reads_the_catalog_it_names_and_leaves_the_active_one() {
+        let connection = connect();
+        connection
+            .execute(&QueryRequest::new(
+                "ATTACH ':memory:' AS other; CREATE TABLE t AS SELECT 'main' AS src; \
+                 CREATE TABLE other.t AS SELECT 'other' AS src",
+            ))
+            .unwrap();
+        let active = connection.active_database();
+
+        let result = connection
+            .execute_unattended(
+                &QueryRequest::new("SELECT src FROM t").with_database(Some("other".to_string())),
+            )
+            .unwrap();
+        assert_eq!(result.rows, vec![vec![Value::Text("other".to_string())]]);
+
+        assert_eq!(connection.active_database(), active);
+        let root = connection
+            .execute(&QueryRequest::new("SELECT src FROM t"))
+            .unwrap();
+        assert_eq!(root.rows, vec![vec![Value::Text("main".to_string())]]);
+
+        let missing = connection.execute_unattended(
+            &QueryRequest::new("SELECT src FROM t").with_database(Some("gone".to_string())),
+        );
+        assert!(missing.is_err_and(|error| error.to_string().contains("gone")));
     }
 
     #[test]

@@ -1424,3 +1424,156 @@ fn mysql_decimal_values_keep_exact_precision() -> Result<(), DbError> {
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// Charts and the console's session
+// ---------------------------------------------------------------------------
+
+const DATABASE_NAME: &str = "SELECT COALESCE(DATABASE(), 'none')";
+
+fn mysql_text(
+    connection: &dyn dbflux_core::Connection,
+    database: Option<&str>,
+    sql: &str,
+) -> String {
+    let result = connection
+        .execute(&QueryRequest::new(sql.to_string()).with_database(database.map(str::to_string)))
+        .unwrap_or_else(|error| panic!("{sql}: {error}"));
+    first_cell(&result)
+}
+
+fn first_cell(result: &dbflux_core::QueryResult) -> String {
+    match result.rows.first().and_then(|row| row.first()) {
+        Some(Value::Text(text)) => text.clone(),
+        Some(Value::Int(number)) => number.to_string(),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn mysql_ids(connection: &dyn dbflux_core::Connection, database: &str) -> String {
+    let sql = format!("SELECT COALESCE(GROUP_CONCAT(id ORDER BY id), '') FROM {database}.t");
+    mysql_text(connection, None, &sql)
+}
+
+fn create_chart_databases(setup: &dyn dbflux_core::Connection) -> Result<(), DbError> {
+    for database in ["chart_a", "chart_b"] {
+        setup.execute(&QueryRequest::new(format!("CREATE DATABASE {database}")))?;
+        setup.execute(&QueryRequest::new(format!(
+            "CREATE TABLE {database}.t (id INT PRIMARY KEY, src VARCHAR(16))"
+        )))?;
+        setup.execute(&QueryRequest::new(format!(
+            "INSERT INTO {database}.t VALUES (0, \'{database}\')"
+        )))?;
+    }
+    Ok(())
+}
+
+fn without_database(uri: &str) -> String {
+    format!("{}/", uri.rsplit_once('/').expect("a URI with a path").0)
+}
+
+fn unattended(database: &str, sql: &str) -> QueryRequest {
+    QueryRequest::new(sql.to_string()).with_database(Some(database.to_string()))
+}
+
+/// A console that sends no database, the state of a fresh tab on a profile with a
+/// default database, writes where the session is. A chart on another database must
+/// not move that session, with or without a transaction open.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn a_chart_does_not_move_the_session_a_console_runs_on() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (setup, _) = connect_mysql(uri.clone())?;
+        create_chart_databases(&*setup)?;
+        let base = without_database(&uri);
+
+        // A profile with a default database.
+        let (console, _) = connect_mysql(format!("{base}chart_a"))?;
+        let chart = console.execute_unattended(&unattended("chart_b", "SELECT src FROM t"))?;
+        assert_eq!(chart.rows, vec![vec![Value::Text("chart_b".to_string())]]);
+        assert_eq!(mysql_text(&*console, None, DATABASE_NAME), "chart_a");
+        console.execute(&QueryRequest::new("INSERT INTO t VALUES (1, \'console\')"))?;
+        assert_eq!(mysql_ids(&*setup, "chart_a"), "0,1");
+        assert_eq!(mysql_ids(&*setup, "chart_b"), "0");
+
+        // With a transaction open: the chart is not inside it either.
+        console.execute(&QueryRequest::new("START TRANSACTION"))?;
+        console.execute(&QueryRequest::new("INSERT INTO t VALUES (2, \'tx\')"))?;
+        let chart = console.execute_unattended(&unattended(
+            "chart_b",
+            "SELECT CAST(COUNT(*) AS CHAR) FROM chart_a.t",
+        ))?;
+        assert_eq!(
+            first_cell(&chart),
+            "2",
+            "the chart does not see the third row"
+        );
+        console.execute(&QueryRequest::new("INSERT INTO t VALUES (3, \'tx\')"))?;
+        console.execute(&QueryRequest::new("ROLLBACK"))?;
+        assert_eq!(mysql_ids(&*setup, "chart_a"), "0,1");
+        assert_eq!(mysql_ids(&*setup, "chart_b"), "0");
+
+        // No default database: MySQL has no way back to none, so a shared session
+        // could not be restored.
+        let (console, _) = connect_mysql(base.clone())?;
+        console.execute_unattended(&unattended("chart_b", "SELECT src FROM t"))?;
+        assert_eq!(mysql_text(&*console, None, DATABASE_NAME), "none");
+        let refused = console.execute(&QueryRequest::new("INSERT INTO t VALUES (4, \'x\')"));
+        assert!(refused.is_err(), "no database is selected");
+        assert_eq!(mysql_ids(&*setup, "chart_b"), "0");
+
+        // A database typed by hand stays too.
+        console.execute(&QueryRequest::new("USE chart_a"))?;
+        console.execute_unattended(&unattended("chart_b", "SELECT src FROM t"))?;
+        assert_eq!(mysql_text(&*console, None, DATABASE_NAME), "chart_a");
+
+        // A chart that stores no database runs on the connection's own, whichever
+        // database the chart before it read.
+        let (console, _) = connect_mysql(format!("{base}chart_a"))?;
+        console.execute_unattended(&unattended("chart_b", "SELECT src FROM t"))?;
+        let own = console.execute_unattended(&QueryRequest::new("SELECT src FROM t"))?;
+        assert_eq!(first_cell(&own), "chart_a");
+
+        Ok(())
+    })
+}
+
+/// A prepared statement keeps the database it was prepared in, so the same text
+/// run in another database read the first one, on a console and on a chart alike.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn the_same_statement_reads_the_database_it_runs_in() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (setup, _) = connect_mysql(uri.clone())?;
+        create_chart_databases(&*setup)?;
+        let (connection, _) = connect_mysql(without_database(&uri))?;
+
+        let sql = "SELECT src FROM t";
+        assert_eq!(mysql_text(&*connection, Some("chart_a"), sql), "chart_a");
+        assert_eq!(mysql_text(&*connection, Some("chart_b"), sql), "chart_b");
+        assert_eq!(mysql_text(&*connection, Some("chart_a"), sql), "chart_a");
+
+        let bounded = |database: &str| {
+            connection.execute(
+                &QueryRequest::new(sql)
+                    .with_database(Some(database.to_string()))
+                    .with_limit(10),
+            )
+        };
+        assert_eq!(
+            bounded("chart_a")?.rows,
+            vec![vec![Value::Text("chart_a".to_string())]]
+        );
+        assert_eq!(
+            bounded("chart_b")?.rows,
+            vec![vec![Value::Text("chart_b".to_string())]]
+        );
+
+        for database in ["chart_a", "chart_b", "chart_a"] {
+            let chart = connection.execute_unattended(&unattended(database, sql))?;
+            assert_eq!(chart.rows, vec![vec![Value::Text(database.to_string())]]);
+        }
+
+        Ok(())
+    })
+}

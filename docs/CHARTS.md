@@ -327,18 +327,25 @@ driver with one connection per database, the chart opens the connection it needs
 A stored database the connection does not list stops the chart with a message
 naming it, and nothing runs on another database. That check reads the list from
 when the connection last connected or refreshed, so a database created since counts
-as missing until a refresh. A log group that no longer exists gets the driver's own
-error in the chart area. A chart saved before charts stored this has no context: it
+as missing until a refresh. A database that cannot be opened is named in the chart
+too, which also stops its auto-refresh; a dashboard's timer does not try it again, a
+refresh by hand does. A log group that no longer exists gets the driver's own error
+in the chart area. A chart saved before charts stored this has no context: it
 sends no database and runs on the connection's own, so its table needs to be
 qualified, and saving it again does not add one. Saved query charts and dashboard
 panels take the editor row limit; metric and instance metric sources do not.
 
-A chart runs on the connection, not on the session of the editor it came from. On a
-driver whose editor has a session of its own (DuckDB, Turso), the chart cannot see
-what that editor has not committed. A chart opened while the editor has a
-transaction open says so in one line above its area. On other drivers the editor
-runs on that same connection, so a chart opened during its transaction runs inside
-it and does see those rows, until the editor commits or rolls back.
+A chart never moves the session an editor runs on. On MySQL, MariaDB and SQL Server,
+which keep the current database on one session, a chart runs on a connection of its
+own, opened when the first one runs (one more connection to the server). It therefore
+cannot see temporary tables, session variables or uncommitted changes of an editor. On
+DuckDB and Turso the editor has a session of its own, with the same effect, and there
+a chart opened while the editor has a transaction open says so in one line above its
+area. That line describes the moment the chart opened and stays if the editor commits
+later. The app does not track an open transaction on the other drivers, so they show
+no line. On PostgreSQL and Redshift a chart runs on the connection of its database,
+which an editor on that database shares: there a chart opened during a transaction
+runs inside it and does see those rows, until the editor commits or rolls back.
 
 ```mermaid
 flowchart TD

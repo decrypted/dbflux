@@ -1629,6 +1629,71 @@ fn stale_list_and_details_errors_reject_old_session_and_preserve_new_attempt(
     }
 }
 
+/// The schema outlives its connection: cancelling an editor query removes the
+/// connection and keeps the cache. Answering `Cached` would leave whoever asked,
+/// a chart for one, without a connection and with no way to get it back.
+#[gpui::test]
+fn a_cached_schema_whose_connection_is_gone_opens_it_again(cx: &mut TestAppContext) {
+    let state = test_app_state(cx);
+    let profile_id = Uuid::new_v4();
+
+    let driver = InstallTestDriver::new();
+    state.update(cx, |state, _| {
+        state
+            .facade
+            .connections
+            .drivers
+            .insert(DRIVER_KEY.to_string(), driver.clone());
+    });
+
+    let fake = FakeTreeConnection::new(SchemaLoadingStrategy::ConnectionPerDatabase);
+    connect_profile(
+        &state,
+        cx,
+        profile_id,
+        fake.clone(),
+        Some(relational_schema(
+            Vec::new(),
+            Some("app"),
+            Vec::new(),
+            Vec::new(),
+        )),
+    );
+
+    let schema = schema_request_key(profile_id, "analytics");
+    state.update(cx, |state, cx| {
+        state.object_tree_request(schema.clone(), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(driver.connect_calls(), 1);
+
+    state.update(cx, |state, _| {
+        assert!(state.remove_database_connection(profile_id, "analytics"));
+    });
+    assert!(state.read_with(cx, |state, _| {
+        state.connections()[&profile_id]
+            .database_schemas
+            .contains_key("analytics")
+    }));
+
+    state.update(cx, |state, cx| {
+        assert_eq!(
+            state.object_tree_request(schema.clone(), cx),
+            ObjectTreeRequestStatus::WaitingForSlotInstall,
+        );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(driver.connect_calls(), 2);
+    state.read_with(cx, |state, _| {
+        assert!(
+            state.connections()[&profile_id]
+                .database_connection("analytics")
+                .is_some()
+        );
+    });
+}
+
 #[gpui::test]
 fn slot_aba_during_install_rejects_waiters_without_extra_install(cx: &mut TestAppContext) {
     let state = test_app_state(cx);

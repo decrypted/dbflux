@@ -1796,6 +1796,256 @@ fn a_chart_saved_from_a_result_keeps_where_it_ran(cx: &mut TestAppContext) {
     assert_eq!(chart.context.database.as_deref(), Some("analytics"));
 }
 
+/// A reused result tab shows the latest run, so saving its chart keeps where that
+/// run went. It kept the first run's database.
+#[gpui::test]
+fn a_reused_result_tab_saves_where_its_latest_run_went(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+
+    let document = console.document.clone();
+    let pick = |console: &mut Fixture<'_>, database: &str| {
+        let document = document.clone();
+        console.window.update(|_, cx| {
+            document.update(cx, |document, _| {
+                document.source.exec_ctx.database = Some(database.to_string());
+            });
+        });
+    };
+    let run = |console: &mut Fixture<'_>| {
+        let document = document.clone();
+        console.window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        console.window.run_until_parked();
+        console.window.update(|window, _| window.refresh());
+        console.window.run_until_parked();
+    };
+    pick(&mut console, "first");
+    run(&mut console);
+    pick(&mut console, "second");
+    run(&mut console);
+
+    let grid = console
+        .window
+        .update(|_, cx| console.document.read(cx).active_result_grid())
+        .expect("the run made a result grid");
+    let profile_id = console.profile_id;
+    let spec = ChartSpec::from_detection(1, vec![3], &api_call_log_result().columns, 10_000)
+        .expect("a spec");
+    let chart = console.window.update(|_, cx| {
+        grid.read(cx).query_result_chart(
+            "latest".to_string(),
+            profile_id,
+            SECOND_STATEMENT.to_string(),
+            spec,
+            BindingSpec::default(),
+            cx,
+        )
+    });
+
+    assert_eq!(chart.context.database.as_deref(), Some("second"));
+}
+
+/// A chart runs where it can leave nothing on the session a console uses, and a
+/// console's own run stays on it.
+#[gpui::test]
+fn a_chart_runs_unattended_and_a_console_does_not(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    let saved = console.saved_with(database_context("analytics"));
+    let chart = console.reopen(&saved);
+    console.run_chart(&chart);
+
+    let unattended = console.driver.stats().unattended_requests;
+    assert_eq!(unattended.len(), 1);
+    assert_eq!(unattended[0].database.as_deref(), Some("analytics"));
+
+    console.run_on_session("select 1");
+    assert_eq!(console.driver.stats().unattended_requests.len(), 1);
+    assert_eq!(console.driver.stats().executed_requests.len(), 2);
+}
+
+/// What the chart keeps out: a driver's own metric dispatch stays where it was.
+#[gpui::test]
+fn a_metric_chart_does_not_run_unattended(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::CloudWatchLogs, "");
+    let app_state = console.app_state.clone();
+    let profile_id = console.profile_id;
+    let chart = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            let mut chart = ChartDocument::new_with_source(
+                Some(profile_id),
+                "metric".to_string(),
+                Box::new(InstanceMetricSource {
+                    metric_id: "m".to_string(),
+                }),
+                app_state,
+                window,
+                cx,
+            );
+            chart.stage_window_for_test(1, 2);
+            chart
+        })
+    });
+    console.run_chart(&chart);
+
+    assert!(console.driver.stats().unattended_requests.is_empty());
+}
+
+/// Every way an open can end is visible once and reports once: a cancelled open
+/// has no coordinator report behind it, so the chart makes one.
+#[gpui::test]
+fn a_cancelled_open_is_named_reported_and_finishes_once(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    console.register_driver();
+    let saved = console.saved_with(database_context("analytics"));
+
+    let app_state = console.app_state.clone();
+    let reports: Rc<RefCell<usize>> = Rc::default();
+    let sink = reports.clone();
+    console.window.update(|_, cx| {
+        cx.set_global(dbflux_ui_base::AppStateGlobal {
+            entity: app_state.clone(),
+        });
+        cx.subscribe(
+            &app_state,
+            move |_, _: &dbflux_ui_base::UserErrorReported, _| {
+                *sink.borrow_mut() += 1;
+            },
+        )
+        .detach();
+    });
+
+    let chart = console.reopen(&saved);
+    let finishes = finishes_of(&mut console, &chart);
+    console.request(&chart);
+    assert_eq!(*finishes.borrow(), 0);
+
+    let key = dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseSchema {
+        profile_id: console.profile_id,
+        database: "analytics".to_string(),
+    };
+    console.window.update(|_, cx| {
+        app_state.update(cx, |state, cx| state.object_tree_cancel(&key, cx));
+    });
+    console.window.run_until_parked();
+
+    assert_eq!(*finishes.borrow(), 1);
+    assert_eq!(*reports.borrow(), 1);
+    assert!(console.message(&chart).contains("analytics"));
+    assert!(console.executed().is_empty());
+}
+
+/// The dashboard's timer asks every panel on every tick, so a database that
+/// cannot open must not be tried again from there; its Refresh does try.
+#[gpui::test]
+fn the_dashboard_timer_does_not_retry_a_database_but_refresh_does(cx: &mut TestAppContext) {
+    use crate::dashboard::{DashboardDocument, DashboardPanelSlot, PanelGridPos};
+    use dbflux_components::common::time_range::view::TimeRangePanel;
+    use dbflux_components::saved_chart::SavedChartRefreshPolicy;
+
+    // No driver is registered yet, so opening fails.
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    let saved = console.saved_with(database_context("analytics"));
+    let chart = console.reopen(&saved);
+
+    let app_state = console.app_state.clone();
+    let panel = chart.clone();
+    let dashboard = console.window.update(|window, cx| {
+        let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+        cx.new(|cx| {
+            DashboardDocument::new(
+                Uuid::new_v4(),
+                "Dashboard".to_string(),
+                vec![DashboardPanelSlot::Loaded {
+                    panel,
+                    grid_pos: PanelGridPos {
+                        grid_row: 0,
+                        grid_column: 0,
+                        grid_width: 6,
+                        grid_height: 2,
+                    },
+                    title_override: None,
+                }],
+                shared_time_range,
+                None,
+                SavedChartRefreshPolicy::Interval { every_secs: 30 },
+                false,
+                app_state,
+                cx,
+            )
+        })
+    });
+    let timed = dashboard.clone();
+    console.window.update(|_, cx| {
+        timed.update(cx, |dashboard, cx| {
+            dashboard.set_active_tab(true, cx);
+            dashboard.update_refresh_timer(cx);
+        });
+    });
+
+    let drain = |console: &mut Fixture<'_>| {
+        let handle = chart.clone();
+        console.window.update(|window, cx| {
+            handle.update(cx, |chart, cx| {
+                chart.drain_pending_reexecute_for_test(window, cx);
+            });
+        });
+        console.window.run_until_parked();
+    };
+    let tick = |console: &mut Fixture<'_>| {
+        console
+            .window
+            .executor()
+            .advance_clock(Duration::from_secs(31));
+        console.window.run_until_parked();
+        let panel = chart.clone();
+        let marked = console
+            .window
+            .update(|_, cx| panel.read(cx).has_pending_reexecute_for_test());
+        assert!(marked, "the timer asked the panel");
+    };
+
+    tick(&mut console);
+    drain(&mut console);
+    assert!(console.message(&chart).contains("analytics"));
+
+    console.register_driver();
+    tick(&mut console);
+    drain(&mut console);
+    assert!(console.executed().is_empty(), "a tick does not try again");
+
+    let refreshed = dashboard.clone();
+    console.window.update(|_, cx| {
+        refreshed.update(cx, |dashboard, cx| dashboard.refresh_all_loaded_panels(cx));
+    });
+    drain(&mut console);
+    assert_eq!(console.executed(), [CALLS_QUERY], "Refresh does");
+}
+
+/// A chart saved just now keeps running where it just ran, even on a list that
+/// has not caught up with a new database. Only a reopened chart is checked.
+#[gpui::test]
+fn saving_does_not_put_a_live_chart_under_the_list_check(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.list_databases(&["app"]);
+    console.set_active_database("created_just_now");
+    console.click_open_in_chart();
+    let chart = console.open_the_chart();
+
+    let saved = console.save(&chart, "new database");
+    console.run_chart(&chart);
+    assert_eq!(console.driver.stats().executed_requests.len(), 2);
+
+    let reopened = console.reopen(&saved);
+    console.run_chart(&reopened);
+    assert_eq!(console.driver.stats().executed_requests.len(), 2, "refused");
+    assert!(console.message(&reopened).contains("created_just_now"));
+}
+
 /// A chart without the flag shows no note, a saved one included.
 #[gpui::test]
 fn a_chart_without_the_flag_shows_no_note(cx: &mut TestAppContext) {

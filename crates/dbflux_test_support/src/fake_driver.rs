@@ -64,6 +64,8 @@ pub enum CrudOp {
 #[derive(Debug, Clone, Default)]
 pub struct FakeDriverStats {
     pub executed_requests: Vec<QueryRequest>,
+    /// The subset of `executed_requests` sent through `execute_unattended`.
+    pub unattended_requests: Vec<QueryRequest>,
     pub explain_requests: Vec<ExplainRequest>,
     pub crud_ops: Vec<CrudOp>,
     pub cancelled_handle_count: usize,
@@ -77,6 +79,7 @@ struct FakeDriverState {
     query_outcomes: RwLock<HashMap<String, FakeQueryOutcome>>,
     default_outcome: RwLock<Option<FakeQueryOutcome>>,
     executed_requests: Mutex<Vec<QueryRequest>>,
+    unattended_requests: Mutex<Vec<QueryRequest>>,
     explain_prefix: RwLock<Option<&'static str>>,
     explain_result: RwLock<Option<QueryResult>>,
     explain_requests: Mutex<Vec<ExplainRequest>>,
@@ -242,6 +245,7 @@ impl FakeDriver {
     pub fn stats(&self) -> FakeDriverStats {
         FakeDriverStats {
             executed_requests: mutex_lock(&self.state.executed_requests).clone(),
+            unattended_requests: mutex_lock(&self.state.unattended_requests).clone(),
             explain_requests: mutex_lock(&self.state.explain_requests).clone(),
             crud_ops: mutex_lock(&self.state.crud_ops).clone(),
             cancelled_handle_count: mutex_lock(&self.state.cancelled_handles).len(),
@@ -795,6 +799,11 @@ impl Connection for FakeConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        self.execute_internal(req).map_err(|error| *error)
+    }
+
+    fn execute_unattended(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        mutex_lock(&self.state.unattended_requests).push(req.clone());
         self.execute_internal(req).map_err(|error| *error)
     }
 

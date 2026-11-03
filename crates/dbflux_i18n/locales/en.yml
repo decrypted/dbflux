@@ -1334,7 +1334,7 @@ document:
       chart_saved: Chart saved
       save_failed: "Failed to save chart: %{error}"
     note:
-      console_transaction: "This chart runs on a separate connection and does not show the uncommitted changes of the console it was opened from."
+      console_transaction: "The console this chart came from had an open transaction when the chart opened. The chart runs on a separate connection and does not show uncommitted changes."
     error:
       source: "Chart source error: %{error}"
       no_connection_selected: No connection selected

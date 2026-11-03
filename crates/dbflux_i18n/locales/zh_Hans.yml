@@ -1334,7 +1334,7 @@ document:
       chart_saved: 图表已保存
       save_failed: "保存图表失败：%{error}"
     note:
-      console_transaction: "此图表在单独的连接上运行，不会显示打开它的控制台中未提交的更改。"
+      console_transaction: "打开此图表时，其来源控制台有一个未结束的事务。图表在单独的连接上运行，不会显示未提交的更改。"
     error:
       source: "图表源错误：%{error}"
       no_connection_selected: 未选择连接

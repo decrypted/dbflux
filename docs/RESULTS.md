@@ -65,6 +65,12 @@ opens upwards or is shifted left, submenus open on the side with room, and a
 menu taller than the window scrolls, keeping the highlighted row in view; the
 column header menu and the export menu fit the window the same way.
 
+In a table or result grid, `m` and `Shift+F10` open the menu on the selected
+cell. For a cell scrolled out of view it opens at the grid's edge on that side,
+off the header, the scrollbars and any pinned columns. The record view keeps it
+inside the view, not on the selected field. In a document collection's tree the
+menu opens at a fixed spot near the panel's top-left corner, not on the node.
+
 With the mouse, a click selects a cell and `Shift`+click, or pressing and dragging, selects the range from it to another cell. A click on a row number selects the whole row, and `Shift`+click on another row number selects every row in between. `Ctrl`+click (`Cmd`+click on macOS) on a cell or a row number adds it to the selection, or takes it out when it is selected on its own; copying several ranges copies the rows and columns they cover, with cells outside the selection left empty. The extra ranges are for copying: delete, duplicate, save and the other row actions act on the row of the cursor, a right-click selects the cell under the pointer, and the record view treats `Ctrl`+click as a plain click. Dragging past an edge of the grid scrolls it that way, faster the further out the pointer is, and keeps extending the range until the button is released or the pointer comes back.
 
 When the selection covers more than one cell, the status bar shows how many cells it holds and, for the numbers among them, their sum, average, minimum and maximum. NULLs and text are counted but left out of the figures, and the status bar says how many it skipped. The totals are worked out from the rows already loaded, unsaved edits included, without querying the database again.

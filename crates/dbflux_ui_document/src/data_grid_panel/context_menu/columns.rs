@@ -4,9 +4,8 @@
 //! Its entries change how the grid shows a column, never the query behind
 //! it, so they act on the table state alone.
 
-use super::{DataGridEvent, DataGridPanel, TableContextMenu};
+use super::{DataGridEvent, DataGridPanel, TableContextMenu, keyboard_menu_anchor};
 use dbflux_components::components::data_table::ContextMenuAction;
-use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use gpui::*;
 
@@ -160,22 +159,18 @@ impl DataGridPanel {
             return false;
         };
 
-        let (row, col, column_left) = {
+        let (row, col, position) = {
             let state = table_state.read(cx);
             let active = state.selection().active;
             let (row, col) = active.map_or((0, 0), |cell| (cell.row, cell.col));
-            let Some(column_left) = state.column_screen_left(col) else {
+            if state.column_screen_left(col).is_none() {
                 return false;
-            };
+            }
 
-            (row, col, column_left)
-        };
+            let position =
+                keyboard_menu_anchor(state, col, state.header_height(cx), self.panel_origin, cx);
 
-        // The toolbar height is the same estimate the cell menu uses.
-        let toolbar_height = px(36.0);
-        let position = Point {
-            x: self.panel_origin.x + column_left + px(20.0),
-            y: self.panel_origin.y + toolbar_height + fonts::grid_header_height(cx),
+            (row, col, position)
         };
 
         self.context_menu = Some(TableContextMenu {

@@ -6,10 +6,11 @@ use super::{
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::detect_chart_columns;
 use dbflux_components::components::data_table::ROW_NUMBER_WIDTH;
-use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
+use dbflux_components::components::data_table::{
+    ContextMenuAction, DataTableState, FilterOperator,
+};
 use dbflux_components::composites::{MenuItem, render_menu_header};
 use dbflux_components::controls::Button;
-use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
@@ -106,6 +107,32 @@ pub(super) fn step_export_selection(
     from
 }
 
+/// Where a menu opened from the keyboard for column `col` hangs: `top` below
+/// the table's top edge, just inside the column. A cell scrolled out of view
+/// has no place on screen, so the anchor stays where cells can be seen, off
+/// the header, the pinned strip and the scrollbars. A table not drawn yet has
+/// no place at all, so the menu opens at the panel's corner.
+fn keyboard_menu_anchor(
+    table: &DataTableState,
+    col: usize,
+    top: Pixels,
+    panel_origin: Point<Pixels>,
+    cx: &App,
+) -> Point<Pixels> {
+    let bounds = table.viewport_bounds();
+    if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
+        return panel_origin;
+    }
+
+    let area = table.cell_area(col, cx);
+    let left = table.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH) + px(20.0);
+
+    Point {
+        x: (bounds.left() + left).min(area.right()).max(area.left()),
+        y: (bounds.top() + top).min(area.bottom()).max(area.top()),
+    }
+}
+
 impl DataGridPanel {
     pub(in crate::data_grid_panel) fn restore_focus_after_context_menu(
         &mut self,
@@ -139,7 +166,7 @@ impl DataGridPanel {
             return;
         };
 
-        let (row, col, cell_x) = {
+        let (row, col, position) = {
             let ts = table_state.read(cx);
 
             let (row, col) = ts
@@ -148,23 +175,10 @@ impl DataGridPanel {
                 .map(|c| (c.row, c.col))
                 .unwrap_or((0, 0));
 
-            // Left edge of the cell's column as the screen draws it, scroll
-            // and pinned columns included.
-            let cell_x = ts.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH);
+            let position =
+                keyboard_menu_anchor(ts, col, ts.row_screen_top(row, cx), self.panel_origin, cx);
 
-            (row, col, cell_x)
-        };
-
-        // Calculate position in window coordinates:
-        // x: panel_origin.x + cell_x - horizontal_scroll + some padding
-        // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
-        let toolbar_height = px(36.0); // Approximate toolbar height
-        let position = Point {
-            x: self.panel_origin.x + cell_x + px(20.0),
-            y: self.panel_origin.y
-                + toolbar_height
-                + fonts::grid_header_height(cx)
-                + fonts::grid_row_height(cx) * row,
+            (row, col, position)
         };
 
         self.context_menu = Some(TableContextMenu {

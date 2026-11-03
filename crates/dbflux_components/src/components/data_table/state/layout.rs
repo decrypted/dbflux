@@ -6,12 +6,14 @@
 
 use std::sync::Arc;
 
-use gpui::{Context, Pixels, px};
+use gpui::{App, Bounds, Context, Pixels, point, px};
+
+use crate::fonts;
 
 use super::super::column_layout::{ColumnLayout, ColumnLayoutSpec};
 use super::super::events::DataTableEvent;
 use super::super::selection::CellCoord;
-use super::super::theme::ROW_NUMBER_WIDTH;
+use super::super::theme::{ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 use super::DataTableState;
 
 /// The largest share of the grid's width the pinned strip, row-number gutter
@@ -119,19 +121,60 @@ impl DataTableState {
 
     /// Where `col`'s left edge is drawn, from the grid's left edge (the
     /// row-number gutter included) after the horizontal scroll, which a
-    /// pinned column does not follow. `None` for a hidden column.
+    /// pinned column does not follow. `None` for a hidden column. A column
+    /// that scrolls can lie under the pinned strip or outside the grid.
     pub fn column_screen_left(&self, col: usize) -> Option<Pixels> {
         let left = ROW_NUMBER_WIDTH + px(self.column_left(col)?);
-        let pinned = self
-            .column_layout
-            .view_position(col)
-            .is_some_and(|position| position < self.pinned_shown_count());
 
-        Some(if pinned {
+        Some(if self.column_is_pinned(col) {
             left
         } else {
             left - self.horizontal_offset
         })
+    }
+
+    fn column_is_pinned(&self, col: usize) -> bool {
+        self.column_layout
+            .view_position(col)
+            .is_some_and(|position| position < self.pinned_shown_count())
+    }
+
+    /// Where `row`'s top edge is drawn, from the grid's top edge (the header
+    /// included) after the vertical scroll. A row scrolled out of view lies
+    /// outside the rows' area. The record view has no such row.
+    pub fn row_screen_top(&self, row: usize, cx: &App) -> Pixels {
+        let offset = self
+            .vertical_scroll_handle
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .y;
+
+        self.header_height(cx) + fonts::grid_row_height(cx) * row + offset
+    }
+
+    /// Where `col`'s cells can be seen, in window coordinates: below the
+    /// header, inside the scrollbars and right of the row numbers, and for a
+    /// column that scrolls, right of the pinned strip it passes under.
+    pub fn cell_area(&self, col: usize, cx: &App) -> Bounds<Pixels> {
+        let table = self.viewport_bounds();
+        let strip = if self.column_is_pinned(col) {
+            px(0.0)
+        } else {
+            px(self.pinned_width())
+        };
+
+        Bounds::from_corners(
+            point(
+                table.left() + ROW_NUMBER_WIDTH + strip,
+                table.top() + self.header_height(cx),
+            ),
+            point(
+                table.right() - SCROLLBAR_WIDTH,
+                table.bottom() - SCROLLBAR_WIDTH,
+            ),
+        )
     }
 
     /// Moves `col` one shown column left (`step` < 0) or right.

@@ -289,6 +289,10 @@ impl Dropdown {
         self.items.len()
     }
 
+    pub fn item_values(&self) -> impl Iterator<Item = String> + '_ {
+        self.items.iter().map(|item| item.value.to_string())
+    }
+
     pub fn set_items(&mut self, items: Vec<DropdownItem>, cx: &mut Context<Self>) {
         self.items = items;
         if let Some(selected) = self.selected_index

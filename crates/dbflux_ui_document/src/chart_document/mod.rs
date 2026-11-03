@@ -11,6 +11,8 @@ mod keyboard_tests;
 pub mod pane;
 mod render;
 
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use super::chart::keyboard::{
     ChartKeyOutcome, chart_shell_pane_actions, step_time_range, time_range_pane_actions,
 };
@@ -66,6 +68,15 @@ enum ChartDocFocus {
 struct PendingResult {
     task_id: dbflux_core::TaskId,
     result: Result<QueryResult, dbflux_core::DbError>,
+    ran: RunTarget,
+}
+
+/// What a run ran. A run still under way when a save or a panel follow moves the
+/// chart on delivers columns of what it ran, not of what the chart runs now.
+#[derive(Clone, PartialEq, Eq)]
+struct RunTarget {
+    query: String,
+    database: Option<String>,
 }
 
 /// Internal execution state.
@@ -226,8 +237,7 @@ fn connection_lacks_database(
         && !listed_since.is_some_and(names)
 }
 
-/// The chart settings the user can change and Save keeps, compared against
-/// what the document opened or was last saved with.
+/// The chart settings the user can change and Save keeps.
 #[derive(Clone, PartialEq, Eq, Default)]
 struct ChartSettings {
     selection: Option<ManualChartSelection>,
@@ -239,6 +249,21 @@ struct ChartSettings {
     database: Option<String>,
 }
 
+impl ChartSettings {
+    fn stored_in(saved: &SavedChart) -> Self {
+        Self {
+            selection: saved_selection(saved),
+            kind: saved.chart_spec.kind,
+            y_scale: saved.chart_spec.y_scale,
+            query: match &saved.source {
+                SavedChartSource::Query { query } => query.clone(),
+                _ => String::new(),
+            },
+            database: saved.context.database.clone(),
+        }
+    }
+}
+
 /// The Query section's controls, made when it first opens: an editor needs a window.
 pub(super) struct QuerySection {
     pub(super) editor: Entity<EditorState>,
@@ -248,7 +273,7 @@ pub(super) struct QuerySection {
     pub(super) has_database_choices: bool,
     /// How many databases were listed when the picker was filled, and what was
     /// current, so a change elsewhere in the app does not fill it again.
-    database_list_seen: Option<(usize, usize, Option<String>)>,
+    database_list_seen: Option<(u64, Option<String>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -291,10 +316,10 @@ pub struct ChartDocument {
     /// stored this has an empty one, sends no database and runs on the
     /// connection's own.
     execution_context: ExecutionContext,
-    /// The database of `execution_context` came from storage, where nothing has
-    /// checked that it still exists. A chart saved just now keeps running where it
-    /// just ran, even on a list that has not caught up.
-    database_is_stored: bool,
+    /// The database the console this chart came from was running on, which exists
+    /// even when the connection's list has not caught up. Any other database is
+    /// checked against that list before a run.
+    console_database: Option<String>,
     /// The connection per database this chart asked to open, which its run
     /// waits for. Holds that run's report to the dashboard.
     awaited_database: Option<String>,
@@ -316,14 +341,13 @@ pub struct ChartDocument {
     /// The database picked in the Query section, applied by the next run or save.
     /// The outer `None` is no pick.
     picked_database: Option<Option<String>>,
-    /// A run applied a picked database, which Save then stores as checked.
-    database_edited: bool,
     /// The result columns from before a query edit, so the first result of the
     /// edited query can find the picked columns again.
     columns_before_edit: Option<Vec<String>>,
-    /// Save stored a query it had no result of, so without bindings. The first
-    /// result stores the columns the chart then draws.
-    store_columns_after_run: bool,
+    /// Save stored this without columns, having no result of it. The first result
+    /// of exactly this stores the columns the chart then draws. A result of anything
+    /// else, an unsaved fix in the box above all, is not what the record holds.
+    columns_wanted_for: Option<RunTarget>,
     /// The console this chart was opened from had a transaction open on its own
     /// session when it opened. A snapshot: the note says when, since the console
     /// may commit while the chart stays.
@@ -340,8 +364,13 @@ pub struct ChartDocument {
     /// The bindings a saved chart reopens with, applied to its first result:
     /// `ChartShell::set_result` forgets picks made before there is a result.
     saved_selection: Option<ManualChartSelection>,
-    /// What the settings were when opened or last saved.
-    settings_baseline: ChartSettings,
+    /// What storage held for this chart when this document last read or wrote it,
+    /// or what it opened with if never saved. Set from the record, never from the
+    /// screen, so that only what was written stops counting as a change.
+    ///
+    /// Not read from storage on each compare: another tab or a panel's Configure
+    /// writing the record is no edit made here, and must not make this tab warn.
+    stored_settings: ChartSettings,
     /// The metric picker replaced the source, which Save does not undo.
     source_replaced: bool,
     /// The settings Escape last warned about losing. A second Escape closes
@@ -548,7 +577,7 @@ impl ChartDocument {
             pending_result: None,
             pending_run_on_first_render: pending_run,
             execution_context: ExecutionContext::default(),
-            database_is_stored: false,
+            console_database: None,
             awaited_database: None,
             opened_database: None,
             database_open_failure: None,
@@ -557,14 +586,13 @@ impl ChartDocument {
             query_section: None,
             query_editor_focused: false,
             picked_database: None,
-            database_edited: false,
             columns_before_edit: None,
-            store_columns_after_run: false,
+            columns_wanted_for: None,
             failure: None,
             truncation_reported: false,
             refusal_reported: None,
             saved_selection: None,
-            settings_baseline: ChartSettings {
+            stored_settings: ChartSettings {
                 query: baseline_query,
                 ..ChartSettings::default()
             },
@@ -806,7 +834,7 @@ impl ChartDocument {
             pending_result: None,
             pending_run_on_first_render: true,
             execution_context: ExecutionContext::default(),
-            database_is_stored: false,
+            console_database: None,
             awaited_database: None,
             opened_database: None,
             database_open_failure: None,
@@ -815,14 +843,13 @@ impl ChartDocument {
             query_section: None,
             query_editor_focused: false,
             picked_database: None,
-            database_edited: false,
             columns_before_edit: None,
-            store_columns_after_run: false,
+            columns_wanted_for: None,
             failure: None,
             truncation_reported: false,
             refusal_reported: None,
             saved_selection: None,
-            settings_baseline: ChartSettings::default(),
+            stored_settings: ChartSettings::default(),
             source_replaced: false,
             escape_warned_for: None,
             chart_shell,
@@ -1072,19 +1099,30 @@ impl ChartDocument {
         }
     }
 
-    /// The settings on screen, to compare against `settings_baseline`.
+    /// The settings on screen, in the terms a save would store them, to compare
+    /// against `stored_settings`.
+    ///
+    /// Columns detection chose are no pick, and neither are positions in a result
+    /// the applied query has not had yet: neither is something to lose.
     fn current_settings(&self, cx: &App) -> ChartSettings {
         let shell = self.chart_shell.read(cx);
+        let pick = self
+            .columns_before_edit
+            .is_none()
+            .then(|| {
+                shell
+                    .chart_manual_selection
+                    .clone()
+                    .or_else(|| self.saved_selection.clone())
+            })
+            .flatten();
 
         ChartSettings {
-            selection: shell
-                .chart_manual_selection
-                .clone()
-                .or_else(|| self.saved_selection.clone()),
+            selection: pick.or_else(|| self.stored_settings.selection.clone()),
             kind: shell.chart_kind(),
             y_scale: shell.y_scale(),
             query: self.query_in_box(cx),
-            database: self.database_in_picker(),
+            database: self.context_to_save(cx).database,
         }
     }
 
@@ -1105,7 +1143,7 @@ impl ChartDocument {
 
         collected_samples
             || self.source_replaced
-            || self.current_settings(cx) != self.settings_baseline
+            || self.current_settings(cx) != self.stored_settings
     }
 
     /// What Escape does once nothing in the chart is left to dismiss.
@@ -1580,7 +1618,7 @@ impl ChartDocument {
             .then(|| self.execution_context.database.clone())
             .flatten();
 
-        if self.database_is_stored
+        if database != self.console_database
             && let Some(database) = database.as_deref()
             && self.stored_database_is_missing(profile_id, database, cx)
         {
@@ -1692,6 +1730,7 @@ impl ChartDocument {
         cx.notify();
 
         let conn_cleanup = conn.clone();
+        let ran = self.run_target();
 
         let task = dbflux_ui_base::work_queue::spawn_query_db(
             &self.app_state,
@@ -1739,9 +1778,11 @@ impl ChartDocument {
                 }
 
                 entity.update(cx, |doc, cx| {
-                    let replaced = doc
-                        .pending_result
-                        .replace(PendingResult { task_id, result });
+                    let replaced = doc.pending_result.replace(PendingResult {
+                        task_id,
+                        result,
+                        ran,
+                    });
                     // Only the newest result gets applied, so the run it replaced
                     // ends here.
                     if replaced.is_some() {
@@ -1887,13 +1928,20 @@ impl ChartDocument {
         let seen = {
             let state = self.app_state.read(cx);
             self.profile_id.map(|id| {
-                let listed = state
+                let schema_list = state
                     .connections()
                     .get(&id)
                     .and_then(|connected| connected.schema.as_ref())
-                    .map_or(0, |schema| schema.databases().len());
-                let listed_since = state.get_database_list(id).map_or(0, Vec::len);
-                (listed, listed_since, current.clone())
+                    .map_or(&[][..], |schema| schema.databases());
+                let list_since = state.get_database_list(id).map_or(&[][..], Vec::as_slice);
+
+                let mut names = DefaultHasher::new();
+                for database in schema_list.iter().chain(list_since) {
+                    database.name.hash(&mut names);
+                }
+                // Where one list ends: moving a name from one to the other is a change.
+                schema_list.len().hash(&mut names);
+                (names.finish(), current.clone())
             })
         };
         if self.query_section.as_ref().is_none_or(|section| {
@@ -2004,7 +2052,8 @@ impl ChartDocument {
         let mut changed = false;
 
         let query = self.query_in_box(cx);
-        if query != self.query {
+        let query_edited = query != self.query;
+        if query_edited {
             // Kept across a failed run: its next success is still the first
             // result of the edited query.
             if self.columns_before_edit.is_none() {
@@ -2022,7 +2071,6 @@ impl ChartDocument {
             self.query = query;
             self.refusal_reported = None;
             self.truncation_reported = false;
-            self.record_query_edit(cx);
             changed = true;
         }
 
@@ -2033,12 +2081,15 @@ impl ChartDocument {
             self.execution_context.database = database;
             self.execution_context.schema = None;
             self.execution_context.container = None;
-            self.database_is_stored = false;
-            self.database_edited = true;
             self.opened_database = None;
             self.refusal_reported = None;
             self.drop_database_wait(cx);
             changed = true;
+        }
+
+        // Last: the record says where the edited query now runs.
+        if query_edited {
+            self.record_query_edit(cx);
         }
 
         changed
@@ -2112,16 +2163,26 @@ impl ChartDocument {
             return false;
         };
 
-        let settings = ChartSettings {
-            selection: saved_selection(&saved),
-            kind: saved.chart_spec.kind,
-            y_scale: saved.chart_spec.y_scale,
-            query: query.clone(),
-            database: saved.context.database.clone(),
-        };
-        if settings == self.settings_baseline
-            && saved.context == SavedChartContext::capture(&self.execution_context, true)
-        {
+        let settings = ChartSettings::stored_in(&saved);
+        let same_place = saved.context == SavedChartContext::capture(&self.execution_context, true);
+        if same_place && settings == self.stored_settings {
+            return false;
+        }
+
+        // The columns a run found for a query this panel already runs: its result, or
+        // the one on its way, has them, so another run would draw the same.
+        let only_columns = settings.selection.is_some()
+            && settings
+                == ChartSettings {
+                    selection: settings.selection.clone(),
+                    ..self.stored_settings.clone()
+                };
+        if same_place && only_columns {
+            self.saved_selection = settings.selection.clone();
+            let bindings = saved.bindings.clone();
+            self.chart_shell
+                .update(cx, |shell, cx| shell.apply_bindings(bindings, cx));
+            self.stored_settings = settings;
             return false;
         }
 
@@ -2150,7 +2211,6 @@ impl ChartDocument {
         self.execution_context = saved
             .context
             .execution_context(now_ms - lookback_ms, now_ms);
-        self.database_is_stored = saved.context.database.is_some();
 
         self.saved_selection = saved_selection(saved);
         let kind = saved.chart_spec.kind;
@@ -2159,13 +2219,14 @@ impl ChartDocument {
             shell.set_chart_kind(kind, cx);
             shell.set_y_scale(y_scale, cx);
         });
-        self.settings_baseline = ChartSettings {
-            selection: self.saved_selection.clone(),
-            kind,
-            y_scale,
+        self.stored_settings = ChartSettings::stored_in(saved);
+    }
+
+    fn run_target(&self) -> RunTarget {
+        RunTarget {
             query: self.query.clone(),
             database: self.execution_context.database.clone(),
-        };
+        }
     }
 
     fn stored_database_is_missing(&self, profile_id: Uuid, database: &str, cx: &App) -> bool {
@@ -2391,6 +2452,10 @@ impl ChartDocument {
     fn apply_result(&mut self, pending: PendingResult, cx: &mut Context<Self>) {
         self.runner.complete_primary(pending.task_id, cx);
 
+        // A run that the chart moved on from: the result can still draw, but it says
+        // nothing about the columns of what runs now.
+        let of_what_runs_now = pending.ran == self.run_target();
+
         match pending.result {
             Ok(result) => {
                 self.exec_state = ExecState::Idle;
@@ -2432,7 +2497,11 @@ impl ChartDocument {
                 let display_clone = display_result.clone();
                 let x_time_domain = self.accumulating_x_time_domain(now_ms);
                 let saved_selection = self.saved_selection.take();
-                let columns_before_edit = self.columns_before_edit.take();
+                let columns_before_edit = if of_what_runs_now {
+                    self.columns_before_edit.take()
+                } else {
+                    None
+                };
                 let mut lost_columns = false;
                 self.chart_shell.update(cx, |shell, cx| {
                     let selection_before_edit = columns_before_edit.is_some().then(|| {
@@ -2456,7 +2525,8 @@ impl ChartDocument {
                     shell.ensure_chart_view(&display_clone, cx);
                 });
 
-                if std::mem::take(&mut self.store_columns_after_run) {
+                if of_what_runs_now && self.columns_wanted_for.as_ref() == Some(&pending.ran) {
+                    self.columns_wanted_for = None;
                     self.last_result = Some(display_result.clone());
                     self.store_columns_of_result(cx);
                 }
@@ -2664,11 +2734,7 @@ impl ChartDocument {
 
     /// Open the name-prompt modal for saving this chart.
     fn open_name_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let initial = if self.saved_chart_id.is_some() {
-            self.title.clone()
-        } else {
-            String::new()
-        };
+        let initial = self.name_to_offer(cx);
 
         let input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -2703,6 +2769,15 @@ impl ChartDocument {
         });
 
         cx.notify();
+    }
+
+    /// The stored name: the sidebar may have renamed the chart since this tab
+    /// opened, and pressing Enter here must not undo that.
+    pub(crate) fn name_to_offer(&self, cx: &App) -> String {
+        self.saved_chart_id
+            .and_then(|id| self.app_state.read(cx).saved_charts.chart_by_id(id))
+            .map(|saved| saved.name.clone())
+            .unwrap_or_default()
     }
 
     /// Confirm the name-prompt and persist the chart.
@@ -2742,67 +2817,64 @@ impl ChartDocument {
             spec.binding = dbflux_components::chart::BindingSpec::default();
         }
 
+        let existing = self
+            .app_state
+            .read(cx)
+            .saved_charts
+            .chart_by_id(id)
+            .cloned();
+
+        // Before its first result the shell has nothing to say about columns, and the
+        // record's still hold.
+        if !columns_unknown
+            && self.last_result.is_none()
+            && let Some(existing) = &existing
+        {
+            spec.series.clone_from(&existing.chart_spec.series);
+            spec.binding = existing.bindings.clone();
+        }
+
         let bindings = spec.binding.clone();
 
         let mut saved = SavedChart::new_query(name.clone(), profile_id, query, spec, bindings);
         // Preserve the ID so upsert overwrites the existing record.
         saved.id = id;
         saved.context = self.context_to_save(cx);
-
-        let persist_result = self.app_state.update(cx, |state, cx| {
-            let result = state.saved_charts.upsert(saved).inspect_err(|e| {
-                state.record_storage_failure(
-                    dbflux_core::observability::actions::CONFIG_UPDATE,
-                    "saved_chart",
-                    id.to_string(),
-                    format!("Failed to save chart '{name}'"),
-                    e.to_string(),
-                );
-            });
-            // A dashboard panel of this chart follows it.
-            if result.is_ok() {
-                cx.emit(dbflux_ui_base::AppStateChanged);
-            }
-            result
-        });
-
-        match persist_result {
-            Ok(_) => {
-                // Only now: a chart whose save failed stays on what it ran, not on
-                // what the user was told did not save. What was stored also runs,
-                // so that the chart on screen is the stored one.
-                if self.apply_query_edits(cx) || columns_unknown {
-                    self.mark_pending_reexecute(cx);
-                }
-                self.store_columns_after_run = columns_unknown;
-
-                self.saved_chart_id = Some(id);
-                self.title = name;
-                self.settings_baseline = self.current_settings(cx);
-                // A picked database is stored now, and is checked like one when
-                // it runs. One a console handed over keeps running where it did.
-                if std::mem::take(&mut self.database_edited) {
-                    self.database_is_stored = self.execution_context.database.is_some();
-                }
-                self.source_replaced = false;
-                self.pending_toast = Some(PendingToast {
-                    message: dbflux_i18n::t!("document.chart.toast.chart_saved"),
-                    is_error: false,
-                });
-            }
-            Err(e) => {
-                self.pending_toast = Some(PendingToast {
-                    message: dbflux_i18n::t!("document.chart.toast.save_failed", error = e),
-                    is_error: true,
-                });
-            }
+        if let Some(source) = self.data_source.saved_source() {
+            saved.source = source;
         }
+        // What this chart has no control for stays as it was stored.
+        if let Some(existing) = existing {
+            saved.time_range_preset = existing.time_range_preset;
+            saved.refresh_policy = existing.refresh_policy;
+            saved.created_at = existing.created_at;
+        }
+
+        if !self.write_saved_chart(saved, cx) {
+            return;
+        }
+
+        // Only now: a chart whose save failed stays on what it ran, not on what the
+        // user was told did not save. What was stored also runs, so that the chart on
+        // screen is the stored one.
+        if self.apply_query_edits(cx) || columns_unknown {
+            self.mark_pending_reexecute(cx);
+        }
+        self.columns_wanted_for = columns_unknown.then(|| self.run_target());
+
+        self.saved_chart_id = Some(id);
+        self.title = name;
+        self.source_replaced = false;
+        self.pending_toast = Some(PendingToast {
+            message: dbflux_i18n::t!("document.chart.toast.chart_saved"),
+            is_error: false,
+        });
 
         cx.notify();
     }
 
     /// Stores the columns the chart draws, after a Save that had no result to take
-    /// them from.
+    /// them from. Only those: a type or a scale picked since is still unsaved.
     fn store_columns_of_result(&mut self, cx: &mut Context<Self>) {
         let Some(mut saved) = self.saved_chart_id.and_then(|id| {
             self.app_state
@@ -2815,12 +2887,22 @@ impl ChartDocument {
         };
 
         let columns = self.last_result_columns().unwrap_or_default();
-        let spec = self.chart_shell.read(cx).current_chart_spec(&columns);
+        let mut spec = self.chart_shell.read(cx).current_chart_spec(&columns);
+        spec.kind = saved.chart_spec.kind;
+        spec.y_scale = saved.chart_spec.y_scale;
         saved.bindings = spec.binding.clone();
         saved.chart_spec = spec;
 
+        self.write_saved_chart(saved, cx);
+    }
+
+    /// Every write of this chart's record from this document. Dashboard panels of it
+    /// follow from the event; this document already holds what it wrote.
+    fn write_saved_chart(&mut self, saved: SavedChart, cx: &mut Context<Self>) -> bool {
+        let settings = ChartSettings::stored_in(&saved);
         let id = saved.id;
         let name = saved.name.clone();
+
         let persist_result = self.app_state.update(cx, |state, cx| {
             let result = state.saved_charts.upsert(saved).inspect_err(|e| {
                 state.record_storage_failure(
@@ -2838,12 +2920,17 @@ impl ChartDocument {
         });
 
         match persist_result {
-            Ok(_) => self.settings_baseline = self.current_settings(cx),
+            Ok(_) => {
+                self.stored_settings = settings;
+                true
+            }
             Err(e) => {
                 self.pending_toast = Some(PendingToast {
                     message: dbflux_i18n::t!("document.chart.toast.save_failed", error = e),
                     is_error: true,
                 });
+                cx.notify();
+                false
             }
         }
     }
@@ -2873,8 +2960,10 @@ impl ChartDocument {
 
     /// Runs the query where the document it came from runs it: its database,
     /// schema and source. Without this the chart sends no database.
-    pub fn set_execution_context(&mut self, context: ExecutionContext) {
-        self.settings_baseline.database = context.database.clone();
+    pub fn set_execution_context(&mut self, context: ExecutionContext, cx: &App) {
+        self.stored_settings.database =
+            saved_chart_context(&self.app_state, self.profile_id, &context, cx).database;
+        self.console_database = context.database.clone();
         self.execution_context = context;
     }
 
@@ -3037,33 +3126,12 @@ impl ChartDocument {
         saved.chart_spec.binding = bindings.clone();
         saved.bindings = bindings;
 
-        let title = saved.name.clone();
-        let persist_result = self.app_state.update(cx, |state, _cx| {
-            state.saved_charts.upsert(saved).inspect_err(|e| {
-                state.record_storage_failure(
-                    dbflux_core::observability::actions::CONFIG_UPDATE,
-                    "saved_chart",
-                    chart_id.to_string(),
-                    format!("Failed to save chart '{title}'"),
-                    e.to_string(),
-                );
-            })
-        });
-
-        match persist_result {
-            Ok(_) => {
-                self.mark_pending_reexecute(cx);
-                true
-            }
-            Err(e) => {
-                self.pending_toast = Some(PendingToast {
-                    message: dbflux_i18n::t!("document.chart.toast.save_failed", error = e),
-                    is_error: true,
-                });
-                cx.notify();
-                false
-            }
+        if !self.write_saved_chart(saved, cx) {
+            return false;
         }
+
+        self.mark_pending_reexecute(cx);
+        true
     }
 
     /// Shows `result` as if a run had returned it.
@@ -3144,7 +3212,7 @@ impl ChartDocument {
         (
             self.query.clone(),
             self.execution_context.clone(),
-            self.database_is_stored,
+            self.execution_context.database != self.console_database,
         )
     }
 
@@ -3162,6 +3230,16 @@ impl ChartDocument {
                 section.database.read(cx).item_count(),
             )
         })
+    }
+
+    /// What the picker offers.
+    #[cfg(test)]
+    pub(crate) fn picker_values_for_test(&self, cx: &App) -> Vec<String> {
+        self.query_section
+            .as_ref()
+            .map_or_else(Vec::new, |section| {
+                section.database.read(cx).item_values().collect()
+            })
     }
 
     /// Whether the Query box holds the keyboard.

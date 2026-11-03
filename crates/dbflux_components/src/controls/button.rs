@@ -330,14 +330,14 @@ impl Button {
     /// one). Reach for this when neither says what the button does: an empty
     /// label with only an icon, or an abbreviation such as `1:1` that means
     /// nothing read aloud.
-    /// Says whether what this button folds is open, for a disclosure.
-    pub fn aria_expanded(mut self, expanded: bool) -> Self {
-        self.aria_expanded = Some(expanded);
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
         self
     }
 
-    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
-        self.aria_label = Some(label.into());
+    /// Says whether what this button folds is open, for a disclosure.
+    pub fn aria_expanded(mut self, expanded: bool) -> Self {
+        self.aria_expanded = Some(expanded);
         self
     }
 

@@ -43,7 +43,7 @@ impl Workspace {
                 window,
                 cx,
             );
-            chart.set_execution_context(context);
+            chart.set_execution_context(context, cx);
             chart.set_console_transaction_note(console_transaction_open);
             chart
         });

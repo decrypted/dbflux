@@ -401,15 +401,20 @@ temporizador sigue ejecutando lo último que se ejecutó. Guardar también los a
 y sobrescribe el mismo gráfico. Lo que haya en el cuadro pasa la misma comprobación de
 lectura que cualquier gráfico, en cada ejecución, así que una sentencia que cambia datos puede guardarse, pero nunca se ejecuta.
 
-El selector aparece en un driver con más de una base de datos. Lista las bases de datos de
+El selector aparece en un driver con más de una base de datos, una vez que la conexión lista
+sus bases de datos. Hasta entonces la barra muestra la base de datos como texto. Lista las bases de datos de
 la conexión y "La predeterminada de la conexión", que es como se muestra que no hay base de
 datos guardada y que no guarda ninguna. Una base de datos guardada que la conexión no lista
 sigue en la lista, marcada, para poder verla y cambiarla. Elegir otra base de datos descarta
-el esquema y el contenedor guardados, que eran de la anterior. Una vez guardada, una base de
-datos elegida se comprueba como cualquier otra guardada.
+el esquema y el contenedor guardados, que eran de la anterior. Una base de datos elegida se
+comprueba como cualquier otra guardada.
 
 Una edición cuenta como algo que cerrar perdería, así que el primer `Escape` avisa. En el
 cuadro, `Escape` primero sale del cuadro y conserva el texto.
+
+Una edición aplicada se escribe en el registro de auditoría como `chart_query_edited`, con la base
+de datos en la que se ejecuta ahora y la consulta como huella, igual que cualquier otra consulta.
+Escribir sin más no registra nada.
 
 Tras una edición, las columnas elegidas siguen a su nombre hasta donde las tenga el nuevo
 resultado. Si falta alguna, el gráfico vuelve a las columnas que encuentra la detección y lo

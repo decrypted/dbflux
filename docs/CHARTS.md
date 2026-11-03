@@ -375,15 +375,19 @@ running what was last run. Save applies them too, runs, and overwrites the same 
 Whatever is in the box goes through the same read check as any chart, on every run, so
 a statement that changes data is stored if saved but never runs.
 
-The picker appears on a driver with more than one database. It lists the connection's
+The picker appears on a driver with more than one database, once the connection lists its
+databases. Until then the bar shows the database as text. It lists the connection's
 databases and "Connection's default", which is how no stored database shows and which
 stores none. A stored database the connection does not list stays on the list, marked,
 so it can be seen and changed. Picking another database drops the stored schema and
-container, which belonged to the old one. Once saved, a picked database is checked like
-any stored one.
+container, which belonged to the old one. A picked database is checked like any stored
+one.
 
 An edit counts as something closing would lose, so the first `Escape` warns. In the box,
 `Escape` leaves the box first and keeps the text.
+
+An applied edit is written to the audit log as `chart_query_edited`, with the database it now
+runs on and the query fingerprinted as for any other query. Typing alone records nothing.
 
 After an edit, picked columns follow their names to where the new result has them. If one
 is gone, the chart goes back to the columns detection finds and says so. Columns are stored

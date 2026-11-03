@@ -190,6 +190,12 @@ pub trait ChartDataSource: Send + 'static {
         None
     }
 
+    /// What a save stores for a source that is not a query, which the chart's Query
+    /// section owns. `None` when the source has no saved form.
+    fn saved_source(&self) -> Option<SavedChartSource> {
+        None
+    }
+
     /// Clone this source into a new heap-allocated box.
     ///
     /// Needed because `Clone` is not object-safe. The picker emits a
@@ -414,6 +420,12 @@ impl MetricSource {
 }
 
 impl ChartDataSource for MetricSource {
+    fn saved_source(&self) -> Option<SavedChartSource> {
+        Some(SavedChartSource::Metric {
+            series: self.series.clone(),
+        })
+    }
+
     fn clone_box(&self) -> Box<dyn ChartDataSource> {
         Box::new(self.clone())
     }
@@ -493,6 +505,12 @@ pub struct InstanceMetricSource {
 }
 
 impl ChartDataSource for InstanceMetricSource {
+    fn saved_source(&self) -> Option<SavedChartSource> {
+        Some(SavedChartSource::InstanceMetric {
+            metric_id: self.metric_id.clone(),
+        })
+    }
+
     fn clone_box(&self) -> Box<dyn ChartDataSource> {
         Box::new(self.clone())
     }

@@ -85,6 +85,9 @@ Click **+ Add Panel**. The picker has up to three tabs:
 | **Query** | A new panel from a name + a query you type. |
 | **Metric** | A panel from a driver metric (only shown when the connection's driver exposes a metric catalog). |
 
+A dashboard shows a saved chart once. The **Saved** tab lists a chart this
+dashboard already shows as *Already on this dashboard*, and it can't be picked.
+
 Each panel's settings button (Edit mode) offers **Configure / Edit title /
 Remove panel**. The **Configure** popover lets you change the chart type (Line, Bar,
 Scatter, Area, Stacked, Pie), adjust axis bindings, and view **Stats**.

@@ -3947,6 +3947,7 @@ modals:
       empty: 此连接上没有已保存的图表。使用 来自查询 或 来自指标 直接创建一个。
       search_label: 搜索
       search_placeholder: 搜索图表…
+      on_dashboard: "已在此仪表盘上"
     tab:
       saved: 已保存图表
       query: 来自查询

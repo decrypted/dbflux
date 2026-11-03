@@ -3947,6 +3947,7 @@ modals:
       empty: 'Nenhum gráfico salvo nesta conexão. Use "De uma consulta" ou "De uma métrica" para criar um diretamente.'
       search_label: Buscar
       search_placeholder: Buscar gráficos…
+      on_dashboard: "Já está neste dashboard"
     tab:
       saved: Gráficos salvos
       query: De uma consulta

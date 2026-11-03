@@ -1419,6 +1419,15 @@ impl Workspace {
                 Vec::new()
             };
 
+        let on_dashboard: Vec<uuid::Uuid> = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .panels_for_dashboard(dashboard_id)
+            .iter()
+            .filter_map(|panel| panel.saved_chart_id())
+            .collect();
+
         // Detect the metric-catalog capability synchronously (cheap — reads
         // the driver metadata bitset). The actual namespace list is fetched
         // off the foreground thread below so the modal opens immediately.
@@ -1450,6 +1459,7 @@ impl Workspace {
                     dashboard_id,
                     profile_id,
                     candidates,
+                    on_dashboard,
                     has_metric_catalog,
                     metric_namespaces: Vec::new(),
                     metric_namespaces_loading: has_metric_catalog,

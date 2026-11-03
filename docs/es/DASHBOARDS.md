@@ -89,6 +89,10 @@ Haz clic en **+ Add Panel**. El selector tiene hasta tres pestañas:
 | **Query**  | Un panel nuevo a partir de un nombre + una query que escribes.                                                               |
 | **Metric** | Un panel a partir de una metric del driver (solo se muestra cuando el driver de la conexión expone un catálogo de métricas). |
 
+Un dashboard muestra cada chart guardado una vez. La pestaña **Saved** lista un
+chart que este dashboard ya muestra como *Ya está en este dashboard*, y no se
+puede elegir.
+
 El botón de ajustes de cada panel (modo Edit) ofrece **Configure / Edit title /
 Remove panel**. El popover **Configure** te permite cambiar el tipo de chart (Line,
 Bar, Scatter, Area, Stacked, Pie), ajustar los axis bindings y ver **Stats**.

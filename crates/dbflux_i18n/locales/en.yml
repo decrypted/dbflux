@@ -3947,6 +3947,7 @@ modals:
       empty: 'No saved charts on this connection. Use "From query" or "From metric" to create one directly.'
       search_label: Search
       search_placeholder: Search charts…
+      on_dashboard: "Already on this dashboard"
     tab:
       saved: Saved charts
       query: From query

@@ -3947,6 +3947,7 @@ modals:
       empty: 'No hay gráficos guardados en esta conexión. Usa "Desde consulta" o "Desde métrica" para crear uno directamente.'
       search_label: Buscar
       search_placeholder: Buscar gráficos…
+      on_dashboard: "Ya está en este dashboard"
     tab:
       saved: Gráficos guardados
       query: Desde consulta

@@ -515,6 +515,12 @@ pub(crate) const CHART: SurfaceRegistry = SurfaceRegistry {
         // The name prompt of Save chart.
         ("confirm-save", KeyboardPath::Command(Command::Execute)),
         ("cancel-save", KeyboardPath::Command(Command::Cancel)),
+        ("chart-query-toggle", KeyboardPath::Menu("chart-query")),
+        ("chart-query-run", KeyboardPath::Command(Command::RunQuery)),
+        (
+            "chart-query-database.*",
+            KeyboardPath::Menu("chart-query-database"),
+        ),
         ("axis-pill-x", KeyboardPath::Menu("chart-axis-x")),
         ("axis-pill-y", KeyboardPath::Menu("chart-axis-y")),
         ("axis-pill-group", KeyboardPath::Menu("chart-axis-group")),

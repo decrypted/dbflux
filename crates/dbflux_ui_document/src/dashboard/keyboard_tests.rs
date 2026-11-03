@@ -598,7 +598,10 @@ fn the_dashboard_tab_is_covered(cx: &mut TestAppContext) {
         app_state,
         Box::new(|app_state, window, cx| {
             let chart = cx.new(|cx| {
-                ChartDocument::new(None, "Chart".to_string(), app_state.clone(), window, cx)
+                let mut chart =
+                    ChartDocument::new(None, "Chart".to_string(), app_state.clone(), window, cx);
+                chart.set_embedded(true, cx);
+                chart
             });
             vec![
                 DashboardPanelSlot::Divider {

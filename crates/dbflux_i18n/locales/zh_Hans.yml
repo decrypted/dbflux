@@ -1267,6 +1267,8 @@ document:
   chart:
     session_samples_only: "本次图表会话中采集的样本"
     pane_actions:
+      query: "查询…"
+      query_database: "查询：数据库…"
       refresh: "刷新"
       auto_refresh: "自动刷新间隔…"
       next_time_range: "下一个时间范围"
@@ -1331,8 +1333,16 @@ document:
     toast:
       escape_loses_settings: "此图表有未保存的更改。再次按 Escape 关闭，或按 %{save} 保存。"
       rows_truncated: "图表显示前 %{rows} 行：查询返回的行数超过了行数限制。"
+      columns_not_in_query: "编辑后的查询不返回此图表正在绘制的列，因此已恢复为默认列。如有需要，可在图表上方选择其他列。"
       chart_saved: 图表已保存
       save_failed: "保存图表失败：%{error}"
+    query:
+      title: "查询"
+      database: "数据库"
+      database_default: "连接的默认数据库"
+      database_missing: "%{database}（不在此连接上）"
+      placeholder: "输入此图表运行的查询"
+      run: "运行"
     note:
       console_transaction: "打开此图表时，其来源控制台有一个未结束的事务。图表在单独的连接上运行，不会显示未提交的更改。"
     error:

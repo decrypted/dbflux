@@ -505,6 +505,94 @@ fn chart_pane_action_labels_resolve_in_every_locale() {
 /// The chart tab's toolbar and axis bar, its save prompt, an axis picker
 /// and the stats rail. The keyboard tests above prove the chart keys, and
 /// `m` opens the pane actions.
+fn open_query_box(chart: &Entity<ChartDocument>, window: &mut VisualTestContext) {
+    window.update(|window, cx| {
+        chart.update(cx, |chart, cx| chart.toggle_query_section(window, cx));
+    });
+    // The box reports its focus from the frame that draws it.
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+}
+
+fn query_box_has_focus(chart: &Entity<ChartDocument>, window: &mut VisualTestContext) -> bool {
+    window.update(|window, cx| chart.read(cx).query_box_has_focus_for_test(window, cx))
+}
+
+/// The Query section starts closed, and opening it puts the keyboard in the box.
+/// What is typed there stays there: `l` would otherwise switch the picked pill.
+#[gpui::test]
+fn the_query_box_takes_the_keyboard_from_the_chart(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+    assert!(!window.update(|_, cx| chart.read(cx).query_section_is_open()));
+
+    open_query_box(&chart, window);
+    assert!(query_box_has_focus(&chart, window));
+    assert_eq!(
+        window.update(|_, cx| chart.read(cx).active_context()),
+        dbflux_app::keymap::ContextId::TextInput
+    );
+
+    window.simulate_keystrokes("s e l");
+    assert_eq!(
+        window.update(|_, cx| chart.read(cx).query_in_box(cx)),
+        "sel"
+    );
+    assert_eq!(keyboard_point(&chart, window), None, "no chart key ran");
+}
+
+/// Escape in the box leaves the box. The next press is the chart's, which warns
+/// about the edit, and the one after that closes.
+#[gpui::test]
+fn escape_leaves_the_box_first_then_warns_then_closes(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+    open_query_box(&chart, window);
+    window.simulate_keystrokes("s e l");
+
+    window.simulate_keystrokes("escape");
+    assert!(
+        !query_box_has_focus(&chart, window),
+        "the box answers first"
+    );
+    assert_eq!(
+        window.update(|_, cx| chart.read(cx).active_context()),
+        dbflux_app::keymap::ContextId::Chart
+    );
+    assert_eq!(
+        window.update(|_, cx| chart.read(cx).query_in_box(cx)),
+        "sel",
+        "the text stays"
+    );
+
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Handled);
+    assert_eq!(answer_escape(&chart, window), EscapeClose::Close);
+}
+
+/// Run from the box without leaving it, as an editor does.
+#[gpui::test]
+fn the_run_key_runs_from_the_box(cx: &mut TestAppContext) {
+    let (_host, chart, window) = chart_with_keyboard(cx);
+    open_query_box(&chart, window);
+    window.simulate_keystrokes("s e l");
+
+    let run = if cfg!(target_os = "macos") {
+        "cmd-enter"
+    } else {
+        "ctrl-enter"
+    };
+    window.simulate_keystrokes(run);
+    window.run_until_parked();
+
+    assert_eq!(
+        window.update(|_, cx| chart.read(cx).applied_for_test().0),
+        "sel"
+    );
+    assert_eq!(
+        window.update(|_, cx| chart.read(cx).query_in_box(cx)),
+        "sel",
+        "no newline was typed"
+    );
+}
+
 #[gpui::test]
 fn the_chart_tab_is_covered(cx: &mut TestAppContext) {
     use crate::keyboard_coverage::CHART;
@@ -557,5 +645,9 @@ fn the_chart_tab_is_covered(cx: &mut TestAppContext) {
     window.simulate_keystrokes("escape");
 
     run(window, "chart-stats");
+    coverage().assert_covered(&capture.frame(window));
+    window.simulate_keystrokes("escape");
+
+    run(window, "chart-query");
     coverage().assert_covered(&capture.frame(window));
 }

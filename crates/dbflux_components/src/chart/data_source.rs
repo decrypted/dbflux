@@ -185,6 +185,11 @@ pub trait ChartDataSource: Send + 'static {
         ChartSourceDescription::empty()
     }
 
+    /// The query this source runs, for a source that has one to read and edit.
+    fn query_text(&self) -> Option<&str> {
+        None
+    }
+
     /// Clone this source into a new heap-allocated box.
     ///
     /// Needed because `Clone` is not object-safe. The picker emits a
@@ -256,6 +261,10 @@ impl ChartDataSource for QuerySource {
         Box::new(QuerySource {
             query: self.query.clone(),
         })
+    }
+
+    fn query_text(&self) -> Option<&str> {
+        Some(&self.query)
     }
 
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {

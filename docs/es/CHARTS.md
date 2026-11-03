@@ -355,9 +355,41 @@ que además detiene su actualización automática; el temporizador de un dashboa
 vuelve a intentar, una actualización a mano sí. Un grupo de logs que ya no existe recibe
 el error del propio driver en el área del gráfico. Un gráfico guardado antes de que los gráficos guardaran esto no
 tiene contexto: no envía ninguna base de datos y se ejecuta en la propia de la
-conexión, así que su tabla necesita estar cualificada, y volver a guardarlo no añade
-ninguna. Los gráficos de query guardados y los paneles de dashboard aplican el límite
-de filas del editor; las fuentes de métrica y de métrica de instancia no.
+conexión, así que su tabla necesita estar cualificada hasta que se elija una base de
+datos en la sección Consulta y se guarde. Los gráficos de query guardados y los paneles
+de dashboard aplican el límite de filas del editor; las fuentes de métrica y de métrica
+de instancia no.
+
+### Sección Consulta
+
+Un gráfico con una consulta tiene una sección Consulta sobre el área del gráfico, cerrada
+por defecto para que el gráfico conserve su espacio: cerrada, muestra la base de datos y
+la primera línea del SQL. Se abre con su botón o desde las acciones del panel. Abierta,
+tiene un cuadro con el SQL, un selector de base de datos y Ejecutar. Los gráficos de
+métrica, de métrica de instancia y de colección no tienen sección, ni tampoco un panel de
+dashboard, cuyo anfitrión controla la interfaz: abre el gráfico desde la lista de guardados
+para editarlo, y un panel abierto sigue el cambio cuando se guarda.
+
+Escribir no ejecuta nada. Ejecutar, su atajo en el cuadro (`Ctrl+Enter`, `Cmd+Enter` en
+macOS) y Refresh de la barra aplican el cuadro y el selector y ejecutan. Un refresco por
+temporizador sigue ejecutando lo último que se ejecutó. Guardar también los aplica, ejecuta
+y sobrescribe el mismo gráfico. Lo que haya en el cuadro pasa la misma comprobación de
+lectura que cualquier gráfico, en cada ejecución, así que una sentencia que cambia datos se
+guarda si se guarda pero nunca se ejecuta.
+
+El selector aparece en un driver con más de una base de datos. Lista las bases de datos de
+la conexión y "La predeterminada de la conexión", que es como se muestra que no hay base de
+datos guardada y que no guarda ninguna. Una base de datos guardada que la conexión no lista
+sigue en la lista, marcada, para poder verla y cambiarla. Elegir otra base de datos descarta
+el esquema y el contenedor guardados, que eran de la anterior. Una vez guardada, una base de
+datos elegida se comprueba como cualquier otra guardada.
+
+Una edición cuenta como algo que cerrar perdería, así que el primer `Escape` avisa. En el
+cuadro, `Escape` primero sale del cuadro y conserva el texto.
+
+Tras una edición, las columnas elegidas siguen a su nombre hasta donde las tenga el nuevo
+resultado. Si falta alguna, el gráfico vuelve a las columnas que encuentra la detección y lo
+dice.
 
 Un gráfico nunca mueve la sesión en la que se ejecuta un editor. En MySQL, MariaDB y SQL
 Server, que guardan la base de datos actual en una sola sesión, un gráfico se ejecuta en

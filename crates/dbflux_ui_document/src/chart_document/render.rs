@@ -49,6 +49,7 @@ use dbflux_ui_base::toast::flush_pending_toast;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::input::Editor;
 use std::sync::Arc;
 
 /// Width of the save-chart name prompt.
@@ -58,6 +59,8 @@ const CHART_DATE_PICKER_WIDTH: Pixels = px(260.0);
 
 impl Render for ChartDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_query_box_focus(window, cx);
+
         // -- Lazily create the TimeRangePanel on first render.
         // Panel creation requires a Window reference (for DatePickerState), so
         // it must be deferred here rather than done in the constructor.
@@ -250,6 +253,95 @@ impl Render for ChartDocument {
 }
 
 impl ChartDocument {
+    /// The Query section: a line with the database and the first line of the SQL,
+    /// and when opened the picker, Run and the box. Nothing for a chart without a
+    /// query or a dashboard panel, whose host owns the chrome.
+    fn render_query_section(
+        &self,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.can_edit_query() {
+            return None;
+        }
+
+        let open = self.query_section_is_open();
+        let weak_toggle = cx.weak_entity();
+        let toggle = Button::new(
+            "chart-query-toggle",
+            dbflux_i18n::t!("document.chart.query.title"),
+        )
+        .icon(if open {
+            AppIcon::ChevronDown
+        } else {
+            AppIcon::ChevronRight
+        })
+        .on_click(move |_, window, cx| {
+            weak_toggle
+                .update(cx, |this, cx| this.toggle_query_section(window, cx))
+                .log_err();
+        });
+
+        let meta = |text: String| {
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(DocumentMetrics::TABLE_META_FONT)
+                .text_color(theme.muted_foreground)
+                .child(text)
+        };
+
+        let section = self.query_section().filter(|_| open);
+        let picker = section
+            .filter(|_| self.database_choices(cx).is_some())
+            .map(|section| section.database.clone());
+
+        let mut bar = document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx).child(toggle);
+        bar = match picker {
+            Some(picker) => bar.child(picker),
+            None => bar.child(meta(self.database_label(cx))),
+        };
+
+        if open {
+            let weak_run = cx.weak_entity();
+            bar = bar.child(div().flex_1()).child(
+                Button::new(
+                    "chart-query-run",
+                    dbflux_i18n::t!("document.chart.query.run"),
+                )
+                .icon(AppIcon::Play)
+                .on_click(move |_, window, cx| {
+                    weak_run
+                        .update(cx, |this, cx| this.run_by_hand(window, cx))
+                        .log_err();
+                }),
+            );
+        } else {
+            let query = self.query_in_box(cx);
+            let first_line = query.lines().find(|line| !line.trim().is_empty());
+            bar = bar.child(meta(first_line.unwrap_or_default().trim().to_string()));
+        }
+
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_shrink_0()
+                .child(bar)
+                .when_some(section, |el, section| {
+                    el.child(
+                        div()
+                            .id("chart-query-editor")
+                            .h(ChartDocumentMetrics::QUERY_EDITOR_HEIGHT)
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .child(Editor::new(&section.editor).appearance(false).h_full()),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
     /// Render the chart content area: chart toolbar row + axis bar + chart area.
     ///
     /// Called from the `ViewHandle::render` closure produced by
@@ -358,10 +450,7 @@ impl ChartDocument {
             let handlers = ChartToolbarHandlers {
                 on_refresh: Arc::new(move |window, cx| {
                     if let Some(doc) = weak_self_for_refresh.upgrade() {
-                        doc.update(cx, |this, cx| {
-                            this.retry_database_on_next_run();
-                            this.request_reexecute(window, cx);
-                        });
+                        doc.update(cx, |this, cx| this.run_by_hand(window, cx));
                     }
                 }),
                 on_toggle_stats_rail: Arc::new(move |_window, cx| {
@@ -492,6 +581,8 @@ impl ChartDocument {
                 .child(dbflux_i18n::t!("document.chart.session_samples_only"))
         });
 
+        let query_section = self.render_query_section(&theme, cx);
+
         let transaction_note = self.transaction_note().map(|note| {
             document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx).child(
                 div()
@@ -599,6 +690,7 @@ impl ChartDocument {
                 |el, row| el.child(row),
             )
             .when(!embedded, |el| el.child(axis_row))
+            .children(query_section)
             .children(transaction_note)
             .child(
                 div()

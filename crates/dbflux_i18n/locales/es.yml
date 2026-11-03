@@ -1267,6 +1267,8 @@ document:
   chart:
     session_samples_only: "Muestras recolectadas en esta sesión del gráfico"
     pane_actions:
+      query: "Consulta…"
+      query_database: "Consulta: base de datos…"
       refresh: "Actualizar"
       auto_refresh: "Intervalo de actualización automática…"
       next_time_range: "Siguiente rango de tiempo"
@@ -1331,8 +1333,16 @@ document:
     toast:
       escape_loses_settings: "Este gráfico tiene cambios sin guardar. Pulsa Escape otra vez para cerrarlo o %{save} para guardarlo."
       rows_truncated: "El gráfico muestra las primeras %{rows} filas: la consulta devolvió más que el límite de filas."
+      columns_not_in_query: "La consulta editada no devuelve las columnas que dibujaba este gráfico, así que vuelve a sus columnas predeterminadas. Elige otras sobre el gráfico si quieres."
       chart_saved: Gráfico guardado
       save_failed: "No se pudo guardar el gráfico: %{error}"
+    query:
+      title: "Consulta"
+      database: "Base de datos"
+      database_default: "La predeterminada de la conexión"
+      database_missing: "%{database} (no está en esta conexión)"
+      placeholder: "Escribe la consulta que ejecuta este gráfico"
+      run: "Ejecutar"
     note:
       console_transaction: "La consola de la que viene este gráfico tenía una transacción abierta cuando se abrió. El gráfico se ejecuta en una conexión aparte y no muestra cambios sin confirmar."
     error:

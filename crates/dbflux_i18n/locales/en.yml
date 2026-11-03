@@ -1267,6 +1267,8 @@ document:
   chart:
     session_samples_only: "Samples collected in this chart session"
     pane_actions:
+      query: "Query…"
+      query_database: "Query: database…"
       refresh: "Refresh"
       auto_refresh: "Auto-refresh interval…"
       next_time_range: "Next time range"
@@ -1331,8 +1333,16 @@ document:
     toast:
       escape_loses_settings: "This chart has unsaved changes. Press Escape again to close it, or %{save} to save it."
       rows_truncated: "The chart shows the first %{rows} rows: the query returned more than the row limit."
+      columns_not_in_query: "The edited query does not return the columns this chart was drawing, so it is back on its default columns. Pick others above the chart if you want to."
       chart_saved: Chart saved
       save_failed: "Failed to save chart: %{error}"
+    query:
+      title: "Query"
+      database: "Database"
+      database_default: "Connection's default"
+      database_missing: "%{database} (not on this connection)"
+      placeholder: "Write the query this chart runs"
+      run: "Run"
     note:
       console_transaction: "The console this chart came from had an open transaction when the chart opened. The chart runs on a separate connection and does not show uncommitted changes."
     error:

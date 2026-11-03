@@ -163,6 +163,8 @@ fn influxql_reads_stay_reads() {
 #[test]
 fn influxql_rates_up_what_it_cannot_place() {
     for sql in [
+        "SELECT to FROM cpu",
+        "SHOW MEASUREMENTS to",
         "SELECT value FROM cpu WHERE host = 'open",
         "SELECT value FROM \"open",
         "SELECT value FROM /open",
@@ -399,6 +401,24 @@ fn what_a_dash_comment_hides_counts_if_it_could_run_as_flux() {
         "--1 x = 1\nfrom(bucket:\"b\") |> range(start:0) |> to(bucket:\"hit\")",
         r#"--1 to(tables: t, bucket:"hit")"#,
         r#"--1 {f: to}.f(tables: range(tables: from(bucket:"b"), start: 0), bucket:"hit")"#,
+        // A lone `\r` ends the comment in InfluxQL only, so Flux's `//` skips the
+        // statement InfluxQL reads next, and the line after it runs.
+        "--1 //\rSELECT value FROM cpu\nto(tables: range(tables: from(bucket:\"b\"), start: 0), bucket:\"hit\")",
+        "--1 //\rSHOW SERIES\nto(tables: range(tables: from(bucket:\"b\"), start: 0), bucket:\"hit\")",
+        "--//\rSELECT value FROM cpu\n1\nto(tables: range(tables: from(bucket:\"b\"), start: 0), bucket:\"hit\")",
+        "--1 //\rSELECT value FROM cpu\nfrom(bucket:\"b\", host:\"http://x\", token:\"t\")",
+        // InfluxQL has no read with an unquoted `to`, whatever the comment says.
+        "--1 //\nSELECT value FROM cpu\nto(tables: t, bucket:\"hit\")",
+        "SELECT value FROM cpu\nto(tables: t, bucket:\"hit\")",
+        // Nothing here ends the line in either language, so all of it is one comment
+        // to InfluxQL too, and the next line opens with `to`.
+        "--1 //\u{2028}SELECT value FROM cpu\nto(tables: t, bucket:\"hit\")",
+        "--1 //\u{85}SELECT value FROM cpu\nto(tables: t, bucket:\"hit\")",
+        "--1 //\u{c}SELECT value FROM cpu\nto(tables: t, bucket:\"hit\")",
+        "--1 //\u{b}SELECT value FROM cpu\nto(tables: t, bucket:\"hit\")",
+        "--1 \u{c}to(tables: t, bucket:\"hit\")",
+        "--1 \u{b}to(tables: t, bucket:\"hit\")",
+        "--1 \rto(tables: t, bucket:\"hit\")",
         // Flux reads the comment's `"` as opening a string that takes the next line,
         // so what InfluxQL reads as a comment after `SHOW SERIES` is code.
         "--1 \"\nSHOW SERIES -- \" to(tables: range(tables: from(bucket:\"b\"), start: 0), bucket:\"hit\") \"x\"",
@@ -427,6 +447,11 @@ fn what_a_dash_comment_hides_counts_if_it_could_run_as_flux() {
         "SELECT * FROM cpu WHERE host = 'a' -- owner ops@example.com",
         "SELECT * FROM cpu WHERE host != 'a' AND host =~ /b/ -- a 5\" disk",
         "-- a = b\nSELECT value FROM cpu WHERE host = 'a'",
+        // Line ends that hide nothing, also in a file from an old editor.
+        "-- old mac line\rSELECT value FROM cpu WHERE host = 'a'",
+        "-- windows line\r\nSELECT value FROM cpu WHERE host = 'a'",
+        "-- rollup to hourly\rSELECT value FROM cpu WHERE host != 'a'",
+        "SELECT value FROM cpu -- a\u{2028}b\u{85}c\u{c}d",
     ] {
         assert_eq!(rate(comment), Read, "{comment:?}");
     }
@@ -489,6 +514,10 @@ fn flux_that_reaches_another_host_rates_up() {
         r#"from("bucket":"b", "ho\x73t":"http://x", "token":"t") |> range(start:0)"#,
         "bucket = \"b\"\nhost = \"http://x\"\ntoken = \"t\"\nfrom(bucket, host, token) |> range(start:0)",
         r#"--1 from(bucket:"b", host:"http://x", token:"t")"#,
+        "h = \"http://x\"\nfrom(bucket:\"b\", host:h, token:\"t\") |> range(start:0)",
+        "f = from\nf(bucket:\"b\", host:\"http://x\", token:\"t\") |> range(start:0)",
+        "g = {f: from}\ng.f(bucket:\"b\", host:\"http://x\", token:\"t\") |> range(start:0)",
+        "(from)(bucket:\"b\", host:\"http://x\", token:\"t\") |> range(start:0)",
     ] {
         assert_eq!(rate(flux), Write, "{flux:?}");
     }
@@ -517,6 +546,14 @@ fn flux_that_only_looks_like_those_stays_a_read() {
         r#"from(bucket:"b") |> range(start:0) |> rename(columns:{host:"x", url:"y"})"#,
         r#"from(bucket:"b") |> range(start:0) |> group(columns:["host"])"#,
         r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "a" and exists r.url)"#,
+        // A variable of that name is a value being passed, not an argument's name.
+        "host = \"server01\"\nfrom(bucket:\"b\") |> range(start:-1h) |> filter(fn: (r) => r.host == host)",
+        "import \"strings\"\nhost = \"a\"\nfrom(bucket:\"b\") |> range(start:0) |> filter(fn: (r) => strings.containsStr(v: r.host, substr: host))",
+        "url = \"x\"\nfrom(bucket:\"b\") |> range(start:0) |> filter(fn: (r) => r.url == url)",
+        "only = (tables=<-, host) => tables |> filter(fn: (r) => r.host == host)\nfrom(bucket:\"b\") |> range(start:0)",
+        "only = (host, url) => host + url\nfrom(bucket:\"b\") |> range(start:0)",
+        "host = \"a\"\nfrom(bucket:\"b\") |> range(start:0) |> filter(fn: (r) => if (host) == \"a\" then true else (r.host) == (host))",
+        "host = \"a\"\nf = () => { return (host) }\nfrom(bucket:\"b\") |> range(start:0)",
         r#"from(bucket:"b") |> range(start:0) |> map(fn:(r)=>({"a b": r.host}))"#,
         r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "$")"#,
         r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "a$b")"#,

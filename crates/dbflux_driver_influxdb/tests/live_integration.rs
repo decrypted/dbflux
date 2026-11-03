@@ -1219,7 +1219,7 @@ fn v1_nothing_rated_a_read_writes() -> Result<(), DbError> {
     ];
     const PIECES: &[&str] = &[
         "", "/", "'", "\"", "\\", "\\/", "\\\\", "\\'", "--", "/*", "*/", "\n", "\r", ";", "cpu",
-        "$", "(", ")", "/'/",
+        "$", "(", ")", "/'/", "\u{2028}", "\u{85}", "\u{c}", "\u{b}",
     ];
     const TAILS: &[&str] = &[
         "SELECT value FROM /'/",
@@ -1318,6 +1318,9 @@ fn v2_nothing_rated_a_read_writes() -> Result<(), DbError> {
     ];
     const AFTER_INSIDES: &[&str] = &["", "\"", "/", "\\/", "$", "${", "\r\"", "\n", "}"];
     const AFTER_CLOSERS: &[&str] = &["", "\")", "/ or true)", ")"];
+    const LINE_ENDS: &[&str] = &[
+        "\r", "\n", "\r\n", "\u{2028}", "\u{85}", "\u{c}", "\u{b}", " ",
+    ];
 
     containers::with_influxdb_v2(|cfg| {
         write_v2_line_protocol(
@@ -1358,6 +1361,49 @@ fn v2_nothing_rated_a_read_writes() -> Result<(), DbError> {
                                     sent.push(flux);
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // InfluxQL's reading of a line that Flux reads differently. These hold no
+        // `range`, so the driver bounds them by the window, which this point is in.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        write_v2_line_protocol(
+            &cfg.endpoint,
+            &cfg.token,
+            &cfg.org,
+            &cfg.bucket,
+            &format!("cpu,host=a value=1 {now_ms}"),
+        )?;
+
+        for comment in ["--1 //", "--1 ", "--// ", "-- ", "--1 \"", "--1 (/", "--1"] {
+            for first_end in LINE_ENDS {
+                for statement in [
+                    "SELECT value FROM cpu",
+                    "SHOW SERIES",
+                    "EXPLAIN SELECT value FROM cpu",
+                    "",
+                ] {
+                    for second_end in LINE_ENDS {
+                        for filler in ["", "1\n", "\" ", "/) "] {
+                            let flux = format!(
+                                "{comment}{first_end}{statement}{second_end}{filler}\
+                                 to(tables: set(tables: from(bucket: \"{bucket}\"), \
+                                 key: \"_measurement\", value: \"h{}\"), bucket: \"{bucket}\")",
+                                sent.len()
+                            );
+
+                            if is_refused(&*connection, &flux) {
+                                continue;
+                            }
+
+                            let _ = connection.execute(&flux_query_with_window(&flux));
+                            sent.push(flux);
                         }
                     }
                 }

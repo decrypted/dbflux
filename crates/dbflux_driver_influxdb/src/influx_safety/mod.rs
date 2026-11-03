@@ -49,6 +49,9 @@ struct Lexed {
     unterminated: bool,
     /// What each InfluxQL `--` comment took, which Flux reads as code.
     dash_comments: Vec<String>,
+    /// A `--` comment holding a `//` ended at a `\r` with no `\n` after it. That ends
+    /// no line in Flux, whose `//` comment goes on over what InfluxQL reads next.
+    dash_comment_runs_on_in_flux: bool,
 }
 
 /// The positions InfluxQL's parser asks for a regex: a field, a source (also after
@@ -90,6 +93,7 @@ struct Lexer {
     lexemes: Vec<Lexeme>,
     unterminated: bool,
     dash_comments: Vec<String>,
+    dash_comment_runs_on_in_flux: bool,
     /// One entry per `${` still open, holding its count of open `{`.
     interpolations: Vec<usize>,
 }
@@ -126,6 +130,9 @@ impl Lexer {
 
         if self.dialect == Dialect::InfluxQl {
             let taken = self.chars.get(self.index + 2..index).unwrap_or_default();
+            self.dash_comment_runs_on_in_flux |= self.at(index) == Some('\r')
+                && self.at(index + 1) != Some('\n')
+                && taken.windows(2).any(|pair| pair == ['/', '/']);
             self.dash_comments.push(taken.iter().collect());
         }
 
@@ -364,6 +371,7 @@ fn lex(query: &str, dialect: Dialect) -> Lexed {
         lexemes: Vec::new(),
         unterminated: false,
         dash_comments: Vec::new(),
+        dash_comment_runs_on_in_flux: false,
         interpolations: Vec::new(),
     };
 
@@ -379,6 +387,7 @@ fn lex(query: &str, dialect: Dialect) -> Lexed {
         unterminated: lexer.unterminated || !lexer.interpolations.is_empty(),
         lexemes: lexer.lexemes,
         dash_comments: lexer.dash_comments,
+        dash_comment_runs_on_in_flux: lexer.dash_comment_runs_on_in_flux,
     }
 }
 
@@ -436,16 +445,19 @@ enum DashComments {
     /// Plain words, or nothing a Flux program would need. The rest of the text
     /// reads as InfluxQL, and no Flux program can open with that.
     Comments,
-    /// A program could start here. A string or regex left open counts: what the
-    /// InfluxQL reading takes for code can be inside it, and what it takes for a
-    /// quoted name can be code.
+    /// A program could start here. Two things count even with nothing else in the
+    /// comment, as both let Flux skip what InfluxQL reads as the statement after it:
+    /// a string or regex left open, and a `//` before a lone `\r`, past which that
+    /// Flux comment goes on to the next `\n` (measured: `--1 //\rSELECT ...\nto(...)`
+    /// writes, and `--1 \rSELECT ...\nto(...)` fails on the `SELECT`).
     MaybeFlux,
     /// A `|>` or an import is Flux, or nothing at all.
     Flux,
 }
 
 fn read_dash_comments(query: &str) -> DashComments {
-    let readings: Vec<Lexed> = lex(query, Dialect::InfluxQl)
+    let influxql = lex(query, Dialect::InfluxQl);
+    let readings: Vec<Lexed> = influxql
         .dash_comments
         .iter()
         .map(|comment| lex(comment, Dialect::Flux))
@@ -459,12 +471,13 @@ fn read_dash_comments(query: &str) -> DashComments {
         return DashComments::Flux;
     }
 
-    let may_be_flux = readings.iter().any(|reading| {
-        reading.unterminated
-            || reading.lexemes.contains(&Lexeme::Symbol('='))
-            || uses_to_as_a_value(&reading.lexemes)
-            || passes_a_remote_argument(&reading.lexemes)
-    });
+    let may_be_flux = influxql.dash_comment_runs_on_in_flux
+        || readings.iter().any(|reading| {
+            reading.unterminated
+                || reading.lexemes.contains(&Lexeme::Symbol('='))
+                || uses_to_as_a_value(&reading.lexemes)
+                || passes_a_remote_argument(&reading.lexemes)
+        });
 
     if may_be_flux {
         DashComments::MaybeFlux
@@ -536,7 +549,9 @@ fn contains_word(lexemes: &[Lexeme], word: &str) -> bool {
 }
 
 /// `INTO` is reserved, so no name can use it unquoted (measured), and in any
-/// statement it can only be the clause that writes.
+/// statement it can only be the clause that writes. `TO` is reserved as well and
+/// belongs to `GRANT`, so a read holding one cannot compile as InfluxQL, while the
+/// same text can run as Flux.
 fn classify_influxql_statement(statement: &[Lexeme]) -> ExecutionClassification {
     use ExecutionClassification::{Admin, Destructive, Metadata, Read, Write};
 
@@ -556,7 +571,7 @@ fn classify_influxql_statement(statement: &[Lexeme]) -> ExecutionClassification 
         _ => Write,
     };
 
-    if contains_word(rest, "INTO") {
+    if contains_word(rest, "INTO") || contains_word(rest, "TO") {
         class.max(Write)
     } else {
         class
@@ -770,38 +785,65 @@ fn flux_imports(lexemes: &[Lexeme]) -> Vec<FluxImport<'_>> {
         .collect()
 }
 
+/// Whether a `(` after `previous` holds a call's arguments, rather than a lambda's
+/// parameters or a group.
+fn opens_a_call(previous: Option<&Lexeme>) -> bool {
+    match previous {
+        Some(Lexeme::Word(word)) => !matches!(
+            word.as_str(),
+            "and" | "or" | "not" | "exists" | "return" | "if" | "then" | "else"
+        ),
+        Some(Lexeme::Symbol(')' | ']' | '}')) => true,
+        _ => false,
+    }
+}
+
 /// Whether a call names `host` or `url` as an argument: `from(host: ...)`,
 /// `influxdb.from(host: ...)` and `usage.limits(host: ...)` send a request there
-/// (measured), whatever package holds the function. So do the shorthand
-/// `from(bucket, host, token)` and a quoted key `from("host": ...)`, and any
-/// quoted key rates up, as this cannot read the escapes one may hold. A record key
-/// is one bracket further in, so `{r with host: "x"}` does not count.
+/// (measured), whatever package holds the function or whatever name it goes by. So
+/// do the shorthand `from(bucket, host, token)` and a quoted key `from("host": ...)`,
+/// and any quoted key rates up, as this cannot read the escapes one may hold.
+///
+/// Only where an argument name stands: `filter(fn: (r) => r.host == host)` and
+/// `f(substr: host)` pass a value, a lambda's `(tables=<-, host)` declares one, and a
+/// record key is one bracket further in.
 fn passes_a_remote_argument(lexemes: &[Lexeme]) -> bool {
-    let mut open: Vec<char> = Vec::new();
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Open {
+        Call,
+        Parenthesis,
+        Other,
+    }
+
+    let mut open: Vec<Open> = Vec::new();
 
     for (index, lexeme) in lexemes.iter().enumerate() {
+        let previous = index
+            .checked_sub(1)
+            .and_then(|previous| lexemes.get(previous));
+        let next = lexemes.get(index + 1);
+
         match lexeme {
-            Lexeme::Symbol(symbol @ ('(' | '[' | '{')) => open.push(*symbol),
+            Lexeme::Symbol('(') => open.push(if opens_a_call(previous) {
+                Open::Call
+            } else {
+                Open::Parenthesis
+            }),
+            Lexeme::Symbol('[' | '{') => open.push(Open::Other),
             Lexeme::Symbol(')' | ']' | '}') => {
                 open.pop();
             }
             Lexeme::Text(_)
-                if open.last() == Some(&'(')
-                    && lexemes.get(index + 1) == Some(&Lexeme::Symbol(':')) =>
+                if matches!(open.last(), Some(Open::Call | Open::Parenthesis))
+                    && next == Some(&Lexeme::Symbol(':')) =>
             {
                 return true;
             }
             Lexeme::Word(word)
                 if matches!(word.as_str(), "host" | "url")
-                    && open.last() == Some(&'(')
-                    && index
-                        .checked_sub(1)
-                        .and_then(|previous| lexemes.get(previous))
-                        != Some(&Lexeme::Symbol('.'))
-                    && matches!(
-                        lexemes.get(index + 1),
-                        Some(Lexeme::Symbol(':' | ',' | ')'))
-                    ) =>
+                    && open.last() == Some(&Open::Call)
+                    && matches!(previous, Some(Lexeme::Symbol('(' | ',')))
+                    && matches!(next, Some(Lexeme::Symbol(':' | ',' | ')'))) =>
             {
                 return true;
             }

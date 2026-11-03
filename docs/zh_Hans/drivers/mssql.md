@@ -90,7 +90,7 @@ Microsoft SQL Server 关系型数据库。
 
 - `explain()` 在 `SET SHOWPLAN_XML ON` 下运行该查询，并以 XML 形式返回查询计划；当请求要求可读形式时，则在 `SET SHOWPLAN_TEXT ON` 下以文本行返回。驱动程序随后总会关闭 SHOWPLAN，以免会话状态泄漏，并在三个批次期间持有会话，使其他请求不会被规划而不运行。
 - `execute()` 拒绝以 `EXPLAIN`、`DESC`、`DESCRIBE` 或 `SHOW` 开头的语句。SQL Server 没有这些语句：它把该词读作过程调用，调用失败后继续运行批次的其余部分。要调用同名过程，请使用 `EXEC`。
-- `TSqlLanguageService` 按批次的全部单词评定，因为语句前不需要 `;`，所以只读配置文件和 MCP 会拒绝跟在读取关键字之后的写操作。在可写配置文件上，以 `SELECT` 或 `WITH` 开头且评定高于读取的批次会先请求确认，并指出找到的单词（`DangerousQueryKind::WriteBehindRead`）。批次中任何位置的 `DROP` 或 `TRUNCATE` 也会请求确认，无论批次以什么开头（`DELETE FROM t WHERE id = 1 DROP TABLE u`）。第一个写操作之后的第二个 `DELETE`、`UPDATE` 或 `INSERT` 不会询问。
+- `TSqlLanguageService` 按批次的全部单词评定，因为语句前不需要 `;`，所以只读配置文件和 MCP 会拒绝跟在读取关键字之后的写操作。在可写配置文件上，以 `SELECT` 或 `WITH` 开头且评定高于读取的批次会先请求确认，并指出找到的单词（`DangerousQueryKind::WriteBehindRead`）。批次中任何位置的 `DROP` 或 `TRUNCATE` 也会请求确认，无论批次以什么开头（`DELETE FROM t WHERE id = 1 DROP TABLE u`）。`detect_dangerous_all` 会报告批次需要的每一种确认，只要其中任何一种未被静默，编辑器和控制台就会询问。前面没有 `;` 的额外 `DELETE`、`UPDATE` 或 `INSERT` 本身不会询问（`DELETE FROM t WHERE id = 1 DELETE FROM u`）。
 - `version_query()` 返回 `SELECT @@VERSION`。
 
 ### 方言

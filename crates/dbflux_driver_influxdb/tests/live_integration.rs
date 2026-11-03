@@ -1107,6 +1107,14 @@ fn v2_rating_refuses_the_flux_the_server_writes_with() -> Result<(), DbError> {
             ),
             ("to_dash", "--1 {SOURCE} {SET} |> to(bucket: \"{BUCKET}\")"),
             (
+                "to_record",
+                "--1 {f: to}.f(tables: {SOURCE} {SET}, bucket: \"{BUCKET}\")",
+            ),
+            (
+                "to_dash_string",
+                "--1 \"\nSHOW SERIES -- \" to(tables: {SOURCE} {SET}, bucket: \"{BUCKET}\") \"x\"",
+            ),
+            (
                 "to_dash_show",
                 "--1 show = 1 {SOURCE} {SET} |> to(bucket: \"{BUCKET}\")\nshow",
             ),

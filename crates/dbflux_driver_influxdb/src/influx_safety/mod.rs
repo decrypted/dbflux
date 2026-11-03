@@ -47,8 +47,8 @@ struct Lexed {
     lexemes: Vec<Lexeme>,
     /// A string, regex or comment ran to the end of the text.
     unterminated: bool,
-    /// An InfluxQL `--` comment took text that Flux reads as code.
-    dash_comment: bool,
+    /// What each InfluxQL `--` comment took, which Flux reads as code.
+    dash_comments: Vec<String>,
 }
 
 /// The positions InfluxQL's parser asks for a regex: a field, a source (also after
@@ -89,7 +89,7 @@ struct Lexer {
     index: usize,
     lexemes: Vec<Lexeme>,
     unterminated: bool,
-    dash_comment: bool,
+    dash_comments: Vec<String>,
     /// One entry per `${` still open, holding its count of open `{`.
     interpolations: Vec<usize>,
 }
@@ -124,7 +124,11 @@ impl Lexer {
             index += 1;
         }
 
-        self.dash_comment |= self.dialect == Dialect::InfluxQl;
+        if self.dialect == Dialect::InfluxQl {
+            let taken = self.chars.get(self.index + 2..index).unwrap_or_default();
+            self.dash_comments.push(taken.iter().collect());
+        }
+
         self.index = index;
     }
 
@@ -359,7 +363,7 @@ fn lex(query: &str, dialect: Dialect) -> Lexed {
         index: 0,
         lexemes: Vec::new(),
         unterminated: false,
-        dash_comment: false,
+        dash_comments: Vec::new(),
         interpolations: Vec::new(),
     };
 
@@ -374,7 +378,7 @@ fn lex(query: &str, dialect: Dialect) -> Lexed {
     Lexed {
         unterminated: lexer.unterminated || !lexer.interpolations.is_empty(),
         lexemes: lexer.lexemes,
-        dash_comment: lexer.dash_comment,
+        dash_comments: lexer.dash_comments,
     }
 }
 
@@ -411,30 +415,82 @@ pub(crate) fn detect_dialect(query: &str) -> Dialect {
     }
 }
 
+/// Whether `to` stands where a value does: `to(...)`, `{f: to}`, `x = to`. Between
+/// words it is prose, as in `-- compare to yesterday`.
+fn uses_to_as_a_value(lexemes: &[Lexeme]) -> bool {
+    let is_word = |lexeme: Option<&Lexeme>| matches!(lexeme, Some(Lexeme::Word(_)));
+
+    lexemes.iter().enumerate().any(|(index, lexeme)| {
+        let previous = index.checked_sub(1).and_then(|index| lexemes.get(index));
+
+        matches!(lexeme, Lexeme::Word(word) if word == "to")
+            && !is_word(previous)
+            && !is_word(lexemes.get(index + 1))
+    })
+}
+
+/// What the `--` comments of text that reads as InfluxQL say about it running as
+/// Flux, where they are code (measured: `--1 from(...) |> to(...)` writes).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DashComments {
+    /// Plain words, or nothing a Flux program would need. The rest of the text
+    /// reads as InfluxQL, and no Flux program can open with that.
+    Comments,
+    /// A program could start here. A string or regex left open counts: what the
+    /// InfluxQL reading takes for code can be inside it, and what it takes for a
+    /// quoted name can be code.
+    MaybeFlux,
+    /// A `|>` or an import is Flux, or nothing at all.
+    Flux,
+}
+
+fn read_dash_comments(query: &str) -> DashComments {
+    let readings: Vec<Lexed> = lex(query, Dialect::InfluxQl)
+        .dash_comments
+        .iter()
+        .map(|comment| lex(comment, Dialect::Flux))
+        .collect();
+
+    let is_flux = readings.iter().any(|reading| {
+        reading.lexemes.contains(&Lexeme::Pipe) || !flux_imports(&reading.lexemes).is_empty()
+    });
+
+    if is_flux {
+        return DashComments::Flux;
+    }
+
+    let may_be_flux = readings.iter().any(|reading| {
+        reading.unterminated
+            || reading.lexemes.contains(&Lexeme::Symbol('='))
+            || uses_to_as_a_value(&reading.lexemes)
+            || passes_a_remote_argument(&reading.lexemes)
+    });
+
+    if may_be_flux {
+        DashComments::MaybeFlux
+    } else {
+        DashComments::Comments
+    }
+}
+
 /// The rating of text that reads as InfluxQL with a `--` comment, in case it runs
-/// as Flux, where that comment is code (measured: `--1 from(...) |> to(...)` writes).
-/// Which language runs it cannot be told from here, so this rates up when the Flux
-/// reading looks like a program. A comment in plain words stays a comment.
+/// as Flux. Which language runs it cannot be told from here. The comments decide
+/// whether to ask, since an ordinary `WHERE host = 'a'` also lexes as Flux. The
+/// whole text decides the answer, since a program behind `--1` goes on from there.
 fn rating_if_flux_behind_dash_comment(query: &str) -> Option<ExecutionClassification> {
-    if !lex(query, Dialect::InfluxQl).dash_comment {
+    let comments = read_dash_comments(query);
+
+    if comments == DashComments::Comments {
         return None;
     }
 
-    let lexemes = lex(query, Dialect::Flux).lexemes;
-    let looks_like_a_program = lexemes.contains(&Lexeme::Pipe)
-        || !flux_imports(&lexemes).is_empty()
-        || lexemes.contains(&Lexeme::Symbol('='))
-        || calls_word(&lexemes, "to");
+    let effect = flux_effect(&lex(query, Dialect::Flux).lexemes);
 
-    if !looks_like_a_program {
-        return None;
+    if comments == DashComments::Flux {
+        Some(effect.unwrap_or(ExecutionClassification::Write))
+    } else {
+        effect
     }
-
-    if lexemes.contains(&Lexeme::Pipe) || !flux_imports(&lexemes).is_empty() {
-        return Some(flux_effect(&lexemes).unwrap_or(ExecutionClassification::Write));
-    }
-
-    flux_effect(&lexemes)
 }
 
 /// The class of `query`, in the language its text reads as.
@@ -460,10 +516,10 @@ pub(crate) fn detect_dangerous(query: &str) -> Option<DangerousQueryKind> {
 }
 
 fn detect_dangerous_flux_behind_comment(query: &str) -> Option<DangerousQueryKind> {
-    if lex(query, Dialect::InfluxQl).dash_comment {
-        detect_dangerous_flux(query)
-    } else {
+    if read_dash_comments(query) == DashComments::Comments {
         None
+    } else {
+        detect_dangerous_flux(query)
     }
 }
 
@@ -716,8 +772,10 @@ fn flux_imports(lexemes: &[Lexeme]) -> Vec<FluxImport<'_>> {
 
 /// Whether a call names `host` or `url` as an argument: `from(host: ...)`,
 /// `influxdb.from(host: ...)` and `usage.limits(host: ...)` send a request there
-/// (measured), whatever package holds the function. A record key is one bracket
-/// further in, so `{r with host: "x"}` does not count.
+/// (measured), whatever package holds the function. So do the shorthand
+/// `from(bucket, host, token)` and a quoted key `from("host": ...)`, and any
+/// quoted key rates up, as this cannot read the escapes one may hold. A record key
+/// is one bracket further in, so `{r with host: "x"}` does not count.
 fn passes_a_remote_argument(lexemes: &[Lexeme]) -> bool {
     let mut open: Vec<char> = Vec::new();
 
@@ -727,10 +785,23 @@ fn passes_a_remote_argument(lexemes: &[Lexeme]) -> bool {
             Lexeme::Symbol(')' | ']' | '}') => {
                 open.pop();
             }
+            Lexeme::Text(_)
+                if open.last() == Some(&'(')
+                    && lexemes.get(index + 1) == Some(&Lexeme::Symbol(':')) =>
+            {
+                return true;
+            }
             Lexeme::Word(word)
                 if matches!(word.as_str(), "host" | "url")
                     && open.last() == Some(&'(')
-                    && lexemes.get(index + 1) == Some(&Lexeme::Symbol(':')) =>
+                    && index
+                        .checked_sub(1)
+                        .and_then(|previous| lexemes.get(previous))
+                        != Some(&Lexeme::Symbol('.'))
+                    && matches!(
+                        lexemes.get(index + 1),
+                        Some(Lexeme::Symbol(':' | ',' | ')'))
+                    ) =>
             {
                 return true;
             }

@@ -560,31 +560,63 @@ pub fn tsql_write_behind_read(sql: &str) -> Option<DangerousQueryKind> {
     (class != ExecutionClassification::Read).then_some(DangerousQueryKind::WriteBehindRead { word })
 }
 
+/// The object words that make a `DROP` its own statement behind an `ALTER`. `ALTER
+/// TABLE t DROP COLUMN a` and `ALTER TABLE t DROP c` are `ALTER`'s grammar, and a
+/// word here that was a constraint's name only adds a prompt to one that asks anyway.
+const DROPPED_OBJECT_WORDS: &[&str] = &[
+    "TABLE",
+    "VIEW",
+    "PROC",
+    "PROCEDURE",
+    "FUNCTION",
+    "DATABASE",
+    "INDEX",
+    "TRIGGER",
+    "SCHEMA",
+    "SEQUENCE",
+    "SYNONYM",
+    "TYPE",
+    "USER",
+    "ROLE",
+    "LOGIN",
+];
+
 /// The confirmation a batch needs for a `DROP` or `TRUNCATE` behind whatever opens
 /// it: `DELETE FROM t WHERE id = 1 DROP TABLE u` drops `u`, and the shared danger
 /// check only reads the `DELETE`. Both words are reserved, so a listed one is the
 /// keyword, and one in a string, comment or quoted name is not a word here.
 ///
-/// `ALTER TABLE t DROP COLUMN a` is `ALTER`'s own grammar, so a batch opening with
-/// `ALTER` keeps the prompt it has. A batch the driver refuses for its implicit
-/// call does not ask, as it would not run after a yes.
+/// A batch the driver refuses for its implicit call does not ask, as it would not
+/// run after a yes.
 pub fn tsql_drop_in_batch(sql: &str) -> Option<DangerousQueryKind> {
     let lexed = lex(sql);
+    let lexemes = &lexed.lexemes;
 
-    let opens_with_alter = lexed
-        .lexemes
+    if has_implicit_call(lexemes) {
+        return None;
+    }
+
+    let opens_with_alter = lexemes
         .iter()
         .find(|lexeme| !matches!(lexeme, Lexeme::Symbol(_)))
         .is_some_and(|lexeme| matches!(lexeme, Lexeme::Word(word) if word == "ALTER"));
 
-    if opens_with_alter || has_implicit_call(&lexed.lexemes) {
-        return None;
-    }
+    lexemes.iter().enumerate().find_map(|(index, lexeme)| {
+        let Lexeme::Word(word) = lexeme else {
+            return None;
+        };
 
-    lexed.lexemes.iter().find_map(|lexeme| match lexeme {
-        Lexeme::Word(word) if word == "DROP" => Some(DangerousQueryKind::Drop),
-        Lexeme::Word(word) if word == "TRUNCATE" => Some(DangerousQueryKind::Truncate),
-        _ => None,
+        match word.as_str() {
+            "TRUNCATE" => Some(DangerousQueryKind::Truncate),
+            "DROP" if !opens_with_alter => Some(DangerousQueryKind::Drop),
+            "DROP" => match lexemes.get(index + 1) {
+                Some(Lexeme::Word(object)) if DROPPED_OBJECT_WORDS.contains(&object.as_str()) => {
+                    Some(DangerousQueryKind::Drop)
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     })
 }
 

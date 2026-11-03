@@ -637,6 +637,15 @@ pub trait LanguageService: Send + Sync {
     /// for dangerous queries without needing to understand the syntax.
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind>;
 
+    /// Every confirmation `query` calls for, strongest reason first.
+    ///
+    /// Suppression and settings apply per kind, so a caller deciding whether to
+    /// ask must look at all of these: with one kind, "Don't ask again" on it would
+    /// hide whatever else the query does. See `DangerousQuerySuppressions`.
+    fn detect_dangerous_all(&self, query: &str) -> Vec<DangerousQueryKind> {
+        self.detect_dangerous(query).into_iter().collect()
+    }
+
     /// Produce diagnostics for the editor with precise line/column positions.
     ///
     /// Returns an empty vec if no problems are found. The UI may call this on

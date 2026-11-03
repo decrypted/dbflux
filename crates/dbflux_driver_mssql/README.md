@@ -206,8 +206,11 @@ Requires the `VIEW SERVER STATE` permission.
   read keyword. On a writable profile a batch that opens with `SELECT` or `WITH` and
   rates above a read asks for confirmation first, naming the word it found
   (`DangerousQueryKind::WriteBehindRead`). A `DROP` or `TRUNCATE` anywhere in a batch
-  asks too, whatever opens it (`DELETE FROM t WHERE id = 1 DROP TABLE u`). A second
-  `DELETE`, `UPDATE` or `INSERT` behind a first write does not.
+  asks too, whatever opens it (`DELETE FROM t WHERE id = 1 DROP TABLE u`).
+  `detect_dangerous_all` reports every kind a batch calls for, and the editor and the
+  console ask while any of them is not silenced. A further `DELETE`, `UPDATE` or
+  `INSERT` with no `;` before it does not ask by itself (`DELETE FROM t WHERE id = 1
+  DELETE FROM u`).
 - `version_query()` returns `SELECT @@VERSION`.
 
 ### Dialect

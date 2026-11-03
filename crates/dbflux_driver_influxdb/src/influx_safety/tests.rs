@@ -398,6 +398,10 @@ fn what_a_dash_comment_hides_counts_if_it_could_run_as_flux() {
         "--1 show = 1 from(bucket:\"b\") |> range(start:0) |> to(bucket:\"hit\")\nshow",
         "--1 x = 1\nfrom(bucket:\"b\") |> range(start:0) |> to(bucket:\"hit\")",
         r#"--1 to(tables: t, bucket:"hit")"#,
+        r#"--1 {f: to}.f(tables: range(tables: from(bucket:"b"), start: 0), bucket:"hit")"#,
+        // Flux reads the comment's `"` as opening a string that takes the next line,
+        // so what InfluxQL reads as a comment after `SHOW SERIES` is code.
+        "--1 \"\nSHOW SERIES -- \" to(tables: range(tables: from(bucket:\"b\"), start: 0), bucket:\"hit\") \"x\"",
         // Did not compile when measured, as an import must come first.
         "--1\nimport \"http\"\nx = http.post(url:\"u\", data: bytes(v:\"x\"))",
     ] {
@@ -417,6 +421,12 @@ fn what_a_dash_comment_hides_counts_if_it_could_run_as_flux() {
         "SELECT value FROM cpu -- send to ops",
         "SELECT value FROM cpu -- INTO hit",
         "SELECT value FROM cpu -- ; DROP DATABASE d",
+        // A predicate lexes as Flux as well, and must not make the comment a program.
+        "SELECT mean(value) FROM cpu WHERE time >= now() - 1h -- compare to yesterday",
+        "-- rollup to hourly\nSELECT mean(value) FROM cpu WHERE host = 'a' GROUP BY time(1h)",
+        "SELECT * FROM cpu WHERE host = 'a' -- owner ops@example.com",
+        "SELECT * FROM cpu WHERE host != 'a' AND host =~ /b/ -- a 5\" disk",
+        "-- a = b\nSELECT value FROM cpu WHERE host = 'a'",
     ] {
         assert_eq!(rate(comment), Read, "{comment:?}");
     }
@@ -475,6 +485,10 @@ fn flux_that_reaches_another_host_rates_up() {
         r#"from(bucket:"b", host:"http://x", token:"t") |> range(start:0)"#,
         "import \"influxdata/influxdb\"\ninfluxdb.from(bucket:\"b\", host:\"http://x\", token:\"t\")",
         "import \"influxdata/influxdb/v1\"\nv1.databases(host:\"http://x\", token:\"t\")",
+        r#"from(bucket:"b", "host":"http://x", token:"t") |> range(start:0)"#,
+        r#"from("bucket":"b", "ho\x73t":"http://x", "token":"t") |> range(start:0)"#,
+        "bucket = \"b\"\nhost = \"http://x\"\ntoken = \"t\"\nfrom(bucket, host, token) |> range(start:0)",
+        r#"--1 from(bucket:"b", host:"http://x", token:"t")"#,
     ] {
         assert_eq!(rate(flux), Write, "{flux:?}");
     }
@@ -502,6 +516,8 @@ fn flux_that_only_looks_like_those_stays_a_read() {
         r#"from(bucket:"b") |> range(start:0) |> map(fn:(r)=>({host: r.a, url: r.b}))"#,
         r#"from(bucket:"b") |> range(start:0) |> rename(columns:{host:"x", url:"y"})"#,
         r#"from(bucket:"b") |> range(start:0) |> group(columns:["host"])"#,
+        r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "a" and exists r.url)"#,
+        r#"from(bucket:"b") |> range(start:0) |> map(fn:(r)=>({"a b": r.host}))"#,
         r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "$")"#,
         r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "a$b")"#,
         r#"from(bucket:"b") |> range(start:0) |> filter(fn:(r)=> r.host == "a\${to(x)}")"#,

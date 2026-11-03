@@ -159,8 +159,10 @@ DELETE FROM t WHERE id = 1` o `SELECT 1 EXEC('...')`, también pregunta primero,
 mensaje nombra la palabra encontrada. **No volver a preguntar** en ese mensaje solo
 afecta a este tipo, hasta que reinicies. Un `DROP` o `TRUNCATE` en cualquier parte de
 un lote de SQL Server también pregunta, abra como abra el lote, como en `DELETE FROM t
-WHERE id = 1 DROP TABLE u`, con el mensaje habitual de `DROP` o `TRUNCATE`. Un segundo
-`DELETE`, `UPDATE` o `INSERT` detrás de una primera escritura no pregunta. En InfluxDB la comprobación encuentra
+WHERE id = 1 DROP TABLE u`. Un lote que requiere varias confirmaciones muestra una cada
+vez y pregunta mientras alguna no esté silenciada, así que **No volver a preguntar** en
+una nunca oculta otra. Un `DELETE`, `UPDATE` o `INSERT` adicional sin `;` delante no
+pregunta por sí solo, como en `DELETE FROM t WHERE id = 1 DELETE FROM u`. En InfluxDB la comprobación encuentra
 `DROP`, `ALTER` y un `DELETE` sin `WHERE` detrás de comentarios y en cualquier
 sentencia de un lote.
 

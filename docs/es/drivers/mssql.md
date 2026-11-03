@@ -231,8 +231,10 @@ Requiere el permiso `VIEW SERVER STATE`.
   con `SELECT` o `WITH` y se valora por encima de una lectura pide confirmación
   primero y nombra la palabra encontrada (`DangerousQueryKind::WriteBehindRead`). Un
   `DROP` o `TRUNCATE` en cualquier parte de un lote también pregunta, abra como abra
-  (`DELETE FROM t WHERE id = 1 DROP TABLE u`). Un segundo `DELETE`, `UPDATE` o `INSERT`
-  detrás de una primera escritura no pregunta.
+  (`DELETE FROM t WHERE id = 1 DROP TABLE u`). `detect_dangerous_all` informa de cada
+  tipo que requiere un lote, y el editor y la consola preguntan mientras alguno no esté
+  silenciado. Un `DELETE`, `UPDATE` o `INSERT` adicional sin `;` delante no pregunta por
+  sí solo (`DELETE FROM t WHERE id = 1 DELETE FROM u`).
 - `version_query()` devuelve `SELECT @@VERSION`.
 
 ### Dialecto

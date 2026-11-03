@@ -20,9 +20,9 @@ use dbflux_core::{
 /// like a read from its first keyword can hold a write
 /// ([`classify_tsql_execution`]). A writable profile asks before running one
 /// ([`tsql_write_behind_read`]), and before a `DROP` or `TRUNCATE` behind anything
-/// else ([`tsql_drop_in_batch`]). These come before the shared check, whose answer
-/// another setting can silence: `Require WHERE` off would otherwise wave through
-/// `DELETE FROM t DROP TABLE u` as a `DELETE` without a `WHERE`.
+/// else ([`tsql_drop_in_batch`]). A batch can call for several of these and the
+/// shared check's kinds at once, so all of them are reported: routine scripts get
+/// one of them silenced, which must not silence the others.
 pub struct TSqlLanguageService;
 
 impl LanguageService for TSqlLanguageService {
@@ -31,9 +31,26 @@ impl LanguageService for TSqlLanguageService {
     }
 
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        tsql_write_behind_read(query)
-            .or_else(|| tsql_drop_in_batch(query))
-            .or_else(|| detect_dangerous_sql(query))
+        self.detect_dangerous_all(query).into_iter().next()
+    }
+
+    fn detect_dangerous_all(&self, query: &str) -> Vec<DangerousQueryKind> {
+        let mut kinds = Vec::new();
+
+        for kind in [
+            tsql_write_behind_read(query),
+            tsql_drop_in_batch(query),
+            detect_dangerous_sql(query),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+
+        kinds
     }
 
     fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
@@ -197,6 +214,45 @@ mod tests {
             ("INSERT t VALUES ('TRUNCATE TABLE u') /* DROP */", None),
         ] {
             assert_eq!(service.detect_dangerous(sql), expected, "{sql}");
+        }
+    }
+
+    #[test]
+    fn every_kind_a_batch_calls_for_is_reported() {
+        use DangerousQueryKind::{DeleteNoWhere, Drop, Script, Truncate};
+
+        let service = TSqlLanguageService;
+        let hidden = |word| DangerousQueryKind::WriteBehindRead { word: Some(word) };
+
+        for (sql, expected) in [
+            (
+                "WITH d AS (SELECT id FROM orders GROUP BY id HAVING COUNT(*) > 1) DELETE FROM orders",
+                vec![hidden("DELETE"), DeleteNoWhere],
+            ),
+            (
+                "SELECT COUNT(*) FROM t; DROP TABLE t",
+                vec![hidden("DROP"), Drop, Script],
+            ),
+            (
+                "DROP TABLE IF EXISTS #stage; DELETE FROM orders",
+                vec![Drop, Script],
+            ),
+            ("DELETE FROM t DROP TABLE u", vec![Drop, DeleteNoWhere]),
+            (
+                "DELETE FROM t TRUNCATE TABLE u",
+                vec![Truncate, DeleteNoWhere],
+            ),
+            ("SELECT a INTO #w FROM orders", vec![hidden("INTO")]),
+            ("DROP TABLE t", vec![Drop]),
+            ("DELETE FROM t WHERE id = 1", vec![]),
+            ("SELECT 1", vec![]),
+        ] {
+            assert_eq!(service.detect_dangerous_all(sql), expected, "{sql}");
+            assert_eq!(
+                service.detect_dangerous(sql),
+                expected.first().copied(),
+                "{sql}"
+            );
         }
     }
 

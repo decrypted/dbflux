@@ -147,9 +147,11 @@ On SQL Server a statement can start at any word, so a batch that opens with
 WHERE id = 1` or `SELECT 1 EXEC('...')`, also asks first, and the message names the
 word it found. **Don't ask again** on that message applies to this kind only, until
 you restart. A `DROP` or `TRUNCATE` anywhere in a SQL Server batch asks too, whatever
-opens the batch, as in `DELETE FROM t WHERE id = 1 DROP TABLE u`, with the usual `DROP`
-or `TRUNCATE` message. A second `DELETE`, `UPDATE` or `INSERT` behind a first write
-does not ask. On InfluxDB the check finds `DROP`, `ALTER` and a `DELETE` without a
+opens the batch, as in `DELETE FROM t WHERE id = 1 DROP TABLE u`. A batch that calls for
+several confirmations shows one at a time, and asks as long as any of them is not
+silenced, so **Don't ask again** on one never hides another. A further `DELETE`,
+`UPDATE` or `INSERT` with no `;` before it does not ask by itself, as in `DELETE FROM t
+WHERE id = 1 DELETE FROM u`. On InfluxDB the check finds `DROP`, `ALTER` and a `DELETE` without a
 `WHERE` behind comments and in any statement of a batch.
 
 <picture>

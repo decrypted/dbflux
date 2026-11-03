@@ -58,8 +58,8 @@ pub(crate) enum ConsoleGate {
 
 /// Applies the dangerous-query rules to a console command.
 ///
-/// `dangerous` is the driver's verdict (`LanguageService::detect_dangerous`)
-/// and `decide` the shared settings-based decision for it. A command the
+/// `dangerous` is the driver's verdict (`LanguageService::detect_dangerous_all`)
+/// and `decide` the shared settings-based decision for each of its kinds. A command the
 /// driver does not flag still asks first when `classify_query_for_language`
 /// rates it as destructive.
 ///
@@ -68,12 +68,12 @@ pub(crate) enum ConsoleGate {
 /// (see `QueryRequest::confirmed_ceiling`); an unflagged destructive command
 /// carries its own classification once confirmed.
 pub(crate) fn console_gate(
-    dangerous: Option<DangerousQueryKind>,
+    dangerous: &[DangerousQueryKind],
     classification: ExecutionClassification,
-    decide: impl FnOnce(DangerousQueryKind) -> DangerousAction,
+    decide: impl FnMut(DangerousQueryKind) -> DangerousAction,
 ) -> ConsoleGate {
-    if let Some(kind) = dangerous {
-        return match decide(kind) {
+    if let Some(decision) = crate::code::decide_dangerous_kinds(dangerous, decide) {
+        return match decision {
             DangerousAction::Allow => ConsoleGate::Run {
                 ceiling: Some(ExecutionClassification::Destructive),
             },
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn flagged_commands_follow_the_shared_decision() {
         let confirm = console_gate(
-            Some(DangerousQueryKind::RedisFlushDb),
+            &[DangerousQueryKind::RedisFlushDb],
             ExecutionClassification::Destructive,
             DangerousAction::Confirm,
         );
@@ -416,14 +416,14 @@ mod tests {
         ));
 
         let refused = console_gate(
-            Some(DangerousQueryKind::RedisFlushAll),
+            &[DangerousQueryKind::RedisFlushAll],
             ExecutionClassification::Destructive,
             |_| DangerousAction::Block("flush disabled".to_string()),
         );
         assert_eq!(refused, ConsoleGate::Refuse("flush disabled".to_string()));
 
         let allowed = console_gate(
-            Some(DangerousQueryKind::RedisKeysPattern),
+            &[DangerousQueryKind::RedisKeysPattern],
             ExecutionClassification::Read,
             |_| DangerousAction::Allow,
         );
@@ -436,9 +436,53 @@ mod tests {
         );
     }
 
+    /// `SELECT 1; DROP TABLE t` on SQL Server, with one of its kinds silenced.
+    #[test]
+    fn a_silenced_kind_does_not_silence_the_others() {
+        let kinds = [
+            DangerousQueryKind::WriteBehindRead { word: Some("DROP") },
+            DangerousQueryKind::Drop,
+            DangerousQueryKind::Script,
+        ];
+
+        let gate = console_gate(&kinds, ExecutionClassification::Destructive, |kind| {
+            if matches!(kind, DangerousQueryKind::WriteBehindRead { .. }) {
+                DangerousAction::Allow
+            } else {
+                DangerousAction::Confirm(kind)
+            }
+        });
+        assert!(matches!(
+            gate,
+            ConsoleGate::Confirm {
+                kind: Some(DangerousQueryKind::Drop),
+                ..
+            }
+        ));
+
+        let gate = console_gate(&kinds, ExecutionClassification::Destructive, |_| {
+            DangerousAction::Allow
+        });
+        assert_eq!(
+            gate,
+            ConsoleGate::Run {
+                ceiling: Some(ExecutionClassification::Destructive)
+            }
+        );
+
+        let gate = console_gate(&kinds, ExecutionClassification::Destructive, |kind| {
+            if kind == DangerousQueryKind::Script {
+                DangerousAction::Block("no".to_string())
+            } else {
+                DangerousAction::Confirm(kind)
+            }
+        });
+        assert_eq!(gate, ConsoleGate::Refuse("no".to_string()));
+    }
+
     #[test]
     fn destructive_commands_ask_even_when_the_driver_does_not_flag_them() {
-        let gate = console_gate(None, ExecutionClassification::AdminDestructive, |_| {
+        let gate = console_gate(&[], ExecutionClassification::AdminDestructive, |_| {
             DangerousAction::Allow
         });
 
@@ -455,7 +499,7 @@ mod tests {
     #[test]
     fn ordinary_commands_run_without_asking_or_a_ceiling() {
         let mut decided = false;
-        let gate = console_gate(None, ExecutionClassification::Read, |_| {
+        let gate = console_gate(&[], ExecutionClassification::Read, |_| {
             decided = true;
             DangerousAction::Allow
         });

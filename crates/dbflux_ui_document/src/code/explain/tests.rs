@@ -1103,6 +1103,101 @@ mod document {
         assert_eq!(sent(&driver), vec![format!("EXPLAIN {BATCH}")]);
     }
 
+    /// "Don't ask again" on a kind that routine scripts earn must not hide what else
+    /// a later batch does.
+    #[gpui::test]
+    fn silencing_one_kind_does_not_silence_the_others(cx: &mut TestAppContext) {
+        use dbflux_core::DangerousQueryKind::{DeleteNoWhere, Drop, Script};
+
+        let driver = FakeDriver::new(DbKind::SqlServer)
+            .with_language_service(&dbflux_driver_mssql::TSqlLanguageService);
+        let profile = memory_profile();
+        let connection = driver.connect_arc(&profile).expect("fake connection");
+        let (document, _toasts, _state, window) = open_on(
+            cx,
+            profile,
+            connection,
+            QueryLanguage::Sql,
+            "SELECT 1",
+            FIRST_LINE,
+        );
+
+        let run = |window: &mut VisualTestContext, sql: &str| {
+            window.update(|window, cx| {
+                document.update(cx, |document, cx| {
+                    document.run_query_text(sql.to_string(), false, window, cx);
+                });
+            });
+            settle(window);
+            window.update(|_, cx| {
+                document
+                    .read(cx)
+                    .pending
+                    .dangerous_query
+                    .as_ref()
+                    .map(|pending| pending.kind)
+            })
+        };
+        let answer = |window: &mut VisualTestContext, dont_ask_again: bool| {
+            window.update(|window, cx| {
+                document.update(cx, |document, cx| {
+                    if dont_ask_again {
+                        document.confirm_dangerous_query(true, window, cx);
+                    } else {
+                        document.cancel_dangerous_query(window, cx);
+                    }
+                });
+            });
+            settle(window);
+        };
+
+        assert_eq!(
+            run(window, "SELECT a INTO #w FROM orders WHERE id = 1"),
+            Some(dbflux_core::DangerousQueryKind::WriteBehindRead { word: Some("INTO") })
+        );
+        answer(window, true);
+        assert_eq!(
+            run(window, "SELECT a INTO #x FROM orders WHERE id = 1"),
+            None
+        );
+
+        assert_eq!(
+            run(
+                window,
+                "WITH d AS (SELECT id FROM orders GROUP BY id HAVING COUNT(*) > 1) DELETE FROM orders"
+            ),
+            Some(DeleteNoWhere)
+        );
+        answer(window, false);
+        assert_eq!(
+            run(window, "SELECT COUNT(*) FROM t; DROP TABLE t"),
+            Some(Drop)
+        );
+        answer(window, false);
+
+        assert_eq!(
+            run(
+                window,
+                "IF OBJECT_ID('tempdb..#t') IS NOT NULL DROP TABLE #t"
+            ),
+            Some(Drop)
+        );
+        answer(window, true);
+        assert_eq!(
+            run(window, "DROP TABLE IF EXISTS #stage; DELETE FROM orders"),
+            Some(Script)
+        );
+        answer(window, false);
+        assert_eq!(
+            run(window, "SELECT COUNT(*) FROM t; DROP TABLE t"),
+            Some(Script)
+        );
+        answer(window, true);
+
+        // All of its kinds are silenced now, each by its own "Don't ask again".
+        assert_eq!(run(window, "SELECT COUNT(*) FROM t; DROP TABLE t"), None);
+    }
+
     #[gpui::test]
     fn a_sql_server_read_and_a_plain_delete_ask_as_they_did(cx: &mut TestAppContext) {
         for sql in [

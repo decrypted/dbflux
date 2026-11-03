@@ -86,7 +86,7 @@ pub(crate) use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 pub(crate) use vim::VimMode;
 
-pub(crate) use execution::evaluate_dangerous_with_effective_settings;
+pub(crate) use execution::{decide_dangerous_kinds, evaluate_dangerous_with_effective_settings};
 
 /// A single result tab within the CodeDocument.
 ///

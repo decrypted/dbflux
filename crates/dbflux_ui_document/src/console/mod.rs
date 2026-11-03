@@ -407,11 +407,11 @@ impl NativeConsole {
             return;
         }
 
-        let dangerous = language_service.detect_dangerous(&command);
+        let dangerous = language_service.detect_dangerous_all(&command);
         let classification =
             classify_query_for_language(&connection.metadata().query_language, &command);
 
-        let gate = console_gate(dangerous, classification, |kind| {
+        let gate = console_gate(&dangerous, classification, |kind| {
             let state = self.app_state.read(cx);
             let is_suppressed = state.dangerous_query_suppressions().is_suppressed(kind);
             let effective = state.effective_settings_for_connection(Some(self.target.profile_id));

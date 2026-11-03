@@ -457,6 +457,10 @@ fn a_drop_or_truncate_counts_whatever_opens_the_batch() {
         ("SET NOCOUNT ON TRUNCATE TABLE u", Truncate),
         ("TRUNCATE TABLE u", Truncate),
         ("DELETE FROM t WHERE id = 1; DROP TABLE u", Drop),
+        // A statement of its own behind an `ALTER`.
+        ("ALTER TABLE t ADD a INT DROP TABLE u", Drop),
+        ("ALTER TABLE t ADD a INT DROP PROC p", Drop),
+        ("ALTER TABLE t ADD a INT TRUNCATE TABLE u", Truncate),
         // Rated as a keyword by the rest of the scan too: a reserved word cannot be
         // an unquoted name.
         ("UPDATE t SET a = x.drop", Drop),
@@ -478,6 +482,8 @@ fn a_drop_or_truncate_counts_whatever_opens_the_batch() {
         // `ALTER`'s own grammar keeps `ALTER`'s prompt.
         "ALTER TABLE t DROP COLUMN a",
         "/* a */ ALTER TABLE t DROP CONSTRAINT c",
+        "ALTER TABLE t DROP c",
+        "ALTER ROLE r DROP MEMBER u",
         // The driver refuses these before they run.
         "EXPLAIN DROP TABLE u",
         "DESCRIBE x DROP TABLE u",

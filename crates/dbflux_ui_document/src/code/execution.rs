@@ -66,6 +66,32 @@ pub(crate) fn evaluate_dangerous_with_effective_settings(
     dbflux_core::DangerousAction::Confirm(kind)
 }
 
+/// What to do about a query calling for `kinds`, or `None` when it calls for none.
+/// A kind that is suppressed or allowed says nothing about the others, so this
+/// asks when any of them asks and refuses when any of them refuses.
+pub(crate) fn decide_dangerous_kinds(
+    kinds: &[dbflux_core::DangerousQueryKind],
+    mut decide: impl FnMut(dbflux_core::DangerousQueryKind) -> dbflux_core::DangerousAction,
+) -> Option<dbflux_core::DangerousAction> {
+    let mut decision = None;
+
+    for kind in kinds {
+        match decide(*kind) {
+            refused @ dbflux_core::DangerousAction::Block(_) => return Some(refused),
+            asked @ dbflux_core::DangerousAction::Confirm(_) => {
+                if !matches!(decision, Some(dbflux_core::DangerousAction::Confirm(_))) {
+                    decision = Some(asked);
+                }
+            }
+            dbflux_core::DangerousAction::Allow => {
+                decision.get_or_insert(dbflux_core::DangerousAction::Allow);
+            }
+        }
+    }
+
+    decision
+}
+
 /// Returns `true` when the connection's profile is set to read-only and
 /// `query` would do more than read data or metadata.
 ///
@@ -544,51 +570,50 @@ impl CodeDocument {
             return;
         }
 
-        let dangerous_kind = self.connection_id.and_then(|conn_id| {
-            self.app_state
-                .read(cx)
-                .connections()
-                .get(&conn_id)
-                .and_then(|connected| {
-                    connected
-                        .connection
-                        .language_service()
-                        .detect_dangerous(&query)
-                })
-        });
+        let dangerous_kinds = self
+            .connection_id
+            .and_then(|conn_id| {
+                self.app_state
+                    .read(cx)
+                    .connections()
+                    .get(&conn_id)
+                    .map(|connected| {
+                        connected
+                            .connection
+                            .language_service()
+                            .detect_dangerous_all(&query)
+                    })
+            })
+            .unwrap_or_default();
 
         // An unattended run never asks for a confirmation; a query that needs
         // one cannot auto-refresh.
-        if dangerous_kind.is_some() && read_only.is_required() {
+        if !dangerous_kinds.is_empty() && read_only.is_required() {
             self.fall_back_to_manual_refresh(cx);
             return;
         }
 
-        if let Some(kind) = dangerous_kind {
-            let is_suppressed = self
-                .app_state
-                .read(cx)
-                .dangerous_query_suppressions()
-                .is_suppressed(kind);
+        let decision = {
+            let state = self.app_state.read(cx);
+            let effective = state.effective_settings_for_connection(self.connection_id);
+            let allow_redis_flush = effective
+                .driver_values
+                .get("allow_flush")
+                .map(|value| value == "true")
+                .unwrap_or(false);
 
-            let (effective, allow_redis_flush) = {
-                let state = self.app_state.read(cx);
-                let effective = state.effective_settings_for_connection(self.connection_id);
-                let allow_redis_flush = effective
-                    .driver_values
-                    .get("allow_flush")
-                    .map(|value| value == "true")
-                    .unwrap_or(false);
+            decide_dangerous_kinds(&dangerous_kinds, |kind| {
+                evaluate_dangerous_with_effective_settings(
+                    kind,
+                    state.dangerous_query_suppressions().is_suppressed(kind),
+                    &effective,
+                    allow_redis_flush,
+                )
+            })
+        };
 
-                (effective, allow_redis_flush)
-            };
-
-            match evaluate_dangerous_with_effective_settings(
-                kind,
-                is_suppressed,
-                &effective,
-                allow_redis_flush,
-            ) {
+        if let Some(decision) = decision {
+            match decision {
                 DangerousAction::Allow => {}
                 DangerousAction::Confirm(kind) => {
                     self.ask_dangerous_query_confirm(

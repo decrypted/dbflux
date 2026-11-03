@@ -84,19 +84,19 @@ pub(in crate::data_grid_panel) enum AggregateGate {
 /// Applies the dangerous-query rules to a pipeline.
 ///
 /// `query_text` is the driver's native text for the pipeline, `dangerous`
-/// its `LanguageService::detect_dangerous` verdict and `classification` the
+/// its `LanguageService::detect_dangerous_all` verdict and `classification` the
 /// execution classification of that text. A pipeline the driver flags goes
 /// through the shared settings-based decision (`decide`). One it cannot
 /// render as text, or that classifies as anything but a read, is always
 /// confirmed: running it silently is never the fallback.
 pub(in crate::data_grid_panel) fn aggregate_gate(
     query_text: Option<&str>,
-    dangerous: Option<DangerousQueryKind>,
+    dangerous: &[DangerousQueryKind],
     classification: Option<ExecutionClassification>,
-    decide: impl FnOnce(DangerousQueryKind) -> DangerousAction,
+    decide: impl FnMut(DangerousQueryKind) -> DangerousAction,
 ) -> AggregateGate {
-    if let Some(kind) = dangerous {
-        return match decide(kind) {
+    if let Some(decision) = crate::code::decide_dangerous_kinds(dangerous, decide) {
+        return match decision {
             DangerousAction::Allow => AggregateGate::Run,
             DangerousAction::Confirm(kind) => AggregateGate::Confirm(Some(kind)),
             DangerousAction::Block(message) => AggregateGate::Refuse(message),
@@ -429,7 +429,8 @@ impl DataGridPanel {
         let language_service = connection.language_service();
         let dangerous = query_text
             .as_deref()
-            .and_then(|text| language_service.detect_dangerous(text));
+            .map(|text| language_service.detect_dangerous_all(text))
+            .unwrap_or_default();
         let classification = query_text.as_deref().map(|text| {
             classify_query_for_language_with_service(
                 &connection.metadata().query_language,
@@ -438,7 +439,7 @@ impl DataGridPanel {
             )
         });
 
-        let gate = aggregate_gate(query_text.as_deref(), dangerous, classification, |kind| {
+        let gate = aggregate_gate(query_text.as_deref(), &dangerous, classification, |kind| {
             let state = self.app_state.read(cx);
             let is_suppressed = state.dangerous_query_suppressions().is_suppressed(kind);
             let effective = state.effective_settings_for_connection(Some(profile_id));
@@ -950,7 +951,7 @@ mod tests {
         assert_eq!(
             aggregate_gate(
                 Some("db.orders.aggregate([])"),
-                None,
+                &[],
                 Some(ExecutionClassification::Read),
                 |_| unreachable!("no dangerous kind to decide"),
             ),
@@ -962,7 +963,7 @@ mod tests {
     fn a_writing_pipeline_goes_through_the_dangerous_query_decision() {
         let confirm = aggregate_gate(
             Some("db.orders.aggregate([{ $out: 'archive' }])"),
-            Some(DangerousQueryKind::MongoAggregateWrite),
+            &[DangerousQueryKind::MongoAggregateWrite],
             Some(ExecutionClassification::Write),
             DangerousAction::Confirm,
         );
@@ -973,7 +974,7 @@ mod tests {
 
         let suppressed = aggregate_gate(
             Some("db.orders.aggregate([{ $out: 'archive' }])"),
-            Some(DangerousQueryKind::MongoAggregateWrite),
+            &[DangerousQueryKind::MongoAggregateWrite],
             Some(ExecutionClassification::Write),
             |_| DangerousAction::Allow,
         );
@@ -981,7 +982,7 @@ mod tests {
 
         let blocked = aggregate_gate(
             Some("db.orders.aggregate([{ $out: 'archive' }])"),
-            Some(DangerousQueryKind::MongoAggregateWrite),
+            &[DangerousQueryKind::MongoAggregateWrite],
             Some(ExecutionClassification::Write),
             |_| DangerousAction::Block("no".to_string()),
         );
@@ -991,14 +992,14 @@ mod tests {
     #[test]
     fn an_unclassified_or_writing_pipeline_is_never_run_silently() {
         assert_eq!(
-            aggregate_gate(None, None, None, |_| DangerousAction::Allow),
+            aggregate_gate(None, &[], None, |_| DangerousAction::Allow),
             AggregateGate::Confirm(None),
             "a pipeline the driver cannot render is confirmed"
         );
         assert_eq!(
             aggregate_gate(
                 Some("db.orders.aggregate([])"),
-                None,
+                &[],
                 Some(ExecutionClassification::Write),
                 |_| DangerousAction::Allow,
             ),

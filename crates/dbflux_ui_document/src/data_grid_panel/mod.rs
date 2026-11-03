@@ -865,8 +865,11 @@ pub struct DataGridPanel {
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
     panel_origin: Point<Pixels>,
-    /// Panel size from the same canvas; the context menu is kept inside it.
+    /// Panel size from the same canvas.
     panel_size: Size<Pixels>,
+    /// Window size from the same canvas. Menus are drawn at window level, so
+    /// they are kept inside the window rather than the panel.
+    window_size: Size<Pixels>,
     /// A table-details fetch for the primary key is in flight. Until it
     /// answers, the grid is read-only for want of a key it may well have, so
     /// the "no primary key" banner waits rather than flashing on every open.
@@ -1469,6 +1472,7 @@ impl DataGridPanel {
             focus_handle,
             panel_origin: Point::default(),
             panel_size: Size::default(),
+            window_size: Size::default(),
             pk_details_pending: false,
             pk_requery_pending: false,
             nearest_neighbors: None,

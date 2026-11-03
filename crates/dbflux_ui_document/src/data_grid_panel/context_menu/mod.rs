@@ -92,41 +92,40 @@ pub(super) struct ContextMenuPlacement {
     pub(super) submenus_open_left: bool,
 }
 
-/// Keep the menu inside the panel.
+/// Keep the menu inside `area`, the window's bounds in panel coordinates.
 ///
 /// The click stays the anchor: the menu is shifted left when it would run
 /// past the right edge and up when it would run past the bottom, and never
-/// past the top-left gap. Submenus open to the right unless the widest one
-/// would not fit there but would fit on the left; in a panel too narrow for
-/// either they stay on the right, where at least their start is visible. A
-/// panel that has not been measured yet reports a zero size;
-/// clamping against it would pin every menu into the corner, so an unmeasured
-/// panel leaves the click alone.
+/// past the top-left gap. A menu taller than the panel still fits as long as
+/// the window has the room, since the menu is drawn at window level. Submenus
+/// open to the right unless the widest one would not fit there but would fit
+/// on the left; in a window too narrow for either they stay on the right,
+/// where at least their start is visible. A window that has not been measured
+/// yet reports a zero size; clamping against it would pin every menu into the
+/// corner, so an unmeasured window leaves the click alone.
 pub(super) fn place_context_menu(
     click: Point<Pixels>,
     menu_width: Pixels,
     menu_height: Pixels,
-    panel: Size<Pixels>,
+    area: Bounds<Pixels>,
 ) -> ContextMenuPlacement {
-    if panel.width <= menu_width || panel.height <= menu_height {
+    if area.size.width <= px(0.0) || area.size.height <= px(0.0) {
         return ContextMenuPlacement {
             origin: click,
             submenus_open_left: false,
         };
     }
 
-    let x = click
-        .x
-        .min(panel.width - menu_width - CONTEXT_MENU_EDGE_GAP)
-        .max(CONTEXT_MENU_EDGE_GAP);
-    let y = if click.y + menu_height + CONTEXT_MENU_EDGE_GAP > panel.height {
-        (panel.height - menu_height - CONTEXT_MENU_EDGE_GAP).max(CONTEXT_MENU_EDGE_GAP)
-    } else {
-        click.y
-    };
+    let left = area.left() + CONTEXT_MENU_EDGE_GAP;
+    let top = area.top() + CONTEXT_MENU_EDGE_GAP;
+    let right = area.right() - CONTEXT_MENU_EDGE_GAP;
+    let bottom = area.bottom() - CONTEXT_MENU_EDGE_GAP;
 
-    let fits_right = x + menu_width - SUBMENU_OVERLAP + SUBMENU_MAX_WIDTH <= panel.width;
-    let fits_left = x + SUBMENU_OVERLAP >= SUBMENU_MAX_WIDTH;
+    let x = click.x.min(right - menu_width).max(left);
+    let y = click.y.min(bottom - menu_height).max(top);
+
+    let fits_right = x + menu_width - SUBMENU_OVERLAP + SUBMENU_MAX_WIDTH <= area.right();
+    let fits_left = x + SUBMENU_OVERLAP - SUBMENU_MAX_WIDTH >= area.left();
 
     ContextMenuPlacement {
         origin: Point { x, y },
@@ -1651,6 +1650,18 @@ impl DataGridPanel {
         render_menu_header(&header, cx).into_any_element()
     }
 
+    /// The window's bounds in panel coordinates, the area a menu drawn by
+    /// this panel may occupy.
+    pub(super) fn menu_area(&self) -> Bounds<Pixels> {
+        Bounds {
+            origin: Point {
+                x: px(0.0) - self.panel_origin.x,
+                y: px(0.0) - self.panel_origin.y,
+            },
+            size: self.window_size,
+        }
+    }
+
     pub(super) fn render_context_menu(
         &self,
         menu: &TableContextMenu,
@@ -1672,7 +1683,7 @@ impl DataGridPanel {
         // and the items need to know that before they are built; the
         // vertical position needs the item count, so it is settled after.
         let submenus_open_left =
-            place_context_menu(click, menu_width, px(0.0), self.panel_size).submenus_open_left;
+            place_context_menu(click, menu_width, px(0.0), self.menu_area()).submenus_open_left;
 
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
@@ -1811,7 +1822,7 @@ impl DataGridPanel {
         let menu_height = row_height * menu_items.len() as f32
             + detail_extra * detail_rows as f32
             + MenuMetrics::PADDING_Y * 2.0;
-        let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
+        let placement = place_context_menu(click, menu_width, menu_height, self.menu_area());
 
         self.render_context_menu_overlay(
             placement.origin.x,
@@ -4584,7 +4595,7 @@ mod tests {
     use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
     use super::{ExportMenuEntry, step_export_selection};
     use dbflux_export::ExportFormat;
-    use gpui::{Pixels, Point, Size, px};
+    use gpui::{Bounds, Pixels, Point, Size, px};
 
     /// The binary copy row cannot run, so the menu keys pass over it in both
     /// directions and wrap at the ends.
@@ -4604,11 +4615,19 @@ mod tests {
         assert_eq!(step_export_selection(&[], 0, true), 0);
     }
 
-    fn panel() -> Size<Pixels> {
-        Size {
-            width: px(1000.0),
-            height: px(600.0),
+    /// A window whose top-left corner is the panel's: the panel fills it.
+    fn window_at_panel(width: f32, height: f32) -> Bounds<Pixels> {
+        Bounds {
+            origin: Point::default(),
+            size: Size {
+                width: px(width),
+                height: px(height),
+            },
         }
+    }
+
+    fn panel() -> Bounds<Pixels> {
+        window_at_panel(1000.0, 600.0)
     }
 
     #[test]
@@ -4686,10 +4705,7 @@ mod tests {
     /// hanging past the right edge is at least partly usable.
     #[test]
     fn a_narrow_panel_keeps_submenus_on_the_right() {
-        let narrow = Size {
-            width: px(400.0),
-            height: px(600.0),
-        };
+        let narrow = window_at_panel(400.0, 600.0);
         let click = Point {
             x: px(20.0),
             y: px(100.0),
@@ -4713,13 +4729,83 @@ mod tests {
         );
     }
 
+    /// A grid below the editor: the panel starts 400px down a 1000px window
+    /// and is 300px tall, shorter than the menu.
+    fn short_panel_low_in_window() -> Bounds<Pixels> {
+        Bounds {
+            origin: Point {
+                x: px(-200.0),
+                y: px(-400.0),
+            },
+            size: Size {
+                width: px(1400.0),
+                height: px(1000.0),
+            },
+        }
+    }
+
+    /// The menu is drawn at window level, so one taller than the panel is
+    /// lifted until its bottom clears the window edge instead of hanging off
+    /// it from the click.
+    #[test]
+    fn a_menu_taller_than_the_panel_is_lifted_inside_the_window() {
+        let click = Point {
+            x: px(100.0),
+            y: px(250.0),
+        };
+        let placed = place_context_menu(click, px(270.0), px(700.0), short_panel_low_in_window());
+        assert_eq!(placed.origin.x, click.x);
+        assert_eq!(
+            placed.origin.y,
+            px(600.0) - px(700.0) - CONTEXT_MENU_EDGE_GAP,
+            "the menu's bottom sits one gap above the window's bottom"
+        );
+    }
+
+    /// Room below the panel inside the window is used before lifting the
+    /// menu: it hangs past the panel's bottom edge from the click.
+    #[test]
+    fn a_menu_that_fits_in_the_window_stays_at_the_click_past_the_panel() {
+        let click = Point {
+            x: px(100.0),
+            y: px(50.0),
+        };
+        let placed = place_context_menu(click, px(270.0), px(500.0), short_panel_low_in_window());
+        assert_eq!(placed.origin, click);
+    }
+
+    /// A menu taller than the window starts at the window's top gap, so its
+    /// first rows stay reachable.
+    #[test]
+    fn a_menu_taller_than_the_window_starts_at_its_top() {
+        let click = Point {
+            x: px(100.0),
+            y: px(250.0),
+        };
+        let placed = place_context_menu(click, px(270.0), px(1200.0), short_panel_low_in_window());
+        assert_eq!(placed.origin.y, px(-400.0) + CONTEXT_MENU_EDGE_GAP);
+    }
+
+    /// The right edge that decides the submenu side is the window's, 1200px
+    /// right of the panel's origin here: the widest submenu still fits there.
+    #[test]
+    fn submenu_side_follows_the_window_edge() {
+        let click = Point {
+            x: px(600.0),
+            y: px(50.0),
+        };
+        let placed = place_context_menu(click, px(270.0), px(300.0), short_panel_low_in_window());
+        assert_eq!(placed.origin.x, click.x);
+        assert!(!placed.submenus_open_left);
+    }
+
     #[test]
     fn an_unmeasured_panel_leaves_the_click_alone() {
         let click = Point {
             x: px(950.0),
             y: px(500.0),
         };
-        let placed = place_context_menu(click, px(180.0), px(300.0), Size::default());
+        let placed = place_context_menu(click, px(180.0), px(300.0), Bounds::default());
         assert_eq!(placed.origin, click);
         assert!(!placed.submenus_open_left);
     }

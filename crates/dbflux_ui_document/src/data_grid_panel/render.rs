@@ -627,10 +627,12 @@ impl DataGridPanel {
     fn panel_origin_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let this_entity = cx.entity().clone();
         canvas(
-            move |bounds, _, cx| {
+            move |bounds, window, cx| {
+                let window_size = window.viewport_size();
                 this_entity.update(cx, |this, _cx| {
                     this.panel_origin = bounds.origin;
                     this.panel_size = bounds.size;
+                    this.window_size = window_size;
                 });
             },
             |_, _, _, _| {},

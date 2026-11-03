@@ -697,6 +697,7 @@ mod fk_label_identity;
 mod fk_navigation;
 mod generated_ids;
 mod menu_layout;
+mod menu_window_bounds;
 mod multi_edit;
 mod multi_sort;
 mod reload_pending_edits;

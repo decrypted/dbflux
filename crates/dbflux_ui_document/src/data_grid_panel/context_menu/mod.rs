@@ -9,7 +9,6 @@ use dbflux_components::components::data_table::ROW_NUMBER_WIDTH;
 use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
 use dbflux_components::composites::{MenuItem, render_menu_header};
 use dbflux_components::controls::Button;
-use dbflux_components::fonts;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
@@ -106,6 +105,20 @@ pub(super) fn step_export_selection(
     from
 }
 
+/// Where a menu opened from the keyboard hangs: `left` and `top` from the
+/// grid's corner, kept inside `grid` for a cell scrolled out of view, which
+/// has no place on screen.
+pub(super) fn keyboard_menu_anchor(
+    grid: Bounds<Pixels>,
+    left: Pixels,
+    top: Pixels,
+) -> Point<Pixels> {
+    Point {
+        x: (grid.left() + left).min(grid.right()).max(grid.left()),
+        y: (grid.top() + top).min(grid.bottom()).max(grid.top()),
+    }
+}
+
 impl DataGridPanel {
     pub(in crate::data_grid_panel) fn restore_focus_after_context_menu(
         &mut self,
@@ -139,7 +152,7 @@ impl DataGridPanel {
             return;
         };
 
-        let (row, col, cell_x) = {
+        let (row, col, position) = {
             let ts = table_state.read(cx);
 
             let (row, col) = ts
@@ -148,23 +161,15 @@ impl DataGridPanel {
                 .map(|c| (c.row, c.col))
                 .unwrap_or((0, 0));
 
-            // Left edge of the cell's column as the screen draws it, scroll
-            // and pinned columns included.
-            let cell_x = ts.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH);
+            let cell_left = ts.column_screen_left(col).unwrap_or(ROW_NUMBER_WIDTH);
 
-            (row, col, cell_x)
-        };
+            let position = keyboard_menu_anchor(
+                ts.viewport_bounds(),
+                cell_left + px(20.0),
+                ts.row_screen_top(row, cx),
+            );
 
-        // Calculate position in window coordinates:
-        // x: panel_origin.x + cell_x - horizontal_scroll + some padding
-        // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
-        let toolbar_height = px(36.0); // Approximate toolbar height
-        let position = Point {
-            x: self.panel_origin.x + cell_x + px(20.0),
-            y: self.panel_origin.y
-                + toolbar_height
-                + fonts::grid_header_height(cx)
-                + fonts::grid_row_height(cx) * row,
+            (row, col, position)
         };
 
         self.context_menu = Some(TableContextMenu {

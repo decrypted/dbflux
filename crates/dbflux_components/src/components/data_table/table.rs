@@ -655,6 +655,8 @@ impl gpui::Render for DataTable {
                             }
                         };
                         state_entity.update(cx, |state, cx| {
+                            state.set_viewport_origin(bounds.origin);
+
                             let new_size = bounds.size;
                             let viewport_changed = new_size != sync.last_viewport_size;
 
@@ -680,6 +682,8 @@ impl gpui::Render for DataTable {
                     |_, _, _, _| {},
                 )
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full()
             })
             // Grid-only scroll chrome. Record mode owns a single vertical list

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::controls::{InputEvent, InputState};
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point,
+    App, AppContext, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point,
     ScrollHandle, ScrollStrategy, SharedString, Size, Subscription, UniformListScrollHandle,
     Window, px,
 };
@@ -147,6 +147,8 @@ pub struct DataTableState {
 
     /// Viewport size (updated on layout).
     viewport_size: Size<Pixels>,
+    /// Where the table was last drawn, in window coordinates.
+    viewport_origin: Point<Pixels>,
 
     /// Selection state.
     selection: SelectionState,
@@ -312,6 +314,7 @@ impl DataTableState {
             sortable: true,
             columns_reorderable: false,
             viewport_size: Size::default(),
+            viewport_origin: Point::default(),
             selection: SelectionState::new(),
             focus_handle: cx.focus_handle(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
@@ -773,6 +776,17 @@ impl DataTableState {
             self.viewport_size = size;
             cx.notify();
         }
+    }
+
+    /// Nothing drawn depends on this, so it does not ask for another frame.
+    pub(super) fn set_viewport_origin(&mut self, origin: Point<Pixels>) {
+        self.viewport_origin = origin;
+    }
+
+    /// The table as last drawn, header and scrollbars included, in window
+    /// coordinates.
+    pub fn viewport_bounds(&self) -> Bounds<Pixels> {
+        Bounds::new(self.viewport_origin, self.viewport_size)
     }
 
     // --- Sort ---

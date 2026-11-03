@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
-use gpui::{Context, Pixels, px};
+use gpui::{App, Context, Pixels, px};
+
+use crate::fonts;
 
 use super::super::column_layout::{ColumnLayout, ColumnLayoutSpec};
 use super::super::events::DataTableEvent;
@@ -132,6 +134,21 @@ impl DataTableState {
         } else {
             left - self.horizontal_offset
         })
+    }
+
+    /// Where `row`'s top edge is drawn, from the grid's top edge (the header
+    /// included) after the vertical scroll. A row scrolled out of view lies
+    /// outside the grid. The record view has no such row.
+    pub fn row_screen_top(&self, row: usize, cx: &App) -> Pixels {
+        let offset = self
+            .vertical_scroll_handle
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .y;
+
+        self.header_height(cx) + fonts::grid_row_height(cx) * row + offset
     }
 
     /// Moves `col` one shown column left (`step` < 0) or right.

@@ -271,8 +271,8 @@ pub(super) struct QuerySection {
     /// Whether the picker has anything to offer, kept from when it was filled: a
     /// server can list thousands of databases, and a frame must not sort them.
     pub(super) has_database_choices: bool,
-    /// How many databases were listed when the picker was filled, and what was
-    /// current, so a change elsewhere in the app does not fill it again.
+    /// A hash of the names listed when the picker was filled, and what was current,
+    /// so a change elsewhere in the app does not fill it again.
     database_list_seen: Option<(u64, Option<String>)>,
     _subscriptions: Vec<Subscription>,
 }
@@ -304,6 +304,8 @@ pub struct ChartDocument {
     query: String,
     data_source: Box<dyn ChartDataSource>,
     last_result: Option<Arc<QueryResult>>,
+    /// What `last_result` is a result of, which a chart that moved on no longer runs.
+    last_result_of: Option<RunTarget>,
 
     // Execution
     runner: DocumentTaskRunner,
@@ -572,6 +574,7 @@ impl ChartDocument {
             query,
             data_source,
             last_result: None,
+            last_result_of: None,
             runner,
             app_state,
             pending_result: None,
@@ -829,6 +832,7 @@ impl ChartDocument {
             query: String::new(),
             data_source,
             last_result: None,
+            last_result_of: None,
             runner,
             app_state,
             pending_result: None,
@@ -2178,10 +2182,14 @@ impl ChartDocument {
                     ..self.stored_settings.clone()
                 };
         if same_place && only_columns {
-            self.saved_selection = settings.selection.clone();
-            let bindings = saved.bindings.clone();
-            self.chart_shell
-                .update(cx, |shell, cx| shell.apply_bindings(bindings, cx));
+            // Positions in the stored query's result. Any other result on screen, or
+            // none, waits for the run on its way.
+            if self.last_result_of.as_ref() == Some(&self.run_target()) {
+                let bindings = saved.bindings.clone();
+                self.apply_binding_spec(bindings, cx);
+            } else {
+                self.saved_selection = settings.selection.clone();
+            }
             self.stored_settings = settings;
             return false;
         }
@@ -2496,11 +2504,10 @@ impl ChartDocument {
 
                 let display_clone = display_result.clone();
                 let x_time_domain = self.accumulating_x_time_domain(now_ms);
-                let saved_selection = self.saved_selection.take();
-                let columns_before_edit = if of_what_runs_now {
-                    self.columns_before_edit.take()
+                let (saved_selection, columns_before_edit) = if of_what_runs_now {
+                    (self.saved_selection.take(), self.columns_before_edit.take())
                 } else {
-                    None
+                    (None, None)
                 };
                 let mut lost_columns = false;
                 self.chart_shell.update(cx, |shell, cx| {
@@ -2539,6 +2546,7 @@ impl ChartDocument {
                 }
 
                 self.last_result = Some(display_result);
+                self.last_result_of = Some(pending.ran);
             }
             Err(err) => {
                 let error = match err.formatted() {

@@ -3817,6 +3817,152 @@ fn a_panel_runs_once_for_a_save_and_its_column_store(cx: &mut TestAppContext) {
             .update(|_, cx| panel.read(cx).has_pending_reexecute())
     );
     assert_eq!(console.bindings(&panel).y, vec![2], "was {detected:?}");
+    assert!(console.draws(&panel), "it still has a chart");
+}
+
+/// Picks `y` in `chart`, as the axis bar does, and saves it. Same query, so only the
+/// columns of the record change.
+fn save_with_y(console: &mut Fixture<'_>, chart: &Entity<ChartDocument>, y: Vec<usize>) {
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| {
+            chart.apply_binding_spec(
+                BindingSpec {
+                    x: 0,
+                    y,
+                    ..BindingSpec::default()
+                },
+                cx,
+            );
+        });
+    });
+    console.save(chart, "saved");
+    console.window.run_until_parked();
+}
+
+/// Other columns of the query a panel has drawn: its result has them, so it redraws
+/// without a run and does not go blank.
+#[gpui::test]
+fn a_panel_redraws_columns_saved_in_a_tab_without_a_run(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let tab = chart_picking_calls(&mut console);
+    let stored = console.save(&tab, "saved");
+    let panel = console.reopen(&stored);
+    let _dashboard = dashboard_of(&mut console, std::slice::from_ref(&panel));
+    console.run_chart(&panel);
+    let runs = console.executed().len();
+
+    save_with_y(&mut console, &tab, vec![1, 2]);
+
+    assert_eq!(console.bindings(&panel).y, vec![1, 2]);
+    assert!(console.draws(&panel), "it still has a chart");
+    assert!(
+        !console
+            .window
+            .update(|_, cx| panel.read(cx).has_pending_reexecute())
+    );
+    assert_eq!(console.executed().len(), runs);
+}
+
+/// A panel with no result yet has nothing to draw them on. Its first result does.
+#[gpui::test]
+fn a_panel_with_no_result_takes_saved_columns_with_its_first(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let tab = chart_picking_calls(&mut console);
+    let stored = console.save(&tab, "saved");
+    let panel = console.reopen(&stored);
+    let _dashboard = dashboard_of(&mut console, std::slice::from_ref(&panel));
+
+    save_with_y(&mut console, &tab, vec![1, 2]);
+    console.run_chart(&panel);
+
+    assert_eq!(console.bindings(&panel).y, vec![1, 2]);
+    assert!(console.draws(&panel));
+}
+
+/// The columns stored for a query a panel follows but has not run yet are positions
+/// in a result it does not have. Its old chart stays up, on its own columns, until
+/// its run brings the new one.
+#[gpui::test]
+fn a_panel_waiting_for_its_run_keeps_its_chart_on_its_own_columns(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let tab = chart_picking_calls(&mut console);
+    let stored = console.save(&tab, "saved");
+    let panel = console.reopen(&stored);
+    let _dashboard = dashboard_of(&mut console, std::slice::from_ref(&panel));
+    console.run_chart(&panel);
+
+    console.type_query(&tab, REORDERED_QUERY);
+    console.save(&tab, "saved");
+    console.window.run_until_parked();
+    console.apply_marked_run(&tab);
+    console.window.run_until_parked();
+
+    assert_eq!(
+        console.bindings(&panel).x,
+        0,
+        "the old result's time column"
+    );
+    assert!(console.draws(&panel), "the old chart stays up");
+
+    console.apply_marked_run(&panel);
+    assert_eq!(
+        console.bindings(&panel).x,
+        1,
+        "ts, where the new result has it"
+    );
+    assert_eq!(console.bindings(&panel).y, vec![2]);
+    assert!(console.draws(&panel));
+}
+
+/// A result of the query a panel just left says nothing about the picks saved for the
+/// one it runs now, and must not use them up on its own columns.
+#[gpui::test]
+fn a_result_of_the_old_query_does_not_use_up_the_saved_picks(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let tab = chart_picking_calls(&mut console);
+    let stored = console.save(&tab, "saved");
+    let panel = console.reopen(&stored);
+    let _dashboard = dashboard_of(&mut console, std::slice::from_ref(&panel));
+    console.run_chart(&panel);
+
+    // The old run ended, and the frame that would apply it comes after the follow.
+    console.request(&panel);
+    console.window.run_until_parked();
+
+    let mut record = stored.clone();
+    record.source = dbflux_components::saved_chart::SavedChartSource::Query {
+        query: REORDERED_QUERY.to_string(),
+    };
+    record.bindings = BindingSpec {
+        x: 1,
+        y: vec![0],
+        ..BindingSpec::default()
+    };
+    record.chart_spec.binding = record.bindings.clone();
+    let app_state = console.app_state.clone();
+    console.window.update(|_, cx| {
+        app_state.update(cx, |state, cx| {
+            state.saved_charts.upsert(record).expect("written");
+            cx.emit(dbflux_ui_base::AppStateChanged);
+        });
+    });
+    console.window.run_until_parked();
+
+    let handle = panel.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |panel, cx| panel.apply_pending_result_for_test(cx));
+    });
+    assert_eq!(
+        console.bindings(&panel).x,
+        0,
+        "not on the old result's columns"
+    );
+
+    console.apply_marked_run(&panel);
+    let bindings = console.bindings(&panel);
+    assert_eq!((bindings.x, bindings.y), (1, vec![0]));
+    assert!(console.draws(&panel));
 }
 
 /// A console on a driver with one fixed database hands over a name the record does

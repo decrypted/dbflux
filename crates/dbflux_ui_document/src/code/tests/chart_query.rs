@@ -10,7 +10,7 @@ use dbflux_components::chart::{
 };
 use dbflux_components::controls::InputPosition;
 use dbflux_components::saved_chart::MetricSeries;
-use dbflux_components::saved_chart::SavedChart;
+use dbflux_components::saved_chart::{SavedChart, SavedChartContext};
 use dbflux_core::{
     ColumnKind, ColumnMeta, ConnectionProfile, DbConfig, DbKind, ExecutionContext,
     ExecutionSourceContext, QueryLanguage, QueryResult, RefreshPolicy, Value,
@@ -110,7 +110,14 @@ fn console_with<'a>(cx: &'a mut TestAppContext, buffer: &str) -> Fixture<'a> {
 fn console_on<'a>(cx: &'a mut TestAppContext, kind: DbKind, buffer: &str) -> Fixture<'a> {
     init_keyboard_runtime(cx);
 
-    let driver = driver(kind);
+    console_for_driver(cx, driver(kind), buffer)
+}
+
+fn console_for_driver<'a>(
+    cx: &'a mut TestAppContext,
+    driver: FakeDriver,
+    buffer: &str,
+) -> Fixture<'a> {
     let profile = ConnectionProfile::new(
         "test",
         DbConfig::SQLite {
@@ -208,6 +215,7 @@ impl Fixture<'_> {
                 query,
                 connection_id,
                 context,
+                ..
             } => Some((query.clone(), *connection_id, context.clone())),
             _ => None,
         })
@@ -1110,4 +1118,1111 @@ fn a_saved_chart_reopens_with_its_columns_and_kind(cx: &mut TestAppContext) {
             .update(|_, cx| reopened.read(cx).chart_shell_for_test().read(cx).y_scale()),
         YScale::Log
     );
+}
+
+// ---------------------------------------------------------------------------
+// Where a saved chart runs
+// ---------------------------------------------------------------------------
+
+const CALLS_QUERY: &str = "select * from api_call_log";
+
+fn database_list(names: &[&str]) -> dbflux_core::SchemaSnapshot {
+    dbflux_core::SchemaSnapshot::relational(dbflux_core::RelationalSchema {
+        databases: names
+            .iter()
+            .map(|name| dbflux_core::DatabaseInfo {
+                name: (*name).to_string(),
+                is_current: false,
+            })
+            .collect(),
+        ..dbflux_core::RelationalSchema::default()
+    })
+}
+
+impl Fixture<'_> {
+    /// What the connection reports having listed when it connected.
+    fn list_databases(&mut self, names: &[&str]) {
+        let app_state = self.app_state.clone();
+        let profile_id = self.profile_id;
+        let schema = database_list(names);
+        self.window.update(|_, cx| {
+            app_state.update(cx, |state, _| {
+                state
+                    .connections_mut()
+                    .get_mut(&profile_id)
+                    .expect("connected")
+                    .schema = Some(schema);
+            });
+        });
+    }
+
+    /// Saves `chart` under a name through the same path as the Save prompt and
+    /// returns the record storage now holds.
+    fn save(&mut self, chart: &Entity<ChartDocument>, name: &str) -> SavedChart {
+        let chart = chart.clone();
+        let app_state = self.app_state.clone();
+        let name = name.to_string();
+        let profile_id = self.profile_id;
+        self.window.update(|_, cx| {
+            // A saved chart references its profile's row, which connecting alone
+            // does not write.
+            app_state.update(cx, |state, _| {
+                if !state
+                    .profiles()
+                    .iter()
+                    .any(|profile| profile.id == profile_id)
+                {
+                    let profile = state.connections()[&profile_id].profile.clone();
+                    state.add_profile_in_folder(profile, None);
+                }
+            });
+            chart.update(cx, |chart, cx| chart.save_as(name.clone(), cx));
+            app_state
+                .read(cx)
+                .saved_charts
+                .all_charts()
+                .iter()
+                .find(|saved| saved.name == name)
+                .cloned()
+                .expect("the chart was saved")
+        })
+    }
+
+    fn reopen(&mut self, saved: &SavedChart) -> Entity<ChartDocument> {
+        let app_state = self.app_state.clone();
+        let saved = saved.clone();
+        self.window.update(|window, cx| {
+            cx.new(|cx| ChartDocument::from_saved(&saved, app_state, window, cx).expect("a chart"))
+        })
+    }
+
+    fn last_request(&self) -> dbflux_core::QueryRequest {
+        self.driver
+            .stats()
+            .executed_requests
+            .last()
+            .cloned()
+            .expect("the chart ran")
+    }
+
+    fn saved_with(&self, context: SavedChartContext) -> SavedChart {
+        let mut saved = SavedChart::new_query(
+            "saved".to_string(),
+            self.profile_id,
+            CALLS_QUERY.to_string(),
+            ChartSpec::from_detection(1, vec![3], &api_call_log_result().columns, 10_000)
+                .expect("a spec"),
+            BindingSpec::default(),
+        );
+        saved.context = context;
+        saved
+    }
+
+    /// One request to `chart`, as a refresh makes.
+    fn request(&mut self, chart: &Entity<ChartDocument>) {
+        let chart = chart.clone();
+        self.window.update(|window, cx| {
+            chart.update(cx, |chart, cx| chart.request_reexecute(window, cx));
+        });
+    }
+
+    fn register_driver(&mut self) {
+        let app_state = self.app_state.clone();
+        let profile_id = self.profile_id;
+        let driver = self.driver.clone().as_driver_arc();
+        self.window.update(|_, cx| {
+            app_state.update(cx, |state, _| {
+                let driver_id = state
+                    .connections()
+                    .get(&profile_id)
+                    .expect("connected")
+                    .profile
+                    .driver_id();
+                state.facade.connections.drivers.insert(driver_id, driver);
+            });
+        });
+    }
+}
+
+fn database_context(database: &str) -> SavedChartContext {
+    SavedChartContext {
+        database: Some(database.to_string()),
+        ..SavedChartContext::default()
+    }
+}
+
+fn log_groups(request: &dbflux_core::QueryRequest) -> Vec<String> {
+    match request
+        .execution_context
+        .as_ref()
+        .and_then(|context| context.source.as_ref())
+    {
+        Some(ExecutionSourceContext::CollectionWindow { targets, .. }) => targets.clone(),
+        other => panic!("no window source: {other:?}"),
+    }
+}
+
+/// The chart from a console keeps the console's database through Save, and the
+/// reopened chart sends it. Without this a reopened chart ran on the
+/// connection's default database.
+#[gpui::test]
+fn a_saved_chart_reopens_on_its_database_and_schema(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.set_active_database("analytics");
+    let document = console.document.clone();
+    console.window.update(|_, cx| {
+        document.update(cx, |document, _| {
+            document.source.exec_ctx.schema = Some("reporting".to_string());
+        });
+    });
+    console.click_open_in_chart();
+    let chart = console.open_the_chart();
+
+    let saved = console.save(&chart, "calls");
+    assert_eq!(saved.context.database.as_deref(), Some("analytics"));
+    assert_eq!(saved.context.schema.as_deref(), Some("reporting"));
+
+    console.set_active_database("other");
+    let reopened = console.reopen(&saved);
+    console.run_chart(&reopened);
+
+    let request = console.last_request();
+    assert_eq!(request.database.as_deref(), Some("analytics"));
+    let context = request.execution_context.expect("a context");
+    assert_eq!(context.database.as_deref(), Some("analytics"));
+    assert_eq!(context.schema.as_deref(), Some("reporting"));
+}
+
+/// A Logs Insights chart keeps its log groups and query mode, without which the
+/// driver answers "Select at least one CloudWatch log group".
+#[gpui::test]
+fn a_saved_logs_chart_reopens_with_its_log_groups_and_mode(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::CloudWatchLogs, SECOND_STATEMENT);
+    let document = console.document.clone();
+    console.window.update(|_, cx| {
+        document.update(cx, |document, _| {
+            document.source.exec_ctx.source = Some(ExecutionSourceContext::CollectionWindow {
+                targets: vec!["/aws/app".to_string(), "/aws/worker".to_string()],
+                start_ms: 1,
+                end_ms: 2,
+                query_mode: Some("sql".to_string()),
+            });
+        });
+    });
+    console.click_open_in_chart();
+    let chart = console.open_the_chart();
+
+    let saved = console.save(&chart, "logs");
+    assert_eq!(saved.context.targets, ["/aws/app", "/aws/worker"]);
+    assert_eq!(saved.context.query_mode.as_deref(), Some("sql"));
+
+    let reopened = console.reopen(&saved);
+    console.run_chart(&reopened);
+
+    let request = console.last_request();
+    assert_eq!(log_groups(&request), ["/aws/app", "/aws/worker"]);
+    match request.execution_context.and_then(|context| context.source) {
+        Some(ExecutionSourceContext::CollectionWindow {
+            start_ms,
+            end_ms,
+            query_mode,
+            ..
+        }) => {
+            assert_eq!(query_mode.as_deref(), Some("sql"));
+            assert!(start_ms < end_ms, "{start_ms}..{end_ms}");
+            assert_ne!((start_ms, end_ms), (1, 2), "bounds are not stored");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The driver's own answer about a log group that is gone reaches the chart.
+#[gpui::test]
+fn a_driver_error_about_log_groups_stays_in_the_chart(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::CloudWatchLogs, "");
+    let saved = console.saved_with(SavedChartContext {
+        targets: vec!["/aws/gone".to_string()],
+        ..SavedChartContext::default()
+    });
+    console.driver.set_query_outcome(
+        CALLS_QUERY,
+        FakeQueryOutcome::Error("/aws/gone not found".into()),
+    );
+
+    let chart = console.reopen(&saved);
+    console.run_chart(&chart);
+
+    assert!(console.message(&chart).contains("/aws/gone"));
+}
+
+/// A chart stays on its database while the sidebar's moves, including through a
+/// refresh and a Save.
+#[gpui::test]
+fn a_chart_on_a_stored_database_keeps_reading_it(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let saved = console.saved_with(database_context("analytics"));
+    console.set_active_database("app");
+
+    let chart = console.reopen(&saved);
+    console.run_chart(&chart);
+    console.set_active_database("other");
+    console.run_chart(&chart);
+
+    let requests = console.driver.stats().executed_requests;
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.database.as_deref() == Some("analytics")),
+        "{requests:?}"
+    );
+
+    let resaved = console.save(&chart, "saved again");
+    assert_eq!(resaved.context, database_context("analytics"));
+}
+
+/// A chart saved before this stored nothing: it sends no database, and saving it
+/// again does not invent one from whatever the sidebar selects.
+#[gpui::test]
+fn a_chart_without_a_stored_context_runs_as_before(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    console.set_active_database("analytics");
+    console.list_databases(&["app"]);
+    let saved = console.saved_with(SavedChartContext::default());
+
+    let chart = console.reopen(&saved);
+    console.run_chart(&chart);
+
+    assert!(console.last_request().database.is_none());
+    assert_eq!(
+        console.save(&chart, "still nothing").context,
+        SavedChartContext::default()
+    );
+}
+
+/// A database the connection does not have stops the chart and is named, where
+/// MongoDB would answer with no rows and another driver could read elsewhere.
+#[gpui::test]
+fn a_stored_database_the_connection_lacks_is_named_and_reported_once(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    console.list_databases(&["app", "billing"]);
+    let saved = console.saved_with(database_context("gone"));
+
+    let chart = console.reopen(&saved);
+    let finishes = finishes_of(&mut console, &chart);
+    console.request(&chart);
+    console.window.run_until_parked();
+
+    assert_eq!(*finishes.borrow(), 1);
+    assert!(console.executed().is_empty(), "nothing ran elsewhere");
+    assert!(console.message(&chart).contains("gone"));
+
+    // Back on the list after a refresh of the connection, it runs.
+    console.list_databases(&["app", "gone"]);
+    console.run_chart(&chart);
+    assert_eq!(console.last_request().database.as_deref(), Some("gone"));
+}
+
+/// A list that says nothing leaves the answer to the driver, and the check is
+/// only for a stored database: a console's own is live and already ran there.
+#[gpui::test]
+fn only_a_stored_database_on_a_known_list_is_refused(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.list_databases(&[]);
+    let saved = console.saved_with(database_context("analytics"));
+    let chart = console.reopen(&saved);
+    console.run_chart(&chart);
+    assert_eq!(
+        console.last_request().database.as_deref(),
+        Some("analytics")
+    );
+
+    console.list_databases(&["app"]);
+    console.set_active_database("created_just_now");
+    console.click_open_in_chart();
+    console.open_the_chart();
+    assert_eq!(
+        console.last_request().database.as_deref(),
+        Some("created_just_now")
+    );
+}
+
+/// The driver's refusal of a database reaches the chart too.
+#[gpui::test]
+fn a_driver_error_about_the_database_stays_in_the_chart(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let saved = console.saved_with(database_context("gone"));
+    console.driver.set_query_outcome(
+        CALLS_QUERY,
+        FakeQueryOutcome::Error("USE database failed: Unknown database 'gone'".into()),
+    );
+
+    let chart = console.reopen(&saved);
+    let finishes = finishes_of(&mut console, &chart);
+    console.run_chart(&chart);
+
+    assert!(console.message(&chart).contains("gone"));
+    assert_eq!(*finishes.borrow(), 1);
+}
+
+/// A driver with one fixed database has none to remember, and behaves as today.
+#[gpui::test]
+fn a_driver_without_databases_stores_none(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::SQLite, SECOND_STATEMENT);
+    console.set_active_database("main");
+    console.click_open_in_chart();
+    let chart = console.open_the_chart();
+
+    let saved = console.save(&chart, "local");
+
+    assert_eq!(saved.context, SavedChartContext::default());
+}
+
+/// With one connection per database nothing opens the database of a saved chart
+/// after a restart, so the chart does, and runs there once it can.
+#[gpui::test]
+fn a_chart_opens_the_connection_its_database_needs(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    console.register_driver();
+    console.list_databases(&["app", "analytics"]);
+    let saved = console.saved_with(database_context("analytics"));
+
+    let chart = console.reopen(&saved);
+    let finishes = finishes_of(&mut console, &chart);
+    console.request(&chart);
+    assert_eq!(*finishes.borrow(), 0, "the run still owes its report");
+    assert!(console.message(&chart).contains("analytics"));
+
+    // A request meanwhile has no run of its own.
+    console.request(&chart);
+    assert_eq!(*finishes.borrow(), 1);
+
+    console.window.run_until_parked();
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
+    });
+
+    assert_eq!(*finishes.borrow(), 2, "the run that waited reports once");
+    assert_eq!(console.executed(), [CALLS_QUERY]);
+    assert_eq!(
+        console.last_request().database.as_deref(),
+        Some("analytics")
+    );
+    let opened = console.window.update(|_, cx| {
+        console
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&console.profile_id)
+            .expect("connected")
+            .database_connection("analytics")
+            .is_some()
+    });
+    assert!(opened);
+}
+
+/// A database that cannot be opened says so, reports once, and only a refresh by
+/// hand tries again: a dashboard's timer would repeat the failure each tick.
+#[gpui::test]
+fn a_database_that_cannot_open_is_named_and_not_retried_by_a_timer(cx: &mut TestAppContext) {
+    // No driver is registered, which fails the same way a refused connect does.
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    let saved = console.saved_with(database_context("analytics"));
+
+    let chart = console.reopen(&saved);
+    let finishes = finishes_of(&mut console, &chart);
+    console.request(&chart);
+    console.window.run_until_parked();
+
+    assert_eq!(*finishes.borrow(), 1);
+    assert!(console.message(&chart).contains("analytics"));
+
+    console.register_driver();
+    console.request(&chart);
+    console.window.run_until_parked();
+    assert_eq!(*finishes.borrow(), 2);
+    assert!(console.executed().is_empty(), "the timer does not retry");
+
+    let handle = chart.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |chart, cx| {
+            chart.retry_database_on_next_run();
+            chart.request_reexecute(window, cx);
+        });
+    });
+    console.window.run_until_parked();
+    assert_eq!(console.executed(), [CALLS_QUERY]);
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
+    });
+    assert_eq!(*finishes.borrow(), 3);
+}
+
+/// Panels run where their saved charts stored, and one that cannot run hands its
+/// run slot back, so the panels queued behind it still get their turn.
+#[gpui::test]
+fn dashboard_panels_use_the_stored_context_and_free_their_slots(cx: &mut TestAppContext) {
+    use crate::dashboard::{DashboardDocument, DashboardPanelSlot, PANEL_REEXEC_CAP, PanelGridPos};
+    use dbflux_components::common::time_range::view::TimeRangePanel;
+    use dbflux_components::saved_chart::SavedChartRefreshPolicy;
+
+    let mut console = console_with(cx, "");
+    console.list_databases(&["app", "analytics"]);
+
+    let panel_count = PANEL_REEXEC_CAP + 2;
+    let saved: Vec<SavedChart> = (0..panel_count)
+        .map(|index| {
+            console.saved_with(database_context(if index == 0 {
+                "analytics"
+            } else {
+                "gone"
+            }))
+        })
+        .collect();
+
+    let charts: Vec<Entity<ChartDocument>> =
+        saved.iter().map(|saved| console.reopen(saved)).collect();
+    let slots: Vec<DashboardPanelSlot> = charts
+        .iter()
+        .map(|chart| DashboardPanelSlot::Loaded {
+            panel: chart.clone(),
+            grid_pos: PanelGridPos {
+                grid_row: 0,
+                grid_column: 0,
+                grid_width: 6,
+                grid_height: 2,
+            },
+            title_override: None,
+        })
+        .collect();
+
+    let app_state = console.app_state.clone();
+    let dashboard = console.window.update(|window, cx| {
+        let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+        cx.new(|cx| {
+            DashboardDocument::new(
+                Uuid::new_v4(),
+                "Dashboard".to_string(),
+                slots,
+                shared_time_range,
+                None,
+                SavedChartRefreshPolicy::Off,
+                false,
+                app_state,
+                cx,
+            )
+        })
+    });
+
+    let requested = dashboard.clone();
+    console.window.update(|_, cx| {
+        requested.update(cx, |dashboard, cx| {
+            for slot in 0..panel_count {
+                dashboard.request_reexec_for_slot(slot, cx);
+            }
+        });
+    });
+
+    // Rendering drains what the dashboard marked; a test without a frame does it
+    // by hand, once per request the dashboard admitted.
+    for _ in 0..panel_count {
+        let admitted: Vec<Entity<ChartDocument>> = console.window.update(|_, cx| {
+            charts
+                .iter()
+                .filter(|chart| chart.read(cx).has_pending_reexecute_for_test())
+                .cloned()
+                .collect()
+        });
+        for chart in admitted {
+            let handle = chart.clone();
+            console.window.update(|window, cx| {
+                handle.update(cx, |chart, cx| {
+                    chart.drain_pending_reexecute_for_test(window, cx)
+                });
+            });
+            console.window.run_until_parked();
+            console.window.update(|_, cx| {
+                chart.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
+            });
+        }
+        console.window.run_until_parked();
+    }
+
+    let inflight = console
+        .window
+        .update(|_, cx| dashboard.read(cx).inflight_reexec_count_for_testing());
+    assert_eq!(inflight, 0, "every panel handed its slot back");
+
+    let requests = console.driver.stats().executed_requests;
+    assert_eq!(requests.len(), 1, "only the panel on a known database ran");
+    assert_eq!(requests[0].database.as_deref(), Some("analytics"));
+    assert!(console.message(&charts[1]).contains("gone"));
+    assert!(console.message(&charts[panel_count - 1]).contains("gone"));
+}
+
+/// A console with a session of its own holds its transaction there, where the
+/// chart cannot see it, and the chart says so only while that is the case.
+#[gpui::test]
+fn the_transaction_note_appears_only_with_an_open_session_transaction(cx: &mut TestAppContext) {
+    let mut console = console_on_sessions(cx);
+
+    let opens = |console: &mut Fixture<'_>| {
+        console.events.borrow_mut().clear();
+        console.click_open_in_chart();
+        console
+            .events
+            .borrow()
+            .iter()
+            .find_map(|event| match event {
+                DocumentEvent::ChartThisQuery {
+                    console_transaction_open,
+                    ..
+                } => Some(*console_transaction_open),
+                _ => None,
+            })
+            .expect("the button asked for a chart")
+    };
+
+    assert!(!opens(&mut console), "nothing has run yet");
+
+    console.run_on_session("select 1");
+    assert!(!opens(&mut console), "no transaction is open");
+
+    console.run_on_session("BEGIN");
+    assert!(opens(&mut console), "BEGIN opened one");
+
+    let chart = console.window.update(|window, cx| {
+        let app_state = console.app_state.clone();
+        cx.new(|cx| {
+            let mut chart = ChartDocument::new(
+                Some(console.profile_id),
+                SECOND_STATEMENT.to_string(),
+                app_state,
+                window,
+                cx,
+            );
+            chart.set_console_transaction_note(true);
+            chart
+        })
+    });
+    let note = console
+        .window
+        .update(|_, cx| chart.read(cx).transaction_note());
+    assert!(note.is_some_and(|note| note.contains("uncommitted")));
+
+    console.run_on_session("select 2");
+    assert!(opens(&mut console), "still open");
+
+    console.run_on_session("COMMIT");
+    assert!(!opens(&mut console), "COMMIT ended it");
+
+    console.run_on_session("BEGIN");
+    console.run_on_session("ROLLBACK");
+    assert!(!opens(&mut console), "ROLLBACK ended it");
+
+    console.run_on_session("BEGIN");
+    let document = console.document.clone();
+    console.window.update(|_, cx| {
+        document.update(cx, |document, cx| document.invalidate_execution_session(cx));
+    });
+    console.window.run_until_parked();
+    assert!(
+        !opens(&mut console),
+        "the session went, and its transaction"
+    );
+}
+
+/// Without a session the console runs on the shared connection the chart uses, so
+/// a chart does see what it has not committed and the note would be false.
+#[gpui::test]
+fn the_transaction_note_stays_away_from_a_shared_connection(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.run_on_session("BEGIN");
+
+    console.click_open_in_chart();
+    let open = console.events.borrow().iter().any(|event| {
+        matches!(
+            event,
+            DocumentEvent::ChartThisQuery {
+                console_transaction_open: true,
+                ..
+            }
+        )
+    });
+    assert!(!open);
+}
+
+/// Saving from the Chart view of a result keeps where the result ran, even once
+/// the document has moved on. Without this such a chart stored nothing.
+#[gpui::test]
+fn a_chart_saved_from_a_result_keeps_where_it_ran(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.set_active_database("analytics");
+
+    let document = console.document.clone();
+    console.window.update(|window, cx| {
+        document.update(cx, |document, cx| document.run_query(window, cx));
+    });
+    console.window.run_until_parked();
+    console.window.update(|window, _| window.refresh());
+    console.window.run_until_parked();
+
+    console.set_active_database("other");
+
+    let grid = console
+        .window
+        .update(|_, cx| document.read(cx).active_result_grid())
+        .expect("the run made a result grid");
+    let profile_id = console.profile_id;
+    let spec = ChartSpec::from_detection(1, vec![3], &api_call_log_result().columns, 10_000)
+        .expect("a spec");
+    let chart = console.window.update(|_, cx| {
+        grid.read(cx).query_result_chart(
+            "from the result".to_string(),
+            profile_id,
+            SECOND_STATEMENT.to_string(),
+            spec,
+            BindingSpec::default(),
+            cx,
+        )
+    });
+
+    assert_eq!(chart.context.database.as_deref(), Some("analytics"));
+}
+
+/// A reused result tab shows the latest run, so saving its chart keeps where that
+/// run went. It kept the first run's database.
+#[gpui::test]
+fn a_reused_result_tab_saves_where_its_latest_run_went(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+
+    let document = console.document.clone();
+    let pick = |console: &mut Fixture<'_>, database: &str| {
+        let document = document.clone();
+        console.window.update(|_, cx| {
+            document.update(cx, |document, _| {
+                document.source.exec_ctx.database = Some(database.to_string());
+            });
+        });
+    };
+    let run = |console: &mut Fixture<'_>| {
+        let document = document.clone();
+        console.window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        console.window.run_until_parked();
+        console.window.update(|window, _| window.refresh());
+        console.window.run_until_parked();
+    };
+    pick(&mut console, "first");
+    run(&mut console);
+    pick(&mut console, "second");
+    run(&mut console);
+
+    let grid = console
+        .window
+        .update(|_, cx| console.document.read(cx).active_result_grid())
+        .expect("the run made a result grid");
+    let profile_id = console.profile_id;
+    let spec = ChartSpec::from_detection(1, vec![3], &api_call_log_result().columns, 10_000)
+        .expect("a spec");
+    let chart = console.window.update(|_, cx| {
+        grid.read(cx).query_result_chart(
+            "latest".to_string(),
+            profile_id,
+            SECOND_STATEMENT.to_string(),
+            spec,
+            BindingSpec::default(),
+            cx,
+        )
+    });
+
+    assert_eq!(chart.context.database.as_deref(), Some("second"));
+}
+
+/// A chart runs where it can leave nothing on the session a console uses, and a
+/// console's own run stays on it.
+#[gpui::test]
+fn a_chart_runs_unattended_and_a_console_does_not(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    let saved = console.saved_with(database_context("analytics"));
+    let chart = console.reopen(&saved);
+    console.run_chart(&chart);
+
+    let unattended = console.driver.stats().unattended_requests;
+    assert_eq!(unattended.len(), 1);
+    assert_eq!(unattended[0].database.as_deref(), Some("analytics"));
+
+    console.run_on_session("select 1");
+    assert_eq!(console.driver.stats().unattended_requests.len(), 1);
+    assert_eq!(console.driver.stats().executed_requests.len(), 2);
+}
+
+/// What the chart keeps out: a driver's own metric dispatch stays where it was.
+#[gpui::test]
+fn a_metric_chart_does_not_run_unattended(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::CloudWatchLogs, "");
+    let app_state = console.app_state.clone();
+    let profile_id = console.profile_id;
+    let chart = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            let mut chart = ChartDocument::new_with_source(
+                Some(profile_id),
+                "metric".to_string(),
+                Box::new(InstanceMetricSource {
+                    metric_id: "m".to_string(),
+                }),
+                app_state,
+                window,
+                cx,
+            );
+            chart.stage_window_for_test(1, 2);
+            chart
+        })
+    });
+    console.run_chart(&chart);
+
+    assert!(console.driver.stats().unattended_requests.is_empty());
+}
+
+/// Every way an open can end is visible once and reports once: a cancelled open
+/// has no coordinator report behind it, so the chart makes one.
+#[gpui::test]
+fn a_cancelled_open_is_named_reported_and_finishes_once(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    console.register_driver();
+    let saved = console.saved_with(database_context("analytics"));
+
+    let app_state = console.app_state.clone();
+    let reports: Rc<RefCell<usize>> = Rc::default();
+    let sink = reports.clone();
+    console.window.update(|_, cx| {
+        cx.set_global(dbflux_ui_base::AppStateGlobal {
+            entity: app_state.clone(),
+        });
+        cx.subscribe(
+            &app_state,
+            move |_, _: &dbflux_ui_base::UserErrorReported, _| {
+                *sink.borrow_mut() += 1;
+            },
+        )
+        .detach();
+    });
+
+    let chart = console.reopen(&saved);
+    let finishes = finishes_of(&mut console, &chart);
+    console.request(&chart);
+    assert_eq!(*finishes.borrow(), 0);
+
+    let key = dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseSchema {
+        profile_id: console.profile_id,
+        database: "analytics".to_string(),
+    };
+    console.window.update(|_, cx| {
+        app_state.update(cx, |state, cx| state.object_tree_cancel(&key, cx));
+    });
+    console.window.run_until_parked();
+
+    assert_eq!(*finishes.borrow(), 1);
+    assert_eq!(*reports.borrow(), 1);
+    assert!(console.message(&chart).contains("analytics"));
+    assert!(console.executed().is_empty());
+}
+
+/// The dashboard's timer asks every panel on every tick, so a database that
+/// cannot open must not be tried again from there; its Refresh does try.
+#[gpui::test]
+fn the_dashboard_timer_does_not_retry_a_database_but_refresh_does(cx: &mut TestAppContext) {
+    use crate::dashboard::{DashboardDocument, DashboardPanelSlot, PanelGridPos};
+    use dbflux_components::common::time_range::view::TimeRangePanel;
+    use dbflux_components::saved_chart::SavedChartRefreshPolicy;
+
+    // No driver is registered yet, so opening fails.
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    let saved = console.saved_with(database_context("analytics"));
+    let chart = console.reopen(&saved);
+
+    let app_state = console.app_state.clone();
+    let panel = chart.clone();
+    let dashboard = console.window.update(|window, cx| {
+        let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+        cx.new(|cx| {
+            DashboardDocument::new(
+                Uuid::new_v4(),
+                "Dashboard".to_string(),
+                vec![DashboardPanelSlot::Loaded {
+                    panel,
+                    grid_pos: PanelGridPos {
+                        grid_row: 0,
+                        grid_column: 0,
+                        grid_width: 6,
+                        grid_height: 2,
+                    },
+                    title_override: None,
+                }],
+                shared_time_range,
+                None,
+                SavedChartRefreshPolicy::Interval { every_secs: 30 },
+                false,
+                app_state,
+                cx,
+            )
+        })
+    });
+    let timed = dashboard.clone();
+    console.window.update(|_, cx| {
+        timed.update(cx, |dashboard, cx| {
+            dashboard.set_active_tab(true, cx);
+            dashboard.update_refresh_timer(cx);
+        });
+    });
+
+    let drain = |console: &mut Fixture<'_>| {
+        let handle = chart.clone();
+        console.window.update(|window, cx| {
+            handle.update(cx, |chart, cx| {
+                chart.drain_pending_reexecute_for_test(window, cx);
+            });
+        });
+        console.window.run_until_parked();
+    };
+    let tick = |console: &mut Fixture<'_>| {
+        console
+            .window
+            .executor()
+            .advance_clock(Duration::from_secs(31));
+        console.window.run_until_parked();
+        let panel = chart.clone();
+        let marked = console
+            .window
+            .update(|_, cx| panel.read(cx).has_pending_reexecute_for_test());
+        assert!(marked, "the timer asked the panel");
+    };
+
+    tick(&mut console);
+    drain(&mut console);
+    assert!(console.message(&chart).contains("analytics"));
+
+    console.register_driver();
+    tick(&mut console);
+    drain(&mut console);
+    assert!(console.executed().is_empty(), "a tick does not try again");
+
+    let refreshed = dashboard.clone();
+    console.window.update(|_, cx| {
+        refreshed.update(cx, |dashboard, cx| dashboard.refresh_all_loaded_panels(cx));
+    });
+    drain(&mut console);
+    assert_eq!(console.executed(), [CALLS_QUERY], "Refresh does");
+}
+
+/// A chart saved just now keeps running where it just ran, even on a list that
+/// has not caught up with a new database. Only a reopened chart is checked.
+#[gpui::test]
+fn saving_does_not_put_a_live_chart_under_the_list_check(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.list_databases(&["app"]);
+    console.set_active_database("created_just_now");
+    console.click_open_in_chart();
+    let chart = console.open_the_chart();
+
+    let saved = console.save(&chart, "new database");
+    console.run_chart(&chart);
+    assert_eq!(console.driver.stats().executed_requests.len(), 2);
+
+    let reopened = console.reopen(&saved);
+    console.run_chart(&reopened);
+    assert_eq!(console.driver.stats().executed_requests.len(), 2, "refused");
+    assert!(console.message(&reopened).contains("created_just_now"));
+}
+
+fn running_chart_task(console: &mut Fixture<'_>) -> dbflux_core::TaskSnapshot {
+    let app_state = console.app_state.clone();
+    let profile_id = console.profile_id;
+    console.window.update(|_, cx| {
+        app_state
+            .read(cx)
+            .running_query_tasks(Some(profile_id))
+            .into_iter()
+            .next()
+            .expect("the chart's task is running")
+    })
+}
+
+/// What the Tasks panel does to a query task. It runs on its own thread in the
+/// app, so this waits for it.
+fn cancel_as_tasks_panel_does(console: &mut Fixture<'_>, task_id: dbflux_core::TaskId) {
+    let app_state = console.app_state.clone();
+    console.window.update(|_, cx| {
+        app_state.read(cx).cancel_query_for_task(task_id);
+    });
+    std::thread::sleep(Duration::from_millis(200));
+}
+
+/// A chart apart from the console: `cancel_active` would stop the console's
+/// statement and leave the chart running, so the Tasks panel must not call it.
+#[gpui::test]
+fn cancelling_a_chart_apart_does_not_reach_the_consoles_connection(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::MySQL).with_unattended_apart();
+    let mut console = console_for_driver(cx, driver, SECOND_STATEMENT);
+    let saved = console.saved_with(database_context("analytics"));
+
+    let chart = console.reopen(&saved);
+    console.request(&chart);
+    let task = running_chart_task(&mut console);
+    assert!(task.runs_apart);
+
+    cancel_as_tasks_panel_does(&mut console, task.id);
+    assert_eq!(console.driver.stats().cancel_active_calls, 0);
+    console.window.run_until_parked();
+}
+
+/// A driver whose charts share the console's connection has only `cancel_active`
+/// to stop one with.
+#[gpui::test]
+fn cancelling_a_chart_on_a_shared_connection_still_reaches_it(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::Postgres, "");
+    let saved = console.saved_with(SavedChartContext::default());
+
+    let chart = console.reopen(&saved);
+    console.request(&chart);
+    let task = running_chart_task(&mut console);
+    assert!(!task.runs_apart);
+
+    cancel_as_tasks_panel_does(&mut console, task.id);
+    assert_eq!(console.driver.stats().cancel_active_calls, 1);
+    console.window.run_until_parked();
+}
+
+/// A connection per database: the task names the database, so a cancel goes to
+/// that connection and not to the primary one, which may be running something else.
+#[gpui::test]
+fn a_charts_task_names_the_connection_it_runs_on(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    console.register_driver();
+    console.list_databases(&["app", "analytics"]);
+    let saved = console.saved_with(database_context("analytics"));
+
+    let chart = console.reopen(&saved);
+    console.request(&chart);
+    console.window.run_until_parked();
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
+    });
+
+    console.request(&chart);
+    let task = running_chart_task(&mut console);
+    assert_eq!(
+        task.target.and_then(|target| target.database).as_deref(),
+        Some("analytics")
+    );
+    console.window.run_until_parked();
+}
+
+/// A disconnect settles every waiting panel at once. The user did that or saw it,
+/// so each panel says so in place without a report of its own.
+#[gpui::test]
+fn a_disconnect_while_waiting_is_shown_without_a_report_per_panel(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let driver = driver(DbKind::Postgres).with_per_database_connections();
+    let mut console = console_for_driver(cx, driver, "");
+    console.register_driver();
+    let saved = console.saved_with(database_context("analytics"));
+
+    let app_state = console.app_state.clone();
+    let reports: Rc<RefCell<usize>> = Rc::default();
+    let sink = reports.clone();
+    console.window.update(|_, cx| {
+        cx.set_global(dbflux_ui_base::AppStateGlobal {
+            entity: app_state.clone(),
+        });
+        cx.subscribe(
+            &app_state,
+            move |_, _: &dbflux_ui_base::UserErrorReported, _| {
+                *sink.borrow_mut() += 1;
+            },
+        )
+        .detach();
+    });
+
+    let chart = console.reopen(&saved);
+    let finishes = finishes_of(&mut console, &chart);
+    console.request(&chart);
+
+    let key = dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseSchema {
+        profile_id: console.profile_id,
+        database: "analytics".to_string(),
+    };
+    let profile_id = console.profile_id;
+    console.window.update(|_, cx| {
+        app_state.update(cx, |state, cx| {
+            state.connections_mut().remove(&profile_id);
+            state.object_tree_cancel(&key, cx);
+        });
+    });
+    console.window.run_until_parked();
+
+    assert_eq!(*finishes.borrow(), 1);
+    assert_eq!(*reports.borrow(), 0);
+    assert!(console.message(&chart).contains("analytics"));
+}
+
+/// A chart without the flag shows no note, a saved one included.
+#[gpui::test]
+fn a_chart_without_the_flag_shows_no_note(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let saved = console.saved_with(SavedChartContext::default());
+    let chart = console.reopen(&saved);
+
+    let note = console
+        .window
+        .update(|_, cx| chart.read(cx).transaction_note());
+    assert_eq!(note, None);
+}
+
+fn console_on_sessions<'a>(cx: &'a mut TestAppContext) -> Fixture<'a> {
+    init_keyboard_runtime(cx);
+
+    let driver = driver(DbKind::DuckDB).with_execution_sessions();
+    console_for_driver(cx, driver, SECOND_STATEMENT)
+}
+
+impl Fixture<'_> {
+    /// Runs `sql` the way the editor runs a statement: through the document's
+    /// session binding.
+    fn run_on_session(&mut self, sql: &str) {
+        let document = self.document.clone();
+        let app_state = self.app_state.clone();
+        let profile_id = self.profile_id;
+        let request = dbflux_core::QueryRequest::new(sql.to_string());
+        self.window.update(|_, cx| {
+            let root = app_state
+                .read(cx)
+                .connections()
+                .get(&profile_id)
+                .expect("connected")
+                .connection
+                .clone();
+            document
+                .read(cx)
+                .execution_session
+                .execute(root, None, &request)
+                .result
+                .expect("the statement ran");
+        });
+    }
 }

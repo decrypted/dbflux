@@ -69,7 +69,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 标题栏上有：
 
 - **时间范围**预设：15m、1h、6h、24h、7d，或**自定义**（会展开一行日期与小时 / 分钟选择器）。该范围会同时应用于所有图表面板。
-- 一个**刷新**拆分按钮：点击可立即刷新所有面板；下拉框用于设置自动刷新间隔（或关闭 / 打开时刷新）。
+- 一个**刷新**拆分按钮：点击可立即刷新所有面板；下拉框用于设置自动刷新间隔（或关闭 / 打开时刷新）。如果面板保存的数据库无法打开，面板会说明这一点。定时器不会重试；此按钮会重试。
 
 > **断开的连接会被妥善处理。** 当某个面板所属的连接已关闭时，其刷新节拍会被跳过——计时器保持存活，重新连接后自动恢复，无需重新打开仪表盘。
 
@@ -95,6 +95,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 | `viz_saved_chart_binding_y` | Y 轴绑定 |
 | `viz_saved_chart_source_metric_dimensions` | CloudWatch 指标维度 |
 | `viz_saved_chart_source_metric_series` | CloudWatch 指标序列规格 |
+| `viz_saved_chart_context_targets` | 查询图表运行的目标（例如日志组） |
 
 存储库位于 `crates/dbflux_storage/src/repositories/viz_*.rs`，实现标准的 `Repository` trait（`all()`、`find_by_id()`、`upsert()`、`delete()`）。
 

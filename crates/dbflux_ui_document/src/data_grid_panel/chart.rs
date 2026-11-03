@@ -1,6 +1,11 @@
 use super::*;
 
 impl DataGridPanel {
+    /// Tells the grid where its result's query ran.
+    pub(crate) fn set_result_context(&mut self, context: Option<dbflux_core::ExecutionContext>) {
+        self.result_context = context;
+    }
+
     // ---- Collection chart save flow ----
 
     /// Open the name-prompt overlay for saving a chart from a Collection or
@@ -91,12 +96,13 @@ impl DataGridPanel {
                     cx.notify();
                     return;
                 };
-                dbflux_components::saved_chart::SavedChart::new_query(
+                self.query_result_chart(
                     name.clone(),
                     *profile_id,
                     original_query.clone(),
                     state.chart_spec,
                     state.bindings,
+                    cx,
                 )
             }
             _ => return,
@@ -127,6 +133,30 @@ impl DataGridPanel {
         });
 
         cx.notify();
+    }
+
+    /// The saved chart of this grid's result, running where its query ran.
+    pub(crate) fn query_result_chart(
+        &self,
+        name: String,
+        profile_id: Uuid,
+        query: String,
+        chart_spec: dbflux_components::chart::ChartSpec,
+        bindings: dbflux_components::chart::BindingSpec,
+        cx: &App,
+    ) -> dbflux_components::saved_chart::SavedChart {
+        let mut chart = dbflux_components::saved_chart::SavedChart::new_query(
+            name, profile_id, query, chart_spec, bindings,
+        );
+        if let Some(context) = &self.result_context {
+            chart.context = crate::chart_document::saved_chart_context(
+                &self.app_state,
+                Some(profile_id),
+                context,
+                cx,
+            );
+        }
+        chart
     }
 
     /// Cancel the collection-chart name prompt without saving.

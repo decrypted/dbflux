@@ -200,6 +200,7 @@ impl MigrationRegistry {
         registry.register(mod_059_connection_profile_driver_params::MigrationImpl);
         registry.register(mod_061_general_settings_max_concurrent_queries::MigrationImpl);
         registry.register(mod_062_general_settings_ssh_accept_new_host_keys::MigrationImpl);
+        registry.register(mod_063_viz_saved_chart_context::MigrationImpl);
         registry.register(mod_064_general_settings_grid_copy_protect_formulas::MigrationImpl);
         registry
     }
@@ -448,6 +449,7 @@ mod mod_058_general_settings_grid_header_click_sorts;
 mod mod_059_connection_profile_driver_params;
 mod mod_061_general_settings_max_concurrent_queries;
 mod mod_062_general_settings_ssh_accept_new_host_keys;
+mod mod_063_viz_saved_chart_context;
 mod mod_064_general_settings_grid_copy_protect_formulas;
 
 pub use mod_001_initial::MigrationImpl;
@@ -1308,6 +1310,7 @@ mod tests {
             "059_connection_profile_driver_params",
             "061_general_settings_max_concurrent_queries",
             "062_general_settings_ssh_accept_new_host_keys",
+            "063_viz_saved_chart_context",
             "064_general_settings_grid_copy_protect_formulas",
         ];
 

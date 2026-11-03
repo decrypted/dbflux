@@ -1011,7 +1011,7 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
   - `cfg_folders` (연결 트리 조직화)
   - `st_sessions`, `st_tabs`, `st_query_history`, `st_saved_queries`, `st_recent_items`, `st_ui_state`
   - `aud_audit_events`, `aud_audit_entities`, `aud_audit_attributes`
-  - `viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_dimensions`, `viz_saved_chart_source_metric_series`
+  - `viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_dimensions`, `viz_saved_chart_source_metric_series`, `viz_saved_chart_context_targets`
   - `qry_saved_queries`, `qry_saved_query_columns`, `qry_saved_query_sorts`, `qry_saved_query_joins`
   - `sys_migrations`, `sys_legacy_imports`
 - 레거시 JSON 가져오기: 첫 시작 시 `dbflux_storage/src/legacy.rs`는 기존 JSON 파일이 있으면 SQLite로 가져옵니다:

@@ -105,6 +105,8 @@ The header has:
   at once.
 - A **refresh** split-button: click to refresh all panels now; the dropdown sets
   an auto-refresh interval (or Off / refresh-on-open).
+  A panel whose stored database cannot be opened says so in the panel. The timer
+  does not try it again; this button does.
 
 > **Disconnected connections are handled gracefully.** When a panel's connection
 > is closed, its refresh tick is skipped — the timer stays alive and resumes
@@ -140,6 +142,7 @@ under the `viz_*` table prefix:
 | `viz_saved_chart_binding_y` | Y-axis bindings |
 | `viz_saved_chart_source_metric_dimensions` | CloudWatch metric dimensions |
 | `viz_saved_chart_source_metric_series` | CloudWatch metric series spec |
+| `viz_saved_chart_context_targets` | Targets where a query chart runs, such as log groups |
 
 Repositories live in `crates/dbflux_storage/src/repositories/viz_*.rs` and
 implement the standard `Repository` trait

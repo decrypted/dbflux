@@ -1333,11 +1333,16 @@ document:
       rows_truncated: "O gráfico mostra as primeiras %{rows} linhas: a consulta retornou mais que o limite de linhas."
       chart_saved: Gráfico salvo
       save_failed: "Falha ao salvar o gráfico: %{error}"
+    note:
+      console_transaction: "O console de origem deste gráfico tinha uma transação aberta quando o gráfico foi aberto. O gráfico é executado em uma conexão separada e não mostra alterações não confirmadas."
     error:
       source: "Erro na origem do gráfico: %{error}"
       no_connection_selected: Nenhuma conexão selecionada
       connection_not_found: Conexão não encontrada
       collection_source_unsupported: "Origem de coleção não compatível com ChartDocument; abra por meio de DataDocument"
+      database_missing: "Este gráfico foi salvo para o banco de dados '%{database}', que não está nesta conexão, por isso não foi executado. Se o banco de dados for novo, atualize a conexão."
+      database_not_opened: "Não foi possível abrir o banco de dados '%{database}' para este gráfico."
+      database_open_failed: "Não foi possível abrir o banco de dados '%{database}' para este gráfico: %{error}"
     metric_picker:
       apply: Aplicar
       dropdown:

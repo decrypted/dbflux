@@ -110,6 +110,8 @@ La cabecera tiene:
 - Un botón split de **refresh**: haz clic para refrescar todos los panels ahora;
   el desplegable establece un intervalo de auto-refresh (o Off / refresh al
   abrir).
+  Un panel cuya base de datos guardada no se puede abrir lo dice en el panel. El
+  temporizador no la vuelve a intentar; este botón sí.
 
 > **Las conexiones desconectadas se gestionan con elegancia.** Cuando la
 > conexión de un panel se cierra, su tick de refresh se salta — el timer sigue
@@ -149,6 +151,7 @@ Todos los datos de dashboard y saved-chart viven en
 | `viz_saved_chart_binding_y`                | Bindings del eje Y                                                       |
 | `viz_saved_chart_source_metric_dimensions` | Dimensiones de métrica de CloudWatch                                     |
 | `viz_saved_chart_source_metric_series`     | Spec de serie de métrica de CloudWatch                                   |
+| `viz_saved_chart_context_targets`          | Destinos de un gráfico de query, como grupos de logs                     |
 
 Los repositorios viven en `crates/dbflux_storage/src/repositories/viz_*.rs` e
 implementan el trait `Repository` estándar (`all()`, `find_by_id()`, `upsert()`,

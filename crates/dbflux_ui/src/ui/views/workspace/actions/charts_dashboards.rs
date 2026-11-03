@@ -18,13 +18,19 @@ impl Workspace {
     ///
     /// Called when the user selects "Chart this query" from a data grid context
     /// menu or "Open in chart" in a code editor. `context` is where the query
-    /// runs and `source_tab` the tab that asked, which Escape in the chart
-    /// returns to.
+    /// runs, `console_transaction_open` whether the asking console has a
+    /// transaction the chart cannot see, and `source_tab` the tab that asked,
+    /// which Escape in the chart returns to.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the fields of TabManagerEvent::ChartThisQuery, plus the two gpui contexts"
+    )]
     pub(in crate::ui::views::workspace) fn open_chart_from_query(
         &mut self,
         query: String,
         connection_id: Option<uuid::Uuid>,
         context: dbflux_core::ExecutionContext,
+        console_transaction_open: bool,
         source_tab: crate::ui::document::DocumentId,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -38,6 +44,7 @@ impl Workspace {
                 cx,
             );
             chart.set_execution_context(context);
+            chart.set_console_transaction_note(console_transaction_open);
             chart
         });
         let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);

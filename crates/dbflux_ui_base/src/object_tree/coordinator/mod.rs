@@ -466,7 +466,12 @@ impl AppStateEntity {
                 profile_id,
                 database,
             } => self.connections().get(profile_id).is_some_and(|connected| {
+                // The schema outlives its connection (a cancelled editor query
+                // removes one), and whoever asks may be asking for the connection.
                 connected.cache_contains(&CacheKey::database_schema(database.clone()))
+                    && connected
+                        .resolve_connection_for_execution(Some(database))
+                        .is_ok()
             }),
             ObjectTreeRequestKey::TableDetails {
                 profile_id,

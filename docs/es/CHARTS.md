@@ -165,6 +165,8 @@ Un `SavedChart` persiste:
 - `source` — un `SavedChartSource`, ya sea `Query { query }` (un string de query
   ejecutado dentro de un `ChartDocument`) o `Collection { collection_ref,
   time_window }` (una fuente de exploración de colección).
+- `context`: dónde se ejecuta una fuente `Query`, un `SavedChartContext`; consulta
+  [Guardar](#guardar).
 - `chart_spec` y `bindings` — la configuración de renderizado completa
   (`ChartSpec` y `BindingSpec`).
 - `time_range_preset`, `refresh_policy`, `created_at`, `updated_at`.
@@ -331,12 +333,45 @@ gráfico guardado se reabre con ellos. Guardar reutiliza el `saved_chart_id`
 existente cuando está presente, así que el registro se sobrescribe en lugar de
 duplicarse.
 
-La base de datos no se guarda. Un gráfico reabierto o un panel de dashboard no envía
-ninguna base de datos y se ejecuta en la propia de la conexión, sea cual sea la que
-seleccione la barra lateral, así que un gráfico guardado desde otra base de datos de
-la conexión necesita su tabla cualificada. Los gráficos de query guardados y los
-paneles de dashboard aplican el límite de filas del editor; las fuentes de métrica y
-de métrica de instancia no.
+Guardar conserva dónde se ejecuta el gráfico, tomado de su contexto de ejecución
+actual: la base de datos, el esquema y el contenedor, los destinos (como los grupos
+de logs de CloudWatch) y el modo de consulta. Un gráfico abierto desde un editor
+conserva los del editor, y uno guardado desde la vista Chart de un resultado, los de
+donde se ejecutó ese resultado. Son nombres, como la query guardada a su lado, en las
+columnas `context_*` de `viz_saved_charts` y en `viz_saved_chart_context_targets`. No
+se guarda el id de la conexión, porque el gráfico nombra su perfil, ni los límites de
+tiempo, porque el gráfico tiene su propio rango. Un driver con una sola base de datos
+fija (SQLite, Turso, CloudWatch y otros) no guarda ninguna base de datos. Renombrar,
+volver a guardar y duplicar conservan el contexto.
+
+Un gráfico reabierto o un panel de dashboard se ejecuta allí, sea cual sea la que
+seleccione la barra lateral. En un driver con una conexión por base de datos, el
+gráfico abre la conexión que necesita. Una base de datos guardada que la conexión no
+lista detiene el gráfico con un mensaje que la nombra, y nada se ejecuta en otra base
+de datos. Esa comprobación lee la lista de la última vez que la conexión se conectó o
+se actualizó, así que una base de datos creada después cuenta como ausente hasta
+actualizar. Una base de datos que no se puede abrir también se nombra en el gráfico, lo
+que además detiene su actualización automática; el temporizador de un dashboard no la
+vuelve a intentar, una actualización a mano sí. Un grupo de logs que ya no existe recibe
+el error del propio driver en el área del gráfico. Un gráfico guardado antes de que los gráficos guardaran esto no
+tiene contexto: no envía ninguna base de datos y se ejecuta en la propia de la
+conexión, así que su tabla necesita estar cualificada, y volver a guardarlo no añade
+ninguna. Los gráficos de query guardados y los paneles de dashboard aplican el límite
+de filas del editor; las fuentes de métrica y de métrica de instancia no.
+
+Un gráfico nunca mueve la sesión en la que se ejecuta un editor. En MySQL, MariaDB y SQL
+Server, que guardan la base de datos actual en una sola sesión, un gráfico se ejecuta en
+una conexión propia, abierta cuando se ejecuta el primero (una conexión más al servidor).
+Por eso no puede ver tablas temporales, variables de sesión ni cambios sin confirmar de
+un editor, y cancelarlo, desde su pestaña o el panel de tareas, detiene solo ese gráfico.
+En DuckDB y Turso el editor tiene sesión propia, con el mismo efecto, y allí
+un gráfico abierto mientras el editor tiene una transacción abierta lo dice en una línea
+sobre su área. Esa línea describe el momento en que se abrió el gráfico y sigue ahí si el
+editor confirma después. La app no sigue las transacciones abiertas en los demás drivers,
+así que no muestran esa línea. En PostgreSQL y Redshift un gráfico se ejecuta en la
+conexión de su base de datos, que comparte con un editor en esa base de datos: allí un
+gráfico abierto durante una transacción se ejecuta dentro de ella y sí ve esas filas,
+hasta que el editor confirme o revierta.
 
 ```mermaid
 flowchart TD

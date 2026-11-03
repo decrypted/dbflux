@@ -22,6 +22,13 @@ use dbflux_test_support::containers;
 use std::time::Duration;
 
 fn connect_redis(uri: String) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
+    connect_redis_on(uri, Some(0))
+}
+
+fn connect_redis_on(
+    uri: String,
+    database: Option<u32>,
+) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
     let driver = RedisDriver::new();
     let profile = ConnectionProfile::new(
         "live-redis",
@@ -31,7 +38,7 @@ fn connect_redis(uri: String) -> Result<Box<dyn dbflux_core::Connection>, DbErro
             host: String::new(),
             port: 6379,
             user: None,
-            database: Some(0),
+            database,
             tls: false,
             ssl_mode: None,
             ssl_root_cert_path: None,
@@ -985,6 +992,25 @@ fn redis_stream_range_groups_pending_and_claim() -> Result<(), DbError> {
         assert!(after.iter().all(|entry| entry.consumer == "worker-2"));
 
         kv.delete_key(&KeyDeleteRequest::new("orders"))?;
+        Ok(())
+    })
+}
+
+/// With no keyspace made active, a request for another one went back to nowhere,
+/// so the next command ran in the chart's keyspace.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn a_request_for_another_keyspace_leaves_the_session_where_it_was() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis_on(uri, None)?;
+        assert_eq!(connection.active_database(), None);
+
+        connection.execute(
+            &QueryRequest::new("SET chart_key five").with_database(Some("db5".to_string())),
+        )?;
+        let here = connection.execute(&QueryRequest::new("GET chart_key"))?;
+        assert_eq!(here.text_body.as_deref(), Some("(nil)"));
+
         Ok(())
     })
 }

@@ -1659,12 +1659,14 @@ impl Workspace {
                         query,
                         connection_id,
                         context,
+                        console_transaction_open,
                         source_tab,
                     } => {
                         this.open_chart_from_query(
                             query.clone(),
                             *connection_id,
                             context.clone(),
+                            *console_transaction_open,
                             *source_tab,
                             window,
                             cx,

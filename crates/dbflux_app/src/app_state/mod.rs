@@ -2320,6 +2320,11 @@ impl AppState {
             return;
         }
 
+        // Its token stops it. `cancel_active` would stop the console's statement.
+        if task.runs_apart {
+            return;
+        }
+
         let target = task.target.or_else(|| {
             task.profile_id.map(|profile_id| dbflux_core::TaskTarget {
                 profile_id,

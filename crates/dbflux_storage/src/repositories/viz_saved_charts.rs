@@ -1,9 +1,10 @@
 //! Repository for `viz_saved_charts` — aggregate root for saved chart persistence.
 //!
-//! This repository coordinates writes across three tables:
+//! This repository coordinates writes across these tables:
 //! - `viz_saved_charts` (parent row)
 //! - `viz_saved_chart_series` (via `SavedChartSeriesRepository`)
 //! - `viz_saved_chart_binding_y` (via `SavedChartBindingYRepository`)
+//! - `viz_saved_chart_context_targets`
 //!
 //! All multi-table operations run inside a single SQLite transaction. The
 //! `SavedChartDto` struct carries `series` and `binding_y` vecs that are
@@ -83,6 +84,12 @@ pub struct SavedChartDto {
     pub refresh_policy_kind: String,
     pub refresh_policy_interval_secs: Option<i64>,
 
+    // SavedChartContext. All `None` on a chart saved before migration 063.
+    pub context_database: Option<String>,
+    pub context_schema: Option<String>,
+    pub context_container: Option<String>,
+    pub context_query_mode: Option<String>,
+
     // Assembled child rows (not columns on the parent table).
     pub series: Vec<SeriesDto>,
     pub binding_y: Vec<BindingYDto>,
@@ -92,6 +99,8 @@ pub struct SavedChartDto {
     pub metric_dimensions: Vec<MetricDimensionDto>,
     /// Metric id for `SavedChartSource::InstanceMetric`. `None` for other kinds.
     pub instance_metric_id: Option<String>,
+    /// Ordered targets of `SavedChartContext`, such as log groups.
+    pub context_targets: Vec<String>,
 }
 
 /// Repository for `viz_saved_charts`.
@@ -132,7 +141,8 @@ impl SavedChartsRepository {
                         source_collection_database, source_collection_name,
                         source_time_window_start_ms, source_time_window_end_ms,
                         source_time_window_language,
-                        time_range_preset, refresh_policy_kind, refresh_policy_interval_secs
+                        time_range_preset, refresh_policy_kind, refresh_policy_interval_secs,
+                        context_database, context_schema, context_container, context_query_mode
                  FROM viz_saved_charts
                  WHERE profile_id = ?1
                  ORDER BY updated_at DESC",
@@ -172,7 +182,8 @@ impl SavedChartsRepository {
                         source_collection_database, source_collection_name,
                         source_time_window_start_ms, source_time_window_end_ms,
                         source_time_window_language,
-                        time_range_preset, refresh_policy_kind, refresh_policy_interval_secs
+                        time_range_preset, refresh_policy_kind, refresh_policy_interval_secs,
+                        context_database, context_schema, context_container, context_query_mode
                  FROM viz_saved_charts
                  WHERE id = ?1",
             )
@@ -261,7 +272,8 @@ impl SavedChartsRepository {
                         source_collection_database, source_collection_name,
                         source_time_window_start_ms, source_time_window_end_ms,
                         source_time_window_language,
-                        time_range_preset, refresh_policy_kind, refresh_policy_interval_secs
+                        time_range_preset, refresh_policy_kind, refresh_policy_interval_secs,
+                        context_database, context_schema, context_container, context_query_mode
                  FROM viz_saved_charts
                  WHERE id IN ({placeholders})"
             );
@@ -317,7 +329,8 @@ impl SavedChartsRepository {
                   source_collection_database, source_collection_name,
                   source_time_window_start_ms, source_time_window_end_ms,
                   source_time_window_language,
-                  time_range_preset, refresh_policy_kind, refresh_policy_interval_secs)
+                  time_range_preset, refresh_policy_kind, refresh_policy_interval_secs,
+                  context_database, context_schema, context_container, context_query_mode)
              VALUES
                  (?1, ?2, ?3, ?4, ?5,
                   ?6, ?7, ?8, ?9, ?10,
@@ -325,7 +338,8 @@ impl SavedChartsRepository {
                   ?15, ?16, ?17, ?18,
                   ?19, ?20,
                   ?21, ?22, ?23, ?24, ?25,
-                  ?26, ?27, ?28)",
+                  ?26, ?27, ?28,
+                  ?29, ?30, ?31, ?32)",
             rusqlite::params![
                 chart.id,
                 chart.name,
@@ -355,6 +369,10 @@ impl SavedChartsRepository {
                 chart.time_range_preset,
                 chart.refresh_policy_kind,
                 chart.refresh_policy_interval_secs,
+                chart.context_database,
+                chart.context_schema,
+                chart.context_container,
+                chart.context_query_mode,
             ],
         )
         .map_err(|source| StorageError::Sqlite {
@@ -492,6 +510,28 @@ impl SavedChartsRepository {
                 "INSERT INTO viz_saved_chart_source_instance_metric (chart_id, metric_id)
                  VALUES (?1, ?2)",
                 rusqlite::params![chart.id, metric_id],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
+        }
+
+        // 6. Atomically replace the context targets in this transaction.
+        tx.execute(
+            "DELETE FROM viz_saved_chart_context_targets WHERE chart_id = ?1",
+            [&chart.id],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: DB_PATH.into(),
+            source,
+        })?;
+
+        for (target_index, target) in chart.context_targets.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO viz_saved_chart_context_targets (chart_id, target_index, target)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![chart.id, target_index as i64, target],
             )
             .map_err(|source| StorageError::Sqlite {
                 path: DB_PATH.into(),
@@ -768,6 +808,46 @@ impl SavedChartsRepository {
                     }
                 }
             }
+
+            // Fetch context targets (empty unless the chart stored some).
+            let targets_sql = format!(
+                "SELECT chart_id, target
+                 FROM viz_saved_chart_context_targets
+                 WHERE chart_id IN ({placeholders})
+                 ORDER BY chart_id, target_index ASC"
+            );
+            let mut stmt = conn
+                .prepare(&targets_sql)
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
+
+            let target_rows: Vec<(String, String)> = stmt
+                .query_map(rusqlite::params_from_iter(chart_ids.iter()), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?
+                .collect::<Result<_, _>>()
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
+
+            for (chart_id, target) in target_rows {
+                if let Some(&idx) = index_map.get(&chart_id) {
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "idx is an enumerate position over `charts`, which is never resized or reordered in this method"
+                    )]
+                    {
+                        charts[idx].context_targets.push(target);
+                    }
+                }
+            }
         }
 
         Ok(charts)
@@ -789,7 +869,8 @@ fn query_parent_rows<P: rusqlite::Params>(
                 source_collection_database, source_collection_name,
                 source_time_window_start_ms, source_time_window_end_ms,
                 source_time_window_language,
-                time_range_preset, refresh_policy_kind, refresh_policy_interval_secs
+                time_range_preset, refresh_policy_kind, refresh_policy_interval_secs,
+                context_database, context_schema, context_container, context_query_mode
          FROM viz_saved_charts
          {order}"
     );
@@ -841,11 +922,16 @@ fn map_parent_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedChartDto> {
         time_range_preset: row.get(25)?,
         refresh_policy_kind: row.get(26)?,
         refresh_policy_interval_secs: row.get(27)?,
+        context_database: row.get(28)?,
+        context_schema: row.get(29)?,
+        context_container: row.get(30)?,
+        context_query_mode: row.get(31)?,
         series: vec![],
         binding_y: vec![],
         metric_series: vec![],
         metric_dimensions: vec![],
         instance_metric_id: None,
+        context_targets: vec![],
     })
 }
 
@@ -918,6 +1004,11 @@ fn make_chart(id: Uuid, profile_id: Uuid, source_kind: &str) -> SavedChartDto {
         metric_series: vec![],
         metric_dimensions: vec![],
         instance_metric_id: None,
+        context_database: None,
+        context_schema: None,
+        context_container: None,
+        context_query_mode: None,
+        context_targets: vec![],
     }
 }
 
@@ -984,6 +1075,11 @@ fn make_metric_chart(id: Uuid, profile_id: Uuid) -> SavedChartDto {
             },
         ],
         instance_metric_id: None,
+        context_database: None,
+        context_schema: None,
+        context_container: None,
+        context_query_mode: None,
+        context_targets: vec![],
     }
 }
 

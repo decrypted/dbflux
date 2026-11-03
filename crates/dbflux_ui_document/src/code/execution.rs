@@ -229,7 +229,7 @@ fn dispatch_statement(
     }
 }
 
-fn task_target_for_execution(
+pub(crate) fn task_target_for_execution(
     profile_id: Uuid,
     connected: &dbflux_core::ConnectedProfile,
     target_db: Option<&str>,
@@ -2036,10 +2036,12 @@ impl CodeDocument {
         if let Some(tab) =
             target_index.and_then(|index| self.result_tabs.result_tabs.get_mut(index))
         {
+            let chart_context = origin.as_ref().map(ResultOrigin::execution_context);
             tab.origin = origin;
             tab.grid.update(cx, |g, cx| {
                 g.set_query_result(result, query.clone(), profile_id, cx);
                 g.set_result_caption(caption, cx);
+                g.set_result_context(chart_context);
             });
         } else {
             self.create_result_tab(result, query, caption, origin, window, cx);
@@ -2115,9 +2117,11 @@ impl CodeDocument {
             DataGridPanel::new_for_result(result, query.clone(), profile_id, app_state, window, cx)
         });
 
+        let chart_context = origin.as_ref().map(ResultOrigin::execution_context);
         grid.update(cx, |grid, cx| {
             grid.set_side_panels_hosted(true);
             grid.set_result_caption(caption, cx);
+            grid.set_result_context(chart_context);
         });
 
         if let Some(panel) = self.source.source_time_range_panel.clone() {

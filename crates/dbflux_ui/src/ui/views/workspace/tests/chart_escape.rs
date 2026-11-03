@@ -134,6 +134,7 @@ impl Fixture<'_> {
                     QUERY.to_string(),
                     Some(profile_id),
                     ExecutionContext::default(),
+                    false,
                     source,
                     window,
                     cx,

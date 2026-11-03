@@ -61,6 +61,8 @@ pub enum DocumentEvent {
         connection_id: Option<uuid::Uuid>,
         /// Where the query runs: the database and schema it was asked from.
         context: dbflux_core::ExecutionContext,
+        /// The asking console has a transaction open on its own session.
+        console_transaction_open: bool,
     },
     /// The chart document's active data source was replaced via `set_data_source`.
     ///

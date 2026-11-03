@@ -358,7 +358,10 @@ impl ChartDocument {
             let handlers = ChartToolbarHandlers {
                 on_refresh: Arc::new(move |window, cx| {
                     if let Some(doc) = weak_self_for_refresh.upgrade() {
-                        doc.update(cx, |this, cx| this.request_reexecute(window, cx));
+                        doc.update(cx, |this, cx| {
+                            this.retry_database_on_next_run();
+                            this.request_reexecute(window, cx);
+                        });
                     }
                 }),
                 on_toggle_stats_rail: Arc::new(move |_window, cx| {
@@ -489,6 +492,17 @@ impl ChartDocument {
                 .child(dbflux_i18n::t!("document.chart.session_samples_only"))
         });
 
+        let transaction_note = self.transaction_note().map(|note| {
+            document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx).child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(theme.warning)
+                    .child(note),
+            )
+        });
+
         let axis_row = document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx)
             .child(axis_bar)
             .child(div().flex_1())
@@ -585,6 +599,7 @@ impl ChartDocument {
                 |el, row| el.child(row),
             )
             .when(!embedded, |el| el.child(axis_row))
+            .children(transaction_note)
             .child(
                 div()
                     .flex_1()

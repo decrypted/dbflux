@@ -1155,6 +1155,7 @@ impl MssqlDriver {
             spid: Arc::new(AtomicI32::new(spid)),
             reconnect_config: Arc::new(reconnect_config),
             poisoned: Arc::new(AtomicBool::new(false)),
+            unattended: Mutex::new(None),
         }))
     }
 
@@ -1348,6 +1349,7 @@ fn build_mssql_connection(
         spid: Arc::new(AtomicI32::new(session.spid)),
         reconnect_config: Arc::new(session.reconnect_config),
         poisoned: Arc::new(AtomicBool::new(false)),
+        unattended: Mutex::new(None),
     }
 }
 
@@ -1376,6 +1378,10 @@ pub struct MssqlConnection {
     spid: Arc<AtomicI32>,
     reconnect_config: Arc<MssqlEndpoint>,
     poisoned: Arc<AtomicBool>,
+
+    /// Connection for requests nobody is watching (charts) with the database it
+    /// opened on, opened when the first one runs. See `execute_unattended`.
+    unattended: Mutex<Option<(Box<MssqlConnection>, Option<String>)>>,
 }
 
 struct MssqlCancelHandle {
@@ -1937,6 +1943,83 @@ fn extract_temporal(row: &tiberius::Row, idx: usize, _column_type: tiberius::Col
 impl Connection for MssqlConnection {
     fn metadata(&self) -> &DriverMetadata {
         &METADATA
+    }
+
+    /// Runs on a connection of its own. `execute` leaves this session on the
+    /// request's database, and a `USE` back afterwards could not stop a console's
+    /// statement landing between the two, since each takes the client lock alone.
+    fn execute_unattended(
+        &self,
+        req: &QueryRequest,
+        cancel: &dbflux_core::CancelToken,
+    ) -> Result<QueryResult, DbError> {
+        let mut slot = self
+            .unattended
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        // It may have waited for that lock behind another chart.
+        if cancel.is_cancelled() {
+            return Err(DbError::Cancelled);
+        }
+
+        // Asked now, a connection the server dropped while idle costs nothing.
+        // Retrying after a failure could run a statement that already ran.
+        if slot
+            .as_ref()
+            .is_some_and(|(connection, _)| connection.ping().is_err())
+        {
+            *slot = None;
+        }
+
+        if slot.is_none() {
+            let endpoint = (*self.reconnect_config).clone();
+            let address = endpoint.config.get_addr();
+            let (host, port) = address
+                .rsplit_once(':')
+                .unwrap_or((address.as_str(), "1433"));
+            let session =
+                establish_mssql_session(endpoint.clone(), host, port.parse().unwrap_or(1433))?;
+            let own_database = session.database.clone();
+            let connection = build_mssql_connection(session, own_database.clone(), None);
+            *slot = Some((Box::new(connection), own_database));
+        }
+        let Some((connection, own_database)) = slot.as_ref() else {
+            return Err(DbError::query_failed(
+                "SQL Server: no connection for the chart",
+            ));
+        };
+
+        // A request without a database runs on the connection's own.
+        let on_own_database;
+        let request = if req.database.is_none() && own_database.is_some() {
+            on_own_database = req.clone().with_database(own_database.clone());
+            &on_own_database
+        } else {
+            req
+        };
+
+        let kill = connection.cancel_handle();
+        let result = dbflux_core::run_watching_cancel(
+            cancel,
+            || {
+                if let Err(error) = kill.cancel() {
+                    log::warn!("[CANCEL] Could not stop the chart's query: {error}");
+                }
+            },
+            || connection.execute(request),
+        );
+
+        // KILL ends the whole session, and can land after the statement ended.
+        if cancel.is_cancelled() {
+            *slot = None;
+        }
+
+        result
+    }
+
+    fn unattended_runs_apart(&self) -> bool {
+        true
     }
 
     fn language_service(&self) -> &dyn dbflux_core::LanguageService {
@@ -7543,6 +7626,7 @@ mod query_safety_tests {
             spid: Arc::new(AtomicI32::new(0)),
             reconnect_config: Arc::new(MssqlEndpoint::direct(tiberius::Config::new())),
             poisoned: Arc::new(AtomicBool::new(false)),
+            unattended: Mutex::new(None),
         }
     }
 

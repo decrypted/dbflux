@@ -68,7 +68,7 @@ mod completion_tests;
 mod context_bar;
 mod diagnostics;
 mod execution;
-pub(crate) use execution::chart_refusal;
+pub(crate) use execution::{chart_refusal, task_target_for_execution};
 mod execution_session;
 mod explain;
 mod file_ops;
@@ -511,6 +511,17 @@ pub(super) struct ResultOrigin {
     connection_id: Uuid,
     context: ExecutionSessionContext,
     exec_ctx: ExecutionContext,
+}
+
+impl ResultOrigin {
+    /// Where the query behind this result ran, which a chart of it runs in too.
+    fn execution_context(&self) -> ExecutionContext {
+        ExecutionContext {
+            connection_id: Some(self.connection_id),
+            database: self.context.database.clone(),
+            ..self.exec_ctx.clone()
+        }
+    }
 }
 
 /// The result-tab collection and its selection cursor.
@@ -1390,6 +1401,7 @@ impl CodeDocument {
             query,
             connection_id,
             context,
+            console_transaction_open: self.execution_session.has_open_transaction(),
         });
     }
 
@@ -1417,11 +1429,7 @@ impl CodeDocument {
             .iter()
             .find(|tab| tab.grid == *grid)
             .and_then(|tab| tab.origin.as_ref())
-            .map(|origin| ExecutionContext {
-                connection_id: Some(origin.connection_id),
-                database: origin.context.database.clone(),
-                ..origin.exec_ctx.clone()
-            })
+            .map(ResultOrigin::execution_context)
             .unwrap_or_else(|| self.chart_execution_context(cx));
 
         self.request_chart(query, connection_id, context, cx);

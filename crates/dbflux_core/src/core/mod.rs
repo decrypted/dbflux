@@ -19,6 +19,7 @@ pub use log_err::LogErr;
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use task::{
     CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
+    run_watching_cancel,
 };
 pub use traits::{
     BucketCreateOptions, BucketCreateOutcome, BucketDetails, BucketEncryption, BucketInfo,

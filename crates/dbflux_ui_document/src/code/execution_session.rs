@@ -34,6 +34,10 @@ enum SessionSlot {
 /// interactive statements and is never acquired from the foreground thread.
 pub(crate) struct ExecutionSessionBinding {
     generation: AtomicU64,
+    /// One past the generation whose session has a transaction open, 0 for
+    /// none, so that invalidating the session also ends what this says about
+    /// it. An atomic because the foreground cannot wait for `slot`.
+    open_transaction: AtomicU64,
     slot: Mutex<SessionSlot>,
 }
 
@@ -41,6 +45,7 @@ impl ExecutionSessionBinding {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             generation: AtomicU64::new(0),
+            open_transaction: AtomicU64::new(0),
             slot: Mutex::new(SessionSlot::Empty),
         })
     }
@@ -56,6 +61,33 @@ impl ExecutionSessionBinding {
 
     pub(super) fn is_current_generation(&self, generation: u64) -> bool {
         self.current_generation() == generation
+    }
+
+    /// Whether the document's session holds a transaction a `BEGIN` opened.
+    ///
+    /// Known because every statement of a session comes through here and one
+    /// that controls a transaction in a way that cannot be followed is refused.
+    /// Always false without a session: there the document runs on the shared
+    /// connection and this type sees no state of its own.
+    ///
+    /// A statement that ends a transaction as a side effect, such as Turso's
+    /// `INSERT OR ROLLBACK`, leaves this true until the next `COMMIT` or
+    /// `ROLLBACK` or until the session goes.
+    pub(crate) fn has_open_transaction(&self) -> bool {
+        self.open_transaction.load(Ordering::Acquire) == self.current_generation() + 1
+    }
+
+    fn track_transaction(&self, control: TransactionControl, generation: u64, succeeded: bool) {
+        match control {
+            TransactionControl::Begin if succeeded => {
+                self.open_transaction
+                    .store(generation + 1, Ordering::Release);
+            }
+            TransactionControl::Commit | TransactionControl::Rollback if succeeded => {
+                self.open_transaction.store(0, Ordering::Release);
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn execute(
@@ -121,10 +153,8 @@ impl ExecutionSessionBinding {
             });
         };
 
-        if matches!(
-            classify_sql_transaction_control(sql),
-            TransactionControl::Unsupported
-        ) {
+        let control = classify_sql_transaction_control(sql);
+        if matches!(control, TransactionControl::Unsupported) {
             return Some(failure(
                 "unsupported or multiple transaction-control statements in the editor",
                 true,
@@ -159,6 +189,9 @@ impl ExecutionSessionBinding {
         }
 
         if !matches_context {
+            // The session it was open on closes, or was already gone.
+            self.open_transaction.store(0, Ordering::Release);
+
             if let SessionSlot::Ready { session, .. } =
                 std::mem::replace(&mut *slot, SessionSlot::Empty)
                 && let Err(error) = session.close()
@@ -223,6 +256,8 @@ impl ExecutionSessionBinding {
                 isolated: true,
             });
         }
+
+        self.track_transaction(control, generation, result.is_ok());
 
         Some(SessionExecution {
             result,
@@ -832,6 +867,85 @@ mod tests {
 
         assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
         assert_eq!(isolated.queries.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_binding_follows_the_transaction_of_its_session() {
+        let binding = ExecutionSessionBinding::new();
+        let (root, _factory, _root_connection) = factory_backed_root();
+        let run = |sql: &str| {
+            binding
+                .execute(root.clone(), None, &QueryRequest::new(sql.to_string()))
+                .result
+                .expect("statement runs");
+        };
+
+        assert!(!binding.has_open_transaction());
+        run("SELECT 1");
+        assert!(!binding.has_open_transaction());
+        run("BEGIN");
+        assert!(binding.has_open_transaction());
+        run("INSERT INTO t VALUES (1)");
+        assert!(binding.has_open_transaction());
+        run("COMMIT");
+        assert!(!binding.has_open_transaction());
+        run("BEGIN TRANSACTION");
+        assert!(binding.has_open_transaction());
+        run("ROLLBACK");
+        assert!(!binding.has_open_transaction());
+    }
+
+    #[test]
+    fn a_session_that_goes_takes_its_transaction_along() {
+        let binding = ExecutionSessionBinding::new();
+        let (root, _factory, _root_connection) = factory_backed_root();
+        let begin = QueryRequest::new("BEGIN".to_string());
+
+        binding
+            .execute(root.clone(), None, &begin)
+            .result
+            .expect("begin");
+        assert!(binding.has_open_transaction());
+        binding.invalidate();
+        assert!(!binding.has_open_transaction(), "invalidated");
+
+        binding
+            .execute(root.clone(), None, &begin)
+            .result
+            .expect("begin");
+        assert!(binding.has_open_transaction());
+        binding
+            .execute(
+                root,
+                Some("other".to_string()),
+                &QueryRequest::new("SELECT 1".to_string()),
+            )
+            .result
+            .expect("select");
+        assert!(
+            !binding.has_open_transaction(),
+            "another database, another session"
+        );
+    }
+
+    /// A refused statement changes nothing, and a statement that failed did not
+    /// open or end anything.
+    #[test]
+    fn only_a_statement_that_ran_moves_the_transaction() {
+        let binding = ExecutionSessionBinding::new();
+        let (root, _factory, _root_connection) = factory_backed_root();
+
+        assert!(
+            binding
+                .execute(
+                    root.clone(),
+                    None,
+                    &QueryRequest::new("BEGIN; COMMIT".to_string()),
+                )
+                .result
+                .is_err()
+        );
+        assert!(!binding.has_open_transaction());
     }
 
     #[test]

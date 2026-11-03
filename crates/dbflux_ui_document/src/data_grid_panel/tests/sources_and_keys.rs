@@ -875,3 +875,81 @@ fn focus_row_by_key_replaces_the_filter_with_a_quoted_equality(cx: &mut TestAppC
         );
     });
 }
+
+/// The menu opened from the keyboard hangs off the selected row where it is
+/// drawn: on a grid scrolled to its last row, the anchor stays inside the
+/// grid instead of lying a whole table's height below it.
+#[gpui::test]
+fn keyboard_menu_on_a_scrolled_grid_opens_inside_it(cx: &mut TestAppContext) {
+    use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+
+    init_keyboard_runtime(cx);
+    let app_state = isolated_test_app_state(cx);
+
+    let (host, window) = host_document(
+        cx,
+        move |window, cx| {
+            cx.new(|cx| {
+                DataGridPanel::new_for_result(
+                    Arc::new(QueryResult::table(
+                        vec![key_column("id", false)],
+                        (1..=200)
+                            .map(|id| vec![dbflux_core::Value::Int(id)])
+                            .collect(),
+                        None,
+                        Duration::ZERO,
+                    )),
+                    "SELECT id FROM numbers".to_string(),
+                    None,
+                    app_state,
+                    window,
+                    cx,
+                )
+            })
+        },
+        |panel, cx| panel.active_context(cx),
+        DataGridPanel::dispatch_command,
+    );
+    let panel = window.update(|_, cx| host.read(cx).document.clone());
+
+    window.update(|window, cx| {
+        let table_state = panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the result builds a table");
+        let focus_handle = table_state.read(cx).focus_handle().clone();
+        focus_handle.focus(window, cx);
+    });
+    window.run_until_parked();
+
+    window.simulate_keystrokes("j ctrl-end");
+    window.run_until_parked();
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.open_context_menu_at_selection(window, cx)
+        });
+    });
+    window.run_until_parked();
+
+    let (anchor, top, bottom) = window.update(|_, cx| {
+        let panel = panel.read(cx);
+        let anchor = panel
+            .context_menu
+            .as_ref()
+            .map(|menu| menu.position.y)
+            .expect("the menu opens");
+        (
+            anchor,
+            panel.panel_origin.y,
+            panel.panel_origin.y + panel.panel_size.height,
+        )
+    });
+
+    assert!(bottom > top, "the panel has been measured");
+    assert!(
+        anchor >= top && anchor <= bottom,
+        "anchor {anchor:?} must lie inside the grid {top:?}..{bottom:?}"
+    );
+}

@@ -596,10 +596,10 @@ impl ChartDocument {
         // imply history the session does not have.
         let session_note = self.source_is_accumulating().then(|| {
             div()
-                .flex_shrink_0()
-                .font_family(dbflux_components::fonts::editor_family(cx))
-                .text_size(DocumentMetrics::TABLE_META_FONT)
-                .text_color(theme.muted_foreground)
+                .debug_selector(|| "chart-axis-session-note".to_string())
+                .w_full()
+                .text_right()
+                .truncate()
                 .child(dbflux_i18n::t!("document.chart.session_samples_only"))
         });
 
@@ -616,18 +616,38 @@ impl ChartDocument {
             )
         });
 
+        // The window and the session note stack, so the note doesn't take the
+        // fields' room. When the fields wrap anyway, on a narrow document, the
+        // bar grows with them and its border stays below them.
         let axis_row = document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx)
-            .child(axis_bar)
+            .h_auto()
+            .min_h(ChartDocumentMetrics::AXIS_ROW_HEIGHT)
+            .debug_selector(|| "chart-axis-row".to_string())
+            .child(
+                div()
+                    .py(Spacing::XS)
+                    .debug_selector(|| "chart-axis-fields".to_string())
+                    .child(axis_bar),
+            )
             .child(div().flex_1())
             .child(
                 div()
-                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
                     .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(DocumentMetrics::TABLE_META_FONT)
                     .text_color(theme.muted_foreground)
-                    .child(window_label),
-            )
-            .children(session_note);
+                    .child(
+                        div()
+                            .debug_selector(|| "chart-axis-window".to_string())
+                            .w_full()
+                            .text_right()
+                            .truncate()
+                            .child(window_label),
+                    )
+                    .children(session_note),
+            );
 
         // -- Custom date/time picker row --
         // Rendered below the chart toolbar when the user has selected "Custom…"

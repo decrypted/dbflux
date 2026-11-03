@@ -4160,6 +4160,70 @@ fn the_picker_fits_its_name_and_the_menu_fits_the_picker(cx: &mut TestAppContext
     }
 }
 
+/// A metric chart's session note does not push the axis fields onto a second
+/// line, and fields that wrap on a narrow document stay inside their bar, so they
+/// paint over neither the Query bar nor the chart. Query and metric charts alike.
+#[gpui::test]
+fn the_axis_fields_stay_inside_their_bar(cx: &mut TestAppContext) {
+    use dbflux_components::saved_chart::SavedChartSource;
+    use dbflux_components::tokens::ChartDocumentMetrics;
+
+    let mut console = console_with(cx, "");
+    let query_chart = console.saved_with(SavedChartContext::default());
+    let mut metric_chart = query_chart.clone();
+    metric_chart.source = SavedChartSource::InstanceMetric {
+        metric_id: "connections".to_string(),
+    };
+
+    for saved in [query_chart, metric_chart] {
+        let chart = console.reopen(&saved);
+
+        let mut drawn_at = |width: f32| {
+            let host = ShownChart(chart.clone());
+            let (_, drawn) = console.window.add_window_view(move |_, _| host);
+            drawn.simulate_resize(gpui::size(gpui::px(width), gpui::px(800.0)));
+            drawn.run_until_parked();
+            (
+                drawn.debug_bounds("chart-axis-row").expect("the bar"),
+                drawn.debug_bounds("chart-axis-fields").expect("the fields"),
+                drawn.update(|window, _| {
+                    ChartDocumentMetrics::AXIS_ROW_HEIGHT.to_pixels(window.rem_size())
+                }),
+                drawn.debug_bounds("chart-axis-window").expect("the window"),
+                drawn.debug_bounds("chart-axis-session-note"),
+            )
+        };
+
+        // The width of a document on a 1600 px window.
+        let (wide_row, wide_fields, bar_height, window, note) = drawn_at(1232.0);
+        if let Some(note) = note {
+            assert!(
+                note.top() >= window.bottom(),
+                "the note stacks under the window: {note:?} and {window:?}"
+            );
+        }
+        assert_eq!(
+            wide_row.size.height, bar_height,
+            "one line of fields fits the bar's height: {wide_fields:?}"
+        );
+
+        let (narrow_row, narrow_fields, ..) = drawn_at(500.0);
+        assert!(
+            narrow_fields.size.height > wide_fields.size.height,
+            "the fields wrap at this width: {narrow_fields:?}"
+        );
+        assert!(
+            narrow_row.size.height > wide_row.size.height,
+            "the bar grows with them: {narrow_row:?} from {wide_row:?}"
+        );
+        assert!(
+            narrow_fields.bottom() <= narrow_row.bottom()
+                && narrow_fields.top() >= narrow_row.top(),
+            "wrapped fields stay inside the bar: {narrow_fields:?} in {narrow_row:?}"
+        );
+    }
+}
+
 /// A saved metric chart stays a metric chart.
 #[gpui::test]
 fn a_save_keeps_a_metric_source(cx: &mut TestAppContext) {

@@ -53,6 +53,7 @@ audit:
     open_viewer_failed: "无法打开审计查看器：%{error}"
     persist_mcp_governance_failed: "持久化 MCP 治理失败：%{error}"
 chart:
+  too_small_to_draw: "太小，无法绘制"
   axis_bar:
     group: 分组
     aggregation:

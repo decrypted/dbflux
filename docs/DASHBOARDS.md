@@ -68,6 +68,10 @@ Switch between **View** and **Edit** in the header:
   corner to resize within the 12-column grid.
 - **View** mode is read-only.
 
+A new panel is four rows tall. A panel under three rows leaves out the legend to
+give the plot its room, and one too small for a plot says *Too small to draw*
+until you make it bigger.
+
 The whole dashboard works from the keyboard in both modes: `h`/`j`/`k`/`l` or
 the arrows select a panel, `Enter` opens it (its chart or table takes the keys
 until `Escape`), `c` opens its Configure popover, `r` or `F2` renames it, `x` or
@@ -162,7 +166,7 @@ success.
   (`Chart { saved_chart_id }` | `Divider { markdown }` |
   `Inspector { metric_id }`), `DashboardPanelDraft`. New dashboards are
   created with `grid_columns = 12`; new panels are appended at
-  `grid_column = 0` on a new row with `grid_width = 12, grid_height = 2`.
+  `grid_column = 0` on a new row with `grid_width = 12, grid_height = 4`.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`)
   — owns the `SavedChart` lifecycle, including `SavedChartRefreshPolicy`
   (`Off` / `Interval { every_secs }`).

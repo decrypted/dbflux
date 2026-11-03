@@ -633,6 +633,12 @@ impl ChartView {
     ///
     /// Returns `None` when `series_idx` is out of range. Used by the host to
     /// resolve the Y value of the nearest decimated point for the inspector.
+    /// Whether the last paint drew a plot: `false` before the first paint and
+    /// while the canvas is too small for one.
+    pub fn has_plot_area(&self) -> bool {
+        self.plot_bounds.borrow().is_some()
+    }
+
     pub fn render_model_decimated_series(&self, series_idx: usize) -> Option<&[(f64, f64)]> {
         self.render_model
             .decimated
@@ -1335,6 +1341,17 @@ const MARGIN_RIGHT: f32 = 16.0;
 const MARGIN_TOP: f32 = 8.0;
 const MARGIN_BOTTOM: f32 = 32.0;
 
+/// The smallest plot worth drawing: below it the labels of an axis take the
+/// plot's room, and a line can't be read against them.
+const MIN_PLOT_HEIGHT: f32 = 40.0;
+const MIN_PLOT_WIDTH: f32 = 60.0;
+
+/// Whether a canvas of this size holds a plot worth drawing.
+fn plot_fits(canvas_width: f32, canvas_height: f32) -> bool {
+    canvas_height - MARGIN_TOP - MARGIN_BOTTOM >= MIN_PLOT_HEIGHT
+        && canvas_width - MARGIN_LEFT - MARGIN_RIGHT >= MIN_PLOT_WIDTH
+}
+
 /// Compute effective horizontal padding from the rendered widths of X-axis tick labels.
 ///
 /// Each returned pad is `max(base_margin, max_label_width / 2.0)`, so the widest
@@ -1503,7 +1520,11 @@ impl Render for ChartView {
                                 // larger, hover detection in the outer gutter maps to
                                 // off-data coordinates — no incorrect data is shown.
                                 // Tracked for follow-up: align plot_bounds with effective padding.
-                                *plot_bounds_for_canvas.borrow_mut() = Some(gpui::Bounds {
+                                *plot_bounds_for_canvas.borrow_mut() = plot_fits(
+                                    f32::from(bounds.size.width),
+                                    f32::from(bounds.size.height),
+                                )
+                                .then(|| gpui::Bounds {
                                     origin: point(
                                         bounds.origin.x + gpui::px(MARGIN_LEFT),
                                         bounds.origin.y,
@@ -1528,6 +1549,19 @@ impl Render for ChartView {
                                 let tick_size = gpui::px(10.5);
                                 let line_height = gpui::px(13.0);
                                 let gridline_color = theme.border;
+
+                                if !plot_fits(w, h) {
+                                    paint_too_small_note(
+                                        window,
+                                        cx,
+                                        b,
+                                        tick_font,
+                                        tick_size,
+                                        line_height,
+                                        tick_color,
+                                    );
+                                    return;
+                                }
 
                                 let plot_w_provisional = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
                                 let x_tick_target =
@@ -2164,11 +2198,21 @@ fn paint_y_tick_labels(
 ) {
     use crate::chart::spec::ChartKind;
 
-    for (value, label) in y_tick_labels
+    if matches!(kind, ChartKind::Pie) {
+        return;
+    }
+
+    let positions: Vec<f32> = y_tick_labels
         .iter()
-        .filter(|_| !matches!(kind, ChartKind::Pie))
-    {
-        let sy = project_y_proj_space_to_screen(*value, plot_y0, plot_h, y_log_min, y_log_range);
+        .map(|(value, _)| {
+            project_y_proj_space_to_screen(*value, plot_y0, plot_h, y_log_min, y_log_range)
+        })
+        .collect();
+
+    for (index, sy) in y_labels_that_fit(&positions, f32::from(line_height)) {
+        let Some((_, label)) = y_tick_labels.get(index) else {
+            continue;
+        };
         let run = TextRun {
             len: label.len(),
             font: tick_font.clone(),
@@ -2193,6 +2237,69 @@ fn paint_y_tick_labels(
                 cx,
             )
             .log_err();
+    }
+}
+
+/// The Y labels that can be drawn without touching the one drawn before them,
+/// as `(index, screen_y)`: a nice-number tick generator can hand a short plot
+/// more ticks than it has lines of text.
+fn y_labels_that_fit(positions: &[f32], line_height: f32) -> Vec<(usize, f32)> {
+    let mut kept: Vec<(usize, f32)> = Vec::with_capacity(positions.len());
+
+    for (index, y) in positions.iter().copied().enumerate() {
+        if kept
+            .last()
+            .is_none_or(|(_, last)| (y - last).abs() >= line_height)
+        {
+            kept.push((index, y));
+        }
+    }
+
+    kept
+}
+
+/// Says that the canvas is too small for a plot, centered and wrapped to fit.
+fn paint_too_small_note(
+    window: &mut Window,
+    cx: &mut App,
+    bounds: Bounds<Pixels>,
+    font: gpui::Font,
+    size: Pixels,
+    line_height: Pixels,
+    color: Hsla,
+) {
+    let text = SharedString::from(dbflux_i18n::t!("chart.too_small_to_draw"));
+    let run = TextRun {
+        len: text.len(),
+        font,
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let Some(lines) = window
+        .text_system()
+        .shape_text(text, size, &[run], Some(bounds.size.width), None)
+        .log_err()
+    else {
+        return;
+    };
+
+    let total: Pixels = lines.iter().map(|line| line.size(line_height).height).sum();
+    let mut y = bounds.origin.y + ((bounds.size.height - total) / 2.0).max(gpui::px(0.0));
+
+    for line in lines {
+        let height = line.size(line_height).height;
+        line.paint(
+            point(bounds.origin.x, y),
+            line_height,
+            gpui::TextAlign::Center,
+            Some(bounds),
+            window,
+            cx,
+        )
+        .log_err();
+        y += height;
     }
 }
 
@@ -3759,6 +3866,81 @@ mod tests {
             None,
             Duration::ZERO,
         )
+    }
+
+    /// A plot is drawn from the smallest size worth reading, and not below it.
+    #[test]
+    fn a_plot_needs_a_real_size() {
+        let (tall, wide) = (
+            MARGIN_TOP + MARGIN_BOTTOM + MIN_PLOT_HEIGHT,
+            MARGIN_LEFT + MARGIN_RIGHT + MIN_PLOT_WIDTH,
+        );
+
+        assert!(plot_fits(wide, tall));
+        assert!(!plot_fits(wide, tall - 1.0));
+        assert!(!plot_fits(wide - 1.0, tall));
+    }
+
+    /// Five ticks on a 20 px plot: only labels a line apart are drawn.
+    #[test]
+    fn y_labels_never_touch() {
+        let kept: Vec<usize> = y_labels_that_fit(&[20.0, 15.0, 10.0, 5.0, 0.0], 13.0)
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(kept, [0, 3]);
+
+        assert_eq!(y_labels_that_fit(&[30.0, 15.0, 0.0], 13.0).len(), 3);
+        assert!(y_labels_that_fit(&[], 13.0).is_empty());
+    }
+
+    struct SizedChart {
+        chart: gpui::Entity<ChartView>,
+        size: gpui::Size<Pixels>,
+    }
+
+    impl gpui::Render for SizedChart {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(self.size.width)
+                .h(self.size.height)
+                .child(self.chart.clone())
+        }
+    }
+
+    /// Too small to draw, a chart leaves no plot area behind for the hover and
+    /// the keyboard point to land in; large enough, it has one.
+    #[gpui::test]
+    fn a_small_canvas_has_no_plot_area(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let mut drawn_at = |width: f32, height: f32| {
+            let chart = cx.new(|_| {
+                ChartView::build(&partially_overlapping_hosts(), simple_spec(0, &[1]))
+                    .expect("build should succeed")
+            });
+            let (_host, window) = cx.add_window_view({
+                let chart = chart.clone();
+                move |_, _| SizedChart {
+                    chart,
+                    size: gpui::size(gpui::px(width), gpui::px(height)),
+                }
+            });
+            window.run_until_parked();
+            window.update(|_, cx| chart.read(cx).has_plot_area())
+        };
+
+        assert!(drawn_at(600.0, 200.0));
+        assert!(!drawn_at(600.0, 30.0), "too short");
+        assert!(!drawn_at(70.0, 200.0), "too narrow");
+    }
+
+    #[test]
+    fn the_too_small_note_resolves_in_every_locale() {
+        for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
+            let note = dbflux_i18n::t!("chart.too_small_to_draw", locale = locale);
+            assert_ne!(note, "chart.too_small_to_draw", "{locale}");
+        }
     }
 
     /// H and L walk the keyboard point along the focused series, J and K

@@ -53,6 +53,7 @@ audit:
     open_viewer_failed: "Não foi possível abrir o visualizador de auditoria: %{error}"
     persist_mcp_governance_failed: "Falha ao salvar a governança do MCP: %{error}"
 chart:
+  too_small_to_draw: "Pequeno demais para desenhar"
   axis_bar:
     group: Grupo
     aggregation:

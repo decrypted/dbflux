@@ -362,8 +362,10 @@ fn panel_index_to_grid(panel_index: u32, grid_columns: u32) -> (u32, u32) {
 /// a new row, matching Grafana's default add-panel behaviour.
 const DEFAULT_NEW_PANEL_WIDTH: u32 = 12;
 
-/// Default grid height for a panel appended via `append_panels`.
-const DEFAULT_NEW_PANEL_HEIGHT: u32 = 2;
+/// Default grid height for a panel appended via `append_panels`: four rows
+/// leave a chart its legend and a plot of about 170 px. Stored panels keep the
+/// height they were saved with.
+const DEFAULT_NEW_PANEL_HEIGHT: u32 = 4;
 
 /// Returns the first grid row that lies past every panel in `panels`.
 ///
@@ -1508,11 +1510,11 @@ mod tests {
         assert_eq!(panels[0].grid_column, 0);
         assert_eq!(panels[0].grid_row, 0);
         assert_eq!(panels[0].grid_width, 12);
-        assert_eq!(panels[0].grid_height, 2);
+        assert_eq!(panels[0].grid_height, 4);
         assert_eq!(panels[1].grid_column, 0);
-        assert_eq!(panels[1].grid_row, 2);
+        assert_eq!(panels[1].grid_row, 4);
         assert_eq!(panels[1].grid_width, 12);
-        assert_eq!(panels[1].grid_height, 2);
+        assert_eq!(panels[1].grid_height, 4);
     }
 
     #[test]

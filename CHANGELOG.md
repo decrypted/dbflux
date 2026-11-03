@@ -61,6 +61,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **A dashboard panel's plot is usable:** A new panel was two rows tall, which left about 10 px for the plot once the legend was drawn, with the Y labels on top of each other. A new panel is now four rows tall. Stored panels keep their size and position; one under three rows leaves out the legend to give the plot its room, Y labels no longer overlap, and a panel too small for a plot says so instead of drawing one.
 * **Add Panel says when a chart is already on the dashboard:** A saved chart the dashboard already shows could be picked in Add Panel: the button said "Add 1 panel", no second panel appeared, and a hidden row was stored for it, which stayed stored after the visible panel was removed. The Saved tab now lists such a chart as already on this dashboard and doesn't let it be picked.
 * **Saving a metric chart keeps its metric:** Save on a metric or instance metric chart replaced its source with an empty query, so the chart reopened with nothing to run. Save also dropped a chart's stored time range and refresh policy, and a chart saved before its first result lost its columns.
 * **Dashboard panels of a chart follow Configure:** Configure on one panel now reaches the other open panels of the same chart.

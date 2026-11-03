@@ -54,6 +54,9 @@ use std::sync::Arc;
 
 /// Width of the save-chart name prompt.
 const CHART_SAVE_PROMPT_WIDTH: Pixels = px(360.0);
+
+/// The shortest dashboard panel that draws its legend.
+const PANEL_ROWS_FOR_LEGEND: u32 = 3;
 /// Width of the date range picker in the custom range row.
 const CHART_DATE_PICKER_WIDTH: Pixels = px(260.0);
 
@@ -692,7 +695,7 @@ impl ChartDocument {
         // legend would otherwise be invisible — series identity is then only
         // surfaced in the hover readout, which doesn't match what users see
         // in CloudWatch / Grafana.
-        let embedded_legend: Option<AnyElement> = if embedded {
+        let embedded_legend: Option<AnyElement> = if embedded && self.panel_has_room_for_legend() {
             self.build_embedded_legend(cx)
         } else {
             None
@@ -812,6 +815,14 @@ impl ChartDocument {
             .collect()
     }
 
+    /// A panel under three rows gives the plot the legend's room: with the
+    /// legend a two-row panel has about 10 px of plot left, without it 48 px. The
+    /// hover readout still names the series.
+    fn panel_has_room_for_legend(&self) -> bool {
+        self.panel_rows
+            .is_none_or(|rows| rows >= PANEL_ROWS_FOR_LEGEND)
+    }
+
     /// Build the always-visible legend row used when this chart is embedded in
     /// a dashboard panel. Returns `None` when the chart view has not been
     /// built yet (e.g. while data is still loading) or when the chart has no
@@ -856,6 +867,7 @@ impl ChartDocument {
         Some(
             div()
                 .id("embedded-chart-legend")
+                .debug_selector(|| "embedded-chart-legend".to_string())
                 .flex_none()
                 .px(DocumentMetrics::PADDING_X)
                 .py(Spacing::XS)

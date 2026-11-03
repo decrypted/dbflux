@@ -61,6 +61,10 @@ DBFlux는 차트 구성을 **저장된 차트**로 유지하고 이를 **대시�
   가장자리나 모서리를 드래그해 12열 그리드 안에서 크기를 조정합니다.
 - **보기** 모드는 읽기 전용입니다.
 
+새 패널의 높이는 4행입니다. 3행 미만인 패널은 범례를 생략해 플롯에 공간을 주고,
+플롯을 그리기에 너무 작은 패널은 크기를 늘릴 때까지 *너무 작아서 그릴 수 없음*을
+표시합니다.
+
 편집 모드에서는 포커스된 패널에서 키보드를 사용할 수도 있습니다: 이름 바꾸기는
 `F2`, 제거는 `Delete`/`Backspace`, 구성 팝오버 열기는 `Enter`입니다.
 
@@ -147,7 +151,7 @@ DBFlux는 차트 구성을 **저장된 차트**로 유지하고 이를 **대시�
   도메인 타입 `Dashboard`, `DashboardPanel`, `DashboardPanelKind`
   (`Chart { saved_chart_id }` | `Divider { markdown }` |
   `Inspector { metric_id }`), `DashboardPanelDraft`. 새 대시보드는
-  `grid_columns = 12`로 생성되고, 새 패널은 `grid_width = 12, grid_height = 2`로
+  `grid_columns = 12`로 생성되고, 새 패널은 `grid_width = 12, grid_height = 4`로
   새 행의 `grid_column = 0`에 추가됩니다.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`)
   — `SavedChart` 수명 주기를 소유하며, 여기에는 `SavedChartRefreshPolicy`

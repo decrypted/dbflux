@@ -72,6 +72,10 @@ Cambia entre **View** y **Edit** en la cabecera:
   cuadrícula de 12 columnas.
 - El modo **View** es de solo lectura.
 
+Un panel nuevo tiene cuatro filas de alto. Un panel de menos de tres filas omite
+la leyenda para dar su espacio al gráfico, y uno demasiado pequeño para un gráfico
+indica *Demasiado pequeño para dibujar* hasta que lo agrandes.
+
 Todo el dashboard funciona con el teclado en ambos modos: `h`/`j`/`k`/`l` o las
 flechas eligen un panel, `Enter` lo abre (su chart o su tabla toman las teclas
 hasta `Escape`), `c` abre su popover Configure, `r` o `F2` lo renombra, `x` o
@@ -172,7 +176,7 @@ actualizan solo si tienen éxito.
   saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`),
   `DashboardPanelDraft`. Los dashboards nuevos se crean con `grid_columns = 12`;
   los paneles nuevos se añaden en `grid_column = 0` en una fila nueva con
-  `grid_width = 12, grid_height = 2`.
+  `grid_width = 12, grid_height = 4`.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) —
   gestiona el ciclo de vida de `SavedChart`, incluyendo
   `SavedChartRefreshPolicy` (`Off` / `Interval { every_secs }`).

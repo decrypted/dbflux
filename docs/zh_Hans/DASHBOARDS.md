@@ -46,6 +46,8 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - **编辑**模式下会显示拖拽手柄——拖动面板可调整顺序，拖动边缘或角可在 12 列网格内调整大小。
 - **查看**模式为只读。
 
+新面板高四行。不足三行的面板会省略图例，把空间留给绘图区；小到无法绘图的面板会显示*太小，无法绘制*，直到你把它调大。
+
 两种模式下整个仪表盘都可用键盘操作：`h`/`j`/`k`/`l` 或方向键选择面板，`Enter` 打开它（其图表或表格接收按键，直到按 `Escape`），`c` 打开配置浮层，`r` 或 `F2` 重命名，`x` 或 `Delete` 移除，`a` 添加面板，`m` 列出所有操作。在编辑模式下，`Shift` + `h`/`j`/`k`/`l` 移动所选面板，`Alt+Shift` + `h`/`j`/`k`/`l` 调整其大小。见[键盘快捷键](KEYBOARD.md#仪表盘)。
 
 ### 添加面板
@@ -105,7 +107,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 两个管理器都在 SQLite 存储库之上包了一层内存缓存，用于同步读取。写入操作先落到存储库，缓存只在写入成功后才更新。
 
-- **`DashboardManager`**（`crates/dbflux_ui_base/src/dashboard_manager.rs`）—— 领域类型包括 `Dashboard`、`DashboardPanel`、`DashboardPanelKind`（`Chart { saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`）和 `DashboardPanelDraft`。新建仪表盘时 `grid_columns = 12`；新建面板会追加到新的一行，取 `grid_column = 0`、`grid_width = 12`、`grid_height = 2`。
+- **`DashboardManager`**（`crates/dbflux_ui_base/src/dashboard_manager.rs`）—— 领域类型包括 `Dashboard`、`DashboardPanel`、`DashboardPanelKind`（`Chart { saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`）和 `DashboardPanelDraft`。新建仪表盘时 `grid_columns = 12`；新建面板会追加到新的一行，取 `grid_column = 0`、`grid_width = 12`、`grid_height = 4`。
 - **`SavedChartManager`**（`crates/dbflux_ui_base/src/saved_chart_manager.rs`）—— 负责 `SavedChart` 的整个生命周期，包括 `SavedChartRefreshPolicy`（`Off` / `Interval { every_secs }`）。
 - **`RemoteDashboardCache`**（`crates/dbflux_app/src/remote_dashboard_cache.rs`）—— 上游仪表盘列表的会话级内存缓存，重启后不会保留。
 

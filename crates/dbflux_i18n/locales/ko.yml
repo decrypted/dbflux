@@ -53,6 +53,7 @@ audit:
     open_viewer_failed: "감사 뷰어를 열 수 없습니다: %{error}"
     persist_mcp_governance_failed: "MCP 거버넌스를 저장하지 못했습니다: %{error}"
 chart:
+  too_small_to_draw: "너무 작아서 그릴 수 없음"
   axis_bar:
     group: 그룹
     aggregation:

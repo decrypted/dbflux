@@ -194,10 +194,11 @@ impl CodeDocument {
         // Populate optional helper: whether the close policy applies right now.
         // A code document persists its pending edits on close only when it has
         // a file to persist to; an untitled buffer has no save target short of
-        // Save As, so it keeps the unsaved-changes dialog instead.
+        // Save As, and a buffer whose close save was refused cannot land it, so
+        // both keep the unsaved-changes dialog instead.
         handle.decides_own_close = Some({
             let e = entity.clone();
-            Box::new(move |cx| e.read(cx).path().is_some())
+            Box::new(move |cx| e.read(cx).decides_own_close())
         });
 
         // Populate optional helper: the only backing file the cleanup path in

@@ -1221,23 +1221,6 @@ impl DashboardDocument {
         }
     }
 
-    /// Reorder panels using insert-at-position semantics.
-    ///
-    /// Persists via `DashboardManager::reorder_panels`. Rebuilds `panel_slots`
-    /// from the manager's updated panel list.
-    pub fn reorder_panels(&mut self, from_index: u32, to_index: u32, cx: &mut Context<Self>) {
-        let dashboard_id = self.dashboard_id;
-        let result = self.app_state.update(cx, |state, _cx| {
-            state
-                .dashboards
-                .reorder_panels(dashboard_id, from_index, to_index)
-        });
-
-        if result.is_ok() {
-            cx.notify();
-        }
-    }
-
     /// Resize a panel, clamping dimensions to valid ranges.
     ///
     /// Persists via `DashboardManager::resize_panel`.

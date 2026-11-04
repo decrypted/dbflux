@@ -97,14 +97,6 @@ fn edits_past_a_hidden_row_reach_the_panel_shown_there() {
     let row = row_of_b(&mgr);
     assert_eq!((row.grid_width, row.grid_height), (2, 3));
 
-    mgr.reorder_panels(dash_id, 1, 0).unwrap();
-    assert_eq!(
-        mgr.shown_panels(dash_id)[0].saved_chart_id(),
-        Some(b),
-        "moving the panel shown second puts it first"
-    );
-    mgr.reorder_panels(dash_id, 0, 1).unwrap();
-
     assert_eq!(mgr.shown_panels(dash_id).len(), 2);
     assert_eq!(mgr.shown_panels(dash_id)[1].saved_chart_id(), Some(b));
 }

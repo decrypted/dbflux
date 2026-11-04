@@ -96,7 +96,8 @@ when you remove the panel.
 
 Each panel's settings button (Edit mode) offers **Configure / Edit title /
 Remove panel**. The **Configure** popover lets you change the chart type (Line, Bar,
-Scatter, Area, Stacked, Pie), adjust axis bindings, and view **Stats**.
+Scatter, Area, Stacked, Pie), adjust axis bindings, and view **Stats**. Removing a
+panel leaves the others where they are, with a gap where it was.
 
 Dashboards can also contain **Divider** strips — markdown headers that visually
 group panels and collapse the panels beneath them when clicked. Collapsed panels

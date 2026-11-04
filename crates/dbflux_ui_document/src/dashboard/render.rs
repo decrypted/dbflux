@@ -422,6 +422,7 @@ impl Render for DashboardDocument {
 
                 let panel_element = div()
                     .id(("panel-slot", panel_index))
+                    .debug_selector(|| format!("panel-slot-{panel_index}"))
                     .absolute()
                     .left(gpui::relative(col_percent / 100.0))
                     .top(px(top_px))

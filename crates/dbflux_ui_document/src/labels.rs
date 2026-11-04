@@ -4055,11 +4055,11 @@ mod tests {
         pending_change_count_label, pending_edits_summary, pk_details_fetch_failed_error,
         presign_expiry_label, presign_method_label, preview_gate_message, query_failed_error,
         result_tab_count_label, row_count_label, row_inspector_title, run_script_task_label,
-        saved_query_already_exists_error, saved_query_saved_as_toast, schema_change_description,
-        script_confirm_message_label, shared_error_prefix, sort_direction_label,
-        source_window_error_message, syntax_error_with_hint, table_action_description,
-        unsaved_changes_label, update_columns_label, valid_lines_label, versioning_off_label,
-        versioning_status_label, visual_mutation_task_label,
+        saved_query_already_exists_error, saved_query_import_error, saved_query_saved_as_toast,
+        schema_change_description, script_confirm_message_label, shared_error_prefix,
+        sort_direction_label, source_window_error_message, syntax_error_with_hint,
+        table_action_description, unsaved_changes_label, update_columns_label, valid_lines_label,
+        versioning_off_label, versioning_status_label, visual_mutation_task_label,
     };
     use super::{
         collection_documents, collection_matching, collection_matching_estimated,

@@ -4210,6 +4210,39 @@ impl gpui::Render for HiddenConsoleHost {
     }
 }
 
+/// The regression this guards: leaving a running query by key and coming back the same
+/// way puts the keyboard in the editor before the document draws, so the result that
+/// arrived meanwhile must not route the keys to the results.
+#[gpui::test]
+fn coming_back_by_key_keeps_the_keyboard_in_the_editor(cx: &mut TestAppContext) {
+    use gpui::Focusable as _;
+
+    let mut console = console_with(cx, "");
+    let hidden = run_in_a_tab_not_showing(&mut console, FIRST_STATEMENT);
+    console.window.run_until_parked();
+
+    let document = hidden.clone();
+    let window = console.window.cx.add_window(move |window, cx| {
+        document.update(cx, |document, cx| document.focus(window, cx));
+        HiddenConsoleHost(document)
+    });
+    let mut drawn = VisualTestContext::from_window(*window, &console.window.cx);
+    drawn.run_until_parked();
+
+    drawn.update(|window, cx| {
+        let document = hidden.read(cx);
+        assert_eq!(document.focus_mode, SqlQueryFocus::Editor);
+        assert!(
+            document
+                .editor
+                .input_state
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        );
+    });
+}
+
 /// A script in a tab that isn't showing ends with its result too.
 #[cfg(unix)]
 #[gpui::test]
@@ -4284,6 +4317,47 @@ fn an_inspector_not_showing_ends_with_its_result(cx: &mut TestAppContext) {
 
     assert_eq!(running_tasks(&mut console), 0, "the task ended");
     assert_eq!(*finishes.borrow(), 1);
+}
+
+/// A cancel from the task list ends an inspector's run: it stays Loading no longer.
+#[gpui::test]
+fn a_cancel_from_the_task_list_leaves_the_inspector_idle(cx: &mut TestAppContext) {
+    let console = console_with(cx, "");
+    let (app_state, profile_id) = (console.app_state.clone(), console.profile_id);
+    let inspector = console.window.update(|_, cx| {
+        let state = app_state.clone();
+        cx.new(|cx| {
+            crate::instance_inspector::InspectorPanel::new(
+                profile_id,
+                "sessions".to_string(),
+                state,
+                cx,
+            )
+        })
+    });
+
+    let handle = inspector.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |inspector, cx| inspector.request_reexec(cx));
+    });
+    assert_eq!(
+        console.window.update(|_, cx| inspector.read(cx).state()),
+        DocumentState::Loading
+    );
+
+    console.window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            let running = state.running_tasks();
+            assert_eq!(running.len(), 1);
+            state.tasks_mut().cancel(running[0].id);
+        });
+    });
+    console.window.run_until_parked();
+
+    assert_eq!(
+        console.window.update(|_, cx| inspector.read(cx).state()),
+        DocumentState::Clean
+    );
 }
 
 /// A query that fails in a tab that isn't showing says so when it fails, not when

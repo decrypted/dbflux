@@ -384,7 +384,9 @@ impl InspectorPanel {
                         log::warn!("[inspector] cleanup after cancel failed: {}", e);
                     }
                     if let Some(entity) = this.upgrade() {
-                        entity.update(cx, |panel, cx| panel.report_run_end(holds_slot, cx));
+                        entity.update(cx, |panel, cx| {
+                            panel.finish_cancelled_run(task_id, holds_slot, cx)
+                        });
                     }
                     return;
                 }
@@ -405,6 +407,25 @@ impl InspectorPanel {
         .detach();
 
         true
+    }
+
+    /// A cancelled run ended. Unless a newer run took over, nothing runs now: the
+    /// cancel can come from the task list, which doesn't know this panel.
+    fn finish_cancelled_run(
+        &mut self,
+        task_id: dbflux_core::TaskId,
+        holds_slot: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.runner.clear_primary(task_id);
+
+        if !self.runner.is_primary_active() && self.state == DocumentState::Loading {
+            self.state = DocumentState::Clean;
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+        }
+
+        self.report_run_end(holds_slot, cx);
     }
 
     fn apply_result(&mut self, pending: PendingResult, cx: &mut Context<Self>) {

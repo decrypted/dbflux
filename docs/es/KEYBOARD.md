@@ -577,7 +577,8 @@ popover.
 En el diálogo Add Panel, `Alt+l` / `Alt+h` cambian sus pestañas (también desde
 sus campos de texto, salvo en macOS). Las flechas recorren la lista de charts
 desde la búsqueda y `Enter` añade los charts marcados, o el resaltado si no hay
-ninguno marcado. `Tab` entra en una lista, donde funcionan `j` / `k`, `g` /
+ninguno marcado. Un chart que ya está en el dashboard no se puede marcar ni añadir.
+`Tab` entra en una lista, donde funcionan `j` / `k`, `g` /
 `Shift+g` y `Space` (marcar un chart, elegir un namespace o una métrica),
 `h` / `l` pasan entre las listas de namespaces y métricas de la pestaña Metric
 y `/` vuelve a la búsqueda. `Escape` cierra el diálogo.

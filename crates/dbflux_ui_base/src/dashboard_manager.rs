@@ -846,7 +846,9 @@ impl DashboardManager {
     }
 
     /// Removes the panel at `panel_index`, re-indexes remaining panels dense
-    /// (0..N-1), and persists via `replace_panels_for_dashboard`.
+    /// (0..N-1), and persists via `replace_panels_for_dashboard`. Other rows for the
+    /// same saved chart go with it: reading the panels hides them, so they would come
+    /// back as a panel on the next open.
     pub fn remove_panel(
         &mut self,
         dashboard_id: Uuid,
@@ -863,7 +865,14 @@ impl DashboardManager {
 
         // Sort by panel_index to ensure deterministic removal.
         panels.sort_by_key(|p| p.panel_index);
+        let removed_chart = panels
+            .iter()
+            .find(|p| p.panel_index == panel_index)
+            .and_then(|p| p.saved_chart_id());
         panels.retain(|p| p.panel_index != panel_index);
+        if let Some(chart) = removed_chart {
+            panels.retain(|p| p.saved_chart_id() != Some(chart));
+        }
 
         // Re-index dense with recomputed grid positions.
         let updated_panels: Vec<DashboardPanel> = panels
@@ -1515,6 +1524,39 @@ mod tests {
         assert_eq!(panels[1].grid_row, 4);
         assert_eq!(panels[1].grid_width, 12);
         assert_eq!(panels[1].grid_height, 4);
+    }
+
+    /// Rows a past bug stored twice for one chart: removing the panel removes them
+    /// all, or the hidden one would come back on the next open.
+    #[test]
+    fn removing_a_panel_removes_the_other_rows_of_its_chart() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+        let (twice, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let chart = |saved_chart_id| DashboardPanelDraft::Chart {
+            saved_chart_id,
+            layout: None,
+        };
+
+        mgr.append_panels(dash_id, vec![chart(twice), chart(other), chart(twice)])
+            .unwrap();
+        mgr.remove_panel(dash_id, 0).unwrap();
+
+        let left: Vec<_> = mgr
+            .panels_for_dashboard(dash_id)
+            .iter()
+            .map(|p| (p.panel_index, p.saved_chart_id()))
+            .collect();
+        assert_eq!(left, [(0, Some(other))]);
     }
 
     #[test]

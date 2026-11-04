@@ -95,7 +95,8 @@ Haz clic en **+ Add Panel**. El selector tiene hasta tres pestañas:
 
 Un dashboard muestra cada chart guardado una vez. La pestaña **Saved** lista un
 chart que este dashboard ya muestra como *Ya está en este dashboard*, y no se
-puede elegir.
+puede elegir. Las versiones anteriores podían guardar ese chart dos veces. La fila
+sobrante sigue oculta y se elimina al quitar el panel.
 
 El botón de ajustes de cada panel (modo Edit) ofrece **Configure / Edit title /
 Remove panel**. El popover **Configure** te permite cambiar el tipo de chart (Line,

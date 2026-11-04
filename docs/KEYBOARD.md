@@ -550,7 +550,7 @@ applies and `Escape` closes the picker and then the popover.
 In the Add Panel dialog, `Alt+l` / `Alt+h` switch its tabs (also from its text
 fields, except on macOS). The arrows move through the chart list from the
 search and `Enter` adds the checked charts, or the highlighted one when none is
-checked. `Tab` moves into a list, where `j` / `k`, `g` / `Shift+g` and `Space`
+checked. A chart already on the dashboard can't be checked or added. `Tab` moves into a list, where `j` / `k`, `g` / `Shift+g` and `Space`
 (check a chart, pick a namespace or metric) work, `h` / `l` switch between the
 Metric tab's namespace and metric lists and `/` goes back to the search.
 `Escape` closes the dialog.

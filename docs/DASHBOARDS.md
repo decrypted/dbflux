@@ -70,7 +70,7 @@ Switch between **View** and **Edit** in the header:
 
 A new panel is four rows tall. A panel under three rows leaves out the legend to
 give the plot its room, and one too small for a plot says *Too small to draw*
-until you make it bigger.
+until you make it bigger, as [any chart](CHARTS.md) does.
 
 The whole dashboard works from the keyboard in both modes: `h`/`j`/`k`/`l` or
 the arrows select a panel, `Enter` opens it (its chart or table takes the keys
@@ -91,6 +91,8 @@ Click **+ Add Panel**. The picker has up to three tabs:
 
 A dashboard shows a saved chart once. The **Saved** tab lists a chart this
 dashboard already shows as *Already on this dashboard*, and it can't be picked.
+Older versions could store such a chart twice. The extra row stays hidden, and goes
+when you remove the panel.
 
 Each panel's settings button (Edit mode) offers **Configure / Edit title /
 Remove panel**. The **Configure** popover lets you change the chart type (Line, Bar,

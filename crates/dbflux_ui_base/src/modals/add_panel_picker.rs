@@ -313,11 +313,6 @@ impl ModalAddPanelPicker {
 
     pub fn open(&mut self, request: AddPanelRequest, window: &mut Window, cx: &mut Context<Self>) {
         let has_metric_catalog = request.has_metric_catalog;
-        self.saved_highlight = request
-            .candidates
-            .iter()
-            .position(|chart| !request.on_dashboard.contains(&chart.id))
-            .unwrap_or(0);
         self.request = Some(request);
         self.visible = true;
         self.active_tab = AddPanelTab::Saved;
@@ -333,6 +328,7 @@ impl ModalAddPanelPicker {
         self.search_input.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
+        self.highlight_first_addable_chart(cx);
         self.query_name_input.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
@@ -352,9 +348,17 @@ impl ModalAddPanelPicker {
             state.set_value("60", window, cx);
         });
 
-        let mut subs = Vec::new();
-        for input in [
+        let mut subs = vec![cx.subscribe_in(
             &self.search_input,
+            window,
+            |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.highlight_first_addable_chart(cx);
+                    cx.notify();
+                }
+            },
+        )];
+        for input in [
             &self.query_name_input,
             &self.metric_name_input,
             &self.metric_namespace_filter_input,
@@ -404,6 +408,24 @@ impl ModalAddPanelPicker {
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
         cx.emit(AddPanelOutcome::Cancelled);
         self.close(cx);
+    }
+
+    /// Puts the highlight on the first listed chart that can be added.
+    fn highlight_first_addable_chart(&mut self, cx: &App) {
+        self.saved_highlight = self
+            .filtered_saved_ids(cx)
+            .iter()
+            .position(|id| !self.is_on_dashboard(*id))
+            .unwrap_or(0);
+    }
+
+    /// The chart the highlight is on, as the list draws it: a search can leave
+    /// fewer rows than the highlight counts.
+    fn highlighted_saved_id(&self, cx: &App) -> Option<Uuid> {
+        let ids = self.filtered_saved_ids(cx);
+
+        ids.get(self.saved_highlight.min(ids.len().saturating_sub(1)))
+            .copied()
     }
 
     fn is_on_dashboard(&self, chart_id: Uuid) -> bool {
@@ -744,11 +766,7 @@ impl ModalAddPanelPicker {
     fn toggle_highlighted(&mut self, window: &Window, cx: &mut Context<Self>) {
         match self.active_tab {
             AddPanelTab::Saved => {
-                if let Some(id) = self
-                    .filtered_saved_ids(cx)
-                    .get(self.saved_highlight)
-                    .copied()
-                {
+                if let Some(id) = self.highlighted_saved_id(cx) {
                     self.toggle_chart(id, cx);
                 }
             }
@@ -793,9 +811,8 @@ impl ModalAddPanelPicker {
                 AddPanelTab::Saved => {
                     self.selected_ids.is_empty()
                         && self
-                            .filtered_saved_ids(cx)
-                            .get(self.saved_highlight)
-                            .is_some_and(|id| !self.is_on_dashboard(*id))
+                            .highlighted_saved_id(cx)
+                            .is_some_and(|id| !self.is_on_dashboard(id))
                 }
                 AddPanelTab::Metric => true,
                 AddPanelTab::Query => false,
@@ -809,9 +826,8 @@ impl ModalAddPanelPicker {
         match self.active_tab {
             AddPanelTab::Saved if self.selected_ids.is_empty() => {
                 if let Some(id) = self
-                    .filtered_saved_ids(cx)
-                    .get(self.saved_highlight)
-                    .copied()
+                    .highlighted_saved_id(cx)
+                    .filter(|id| !self.is_on_dashboard(*id))
                 {
                     self.selected_ids.push(id);
                 }
@@ -2183,73 +2199,14 @@ mod keyboard_tests {
         (modal, window, outcomes)
     }
 
+    mod on_dashboard;
+
     fn named_chart(name: &str) -> SavedChart {
         SavedChart {
             id: Uuid::new_v4(),
             name: name.to_string(),
             ..chart()
         }
-    }
-
-    /// A chart the dashboard already shows can't be added by click or by key:
-    /// a second panel for it would never appear.
-    #[gpui::test]
-    fn a_chart_on_the_dashboard_cannot_be_picked(cx: &mut TestAppContext) {
-        let shown = named_chart("Latency");
-        let other = named_chart("Throughput");
-        let (shown_id, other_id) = (shown.id, other.id);
-        let (modal, window, outcomes) =
-            open_modal_on_dashboard(cx, vec![shown, other], vec![shown_id], false);
-
-        // Starts on the first chart that can be added.
-        assert_eq!(window.update(|_, cx| modal.read(cx).saved_highlight), 1);
-
-        window.update(|_, cx| modal.update(cx, |modal, cx| modal.toggle_chart(shown_id, cx)));
-        assert!(window.update(|_, cx| modal.read(cx).selected_ids.is_empty()));
-
-        window.update(|window, cx| {
-            let list = modal.read(cx).saved_list_focus.clone();
-            list.focus(window, cx);
-        });
-        window.run_until_parked();
-
-        window.simulate_keystrokes("k space");
-        assert!(
-            window.update(|_, cx| modal.read(cx).selected_ids.is_empty()),
-            "Space does not check it"
-        );
-        window.simulate_keystrokes("enter");
-        assert!(
-            outcomes.borrow().is_empty(),
-            "Enter does not add it, and the dialog stays open"
-        );
-        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
-
-        window.simulate_keystrokes("j enter");
-        assert!(matches!(
-            outcomes.borrow().as_slice(),
-            [AddPanelOutcome::Confirmed { chart_ids, .. }] if chart_ids == &[other_id]
-        ));
-    }
-
-    /// The row says why it can't be picked, and only that row does.
-    #[gpui::test]
-    fn a_chart_on_the_dashboard_says_so(cx: &mut TestAppContext) {
-        let shown = named_chart("Latency");
-        let shown_id = shown.id;
-        let (modal, window, _outcomes) =
-            open_modal_on_dashboard(cx, vec![shown], vec![shown_id], false);
-
-        assert!(window.debug_bounds("add-panel-on-dashboard").is_some());
-        assert_eq!(
-            window.update(|_, cx| modal.read(cx).submit_label()),
-            "Add panels"
-        );
-        assert!(!window.update(|_, cx| modal.read(cx).can_confirm(cx)));
-        assert!(!window.update(|_, cx| modal.read(cx).can_confirm_from_keys(cx)));
-
-        let (_modal, window, _outcomes) = open_modal_with(cx, vec![named_chart("Latency")], false);
-        assert!(window.debug_bounds("add-panel-on-dashboard").is_none());
     }
 
     /// Alt+L and Alt+H switch the tabs from the search field, wrapping.

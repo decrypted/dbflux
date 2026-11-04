@@ -1329,6 +1329,7 @@ document:
         last: "Último"
         series: "Series"
       saved_badge: "guardado"
+      unsaved_badge: "Cambios sin guardar"
     status:
       task_label: Consulta de gráfico
     toast:

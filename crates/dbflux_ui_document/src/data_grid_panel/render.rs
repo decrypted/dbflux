@@ -2033,6 +2033,8 @@ impl DataGridPanel {
             // Saving a chart stores its query; a table browse has none, so
             // `open_collection_chart_save` does nothing for it.
             source_supports_save: !matches!(self.source, DataSource::Table { .. }),
+            // Saving here makes a new chart each time, so there is nothing to differ from.
+            has_unsaved_changes: false,
             refresh_variant: ButtonVariant::Primary,
             leading: None,
             show_window: true,

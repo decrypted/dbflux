@@ -62,6 +62,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **A chart says when it has unsaved changes:** The green "saved" chip stayed green after an edit, so a query or database changed and run looked stored while reopening showed the old one. Now the chip reads "Unsaved changes" and "Save chart" stands out as soon as anything Save would keep differs, until it is saved or the edit is undone. Running still saves nothing.
 * **A chart's axis fields stay in their bar:** The axis row had a fixed height, so fields that wrapped painted over what's below: the Query bar on a narrow window, and on any metric or instance metric chart, whose window label and "Samples collected in this chart session" note took the row's width, also the lines around it. The row now grows with its fields, and the label and the note stack.
 * **Removing a moved panel removes that panel from view:** After panels were moved, removing one took the wrong card off the screen until the dashboard was reopened.
 * **A collapsed dashboard section doesn't stop the others refreshing:** A refresh or time range change marked the panels of a collapsed section to run, and they held run slots they could not give back, so with enough of them the panels in view stopped refreshing. They now wait, and run when the section opens.

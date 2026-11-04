@@ -155,13 +155,19 @@ pub(crate) fn saved_chart_context(
     context: &ExecutionContext,
     cx: &App,
 ) -> SavedChartContext {
-    let has_databases = profile_id
+    SavedChartContext::capture(context, connection_has_databases(app_state, profile_id, cx))
+}
+
+fn connection_has_databases(
+    app_state: &Entity<AppStateEntity>,
+    profile_id: Option<Uuid>,
+    cx: &App,
+) -> bool {
+    profile_id
         .and_then(|id| app_state.read(cx).connections().get(&id))
         .is_none_or(|connected| {
             connected.connection.schema_loading_strategy() != SchemaLoadingStrategy::SingleDatabase
-        });
-
-    SavedChartContext::capture(context, has_databases)
+        })
 }
 
 /// Where the picked columns are in an edited query's result: by name when the
@@ -1128,7 +1134,8 @@ impl ChartDocument {
     /// against `stored_settings`.
     ///
     /// Columns detection chose are no pick, and neither are positions in a result
-    /// the applied query has not had yet: neither is something to lose.
+    /// the applied query has not had yet: neither is something to lose. A driver with
+    /// one fixed database has no picker, and Save keeps no database for it.
     fn current_settings(&self, cx: &App) -> ChartSettings {
         let shell = self.chart_shell.read(cx);
         let pick = self
@@ -1147,13 +1154,23 @@ impl ChartDocument {
             kind: shell.chart_kind(),
             y_scale: shell.y_scale(),
             query: self.query_in_box(cx),
-            database: self.context_to_save(cx).database,
+            database: if connection_has_databases(&self.app_state, self.profile_id, cx) {
+                self.database_in_picker()
+            } else {
+                self.stored_settings.database.clone()
+            },
         }
     }
 
-    /// Whether closing drops something the user cannot get back: picks made
-    /// in this chart since it opened or was saved, a metric swapped in the
-    /// picker, or the samples only this session collected.
+    /// Whether anything Save keeps differs from what is stored. The Escape warning and
+    /// the Save button both read this, so that they cannot disagree. The time range,
+    /// the refresh interval and hidden series do not count: Save does not keep them.
+    pub(crate) fn has_unsaved_changes(&self, cx: &App) -> bool {
+        self.source_replaced || self.current_settings(cx) != self.stored_settings
+    }
+
+    /// Whether closing drops something the user cannot get back: anything unsaved, or
+    /// the samples only this session collected, which Save does not keep either.
     ///
     /// A chart with its default settings is safe: it opens again from its
     /// query or from the saved list. The time range, the refresh interval and
@@ -1166,9 +1183,7 @@ impl ChartDocument {
                 .as_ref()
                 .is_some_and(|result| result.row_count() > 1);
 
-        collected_samples
-            || self.source_replaced
-            || self.current_settings(cx) != self.stored_settings
+        collected_samples || self.has_unsaved_changes(cx)
     }
 
     /// What Escape does once nothing in the chart is left to dismiss.

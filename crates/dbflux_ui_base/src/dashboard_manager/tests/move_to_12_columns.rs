@@ -206,7 +206,7 @@ fn rows_rescaled_by_an_earlier_version_stay_as_they_are() {
 /// that row is held to the edge.
 #[test]
 fn a_row_overrunning_its_grid_that_was_never_opened_still_moves() {
-    let rows = vec![(0, 0, 1, 4), (4, 1, 2, 4)];
+    let rows = [(0, 0, 1, 4), (4, 1, 2, 4)];
     let (rt, dash_id) = stored(2, rows.iter().map(|rect| chart(*rect)).collect());
 
     let mut mgr = manager_over(&rt);

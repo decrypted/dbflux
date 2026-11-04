@@ -112,20 +112,31 @@ impl DashboardsRepository {
         Ok(rows.pop())
     }
 
-    /// Inserts or replaces a dashboard row, bumping `updated_at` to now.
+    /// Inserts a dashboard row or updates it in place, bumping `updated_at` to now. A
+    /// `REPLACE` would delete the row first, and the delete cascades to its panels.
     pub fn upsert(&self, dashboard: &DashboardDto) -> Result<(), StorageError> {
         let conn = self.conn.lock().map_err(lock_err)?;
 
         let now_ms = now_millis();
 
         conn.execute(
-            "INSERT OR REPLACE INTO viz_dashboards
+            "INSERT INTO viz_dashboards
                  (id, name, description, profile_id,
                   shared_time_range_preset,
                   shared_refresh_policy_kind,
                   shared_refresh_policy_interval_secs,
                   grid_columns, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name,
+                 description = excluded.description,
+                 profile_id = excluded.profile_id,
+                 shared_time_range_preset = excluded.shared_time_range_preset,
+                 shared_refresh_policy_kind = excluded.shared_refresh_policy_kind,
+                 shared_refresh_policy_interval_secs = excluded.shared_refresh_policy_interval_secs,
+                 grid_columns = excluded.grid_columns,
+                 created_at = excluded.created_at,
+                 updated_at = excluded.updated_at",
             rusqlite::params![
                 dashboard.id,
                 dashboard.name,
@@ -372,6 +383,76 @@ mod tests {
             dto.shared_refresh_policy_interval_secs
         );
         assert_eq!(loaded.grid_columns, dto.grid_columns);
+    }
+
+    #[test]
+    fn test_dashboard_upsert_updates_in_place_and_keeps_its_panels() {
+        let path = temp_db("upsert_keeps_panels");
+        let conn = open_database(&path).expect("open");
+        MigrationRegistry::new().run_all(&conn).expect("migrate");
+
+        let profile_id = insert_profile(&conn);
+        let chart_id = insert_chart(&conn, profile_id);
+
+        let conn = Arc::new(Mutex::new(conn));
+        let repo = DashboardsRepository::new(Arc::clone(&conn));
+        let panels = DashboardPanelsRepository::new(Arc::clone(&conn));
+
+        let id = Uuid::new_v4();
+        let mut dashboard = make_dashboard(id, Some(profile_id));
+        repo.upsert(&dashboard).expect("insert");
+        panels
+            .replace_panels_for_dashboard(
+                id,
+                &[DashboardPanelDto {
+                    dashboard_id: id.to_string(),
+                    panel_index: 0,
+                    panel_kind: "chart".to_string(),
+                    divider_markdown: None,
+                    inspector_metric_id: None,
+                    saved_chart_id: chart_id.to_string(),
+                    title_override: Some("kept".to_string()),
+                    grid_row: 3,
+                    grid_column: 1,
+                    grid_width: 4,
+                    grid_height: 5,
+                }],
+            )
+            .expect("panels");
+
+        dashboard.name = "Renamed".to_string();
+        dashboard.description = None;
+        dashboard.profile_id = None;
+        dashboard.shared_time_range_preset = None;
+        dashboard.shared_refresh_policy_kind = "off".to_string();
+        dashboard.shared_refresh_policy_interval_secs = None;
+        dashboard.grid_columns = 12;
+        repo.upsert(&dashboard).expect("update");
+
+        let stored = repo.get_by_id(id).expect("get").expect("stored");
+        assert_eq!(stored.name, "Renamed");
+        assert_eq!(stored.description, None);
+        assert_eq!(stored.profile_id, None);
+        assert_eq!(stored.shared_time_range_preset, None);
+        assert_eq!(stored.shared_refresh_policy_kind, "off");
+        assert_eq!(stored.shared_refresh_policy_interval_secs, None);
+        assert_eq!(stored.grid_columns, 12);
+        assert_eq!(stored.created_at, 1_000_000);
+        assert_ne!(stored.updated_at, 1_000_000);
+
+        let rows = panels.list_for_dashboard(id).expect("list");
+        assert_eq!(rows.len(), 1, "the update must keep the panel rows");
+        assert_eq!(rows[0].saved_chart_id, chart_id.to_string());
+        assert_eq!(rows[0].title_override.as_deref(), Some("kept"));
+        assert_eq!(
+            (
+                rows[0].grid_row,
+                rows[0].grid_column,
+                rows[0].grid_width,
+                rows[0].grid_height
+            ),
+            (3, 1, 4, 5)
+        );
     }
 
     #[test]

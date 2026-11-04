@@ -101,11 +101,11 @@ impl Render for ChartDocument {
             self._time_range_sub = Some(time_range_sub);
             self._subscriptions.push(preset_sub);
 
-            // Seed the initial window synchronously rather than relying on
-            // emit_initial's event delivery, which GPUI defers until after the
-            // current render pass. Sources that require a window (MetricSource,
-            // CollectionSource) would otherwise call build_plan(None) → WindowRequired
-            // toast on the very first auto-run triggered by pending_run_on_first_render.
+            // The first run needs a window, and sources that require one
+            // (MetricSource, CollectionSource) would answer WindowRequired without.
+            // The panel's event would come too late for that run and start another,
+            // so the chart seeds the window itself and the panel stays silent until
+            // the user changes the range.
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
@@ -131,10 +131,6 @@ impl Render for ChartDocument {
             self.applied_display_window = Some(display_window);
             // Seed selected_time_range to match the initial panel preset.
             self.selected_time_range = panel.read(cx).selected_time_range;
-
-            // Also trigger emit_initial so that the subscription fires on the
-            // next render pass, keeping the dropdown and panel state consistent.
-            panel.update(cx, |panel, cx| panel.emit_initial(cx));
         }
 
         // -- Consume pending data-source swap from MetricPickerApplied event.
@@ -144,20 +140,11 @@ impl Render for ChartDocument {
             self.set_data_source(source, window, cx);
         }
 
-        // -- Drain pending chart re-execute triggered by time-range changes.
-        if std::mem::take(&mut self.pending_chart_reexecute) {
-            self.request_reexecute(window, cx);
-        }
+        self.run_if_marked(cx);
 
         // -- Apply pending query result --
         if let Some(pending) = self.pending_result.take() {
             self.apply_result(pending, cx);
-        }
-
-        // -- Auto-run on first render --
-        if self.pending_run_on_first_render {
-            self.pending_run_on_first_render = false;
-            self.request_reexecute(window, cx);
         }
 
         // -- Flush pending toasts --

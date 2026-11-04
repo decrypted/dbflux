@@ -142,11 +142,6 @@ impl Render for ChartDocument {
 
         self.run_if_marked(cx);
 
-        // -- Apply pending query result --
-        if let Some(pending) = self.pending_result.take() {
-            self.apply_result(pending, cx);
-        }
-
         // -- Flush pending toasts --
         // Last: a notify during render schedules no new frame, so a toast the
         // steps above queued would otherwise wait for an unrelated repaint.

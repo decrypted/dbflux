@@ -1257,7 +1257,7 @@ impl CodeDocument {
             }
 
             // Emit fallback when entity is gone AND result delivery fails.
-            // When entity is gone, process_pending_result never runs → emit directly.
+            // When entity is gone, finish_query never runs → emit directly.
             //
             // Extract outcome details BEFORE moving result into the closure so we can
             // emit the correct success/failure event when the entity is already gone.
@@ -1297,27 +1297,31 @@ impl CodeDocument {
             // use it in the fallback event if needed.
             let query_text = reported_query.clone();
 
-            let inner_result = this.update(cx, |doc, cx| {
-                doc.pending.result = Some(PendingQueryResult {
-                    task_id,
-                    exec_id,
-                    query,
-                    result,
-                    is_script: false,
-                    read_only,
-                    result_grid,
-                    origin: Some(origin),
-                    run,
-                });
+            let inner_result = this.update_in(cx, |doc, window, cx| {
+                doc.finish_query(
+                    PendingQueryResult {
+                        task_id,
+                        exec_id,
+                        query,
+                        result,
+                        is_script: false,
+                        read_only,
+                        result_grid,
+                        origin: Some(origin),
+                        run,
+                    },
+                    window,
+                    cx,
+                );
                 cx.notify();
             });
 
             // Fallback fires if the entity is gone (this.update failed). If this.update
-            // succeeded, the entity is alive and process_pending_result will emit via the
+            // succeeded, the entity is alive and finish_query will emit via the
             // normal path — no second probe needed. This avoids both double-logging and
             // the overhead of a separate cx.update call.
             if inner_result.is_err() {
-                // Entity is gone; process_pending_result won't run. Emit via fallback so the event
+                // Entity is gone; finish_query won't run. Emit via fallback so the event
                 // is not silently dropped.
                 let ts_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1657,12 +1661,44 @@ impl CodeDocument {
         .push(cx);
     }
 
-    /// Process pending query result (called from render where we have window access).
-    pub(super) fn process_pending_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending.result.take() else {
+    /// Moves the keyboard's mode to a new result, when the document is drawn: a tab
+    /// that isn't showing has no keyboard to move, and one coming back by key gets
+    /// its focus back before this runs.
+    ///
+    /// Only flips the internal focus_mode to Results when the user is not actively
+    /// typing in the editor input. Otherwise the GPUI focus stays on the input but
+    /// our key-routing thinks Results is active, so Workspace::on_key_down sends
+    /// single-letter keys (l, r, o, x, …) through the Results keymap layer and
+    /// steals them from the editor.
+    pub(super) fn process_pending_results_focus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !std::mem::take(&mut self.pending.results_focus) {
             return;
-        };
+        }
 
+        let input_focused = self
+            .editor
+            .input_state
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+        if !input_focused {
+            self.focus_mode = SqlQueryFocus::Results;
+        }
+    }
+
+    /// Ends a run with its result. Called when the result arrives, not from
+    /// render: a document in a tab that isn't showing doesn't draw, and its task
+    /// would count on until someone looks at it.
+    fn finish_query(
+        &mut self,
+        pending: PendingQueryResult,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.clear_live_output();
         self.state = DocumentState::Clean;
 
@@ -1749,21 +1785,7 @@ impl CodeDocument {
                     self.layout = SqlQueryLayout::Split;
                 }
 
-                // Only flip the internal focus_mode to Results when the user is
-                // not actively typing in the editor input. Otherwise the GPUI
-                // focus stays on the input but our key-routing thinks Results
-                // is active, so Workspace::on_key_down sends single-letter keys
-                // (l, r, o, x, …) through the Results keymap layer and steals
-                // them from the editor.
-                let input_focused = self
-                    .editor
-                    .input_state
-                    .read(cx)
-                    .focus_handle(cx)
-                    .is_focused(window);
-                if !input_focused {
-                    self.focus_mode = SqlQueryFocus::Results;
-                }
+                self.pending.results_focus = true;
 
                 // Emit audit event for successful execution (query or script)
                 let summary = if is_script {
@@ -2888,7 +2910,7 @@ impl CodeDocument {
             }
 
             // Emit fallback when entity is gone AND result delivery fails.
-            // When entity is gone, process_pending_result never runs → emit directly.
+            // When entity is gone, finish_query never runs → emit directly.
             //
             // Extract outcome details and duration BEFORE moving result into the closure so we can
             // emit the correct success/failure event when the entity is already gone.
@@ -2924,25 +2946,29 @@ impl CodeDocument {
             // use it in the fallback event if needed.
             let script_content = content.clone();
 
-            let inner_result = this.update(cx, |doc, cx| {
-                doc.pending.result = Some(PendingQueryResult {
-                    task_id,
-                    exec_id,
-                    query: content,
-                    result,
-                    is_script: true,
-                    read_only: ReadOnlyEnforcement::None,
-                    result_grid: None,
-                    origin: None,
-                    run: StatementRun::Query,
-                });
+            let inner_result = this.update_in(cx, |doc, window, cx| {
+                doc.finish_query(
+                    PendingQueryResult {
+                        task_id,
+                        exec_id,
+                        query: content,
+                        result,
+                        is_script: true,
+                        read_only: ReadOnlyEnforcement::None,
+                        result_grid: None,
+                        origin: None,
+                        run: StatementRun::Query,
+                    },
+                    window,
+                    cx,
+                );
                 cx.notify();
             });
 
             // Fallback fires if the entity is gone (inner update failed). We do NOT probe
             // with a second synthetic cx.update call — we use the actual inner update result.
             if inner_result.is_err() {
-                // Entity is gone; process_pending_result won't run. Emit via fallback so the event
+                // Entity is gone; finish_query won't run. Emit via fallback so the event
                 // is not silently dropped.
                 let ts_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

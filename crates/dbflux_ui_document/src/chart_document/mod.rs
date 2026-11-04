@@ -312,7 +312,6 @@ pub struct ChartDocument {
     // Execution
     runner: DocumentTaskRunner,
     app_state: Entity<AppStateEntity>,
-    pending_result: Option<PendingResult>,
     pending_run_on_first_render: bool,
     /// Where the query runs, fixed when the chart opened and never following
     /// the sidebar: the database, schema and source of the document it was asked
@@ -593,7 +592,6 @@ impl ChartDocument {
             last_result_of: None,
             runner,
             app_state,
-            pending_result: None,
             pending_run_on_first_render: pending_run,
             execution_context: ExecutionContext::default(),
             console_database: None,
@@ -855,7 +853,6 @@ impl ChartDocument {
             last_result_of: None,
             runner,
             app_state,
-            pending_result: None,
             pending_run_on_first_render: true,
             execution_context: ExecutionContext::default(),
             console_database: None,
@@ -1589,8 +1586,8 @@ impl ChartDocument {
     /// Request a fresh query execution.
     ///
     /// Gets the connection from `app_state`, fires the query on a background
-    /// thread, and delivers the result back to the entity via `pending_result`.
-    /// The render loop picks up `pending_result` and applies it.
+    /// thread, and applies the result when it arrives, also in a tab that isn't
+    /// showing: its task and whatever waits for this run end with the run.
     ///
     /// Every request reports `ExecutionFinished` once, also one that never
     /// started: a dashboard holds one of its few run slots until it does, so a
@@ -1847,23 +1844,22 @@ impl ChartDocument {
 
                 if cancel_token.is_cancelled() {
                     clean_up();
-                    entity.update(cx, |doc, cx| doc.report_run_end(holds_slot, cx));
+                    entity.update(cx, |doc, cx| {
+                        doc.finish_cancelled_run(task_id, holds_slot, cx)
+                    });
                     return;
                 }
 
                 entity.update(cx, |doc, cx| {
-                    let replaced = doc.pending_result.replace(PendingResult {
-                        task_id,
-                        result,
-                        ran,
-                        holds_slot,
-                    });
-                    // Only the newest result gets applied, so the run it replaced
-                    // ends here.
-                    if let Some(replaced) = replaced {
-                        doc.report_run_end(replaced.holds_slot, cx);
-                    }
-                    cx.notify();
+                    doc.apply_result(
+                        PendingResult {
+                            task_id,
+                            result,
+                            ran,
+                            holds_slot,
+                        },
+                        cx,
+                    );
                 });
             });
         })
@@ -2530,6 +2526,29 @@ impl ChartDocument {
         cx.notify();
     }
 
+    /// A cancelled run ended. Unless a newer run took over, nothing runs now: the
+    /// cancel can come from the task list, which doesn't know this chart.
+    fn finish_cancelled_run(
+        &mut self,
+        task_id: dbflux_core::TaskId,
+        holds_slot: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.runner.clear_primary(task_id);
+
+        if !self.runner.is_primary_active()
+            && self.awaited_database.is_none()
+            && self.exec_state == ExecState::Running
+        {
+            self.exec_state = ExecState::Idle;
+            self.state = DocumentState::Clean;
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+        }
+
+        self.report_run_end(holds_slot, cx);
+    }
+
     /// Apply a completed query result to the chart shell.
     ///
     /// For accumulating sources (`is_accumulating() == true`) the raw
@@ -2788,10 +2807,6 @@ impl ChartDocument {
         self._refresh_timer = None;
         self.runner.cancel_primary(cx);
         self.drop_database_wait(cx);
-
-        if let Some(pending) = self.pending_result.take() {
-            self.report_run_end(pending.holds_slot, cx);
-        }
 
         self.pending_run_on_first_render = false;
         if std::mem::take(&mut self.pending_chart_reexecute) {
@@ -3414,14 +3429,6 @@ impl ChartDocument {
     #[cfg(test)]
     pub(crate) fn cancel_run_for_test(&mut self, cx: &mut Context<Self>) {
         self.runner.cancel_primary(cx);
-    }
-
-    /// Applies a finished run, as the next render would.
-    #[cfg(test)]
-    pub(crate) fn apply_pending_result_for_test(&mut self, cx: &mut Context<Self>) {
-        if let Some(pending) = self.pending_result.take() {
-            self.apply_result(pending, cx);
-        }
     }
 
     /// The chart shell, for tests that read the chart state.

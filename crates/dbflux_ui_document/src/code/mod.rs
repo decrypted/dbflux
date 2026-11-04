@@ -541,7 +541,8 @@ pub(super) struct ResultTabs {
 /// the modal has not yet been answered.
 #[derive(Default)]
 pub(super) struct PendingActions {
-    result: Option<PendingQueryResult>,
+    /// A result arrived: where the keyboard goes is decided when the document draws.
+    results_focus: bool,
     set_query: Option<HistoryQuerySelected>,
     auto_refresh: bool,
     /// A result tab asked to load every row of its query.

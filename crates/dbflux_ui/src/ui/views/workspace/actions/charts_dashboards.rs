@@ -250,30 +250,12 @@ impl Workspace {
             return;
         };
 
-        // Build panel slots from persisted panels.
-        // Dedup panels by saved_chart_id when reading the persisted set.
-        // Past bugs could persist two rows pointing to the same saved chart
-        // (creating visible duplicates with identical data); this guard
-        // keeps an already-affected dashboard usable without forcing the
-        // user to delete and re-create panels manually.
-        let mut panels: Vec<dbflux_ui_base::DashboardPanel> = {
-            let raw = self
-                .app_state
-                .read(cx)
-                .dashboards
-                .panels_for_dashboard(dashboard_id)
-                .to_vec();
-            let mut seen: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
-            // Dividers don't dedup against saved_chart_id (they have none); pass
-            // them through unconditionally. Chart panels dedup on saved_chart_id
-            // so stale "two rows for the same chart" never materialises twice.
-            raw.into_iter()
-                .filter(|p| match p.saved_chart_id() {
-                    Some(id) => seen.insert(id),
-                    None => true,
-                })
-                .collect()
-        };
+        // Build panel slots from persisted panels, in the order edits go by.
+        let mut panels: Vec<dbflux_ui_base::DashboardPanel> = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .shown_panels(dashboard_id);
 
         // One-shot rescale of pre-12-col data. Old dashboards persisted with
         // `grid_columns < 12` are widened in place so subsequent loads see
@@ -281,7 +263,7 @@ impl Workspace {
         // the new positions are written back through `update_panel_position`.
         use crate::ui::document::dashboard::{DASHBOARD_GRID_COLUMNS, rescale_panel_to_12_cols};
         if dashboard.grid_columns < DASHBOARD_GRID_COLUMNS && !panels.is_empty() {
-            for panel in panels.iter_mut() {
+            for (shown_index, panel) in panels.iter_mut().enumerate() {
                 let (new_col, new_w) = rescale_panel_to_12_cols(
                     panel.grid_column,
                     panel.grid_width,
@@ -289,7 +271,7 @@ impl Workspace {
                 );
                 if new_col != panel.grid_column || new_w != panel.grid_width {
                     let dashboard_id_local = dashboard_id;
-                    let panel_index = panel.panel_index;
+                    let panel_index = shown_index as u32;
                     let new_row = panel.grid_row;
                     let new_h = panel.grid_height;
                     let result = self.app_state.update(cx, |state, _cx| {
@@ -1419,6 +1401,15 @@ impl Workspace {
                 Vec::new()
             };
 
+        let on_dashboard: Vec<uuid::Uuid> = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .panels_for_dashboard(dashboard_id)
+            .iter()
+            .filter_map(|panel| panel.saved_chart_id())
+            .collect();
+
         // Detect the metric-catalog capability synchronously (cheap — reads
         // the driver metadata bitset). The actual namespace list is fetched
         // off the foreground thread below so the modal opens immediately.
@@ -1450,6 +1441,7 @@ impl Workspace {
                     dashboard_id,
                     profile_id,
                     candidates,
+                    on_dashboard,
                     has_metric_catalog,
                     metric_namespaces: Vec::new(),
                     metric_namespaces_loading: has_metric_catalog,

@@ -53,6 +53,7 @@ audit:
     open_viewer_failed: "No se pudo abrir el visor de auditoría: %{error}"
     persist_mcp_governance_failed: "No se pudo guardar la gobernanza de MCP: %{error}"
 chart:
+  too_small_to_draw: "Demasiado pequeño para dibujar"
   axis_bar:
     group: Grupo
     aggregation:
@@ -3947,6 +3948,7 @@ modals:
       empty: 'No hay gráficos guardados en esta conexión. Usa "Desde consulta" o "Desde métrica" para crear uno directamente.'
       search_label: Buscar
       search_placeholder: Buscar gráficos…
+      on_dashboard: "Ya está en este dashboard"
     tab:
       saved: Gráficos guardados
       query: Desde consulta

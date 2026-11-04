@@ -868,6 +868,53 @@ fn more_panels_than_slots_each_run_once(cx: &mut TestAppContext) {
     assert_eq!(rig.inflight(&dashboard), 0, "no run slot left taken");
 }
 
+/// A collapsed section's panels don't draw, so a run marked for them can't start or
+/// end. They wait in the queue, not on the run slots, and the panels in view refresh.
+#[gpui::test]
+fn a_collapsed_section_does_not_hold_the_run_slots(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let hidden_count = PANEL_REEXEC_CAP + 1;
+    let (dashboard, _panels) = rig.build_dashboard(hidden_count + 1, SavedChartRefreshPolicy::Off);
+    rig.show(dashboard.clone());
+    rig.settle();
+
+    let section = Rc::new(Cell::new(0));
+    let collapsed = section.clone();
+    rig.on_dashboard(&dashboard, |dashboard, cx| {
+        let first = dashboard.push_divider_for_test(0);
+        dashboard.push_divider_for_test(hidden_count as u32);
+        collapsed.set(first);
+        dashboard.toggle_divider_collapse(first, cx);
+    });
+    rig.settle();
+
+    let refreshed = rig.count(|rig| {
+        rig.on_dashboard(&dashboard, |dashboard, cx| {
+            dashboard.refresh_all_loaded_panels(cx);
+        });
+        rig.settle();
+    });
+    assert_eq!(refreshed, ran(1), "the panel in view ran");
+    assert_eq!(
+        rig.inflight(&dashboard),
+        0,
+        "no slot is held for a hidden panel"
+    );
+
+    let opened = rig.count(|rig| {
+        rig.on_dashboard(&dashboard, |dashboard, cx| {
+            dashboard.toggle_divider_collapse(section.get(), cx);
+        });
+        rig.settle();
+    });
+    assert_eq!(
+        opened,
+        ran(hidden_count),
+        "the section catches up when it opens"
+    );
+    assert_eq!(rig.inflight(&dashboard), 0);
+}
+
 /// A panel removed mid-run never reports, so its slot goes with it.
 #[gpui::test]
 fn removing_a_running_panel_gives_its_slot_back(cx: &mut TestAppContext) {

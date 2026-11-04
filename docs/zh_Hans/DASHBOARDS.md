@@ -46,6 +46,8 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - **编辑**模式下会显示拖拽手柄——拖动面板可调整顺序，拖动边缘或角可在 12 列网格内调整大小。
 - **查看**模式为只读。
 
+新面板高四行。不足三行的面板会省略图例，把空间留给绘图区；小到无法绘图的面板会显示*太小，无法绘制*，直到你把它调大。
+
 两种模式下整个仪表盘都可用键盘操作：`h`/`j`/`k`/`l` 或方向键选择面板，`Enter` 打开它（其图表或表格接收按键，直到按 `Escape`），`c` 打开配置浮层，`r` 或 `F2` 重命名，`x` 或 `Delete` 移除，`a` 添加面板，`m` 列出所有操作。在编辑模式下，`Shift` + `h`/`j`/`k`/`l` 移动所选面板，`Alt+Shift` + `h`/`j`/`k`/`l` 调整其大小。见[键盘快捷键](KEYBOARD.md#仪表盘)。
 
 ### 添加面板
@@ -58,9 +60,11 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 | **来自查询** | 由「名称 + 你输入的查询」生成一个新面板。 |
 | **来自指标** | 由某个驱动指标生成面板（仅当该连接所属驱动提供指标目录时才显示）。 |
 
+仪表盘对每个已保存图表只显示一次。**已保存图表**标签页会将此仪表盘已显示的图表标为*已在此仪表盘上*，且无法选择。旧版本可能将此类图表存储两次。多余的行保持隐藏，并在移除该面板时一并删除。
+
 在编辑模式下，每个面板的设置按钮提供**配置… / 编辑标题… / 移除面板**。**配置**浮层可用于更改图表类型（折线图、柱状图、散点图、面积图、堆叠图、饼图）、调整轴绑定以及查看**统计**。
 
-仪表盘还可以包含 **Divider**（分隔条）——即以 Markdown 标题形式呈现的条带，用于在视觉上对面板分组，点击后会折叠其下方的面板。
+仪表盘还可以包含 **Divider**（分隔条）——即以 Markdown 标题形式呈现的条带，用于在视觉上对面板分组，点击后会折叠其下方的面板。折叠的面板不会刷新；在此期间请求的刷新会在展开该区域时运行。
 
 > **图表**面板引用一个已保存的图表。若删除该已保存图表，面板会变成一个占位符（「未找到图表 — 已保存的图表已被删除」），而不会消失。
 
@@ -105,7 +109,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 两个管理器都在 SQLite 存储库之上包了一层内存缓存，用于同步读取。写入操作先落到存储库，缓存只在写入成功后才更新。
 
-- **`DashboardManager`**（`crates/dbflux_ui_base/src/dashboard_manager.rs`）—— 领域类型包括 `Dashboard`、`DashboardPanel`、`DashboardPanelKind`（`Chart { saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`）和 `DashboardPanelDraft`。新建仪表盘时 `grid_columns = 12`；新建面板会追加到新的一行，取 `grid_column = 0`、`grid_width = 12`、`grid_height = 2`。
+- **`DashboardManager`**（`crates/dbflux_ui_base/src/dashboard_manager.rs`）—— 领域类型包括 `Dashboard`、`DashboardPanel`、`DashboardPanelKind`（`Chart { saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`）和 `DashboardPanelDraft`。新建仪表盘时 `grid_columns = 12`；新建面板会追加到新的一行，取 `grid_column = 0`、`grid_width = 12`、`grid_height = 4`。
 - **`SavedChartManager`**（`crates/dbflux_ui_base/src/saved_chart_manager.rs`）—— 负责 `SavedChart` 的整个生命周期，包括 `SavedChartRefreshPolicy`（`Off` / `Interval { every_secs }`）。
 - **`RemoteDashboardCache`**（`crates/dbflux_app/src/remote_dashboard_cache.rs`）—— 上游仪表盘列表的会话级内存缓存，重启后不会保留。
 

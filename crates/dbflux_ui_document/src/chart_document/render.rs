@@ -54,6 +54,9 @@ use std::sync::Arc;
 
 /// Width of the save-chart name prompt.
 const CHART_SAVE_PROMPT_WIDTH: Pixels = px(360.0);
+
+/// The shortest dashboard panel that draws its legend.
+const PANEL_ROWS_FOR_LEGEND: u32 = 3;
 /// Width of the date range picker in the custom range row.
 const CHART_DATE_PICKER_WIDTH: Pixels = px(260.0);
 
@@ -580,10 +583,10 @@ impl ChartDocument {
         // imply history the session does not have.
         let session_note = self.source_is_accumulating().then(|| {
             div()
-                .flex_shrink_0()
-                .font_family(dbflux_components::fonts::editor_family(cx))
-                .text_size(DocumentMetrics::TABLE_META_FONT)
-                .text_color(theme.muted_foreground)
+                .debug_selector(|| "chart-axis-session-note".to_string())
+                .w_full()
+                .text_right()
+                .truncate()
                 .child(dbflux_i18n::t!("document.chart.session_samples_only"))
         });
 
@@ -600,18 +603,38 @@ impl ChartDocument {
             )
         });
 
+        // The window and the session note stack, so the note doesn't take the
+        // fields' room. When the fields wrap anyway, on a narrow document, the
+        // bar grows with them and its border stays below them.
         let axis_row = document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx)
-            .child(axis_bar)
+            .h_auto()
+            .min_h(ChartDocumentMetrics::AXIS_ROW_HEIGHT)
+            .debug_selector(|| "chart-axis-row".to_string())
+            .child(
+                div()
+                    .py(Spacing::XS)
+                    .debug_selector(|| "chart-axis-fields".to_string())
+                    .child(axis_bar),
+            )
             .child(div().flex_1())
             .child(
                 div()
-                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
                     .font_family(dbflux_components::fonts::editor_family(cx))
                     .text_size(DocumentMetrics::TABLE_META_FONT)
                     .text_color(theme.muted_foreground)
-                    .child(window_label),
-            )
-            .children(session_note);
+                    .child(
+                        div()
+                            .debug_selector(|| "chart-axis-window".to_string())
+                            .w_full()
+                            .text_right()
+                            .truncate()
+                            .child(window_label),
+                    )
+                    .children(session_note),
+            );
 
         // -- Custom date/time picker row --
         // Rendered below the chart toolbar when the user has selected "Custom…"
@@ -678,8 +701,9 @@ impl ChartDocument {
         // but dashboard panels skip the data-grid chrome entirely, so the
         // legend would otherwise be invisible — series identity is then only
         // surfaced in the hover readout, which doesn't match what users see
-        // in CloudWatch / Grafana.
-        let embedded_legend: Option<AnyElement> = if embedded {
+        // in CloudWatch / Grafana. A panel too short to spare its room leaves it out;
+        // see `panel_has_room_for_legend`.
+        let embedded_legend: Option<AnyElement> = if embedded && self.panel_has_room_for_legend() {
             self.build_embedded_legend(cx)
         } else {
             None
@@ -799,6 +823,14 @@ impl ChartDocument {
             .collect()
     }
 
+    /// A panel under three rows gives the plot the legend's room: with the
+    /// legend a two-row panel has about 10 px of plot left, without it 48 px. The
+    /// hover readout still names the series.
+    fn panel_has_room_for_legend(&self) -> bool {
+        self.panel_rows
+            .is_none_or(|rows| rows >= PANEL_ROWS_FOR_LEGEND)
+    }
+
     /// Build the always-visible legend row used when this chart is embedded in
     /// a dashboard panel. Returns `None` when the chart view has not been
     /// built yet (e.g. while data is still loading) or when the chart has no
@@ -843,6 +875,7 @@ impl ChartDocument {
         Some(
             div()
                 .id("embedded-chart-legend")
+                .debug_selector(|| "embedded-chart-legend".to_string())
                 .flex_none()
                 .px(DocumentMetrics::PADDING_X)
                 .py(Spacing::XS)

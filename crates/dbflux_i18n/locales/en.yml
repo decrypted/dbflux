@@ -53,6 +53,7 @@ audit:
     open_viewer_failed: "Cannot open audit viewer: %{error}"
     persist_mcp_governance_failed: "Failed to persist MCP governance: %{error}"
 chart:
+  too_small_to_draw: "Too small to draw"
   axis_bar:
     group: Group
     aggregation:
@@ -3947,6 +3948,7 @@ modals:
       empty: 'No saved charts on this connection. Use "From query" or "From metric" to create one directly.'
       search_label: Search
       search_placeholder: Search charts…
+      on_dashboard: "Already on this dashboard"
     tab:
       saved: Saved charts
       query: From query

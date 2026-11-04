@@ -4160,6 +4160,70 @@ fn the_picker_fits_its_name_and_the_menu_fits_the_picker(cx: &mut TestAppContext
     }
 }
 
+/// A metric chart's session note does not push the axis fields onto a second
+/// line, and fields that wrap on a narrow document stay inside their bar, so they
+/// paint over neither the Query bar nor the chart. Query and metric charts alike.
+#[gpui::test]
+fn the_axis_fields_stay_inside_their_bar(cx: &mut TestAppContext) {
+    use dbflux_components::saved_chart::SavedChartSource;
+    use dbflux_components::tokens::ChartDocumentMetrics;
+
+    let mut console = console_with(cx, "");
+    let query_chart = console.saved_with(SavedChartContext::default());
+    let mut metric_chart = query_chart.clone();
+    metric_chart.source = SavedChartSource::InstanceMetric {
+        metric_id: "connections".to_string(),
+    };
+
+    for saved in [query_chart, metric_chart] {
+        let chart = console.reopen(&saved);
+
+        let mut drawn_at = |width: f32| {
+            let host = ShownChart(chart.clone());
+            let (_, drawn) = console.window.add_window_view(move |_, _| host);
+            drawn.simulate_resize(gpui::size(gpui::px(width), gpui::px(800.0)));
+            drawn.run_until_parked();
+            (
+                drawn.debug_bounds("chart-axis-row").expect("the bar"),
+                drawn.debug_bounds("chart-axis-fields").expect("the fields"),
+                drawn.update(|window, _| {
+                    ChartDocumentMetrics::AXIS_ROW_HEIGHT.to_pixels(window.rem_size())
+                }),
+                drawn.debug_bounds("chart-axis-window").expect("the window"),
+                drawn.debug_bounds("chart-axis-session-note"),
+            )
+        };
+
+        // The width of a document on a 1600 px window.
+        let (wide_row, wide_fields, bar_height, window, note) = drawn_at(1232.0);
+        if let Some(note) = note {
+            assert!(
+                note.top() >= window.bottom(),
+                "the note stacks under the window: {note:?} and {window:?}"
+            );
+        }
+        assert_eq!(
+            wide_row.size.height, bar_height,
+            "one line of fields fits the bar's height: {wide_fields:?}"
+        );
+
+        let (narrow_row, narrow_fields, ..) = drawn_at(500.0);
+        assert!(
+            narrow_fields.size.height > wide_fields.size.height,
+            "the fields wrap at this width: {narrow_fields:?}"
+        );
+        assert!(
+            narrow_row.size.height > wide_row.size.height,
+            "the bar grows with them: {narrow_row:?} from {wide_row:?}"
+        );
+        assert!(
+            narrow_fields.bottom() <= narrow_row.bottom()
+                && narrow_fields.top() >= narrow_row.top(),
+            "wrapped fields stay inside the bar: {narrow_fields:?} in {narrow_row:?}"
+        );
+    }
+}
+
 /// A saved metric chart stays a metric chart.
 #[gpui::test]
 fn a_save_keeps_a_metric_source(cx: &mut TestAppContext) {
@@ -4186,6 +4250,15 @@ fn dashboard_of<'a>(
     console: &mut Fixture<'a>,
     panels: &[Entity<ChartDocument>],
 ) -> Entity<crate::dashboard::DashboardDocument> {
+    dashboard_of_rows(console, panels, 2)
+}
+
+/// Builds a dashboard around `panels`, each embedded and `rows` tall.
+fn dashboard_of_rows<'a>(
+    console: &mut Fixture<'a>,
+    panels: &[Entity<ChartDocument>],
+    rows: u32,
+) -> Entity<crate::dashboard::DashboardDocument> {
     use crate::dashboard::{DashboardDocument, DashboardPanelSlot, PanelGridPos};
     use dbflux_components::common::time_range::view::TimeRangePanel;
     use dbflux_components::saved_chart::SavedChartRefreshPolicy;
@@ -4203,7 +4276,7 @@ fn dashboard_of<'a>(
                     grid_row: 0,
                     grid_column: 0,
                     grid_width: 6,
-                    grid_height: 2,
+                    grid_height: rows,
                 },
                 title_override: None,
             }
@@ -4226,6 +4299,56 @@ fn dashboard_of<'a>(
             )
         })
     })
+}
+
+struct DashboardHost(Entity<crate::dashboard::DashboardDocument>);
+
+impl gpui::Render for DashboardHost {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement as _, Styled as _};
+
+        gpui::div().size_full().child(self.0.clone())
+    }
+}
+
+/// A short panel gives the plot the legend's room, and one too short for a plot
+/// draws none. A stored panel keeps its height whatever it holds.
+#[gpui::test]
+fn a_panels_rows_decide_its_legend_and_its_plot(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let tab = chart_picking_calls(&mut console);
+    let stored = console.save(&tab, "saved");
+
+    for (rows, legend, plot) in [(1, false, false), (2, false, true), (3, true, true)] {
+        let panel = console.reopen(&stored);
+        console.run_chart(&panel);
+        let dashboard = dashboard_of_rows(&mut console, std::slice::from_ref(&panel), rows);
+
+        let window = console
+            .window
+            .cx
+            .add_window(|_, _| DashboardHost(dashboard.clone()));
+        let mut drawn = VisualTestContext::from_window(*window, &console.window.cx);
+        drawn.run_until_parked();
+
+        assert_eq!(
+            drawn.debug_bounds("embedded-chart-legend").is_some(),
+            legend,
+            "legend at {rows} rows"
+        );
+        let has_plot = drawn.update(|_, cx| {
+            let view = panel.read(cx).chart_shell_for_test().read(cx).chart_view();
+            view.expect("the chart ran").read(cx).has_plot_area()
+        });
+        assert_eq!(has_plot, plot, "plot at {rows} rows");
+
+        let held = drawn.update(|_, cx| dashboard.read(cx).panel_slots()[0].grid_pos().grid_height);
+        assert_eq!(held, rows);
+    }
 }
 
 /// Configure writes the panel's own settings, so it has nothing to follow: no second

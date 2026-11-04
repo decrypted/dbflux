@@ -806,6 +806,10 @@ impl DashboardDocument {
         if !self.collapsed_divider_indices.remove(&divider_index) {
             self.collapsed_divider_indices.insert(divider_index);
         }
+        // Opening a section lets what waited for it run.
+        if !self.is_backgrounded {
+            self.dispatch_queued_up_to_the_cap(cx);
+        }
         cx.notify();
     }
 
@@ -954,7 +958,11 @@ impl DashboardDocument {
             return;
         }
 
-        if self.inflight_reexec_count() < PANEL_REEXEC_CAP {
+        // A panel in a collapsed section doesn't draw, so a run marked for it couldn't
+        // start or give its slot back. It waits for the section to open.
+        if self.inflight_reexec_count() < PANEL_REEXEC_CAP
+            && !self.collapse_view().0.contains(&slot_idx)
+        {
             self.dispatch_reexec(slot_idx, cx);
         } else if !self.pending_reexec.contains(&slot_idx) {
             self.pending_reexec.push_back(slot_idx);
@@ -978,10 +986,30 @@ impl DashboardDocument {
     }
 
     fn dispatch_next_queued(&mut self, cx: &mut Context<Self>) {
-        while let Some(next_idx) = self.pending_reexec.pop_front() {
+        while let Some(next_idx) = self.next_queued_in_view() {
             if self.dispatch_reexec(next_idx, cx) {
                 break;
             }
+        }
+    }
+
+    /// Takes the first queued panel that isn't in a collapsed section.
+    fn next_queued_in_view(&mut self) -> Option<usize> {
+        let (hidden, _) = self.collapse_view();
+        let at = self
+            .pending_reexec
+            .iter()
+            .position(|slot_idx| !hidden.contains(slot_idx))?;
+
+        self.pending_reexec.remove(at)
+    }
+
+    fn dispatch_queued_up_to_the_cap(&mut self, cx: &mut Context<Self>) {
+        while self.inflight_reexec_count() < PANEL_REEXEC_CAP {
+            let Some(next_idx) = self.next_queued_in_view() else {
+                break;
+            };
+            self.dispatch_reexec(next_idx, cx);
         }
     }
 
@@ -1037,12 +1065,7 @@ impl DashboardDocument {
         self.pending_refresh_on_focus = false;
 
         // Drain from the pending queue up to the current available capacity.
-        while self.inflight_reexec_count() < PANEL_REEXEC_CAP {
-            let Some(next_idx) = self.pending_reexec.pop_front() else {
-                break;
-            };
-            self.dispatch_reexec(next_idx, cx);
-        }
+        self.dispatch_queued_up_to_the_cap(cx);
     }
 
     /// Mark the dashboard as backgrounded (`true`) or foregrounded (`false`).
@@ -1112,7 +1135,7 @@ impl DashboardDocument {
         }
     }
 
-    /// Remove a panel by its `panel_index` (into the sorted slot list).
+    /// Remove the panel at slot `panel_index`.
     ///
     /// Persists the removal via `DashboardManager::remove_panel` and
     /// removes the slot from `panel_slots`. Triggers `cx.notify()`.
@@ -1123,21 +1146,8 @@ impl DashboardDocument {
         });
 
         if result.is_ok() {
-            // Remove the slot at the given position from the in-memory list.
-            // Slots are sorted by (grid_row, grid_column) in render; here we
-            // remove the one whose panel_index matches.
-            let mut sorted_indices: Vec<(usize, u32)> = self
-                .panel_slots
-                .iter()
-                .enumerate()
-                .map(|(i, s)| {
-                    let p = s.grid_pos();
-                    (i, p.grid_row * 16 + p.grid_column)
-                })
-                .collect();
-            sorted_indices.sort_by_key(|(_, k)| *k);
-
-            if let Some(&(vec_idx, _)) = sorted_indices.get(panel_index as usize) {
+            let vec_idx = panel_index as usize;
+            if vec_idx < self.panel_slots.len() {
                 let removed = self.panel_slots.remove(vec_idx);
 
                 self.pending_reexec.retain(|idx| *idx != vec_idx);
@@ -2239,6 +2249,21 @@ impl DashboardDocument {
     #[cfg(test)]
     pub(crate) fn panel_slots_for_testing(&self) -> &[DashboardPanelSlot] {
         &self.panel_slots
+    }
+
+    /// Adds a divider at `row` and returns its index.
+    #[cfg(test)]
+    pub(crate) fn push_divider_for_test(&mut self, row: u32) -> u32 {
+        self.panel_slots.push(DashboardPanelSlot::Divider {
+            markdown: String::new(),
+            grid_pos: PanelGridPos {
+                grid_row: row,
+                grid_column: 0,
+                grid_width: 12,
+                grid_height: 1,
+            },
+        });
+        self.panel_slots.len() as u32 - 1
     }
 
     pub fn inflight_reexec_count_for_testing(&self) -> usize {

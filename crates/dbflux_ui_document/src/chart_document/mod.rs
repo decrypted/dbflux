@@ -470,6 +470,11 @@ pub struct ChartDocument {
     /// surrounding chrome instead.
     pub(super) embedded: bool,
 
+    /// How many rows tall the dashboard panel holding this chart is drawn. The
+    /// dashboard sets it as it draws the panel, so a drag resize takes effect
+    /// in the same frame. `None` outside a dashboard.
+    pub(super) panel_rows: Option<u32>,
+
     _subscriptions: Vec<Subscription>,
 
     /// Sample accumulation buffer for `InstanceMetric` sources.
@@ -639,6 +644,7 @@ impl ChartDocument {
             focus_mode: ChartDocFocus::default(),
             result_panel: None,
             embedded: false,
+            panel_rows: None,
             _subscriptions: vec![
                 metric_apply_sub,
                 app_state_disconnect_sub,
@@ -895,6 +901,7 @@ impl ChartDocument {
             pending_toast: None,
             result_panel: None,
             embedded: false,
+            panel_rows: None,
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
@@ -3095,6 +3102,16 @@ impl ChartDocument {
             self.embedded = embedded;
             cx.notify();
         }
+    }
+
+    pub(crate) fn panel_rows(&self) -> Option<u32> {
+        self.panel_rows
+    }
+
+    /// The rows of the dashboard panel holding this chart. Takes no `cx`: the
+    /// dashboard calls it while drawing, right before this chart draws.
+    pub fn set_panel_rows(&mut self, rows: u32) {
+        self.panel_rows = Some(rows);
     }
 
     /// Returns whether this chart is in embedded mode.

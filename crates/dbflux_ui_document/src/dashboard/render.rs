@@ -279,6 +279,20 @@ impl Render for DashboardDocument {
                     None
                 };
 
+                let body_padding = if eff_h > 1 {
+                    DashboardMetrics::PANEL_PADDING
+                } else {
+                    DashboardMetrics::PANEL_PADDING_ONE_ROW
+                };
+
+                // Here, because a drag resize draws a height nothing has stored yet.
+                // It takes no notify: the chart draws right after this.
+                if let DashboardPanelSlot::Loaded { panel, .. } = slot
+                    && panel.read(cx).panel_rows() != Some(eff_h)
+                {
+                    panel.update(cx, |chart, _| chart.set_panel_rows(eff_h));
+                }
+
                 let panel_card = match slot {
                     DashboardPanelSlot::Loaded { panel, .. } => card_focus_decoration(
                         card_shell(cx)
@@ -295,7 +309,7 @@ impl Render for DashboardDocument {
                                     .flex_1()
                                     .min_h_0()
                                     .overflow_hidden()
-                                    .p(DashboardMetrics::PANEL_PADDING)
+                                    .p(body_padding)
                                     .child(panel.clone()),
                             )
                             .when_some(resize_right, |el, r| el.child(r))

@@ -72,6 +72,10 @@ Cambia entre **View** y **Edit** en la cabecera:
   cuadrícula de 12 columnas.
 - El modo **View** es de solo lectura.
 
+Un panel nuevo tiene cuatro filas de alto. Un panel de menos de tres filas omite
+la leyenda para dar su espacio al gráfico, y uno demasiado pequeño para un gráfico
+indica *Demasiado pequeño para dibujar* hasta que lo agrandes.
+
 Todo el dashboard funciona con el teclado en ambos modos: `h`/`j`/`k`/`l` o las
 flechas eligen un panel, `Enter` lo abre (su chart o su tabla toman las teclas
 hasta `Escape`), `c` abre su popover Configure, `r` o `F2` lo renombra, `x` o
@@ -89,12 +93,19 @@ Haz clic en **+ Add Panel**. El selector tiene hasta tres pestañas:
 | **Query**  | Un panel nuevo a partir de un nombre + una query que escribes.                                                               |
 | **Metric** | Un panel a partir de una metric del driver (solo se muestra cuando el driver de la conexión expone un catálogo de métricas). |
 
+Un dashboard muestra cada chart guardado una vez. La pestaña **Saved** lista un
+chart que este dashboard ya muestra como *Ya está en este dashboard*, y no se
+puede elegir. Las versiones anteriores podían guardar ese chart dos veces. La fila
+sobrante sigue oculta y se elimina al quitar el panel.
+
 El botón de ajustes de cada panel (modo Edit) ofrece **Configure / Edit title /
 Remove panel**. El popover **Configure** te permite cambiar el tipo de chart (Line,
 Bar, Scatter, Area, Stacked, Pie), ajustar los axis bindings y ver **Stats**.
 
 Los dashboards también pueden contener tiras **Divider** — cabeceras markdown
-que agrupan visualmente los panels y colapsan los panels debajo al hacer clic.
+que agrupan visualmente los panels y colapsan los panels debajo al hacer clic. Los
+panels colapsados no se refrescan; un refresco pedido entretanto se ejecuta al abrir
+la sección.
 
 > Un panel **Chart** referencia un chart guardado. Si borras ese chart guardado,
 > el panel se convierte en un placeholder ("Chart not found — saved chart was
@@ -173,7 +184,7 @@ actualizan solo si tienen éxito.
   saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`),
   `DashboardPanelDraft`. Los dashboards nuevos se crean con `grid_columns = 12`;
   los paneles nuevos se añaden en `grid_column = 0` en una fila nueva con
-  `grid_width = 12, grid_height = 2`.
+  `grid_width = 12, grid_height = 4`.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) —
   gestiona el ciclo de vida de `SavedChart`, incluyendo
   `SavedChartRefreshPolicy` (`Off` / `Interval { every_secs }`).

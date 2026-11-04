@@ -102,6 +102,10 @@ gráfico no puede dibujarse, su área dice por qué y qué hacer: elegir una col
 Y, cambiar la query para que devuelva una columna numérica, o que la query no
 devolvió filas o falló.
 
+En un área baja o estrecha se omiten las etiquetas del eje Y que se tocarían. Por
+debajo de un gráfico de 40 por 60 px, el área indica *Demasiado pequeño para dibujar*
+en lugar del gráfico, sin hover ni punto de teclado, hasta que vuelve a tener espacio.
+
 ### Por qué nunca se inspeccionan `type_name` ni los IDs de driver
 
 La documentación a nivel de módulo en `detect.rs` indica que el módulo de

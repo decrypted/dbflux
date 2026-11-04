@@ -362,8 +362,37 @@ fn panel_index_to_grid(panel_index: u32, grid_columns: u32) -> (u32, u32) {
 /// a new row, matching Grafana's default add-panel behaviour.
 const DEFAULT_NEW_PANEL_WIDTH: u32 = 12;
 
-/// Default grid height for a panel appended via `append_panels`.
-const DEFAULT_NEW_PANEL_HEIGHT: u32 = 2;
+/// Default grid height for a panel appended via `append_panels`: four rows
+/// leave a chart its legend and a plot of about 170 px. Stored panels keep the
+/// height they were saved with.
+const DEFAULT_NEW_PANEL_HEIGHT: u32 = 4;
+
+/// The rows of `panels` a dashboard shows, by stored index: the first of each chart.
+/// Rows without a chart (dividers, inspectors) are all shown.
+fn shown_rows(panels: &[DashboardPanel]) -> Vec<DashboardPanel> {
+    let mut rows = panels.to_vec();
+    rows.sort_by_key(|p| p.panel_index);
+
+    let mut seen = HashSet::new();
+    rows.retain(|p| p.saved_chart_id().is_none_or(|chart| seen.insert(chart)));
+    rows
+}
+
+/// The stored index of the panel shown at `shown_index`.
+fn stored_index(
+    panels: &[DashboardPanel],
+    dashboard_id: Uuid,
+    shown_index: u32,
+) -> Result<u32, StorageError> {
+    shown_rows(panels)
+        .get(shown_index as usize)
+        .map(|p| p.panel_index)
+        .ok_or_else(|| {
+            StorageError::Data(format!(
+                "no panel shown at {shown_index} in dashboard {dashboard_id}"
+            ))
+        })
+}
 
 /// Returns the first grid row that lies past every panel in `panels`.
 ///
@@ -512,6 +541,14 @@ impl DashboardManager {
         }
 
         Ok(())
+    }
+
+    /// The panels a dashboard shows, in the order of its slots: a chart's first row.
+    /// Past bugs could store two rows for one chart, and showing one keeps such a
+    /// dashboard usable without asking anyone to delete panels. Every edit below takes
+    /// a position in this list, which is what a slot's index is, not a stored index.
+    pub fn shown_panels(&self, dashboard_id: Uuid) -> Vec<DashboardPanel> {
+        shown_rows(self.panels_for_dashboard(dashboard_id))
     }
 
     /// The cached panels of `dashboard_id`, to be modified and written back.
@@ -814,21 +851,19 @@ impl DashboardManager {
     pub fn update_panel_position(
         &mut self,
         dashboard_id: Uuid,
-        panel_index: u32,
+        shown_index: u32,
         grid_column: u32,
         grid_row: u32,
         grid_width: u32,
         grid_height: u32,
     ) -> Result<(), StorageError> {
         let mut panels = self.writable_panels(dashboard_id)?;
-        let panel = panels
-            .iter_mut()
-            .find(|p| p.panel_index == panel_index)
-            .ok_or_else(|| {
-                StorageError::Data(format!(
-                    "panel_index {panel_index} not found in dashboard {dashboard_id}"
-                ))
-            })?;
+        let row = stored_index(&panels, dashboard_id, shown_index)?;
+        let Some(panel) = panels.iter_mut().find(|p| p.panel_index == row) else {
+            return Err(StorageError::Data(format!(
+                "panel_index {row} not found in dashboard {dashboard_id}"
+            )));
+        };
 
         panel.grid_column = grid_column.min(11);
         panel.grid_row = grid_row;
@@ -843,12 +878,14 @@ impl DashboardManager {
         Ok(())
     }
 
-    /// Removes the panel at `panel_index`, re-indexes remaining panels dense
-    /// (0..N-1), and persists via `replace_panels_for_dashboard`.
+    /// Removes the panel shown at `shown_index`, re-indexes remaining panels dense
+    /// (0..N-1), and persists via `replace_panels_for_dashboard`. Other rows for the
+    /// same saved chart go with it: reading the panels hides them, so they would come
+    /// back as a panel on the next open.
     pub fn remove_panel(
         &mut self,
         dashboard_id: Uuid,
-        panel_index: u32,
+        shown_index: u32,
     ) -> Result<(), StorageError> {
         let grid_columns = self
             .dashboards
@@ -861,7 +898,13 @@ impl DashboardManager {
 
         // Sort by panel_index to ensure deterministic removal.
         panels.sort_by_key(|p| p.panel_index);
-        panels.retain(|p| p.panel_index != panel_index);
+        if let Some(removed) = shown_rows(&panels).get(shown_index as usize) {
+            let chart = removed.saved_chart_id();
+            panels.retain(|p| {
+                p.panel_index != removed.panel_index
+                    && (chart.is_none() || p.saved_chart_id() != chart)
+            });
+        }
 
         // Re-index dense with recomputed grid positions.
         let updated_panels: Vec<DashboardPanel> = panels
@@ -903,6 +946,19 @@ impl DashboardManager {
         let mut panels = self.writable_panels(dashboard_id)?;
         panels.sort_by_key(|p| p.panel_index);
 
+        // Both are positions among the shown panels; the rows they name are moved.
+        let shown = shown_rows(&panels);
+        let Some(from_row) = shown.get(from_index as usize).map(|p| p.panel_index) else {
+            return Err(StorageError::Data(format!(
+                "reorder_panels: from={from_index} out of range (len={})",
+                shown.len()
+            )));
+        };
+        let to_row = shown
+            .get(to_index as usize)
+            .map_or(panels.len() as u32, |p| p.panel_index);
+        let (from_index, to_index) = (from_row, to_row);
+
         if from_index as usize >= panels.len() || to_index as usize > panels.len() {
             return Err(StorageError::Data(format!(
                 "reorder_panels: from={from_index} to={to_index} out of range (len={})",
@@ -942,7 +998,7 @@ impl DashboardManager {
     pub fn resize_panel(
         &mut self,
         dashboard_id: Uuid,
-        panel_index: u32,
+        shown_index: u32,
         new_width: u32,
         new_height: u32,
     ) -> Result<(), StorageError> {
@@ -957,14 +1013,12 @@ impl DashboardManager {
         let clamped_height = new_height.clamp(1, 4);
 
         let mut panels = self.writable_panels(dashboard_id)?;
-        let panel = panels
-            .iter_mut()
-            .find(|p| p.panel_index == panel_index)
-            .ok_or_else(|| {
-                StorageError::Data(format!(
-                    "panel_index {panel_index} not found in dashboard {dashboard_id}"
-                ))
-            })?;
+        let row = stored_index(&panels, dashboard_id, shown_index)?;
+        let Some(panel) = panels.iter_mut().find(|p| p.panel_index == row) else {
+            return Err(StorageError::Data(format!(
+                "panel_index {row} not found in dashboard {dashboard_id}"
+            )));
+        };
 
         panel.grid_width = clamped_width;
         panel.grid_height = clamped_height;
@@ -982,18 +1036,16 @@ impl DashboardManager {
     pub fn update_panel_title_override(
         &mut self,
         dashboard_id: Uuid,
-        panel_index: u32,
+        shown_index: u32,
         override_text: Option<String>,
     ) -> Result<(), StorageError> {
         let mut panels = self.writable_panels(dashboard_id)?;
-        let panel = panels
-            .iter_mut()
-            .find(|p| p.panel_index == panel_index)
-            .ok_or_else(|| {
-                StorageError::Data(format!(
-                    "panel_index {panel_index} not found in dashboard {dashboard_id}"
-                ))
-            })?;
+        let row = stored_index(&panels, dashboard_id, shown_index)?;
+        let Some(panel) = panels.iter_mut().find(|p| p.panel_index == row) else {
+            return Err(StorageError::Data(format!(
+                "panel_index {row} not found in dashboard {dashboard_id}"
+            )));
+        };
 
         // Normalize: empty string → None.
         panel.title_override =
@@ -1508,12 +1560,47 @@ mod tests {
         assert_eq!(panels[0].grid_column, 0);
         assert_eq!(panels[0].grid_row, 0);
         assert_eq!(panels[0].grid_width, 12);
-        assert_eq!(panels[0].grid_height, 2);
+        assert_eq!(panels[0].grid_height, 4);
         assert_eq!(panels[1].grid_column, 0);
-        assert_eq!(panels[1].grid_row, 2);
+        assert_eq!(panels[1].grid_row, 4);
         assert_eq!(panels[1].grid_width, 12);
-        assert_eq!(panels[1].grid_height, 2);
+        assert_eq!(panels[1].grid_height, 4);
     }
+
+    /// Rows a past bug stored twice for one chart: removing the panel removes them
+    /// all, or the hidden one would come back on the next open.
+    #[test]
+    fn removing_a_panel_removes_the_other_rows_of_its_chart() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+        let (twice, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let chart = |saved_chart_id| DashboardPanelDraft::Chart {
+            saved_chart_id,
+            layout: None,
+        };
+
+        mgr.append_panels(dash_id, vec![chart(twice), chart(other), chart(twice)])
+            .unwrap();
+        mgr.remove_panel(dash_id, 0).unwrap();
+
+        let left: Vec<_> = mgr
+            .panels_for_dashboard(dash_id)
+            .iter()
+            .map(|p| (p.panel_index, p.saved_chart_id()))
+            .collect();
+        assert_eq!(left, [(0, Some(other))]);
+    }
+
+    mod shown_panels;
 
     #[test]
     fn test_append_panels_with_layout_override_preserves_exact_positions() {

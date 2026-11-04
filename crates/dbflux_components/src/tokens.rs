@@ -2259,6 +2259,9 @@ impl DashboardMetrics {
     /// icon, a 12 px drag grip, a 12.5 px semibold title.
     pub const PANEL_HEADER_HEIGHT: Rems = ui(36.0);
     pub const PANEL_PADDING: Pixels = px(12.0);
+    /// A panel one row tall has no room for the padding: this leaves its
+    /// content a line of text.
+    pub const PANEL_PADDING_ONE_ROW: Pixels = px(2.0);
     pub const PANEL_ICON: Rems = ui(14.0);
     pub const PANEL_GRIP: Rems = ui(12.0);
     pub const PANEL_TITLE_FONT: Rems = ui(12.5);

@@ -53,6 +53,7 @@ audit:
     open_viewer_failed: "감사 뷰어를 열 수 없습니다: %{error}"
     persist_mcp_governance_failed: "MCP 거버넌스를 저장하지 못했습니다: %{error}"
 chart:
+  too_small_to_draw: "너무 작아서 그릴 수 없음"
   axis_bar:
     group: 그룹
     aggregation:
@@ -3947,6 +3948,7 @@ modals:
       empty: '이 연결에는 저장된 차트가 없습니다. "쿼리에서" 또는 "지표에서" 탭에서 바로 만들 수 있습니다.'
       search_label: 검색
       search_placeholder: 차트 검색…
+      on_dashboard: "이미 이 대시보드에 있음"
     tab:
       saved: 저장된 차트
       query: 쿼리에서

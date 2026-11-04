@@ -331,6 +331,10 @@ su trabajo cuando la conexión está cerrada. El timer en sí permanece activo, 
 que el refresco se reanuda automáticamente al reconectar sin necesidad de
 rearmarlo.
 
+Un panel con un timer propio, como un gráfico guardado de una métrica de instancia,
+deja sus ejecuciones al timer del dashboard mientras el dashboard tenga uno. Con el
+refresco del dashboard desactivado, el timer propio del panel lo mantiene al día.
+
 ### Cobertura de drivers integrados
 
 | Driver          | `INSTANCE_METRICS` | `INSTANCE_INSPECTOR` | Lista de métricas / inspectores                      |

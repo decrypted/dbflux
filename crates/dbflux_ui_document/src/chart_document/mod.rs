@@ -10,6 +10,8 @@
 mod keyboard_tests;
 pub mod pane;
 mod render;
+#[cfg(test)]
+mod run_count_tests;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -399,6 +401,9 @@ pub struct ChartDocument {
     pending_time_window: Option<(i64, i64)>,
     pending_chart_reexecute: bool,
 
+    /// Keeps this chart's own timer from running it while its dashboard's does.
+    refresh_left_to_host: bool,
+
     /// Applied display window for accumulating sources (`is_accumulating()`).
     ///
     /// Instance-metric backends return only the current sample, so the visible
@@ -612,6 +617,7 @@ impl ChartDocument {
             is_active_tab: true,
             pending_time_window: None,
             pending_chart_reexecute: false,
+            refresh_left_to_host: false,
             applied_display_window: None,
             external_window_staged: false,
             pending_data_source: None,
@@ -867,6 +873,7 @@ impl ChartDocument {
             is_active_tab: true,
             pending_time_window: None,
             pending_chart_reexecute: false,
+            refresh_left_to_host: false,
             applied_display_window: None,
             external_window_staged: false,
             pending_data_source: None,
@@ -1447,7 +1454,7 @@ impl ChartDocument {
                         {
                             return;
                         }
-                        if !doc.auto_refresh_tick_allowed(cx) {
+                        if doc.refresh_left_to_host || !doc.auto_refresh_tick_allowed(cx) {
                             return;
                         }
                         doc.mark_pending_reexecute(cx);
@@ -1459,6 +1466,11 @@ impl ChartDocument {
 
     pub fn set_active_tab(&mut self, active: bool) {
         self.is_active_tab = active;
+    }
+
+    /// A dashboard with a timer runs its panels itself, through its cap.
+    pub(crate) fn set_refresh_left_to_host(&mut self, left_to_host: bool) {
+        self.refresh_left_to_host = left_to_host;
     }
 
     fn auto_refresh_tick_allowed(&self, cx: &App) -> bool {
@@ -1743,6 +1755,14 @@ impl ChartDocument {
             {
                 let cancel = cancel_token.clone();
                 async move {
+                    // Replaced before a thread picked it up, so it never reaches
+                    // the driver. Past this point the token only reaches a driver
+                    // that runs it apart; anywhere else a replaced statement runs
+                    // to its end on the server.
+                    if cancel.is_cancelled() {
+                        return Err(dbflux_core::DbError::Cancelled);
+                    }
+
                     // A driver's own metric dispatch has nothing to leave behind,
                     // and goes where it always went.
                     if runs_user_query {
@@ -2577,8 +2597,8 @@ impl ChartDocument {
     /// after Apply.
     ///
     /// When a dashboard staged an external window, this document's own panel
-    /// events (including the first-render `emit_initial`) are ignored: the
-    /// staged window stays authoritative until the dashboard re-stages.
+    /// events are ignored: the staged window stays authoritative until the
+    /// dashboard re-stages.
     pub fn on_time_range_changed(
         &mut self,
         start_ms: Option<i64>,
@@ -2667,8 +2687,7 @@ impl ChartDocument {
     /// re-anchors at the current time and rolling refreshes keep collecting
     /// visible samples), while a Custom selection stages fixed `Absolute`
     /// bounds. Staged windows are flagged external so the child's own
-    /// first-render preset seed and its `emit_initial` event cannot overwrite
-    /// them.
+    /// first-render preset seed and its panel's events cannot overwrite them.
     ///
     /// Staging also immediately reprojects any retained session samples and
     /// the chart domain into the new window: a queued, failing, or offline
@@ -4701,12 +4720,18 @@ mod tests {
             });
         });
 
-        // First child render: seeds its own preset and fires emit_initial.
+        // First child render: seeds its own preset. Its panel then speaks up by
+        // itself, which staging must also survive.
         visual.update(|_, cx| {
             harness.update(cx, |h, cx| {
                 h.show = true;
                 cx.notify();
             });
+        });
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let panel = doc.read(cx).time_range_panel.clone().expect("first render");
+            panel.update(cx, |panel, cx| panel.emit_initial(cx));
         });
         visual.run_until_parked();
 

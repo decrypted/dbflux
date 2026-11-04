@@ -287,7 +287,10 @@ impl InspectorPanel {
     /// Builds an `InstanceInspectorQuery` execution context (no time window)
     /// and dispatches through the connection. The query text is empty — the
     /// driver dispatches based solely on the source context variant.
-    pub fn request_reexec(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// True when a run started, whose end reports `ExecutionFinished` once, also
+    /// when a newer run replaces it: a dashboard holds a run slot until then.
+    pub fn request_reexec(&mut self, cx: &mut Context<Self>) -> bool {
         let profile_id = self.profile_id;
 
         let conn = {
@@ -298,7 +301,7 @@ impl InspectorPanel {
                 ));
                 self.state = DocumentState::Error;
                 cx.notify();
-                return;
+                return false;
             };
             match connected.resolve_connection_for_execution(None) {
                 Ok(c) => c,
@@ -309,7 +312,7 @@ impl InspectorPanel {
                     ));
                     self.state = DocumentState::Error;
                     cx.notify();
-                    return;
+                    return false;
                 }
             }
         };
@@ -328,9 +331,15 @@ impl InspectorPanel {
         cx.notify();
 
         let conn_cleanup = conn.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.execute(&request) });
+        let cancel = cancel_token.clone();
+        let task = cx.background_executor().spawn(async move {
+            // Replaced before a thread picked it up, so it never reaches the driver.
+            if cancel.is_cancelled() {
+                return Err(dbflux_core::DbError::Cancelled);
+            }
+
+            conn.execute(&request)
+        });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -340,17 +349,29 @@ impl InspectorPanel {
                     if let Err(e) = conn_cleanup.cleanup_after_cancel() {
                         log::warn!("[inspector] cleanup after cancel failed: {}", e);
                     }
+                    if let Some(entity) = this.upgrade() {
+                        entity.update(cx, |_, cx| cx.emit(DocumentEvent::ExecutionFinished));
+                    }
                     return;
                 }
 
                 let Some(entity) = this.upgrade() else { return };
                 entity.update(cx, |panel, cx| {
-                    panel.pending_result = Some(PendingResult { task_id, result });
+                    let replaced = panel
+                        .pending_result
+                        .replace(PendingResult { task_id, result });
+                    // Only the newest result gets applied, so the run it replaced
+                    // ends here.
+                    if replaced.is_some() {
+                        cx.emit(DocumentEvent::ExecutionFinished);
+                    }
                     cx.notify();
                 });
             });
         })
         .detach();
+
+        true
     }
 
     fn apply_result(&mut self, pending: PendingResult, cx: &mut Context<Self>) {

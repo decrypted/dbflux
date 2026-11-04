@@ -300,6 +300,10 @@ Dashboard, standalone-chart, and inspector refresh timers all check
 their work when the connection is closed. The timer itself stays alive, so
 refresh resumes automatically on reconnect without re-arming.
 
+A panel with a timer of its own, such as a saved instance metric chart, leaves its
+runs to the dashboard's timer while the dashboard has one. With the dashboard's
+refresh off, the panel's own timer keeps it current.
+
 ### Built-in driver coverage
 
 | Driver | `INSTANCE_METRICS` | `INSTANCE_INSPECTOR` | Metric / inspector list |

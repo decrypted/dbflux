@@ -85,7 +85,9 @@ grid (ver [Filtrar resultados](RESULTS.md#filtrar-resultados)).
 Los builders se pueden guardar por perfil de conexión y reabrir más tarde. Las
 queries guardadas están acotadas al perfil, con nombres únicos. Una query
 guardada también se puede importar a otra conexión; al importar, DBFlux verifica
-que las tablas referenciadas existan en la conexión destino antes de cargarla.
+que las tablas referenciadas existan en la conexión destino antes de cargarla. Una
+importación nunca reemplaza una query: si el perfil destino ya tiene una query guardada
+con ese nombre, la importación falla y esa query queda como estaba.
 
 ## UPDATE y DELETE visuales
 

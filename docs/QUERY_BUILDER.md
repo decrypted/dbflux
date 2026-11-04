@@ -79,7 +79,9 @@ The same autocomplete is available in the data grid's `WHERE` filter input (see
 Builders can be saved per connection profile and reopened later. Saved queries
 are scoped to the profile, with unique names. A saved query can also be imported
 onto a different connection; on import DBFlux verifies that the referenced tables
-exist on the target connection before loading.
+exist on the target connection before loading. An import never replaces a query:
+if the target profile already has a saved query of that name, the import fails and
+that query stays as it is.
 
 ## Visual UPDATE and DELETE
 

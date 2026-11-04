@@ -7,9 +7,9 @@ use super::*;
 const LAYOUT: &[(u32, u32, u32, u32)] = &[(0, 0, 6, 4), (0, 6, 6, 4), (4, 0, 12, 2)];
 
 fn dashboard_with_panels() -> (DashboardManager, StorageRuntime, Uuid) {
-    let (mut mgr, rt) = make_manager_with_rt();
-    let profile_id = insert_profile(&rt);
-    let dash_id = mgr
+    let (mut manager, runtime) = make_manager_with_rt();
+    let profile_id = insert_profile(&runtime);
+    let dashboard_id = manager
         .create_dashboard(
             "D".to_string(),
             None,
@@ -32,52 +32,64 @@ fn dashboard_with_panels() -> (DashboardManager, StorageRuntime, Uuid) {
             },
         )
         .collect();
-    mgr.append_panels(dash_id, drafts).unwrap();
+    manager.append_panels(dashboard_id, drafts).unwrap();
 
-    (mgr, rt, dash_id)
+    (manager, runtime, dashboard_id)
 }
 
-fn fresh_manager(rt: &StorageRuntime) -> DashboardManager {
-    let conn = rt.viz_connection().expect("viz connection");
+fn fresh_manager(runtime: &StorageRuntime) -> DashboardManager {
+    let conn = runtime.viz_connection().expect("viz connection");
     DashboardManager::new(
         Arc::new(DashboardsRepository::new(Arc::clone(&conn))),
         Arc::new(DashboardPanelsRepository::new(conn)),
     )
 }
 
-fn stored_layout(rt: &StorageRuntime, dash_id: Uuid) -> Vec<(u32, u32, u32, u32)> {
-    fresh_manager(rt)
-        .panels_for_dashboard(dash_id)
+fn stored_layout(runtime: &StorageRuntime, dashboard_id: Uuid) -> Vec<(u32, u32, u32, u32)> {
+    fresh_manager(runtime)
+        .panels_for_dashboard(dashboard_id)
         .iter()
-        .map(|p| (p.grid_row, p.grid_column, p.grid_width, p.grid_height))
+        .map(|panel| {
+            (
+                panel.grid_row,
+                panel.grid_column,
+                panel.grid_width,
+                panel.grid_height,
+            )
+        })
         .collect()
 }
 
 #[test]
 fn renaming_keeps_the_panels() {
-    let (mut mgr, rt, dash_id) = dashboard_with_panels();
+    let (mut manager, runtime, dashboard_id) = dashboard_with_panels();
 
-    mgr.rename_dashboard(dash_id, "Renamed".to_string())
+    manager
+        .rename_dashboard(dashboard_id, "Renamed".to_string())
         .unwrap();
 
-    assert_eq!(stored_layout(&rt, dash_id), LAYOUT);
+    assert_eq!(stored_layout(&runtime, dashboard_id), LAYOUT);
     assert_eq!(
-        fresh_manager(&rt).dashboard_by_id(dash_id).unwrap().name,
+        fresh_manager(&runtime)
+            .dashboard_by_id(dashboard_id)
+            .unwrap()
+            .name,
         "Renamed"
     );
 }
 
 #[test]
 fn setting_the_shared_time_range_keeps_the_panels() {
-    let (mut mgr, rt, dash_id) = dashboard_with_panels();
+    let (mut manager, runtime, dashboard_id) = dashboard_with_panels();
 
-    mgr.update_shared_time_range(dash_id, Some(TimeRangePreset::Last6Hours))
+    manager
+        .update_shared_time_range(dashboard_id, Some(TimeRangePreset::Last6Hours))
         .unwrap();
 
-    assert_eq!(stored_layout(&rt, dash_id), LAYOUT);
+    assert_eq!(stored_layout(&runtime, dashboard_id), LAYOUT);
     assert_eq!(
-        fresh_manager(&rt)
-            .dashboard_by_id(dash_id)
+        fresh_manager(&runtime)
+            .dashboard_by_id(dashboard_id)
             .unwrap()
             .shared_time_range_preset,
         Some(TimeRangePreset::Last6Hours)
@@ -86,15 +98,17 @@ fn setting_the_shared_time_range_keeps_the_panels() {
 
 #[test]
 fn setting_the_shared_refresh_policy_keeps_the_panels() {
-    let (mut mgr, rt, dash_id) = dashboard_with_panels();
+    let (mut manager, runtime, dashboard_id) = dashboard_with_panels();
     let policy = SavedChartRefreshPolicy::Interval { every_secs: 30 };
 
-    mgr.update_shared_refresh_policy(dash_id, policy).unwrap();
+    manager
+        .update_shared_refresh_policy(dashboard_id, policy)
+        .unwrap();
 
-    assert_eq!(stored_layout(&rt, dash_id), LAYOUT);
+    assert_eq!(stored_layout(&runtime, dashboard_id), LAYOUT);
     assert_eq!(
-        fresh_manager(&rt)
-            .dashboard_by_id(dash_id)
+        fresh_manager(&runtime)
+            .dashboard_by_id(dashboard_id)
             .unwrap()
             .shared_refresh_policy,
         policy
@@ -103,16 +117,16 @@ fn setting_the_shared_refresh_policy_keeps_the_panels() {
 
 #[test]
 fn upserting_an_existing_dashboard_keeps_the_panels() {
-    let (mut mgr, rt, dash_id) = dashboard_with_panels();
-    let mut dashboard = mgr.dashboard_by_id(dash_id).unwrap().clone();
+    let (mut manager, runtime, dashboard_id) = dashboard_with_panels();
+    let mut dashboard = manager.dashboard_by_id(dashboard_id).unwrap().clone();
     dashboard.description = Some("described".to_string());
 
-    assert!(mgr.upsert_dashboard(dashboard).unwrap());
+    assert!(manager.upsert_dashboard(dashboard).unwrap());
 
-    assert_eq!(stored_layout(&rt, dash_id), LAYOUT);
+    assert_eq!(stored_layout(&runtime, dashboard_id), LAYOUT);
     assert_eq!(
-        fresh_manager(&rt)
-            .dashboard_by_id(dash_id)
+        fresh_manager(&runtime)
+            .dashboard_by_id(dashboard_id)
             .unwrap()
             .description
             .as_deref(),
@@ -122,10 +136,10 @@ fn upserting_an_existing_dashboard_keeps_the_panels() {
 
 #[test]
 fn creating_and_duplicating_keep_the_panels_of_the_source() {
-    let (mut mgr, rt, dash_id) = dashboard_with_panels();
-    let profile_id = insert_profile(&rt);
+    let (mut manager, runtime, dashboard_id) = dashboard_with_panels();
+    let profile_id = insert_profile(&runtime);
 
-    let created = mgr
+    let created = manager
         .create_dashboard(
             "Other".to_string(),
             None,
@@ -134,9 +148,9 @@ fn creating_and_duplicating_keep_the_panels_of_the_source() {
             SavedChartRefreshPolicy::Off,
         )
         .unwrap();
-    let copy = mgr.duplicate_dashboard(dash_id).unwrap();
+    let copy = manager.duplicate_dashboard(dashboard_id).unwrap();
 
-    assert_eq!(stored_layout(&rt, dash_id), LAYOUT);
-    assert_eq!(stored_layout(&rt, copy), LAYOUT);
-    assert!(stored_layout(&rt, created).is_empty());
+    assert_eq!(stored_layout(&runtime, dashboard_id), LAYOUT);
+    assert_eq!(stored_layout(&runtime, copy), LAYOUT);
+    assert!(stored_layout(&runtime, created).is_empty());
 }

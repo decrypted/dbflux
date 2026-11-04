@@ -112,8 +112,9 @@ impl DashboardsRepository {
         Ok(rows.pop())
     }
 
-    /// Inserts a dashboard row or updates it in place, bumping `updated_at` to now. A
-    /// `REPLACE` would delete the row first, and the delete cascades to its panels.
+    /// Inserts a dashboard row or updates it in place, bumping `updated_at` to now and
+    /// keeping `created_at`. A `REPLACE` would delete the row first, and the delete
+    /// cascades to its panels.
     pub fn upsert(&self, dashboard: &DashboardDto) -> Result<(), StorageError> {
         let conn = self.conn.lock().map_err(lock_err)?;
 
@@ -135,7 +136,6 @@ impl DashboardsRepository {
                  shared_refresh_policy_kind = excluded.shared_refresh_policy_kind,
                  shared_refresh_policy_interval_secs = excluded.shared_refresh_policy_interval_secs,
                  grid_columns = excluded.grid_columns,
-                 created_at = excluded.created_at,
                  updated_at = excluded.updated_at",
             rusqlite::params![
                 dashboard.id,
@@ -427,6 +427,7 @@ mod tests {
         dashboard.shared_refresh_policy_kind = "off".to_string();
         dashboard.shared_refresh_policy_interval_secs = None;
         dashboard.grid_columns = 12;
+        dashboard.created_at = 5;
         repo.upsert(&dashboard).expect("update");
 
         let stored = repo.get_by_id(id).expect("get").expect("stored");

@@ -1103,15 +1103,16 @@ impl DataGridPanel {
                 .meta_right(dbflux_ui_base::toast::now_hms())
                 .push(cx);
             }
-            Err(e) => {
-                dbflux_ui_base::user_error::report_error(
-                    dbflux_ui_base::user_error::UserFacingError::new(
-                        dbflux_ui_base::user_error::ErrorKind::User,
-                        dbflux_i18n::t!("document.data.saved_query.error.import_failed"),
-                    )
-                    .with_cause(e.to_string()),
-                    cx,
+            Err(error) => {
+                let (message, cause) = crate::labels::saved_query_import_error(&error);
+                let mut report = dbflux_ui_base::user_error::UserFacingError::new(
+                    dbflux_ui_base::user_error::ErrorKind::User,
+                    message,
                 );
+                if let Some(cause) = cause {
+                    report = report.with_cause(cause);
+                }
+                dbflux_ui_base::user_error::report_error(report, cx);
             }
         }
     }

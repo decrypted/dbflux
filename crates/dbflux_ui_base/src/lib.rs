@@ -56,6 +56,8 @@ pub use object_tree::{
 };
 pub use saved_chart_manager::SavedChartManager;
 pub use saved_document_query_manager::SavedDocumentQueryManager;
-pub use saved_query_manager::{ConnectionTableProbe, SavedQueryManager, TableProbe};
+pub use saved_query_manager::{
+    ConnectionTableProbe, SavedQueryImportError, SavedQueryManager, TableProbe,
+};
 pub use schema_snapshot_manager::{CaptureOutcome, SchemaSnapshotManager};
 pub use user_error::{ErrorKind, UserFacingError, report_error, report_error_async};

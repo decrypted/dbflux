@@ -2181,6 +2181,22 @@ pub(crate) fn saved_query_saved_as_toast(name: &str) -> String {
     dbflux_i18n::t!("document.data.saved_query.toast.saved_as", name = name)
 }
 
+/// What a failed saved-query import shows: the message, and the cause when there is one.
+/// A taken name is not a missing table, so it says so and has no cause to add.
+pub(crate) fn saved_query_import_error(
+    error: &dbflux_ui_base::SavedQueryImportError,
+) -> (String, Option<String>) {
+    match error {
+        dbflux_ui_base::SavedQueryImportError::NameTaken(name) => {
+            (saved_query_already_exists_error(name), None)
+        }
+        dbflux_ui_base::SavedQueryImportError::Storage(cause) => (
+            dbflux_i18n::t!("document.data.saved_query.error.import_failed"),
+            Some(cause.to_string()),
+        ),
+    }
+}
+
 /// Error text when a saved query name collides with an existing one.
 pub(crate) fn saved_query_already_exists_error(name: &str) -> String {
     dbflux_i18n::t!(
@@ -7623,6 +7639,28 @@ mod tests {
 
         assert!(value.contains("nightly orders"));
         assert_ne!(value, "document.data.saved_query.toast.saved_as");
+    }
+
+    #[test]
+    fn a_taken_name_on_import_is_not_reported_as_a_missing_table() {
+        let name_taken = dbflux_ui_base::SavedQueryImportError::NameTaken("Weekly".to_string());
+        let (message, cause) = saved_query_import_error(&name_taken);
+        assert_eq!(message, saved_query_already_exists_error("Weekly"));
+        assert_ne!(
+            message,
+            dbflux_i18n::t!("document.data.saved_query.error.import_failed")
+        );
+        assert_eq!(cause, None);
+
+        let missing = dbflux_ui_base::SavedQueryImportError::Storage(
+            dbflux_storage::error::StorageError::Data("table not found: t".to_string()),
+        );
+        let (message, cause) = saved_query_import_error(&missing);
+        assert_eq!(
+            message,
+            dbflux_i18n::t!("document.data.saved_query.error.import_failed")
+        );
+        assert!(cause.expect("the cause").contains("table not found"));
     }
 
     #[test]

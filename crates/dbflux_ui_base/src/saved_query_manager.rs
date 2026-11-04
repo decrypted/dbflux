@@ -59,6 +59,30 @@ impl<'a> TableProbe for ConnectionTableProbe<'a> {
 // SavedQueryManager
 // ---------------------------------------------------------------------------
 
+/// Why `SavedQueryManager::import_to` wrote nothing.
+#[derive(Debug)]
+pub enum SavedQueryImportError {
+    /// The target profile already has a saved query with this name.
+    NameTaken(String),
+    /// The source query is missing, the table is absent on the target, or the write failed.
+    Storage(StorageError),
+}
+
+impl From<StorageError> for SavedQueryImportError {
+    fn from(error: StorageError) -> Self {
+        Self::Storage(error)
+    }
+}
+
+impl std::fmt::Display for SavedQueryImportError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NameTaken(name) => write!(formatter, "saved query name taken: {name}"),
+            Self::Storage(error) => error.fmt(formatter),
+        }
+    }
+}
+
 /// In-memory manager for saved visual queries, backed by `SavedQueryRepo`.
 ///
 /// Per-profile caches are loaded lazily on first `list` call and kept up to
@@ -216,10 +240,11 @@ impl SavedQueryManager {
 
     /// Imports a saved query from `source_id` into `target_profile_id`.
     ///
-    /// The import verifies that the source table exists on the target connection
-    /// via `probe.check_table_exists` before writing. On failure no row is
-    /// written. On success a new row is created with a new UUID v7 id, the
-    /// source spec, and the target profile.
+    /// The import verifies that the target profile has no saved query with the source's
+    /// name, and that the source table exists on the target connection via
+    /// `probe.check_table_exists`, before writing. On failure no row is written and a
+    /// query already on the target stays as it is. On success a new row is created with
+    /// a new UUID v7 id, the source spec, and the target profile.
     ///
     /// Per design decision 7: hard-fail when offline or table absent; there is
     /// no deferred / retry path in v1.
@@ -228,16 +253,11 @@ impl SavedQueryManager {
         source_id: &str,
         target_profile_id: &str,
         probe: &dyn TableProbe,
-    ) -> Result<SavedQuerySummary, StorageError> {
+    ) -> Result<SavedQuerySummary, SavedQueryImportError> {
         let source_spec = self
             .repo
             .get(source_id)?
             .ok_or_else(|| StorageError::Data(format!("saved query not found: {source_id}")))?;
-
-        probe.check_table_exists(
-            source_spec.source.schema.as_deref(),
-            &source_spec.source.table,
-        )?;
 
         let source_name = self
             .repo
@@ -246,6 +266,20 @@ impl SavedQueryManager {
             .find(|s| s.id == source_id)
             .map(|s| s.name)
             .unwrap_or_else(|| source_spec.source.table.clone());
+
+        if self
+            .repo
+            .list_for_profile(target_profile_id)?
+            .iter()
+            .any(|query| query.name == source_name)
+        {
+            return Err(SavedQueryImportError::NameTaken(source_name));
+        }
+
+        probe.check_table_exists(
+            source_spec.source.schema.as_deref(),
+            &source_spec.source.table,
+        )?;
 
         let new_id = Uuid::now_v7().to_string();
         let summary =
@@ -587,7 +621,10 @@ mod tests {
 
         let probe = MockTableProbe { succeeds: true };
         let result = mgr.import_to(&source.id, "target-profile", &probe);
-        assert!(result.is_err(), "the name is taken on the target");
+        assert!(
+            matches!(result, Err(SavedQueryImportError::NameTaken(ref name)) if name == "Same name"),
+            "{result:?}"
+        );
 
         let mut fresh = make_manager_from_conn(conn);
         let list = fresh.list("target-profile");

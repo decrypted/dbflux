@@ -114,7 +114,7 @@ fn removing_a_panel_and_reopening_moves_nothing(cx: &mut TestAppContext) {
             let before = shown_slots(window);
             assert_eq!(before.len(), layout.len(), "{at}");
 
-            // A click selects a panel in Edit mode.
+            // `alt-l` switches the dashboard to Edit mode, where a click selects a panel.
             window.simulate_keystrokes("alt-l");
             window.run_until_parked();
             let chosen = before[removed];

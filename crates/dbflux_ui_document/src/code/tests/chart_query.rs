@@ -5,6 +5,7 @@ use crate::code::CodeDocument;
 use crate::data_grid_panel::DataGridEvent;
 use crate::handle::DocumentEvent;
 use crate::keyboard_test_support::init_keyboard_runtime;
+use crate::types::DocumentState;
 use dbflux_components::chart::{
     BindingSpec, ChartKind, ChartSpec, InstanceMetricSource, MetricSource, YScale,
 };
@@ -185,9 +186,6 @@ impl Fixture<'_> {
             chart.update(cx, |chart, cx| chart.request_reexecute(window, cx));
         });
         self.window.run_until_parked();
-        self.window.update(|_, cx| {
-            chart.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-        });
     }
 
     fn put_cursor_on_line(&mut self, line: u32) {
@@ -1503,10 +1501,6 @@ fn a_chart_opens_the_connection_its_database_needs(cx: &mut TestAppContext) {
     assert_eq!(*finishes.borrow(), 1);
 
     console.window.run_until_parked();
-    let handle = chart.clone();
-    console.window.update(|_, cx| {
-        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-    });
 
     assert_eq!(*finishes.borrow(), 2, "the run that waited reports once");
     assert_eq!(console.executed(), [CALLS_QUERY]);
@@ -1560,10 +1554,6 @@ fn a_database_that_cannot_open_is_named_and_not_retried_by_a_timer(cx: &mut Test
     });
     console.window.run_until_parked();
     assert_eq!(console.executed(), [CALLS_QUERY]);
-    let handle = chart.clone();
-    console.window.update(|_, cx| {
-        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-    });
     assert_eq!(*finishes.borrow(), 3);
 }
 
@@ -1650,9 +1640,6 @@ fn dashboard_panels_use_the_stored_context_and_free_their_slots(cx: &mut TestApp
                 });
             });
             console.window.run_until_parked();
-            console.window.update(|_, cx| {
-                chart.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-            });
         }
         console.window.run_until_parked();
     }
@@ -2122,10 +2109,6 @@ fn a_charts_task_names_the_connection_it_runs_on(cx: &mut TestAppContext) {
     let chart = console.reopen(&saved);
     console.request(&chart);
     console.window.run_until_parked();
-    let handle = chart.clone();
-    console.window.update(|_, cx| {
-        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-    });
 
     console.request(&chart);
     let task = running_chart_task(&mut console);
@@ -2215,10 +2198,6 @@ impl Fixture<'_> {
             handle.update(cx, |chart, cx| chart.run_by_hand(window, cx));
         });
         self.window.run_until_parked();
-        let handle = chart.clone();
-        self.window.update(|_, cx| {
-            handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-        });
     }
 
     fn applied(&mut self, chart: &Entity<ChartDocument>) -> (String, ExecutionContext, bool) {
@@ -2240,10 +2219,6 @@ impl Fixture<'_> {
             });
         });
         self.window.run_until_parked();
-        let handle = chart.clone();
-        self.window.update(|_, cx| {
-            handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-        });
     }
 }
 
@@ -2714,10 +2689,6 @@ fn a_pick_while_another_database_opens_reports_the_run_it_replaced(cx: &mut Test
     assert_eq!(*finishes.borrow(), 1, "the run it replaced reports at once");
 
     console.window.run_until_parked();
-    let handle = chart.clone();
-    console.window.update(|_, cx| {
-        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-    });
 
     assert_eq!(*finishes.borrow(), 2, "and the one that ran when it ends");
     assert_eq!(console.last_request().database.as_deref(), Some("billing"));
@@ -2758,10 +2729,6 @@ fn a_pick_of_an_open_database_ends_the_wait_on_another(cx: &mut TestAppContext) 
     assert_eq!(*finishes.borrow(), 1, "the run that waited reports");
 
     console.window.run_until_parked();
-    let handle = chart.clone();
-    console.window.update(|_, cx| {
-        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-    });
 
     assert_eq!(*finishes.borrow(), 2, "and the one that ran");
     assert_eq!(
@@ -3599,10 +3566,6 @@ fn a_result_from_before_the_save_does_not_store_its_columns(cx: &mut TestAppCont
     console.window.run_until_parked();
     console.type_query(&chart, REORDERED_QUERY);
     let id = console.save(&chart, "saved").id;
-    let handle = chart.clone();
-    console.window.update(|_, cx| {
-        handle.update(cx, |chart, cx| chart.apply_pending_result_for_test(cx));
-    });
 
     assert!(
         stored_record(&mut console, id).bindings.y.is_empty(),
@@ -3949,10 +3912,6 @@ fn a_result_of_the_old_query_does_not_use_up_the_saved_picks(cx: &mut TestAppCon
     });
     console.window.run_until_parked();
 
-    let handle = panel.clone();
-    console.window.update(|_, cx| {
-        handle.update(cx, |panel, cx| panel.apply_pending_result_for_test(cx));
-    });
     assert_eq!(
         console.bindings(&panel).x,
         0,
@@ -4157,6 +4116,182 @@ fn the_picker_fits_its_name_and_the_menu_fits_the_picker(cx: &mut TestAppContext
             "at {window_width}: {bar:?}"
         );
         assert!(bar.menu.expect("a menu") >= trigger, "{bar:?}");
+    }
+}
+
+/// The tasks still running, as the task list counts them.
+fn running_tasks(console: &mut Fixture<'_>) -> usize {
+    let app_state = console.app_state.clone();
+    console
+        .window
+        .update(|_, cx| app_state.read(cx).running_tasks().len())
+}
+
+/// A console that never draws, like one in a tab that isn't showing, with `sql` on its
+/// way.
+fn run_in_a_tab_not_showing(console: &mut Fixture<'_>, sql: &str) -> Entity<CodeDocument> {
+    let (app_state, profile_id) = (console.app_state.clone(), console.profile_id);
+    let hidden = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            CodeDocument::new_with_language(
+                app_state,
+                Some(profile_id),
+                QueryLanguage::Sql,
+                window,
+                cx,
+            )
+        })
+    });
+
+    let handle = hidden.clone();
+    let sql = sql.to_string();
+    console.window.update(|window, cx| {
+        handle.update(cx, |document, cx| {
+            document.execute_statement(
+                sql,
+                false,
+                dbflux_core::ReadOnlyEnforcement::None,
+                crate::code::explain::StatementRun::Query,
+                window,
+                cx,
+            );
+        });
+    });
+
+    hidden
+}
+
+/// A console in a tab that isn't showing never draws. Its query ends when its
+/// result arrives all the same: the task, the tab and the result grid.
+#[gpui::test]
+fn a_query_in_a_tab_not_showing_ends_with_its_result(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let hidden = run_in_a_tab_not_showing(&mut console, FIRST_STATEMENT);
+    assert_eq!(running_tasks(&mut console), 1);
+    assert_eq!(
+        console.window.update(|_, cx| hidden.read(cx).state()),
+        DocumentState::Executing
+    );
+
+    console.window.run_until_parked();
+
+    assert_eq!(running_tasks(&mut console), 0, "the task ended");
+    console.window.update(|_, cx| {
+        let document = hidden.read(cx);
+        assert_eq!(document.state(), DocumentState::Clean, "the tab's spinner");
+        assert_eq!(document.result_tabs.result_tabs.len(), 1, "the result");
+    });
+}
+
+/// A query that fails in a tab that isn't showing says so when it fails, not when
+/// the user comes back.
+#[gpui::test]
+fn a_query_failing_in_a_tab_not_showing_shows_its_error_at_once(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    console
+        .driver
+        .set_query_outcome(FIRST_STATEMENT, FakeQueryOutcome::Error("no".into()));
+
+    let hidden = run_in_a_tab_not_showing(&mut console, FIRST_STATEMENT);
+    console.window.run_until_parked();
+
+    assert_eq!(running_tasks(&mut console), 0, "the task ended");
+    console.window.update(|_, cx| {
+        assert_eq!(hidden.read(cx).state(), DocumentState::Error);
+        let titles = cx.global::<ToastGlobal>().host.read(cx).toast_titles();
+        assert!(
+            titles.iter().any(|title| title.contains("Query failed")),
+            "{titles:?}"
+        );
+    });
+}
+
+/// A chart's run ends with its result too, drawn or not.
+#[gpui::test]
+fn a_chart_not_showing_ends_with_its_result(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.click_open_in_chart();
+    let chart = console.open_the_chart();
+
+    let finishes = finishes_of(&mut console, &chart);
+    console.request(&chart);
+    assert_eq!(running_tasks(&mut console), 1);
+
+    console.window.run_until_parked();
+
+    assert_eq!(running_tasks(&mut console), 0);
+    assert_eq!(*finishes.borrow(), 1);
+    assert!(console.draws(&chart));
+    console
+        .window
+        .update(|_, cx| assert_eq!(chart.read(cx).state(), DocumentState::Clean));
+}
+
+/// A cancel from the task list ends the chart's run: the tab keeps no spinner,
+/// and the area no "Running the query...".
+#[gpui::test]
+fn a_cancel_from_the_task_list_leaves_the_chart_idle(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.click_open_in_chart();
+    let chart = console.open_the_chart();
+
+    let finishes = finishes_of(&mut console, &chart);
+    console.request(&chart);
+
+    let app_state = console.app_state.clone();
+    console.window.update(|_, cx| {
+        app_state.update(cx, |state, _| {
+            let running = state.running_tasks();
+            assert_eq!(running.len(), 1);
+            state.tasks_mut().cancel(running[0].id);
+        });
+    });
+    console.window.run_until_parked();
+
+    assert_eq!(*finishes.borrow(), 1);
+    console
+        .window
+        .update(|_, cx| assert_eq!(chart.read(cx).state(), DocumentState::Clean));
+    assert_ne!(
+        console.message(&chart),
+        dbflux_i18n::t!("document.chart.shell.degraded.running")
+    );
+}
+
+/// A run replaced by a newer one ends without taking the chart's spinner along:
+/// while a task runs, the tab says so.
+#[gpui::test]
+fn a_replaced_run_leaves_the_newer_one_spinning(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, SECOND_STATEMENT);
+    console.click_open_in_chart();
+    let chart = console.open_the_chart();
+
+    let seen: Rc<RefCell<Vec<(DocumentState, usize)>>> = Rc::default();
+    let sink = seen.clone();
+    let app_state = console.app_state.clone();
+    console.window.update(|_, cx| {
+        cx.subscribe(&chart, move |chart, event: &DocumentEvent, cx| {
+            if matches!(event, DocumentEvent::ExecutionFinished) {
+                let running = app_state.read(cx).running_tasks().len();
+                sink.borrow_mut().push((chart.read(cx).state(), running));
+            }
+        })
+        .detach();
+    });
+
+    console.request(&chart);
+    console.request(&chart);
+    console.window.run_until_parked();
+
+    let seen = seen.borrow();
+    assert_eq!(seen.len(), 2, "both runs report");
+    for (state, running) in seen.iter() {
+        assert_eq!(
+            *state == DocumentState::Executing,
+            *running > 0,
+            "{:?}",
+            *seen
+        );
     }
 }
 

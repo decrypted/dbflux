@@ -146,11 +146,6 @@ impl Render for ChartDocument {
             self.request_reexecute(window, cx);
         }
 
-        // -- Apply pending query result --
-        if let Some(pending) = self.pending_result.take() {
-            self.apply_result(pending, cx);
-        }
-
         // -- Auto-run on first render --
         if self.pending_run_on_first_render {
             self.pending_run_on_first_render = false;

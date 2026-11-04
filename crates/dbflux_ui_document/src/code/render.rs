@@ -1145,6 +1145,8 @@ impl Render for CodeDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_statement_gutter_style(cx);
 
+        self.process_pending_results_focus(window, cx);
+
         self.process_pending_set_query(window, cx);
 
         self.process_pending_auto_refresh(window, cx);

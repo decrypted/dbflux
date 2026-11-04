@@ -1079,7 +1079,7 @@ fn the_slot_stays_with_the_run_that_took_it(cx: &mut TestAppContext) {
     let (dashboard, panels) = rig.build_dashboard(2, SavedChartRefreshPolicy::Off);
     rig.run_first_frames_apart(&panels);
 
-    // This run reaches the driver and its result waits for a frame.
+    // This run reaches the driver and ends.
     rig.request(&panels[0]);
     rig.settle();
     rig.on_dashboard(&dashboard, |dashboard, cx| {
@@ -1087,7 +1087,7 @@ fn the_slot_stays_with_the_run_that_took_it(cx: &mut TestAppContext) {
     });
     assert_eq!(rig.inflight(&dashboard), 1);
 
-    // The frame starts the slotted run and applies the earlier one, without parking.
+    // The frame starts the slotted run, without parking.
     rig.show(dashboard.clone());
     assert_eq!(rig.inflight(&dashboard), 1, "the slotted run is under way");
 
@@ -1135,7 +1135,7 @@ fn an_inspector_slot_stays_with_the_run_that_took_it(cx: &mut TestAppContext) {
             },
         );
 
-    // Its own refresh, as F5 makes, whose result waits for a frame.
+    // Its own refresh, as F5 makes, which ends before the slotted run starts.
     let refreshed = inspector.clone();
     rig.window.update(|_, cx| {
         refreshed.update(cx, |inspector, cx| {
@@ -1253,8 +1253,7 @@ fn a_removed_panel_holds_its_slot_until_its_run_ends(cx: &mut TestAppContext) {
     assert_eq!(rig.statements(), statements, "cancelled before it started");
 }
 
-/// The same for an inspector, whose result would otherwise wait for a frame that
-/// never comes.
+/// The same for an inspector.
 #[gpui::test]
 fn a_removed_inspector_holds_its_slot_until_its_run_ends(cx: &mut TestAppContext) {
     let mut rig = rig(cx);

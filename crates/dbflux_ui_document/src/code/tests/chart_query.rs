@@ -2,6 +2,7 @@
 
 use crate::chart_document::ChartDocument;
 use crate::code::CodeDocument;
+use crate::code::SqlQueryFocus;
 use crate::data_grid_panel::DataGridEvent;
 use crate::handle::DocumentEvent;
 use crate::keyboard_test_support::init_keyboard_runtime;
@@ -4180,7 +4181,109 @@ fn a_query_in_a_tab_not_showing_ends_with_its_result(cx: &mut TestAppContext) {
         let document = hidden.read(cx);
         assert_eq!(document.state(), DocumentState::Clean, "the tab's spinner");
         assert_eq!(document.result_tabs.result_tabs.len(), 1, "the result");
+        assert_eq!(
+            document.focus_mode,
+            SqlQueryFocus::Editor,
+            "a tab that isn't showing keeps its keyboard mode"
+        );
     });
+
+    // Drawn again with the keyboard away from the editor, the result takes it, as
+    // it does for a query that ends in view.
+    let host = HiddenConsoleHost(hidden.clone());
+    let (_, drawn) = console.window.add_window_view(move |_, _| host);
+    drawn.run_until_parked();
+    drawn.update(|_, cx| assert_eq!(hidden.read(cx).focus_mode, SqlQueryFocus::Results));
+}
+
+struct HiddenConsoleHost(Entity<CodeDocument>);
+
+impl gpui::Render for HiddenConsoleHost {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement as _, Styled as _};
+
+        gpui::div().size_full().child(self.0.clone())
+    }
+}
+
+/// A script in a tab that isn't showing ends with its result too.
+#[cfg(unix)]
+#[gpui::test]
+fn a_script_in_a_tab_not_showing_ends_with_its_result(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let (app_state, profile_id) = (console.app_state.clone(), console.profile_id);
+    let hidden = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            let mut document = CodeDocument::new_with_language(
+                app_state,
+                Some(profile_id),
+                QueryLanguage::Bash,
+                window,
+                cx,
+            );
+            document.set_content("echo done", window, cx);
+            document
+        })
+    });
+
+    let handle = hidden.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |document, cx| document.run_query(window, cx));
+    });
+    assert_eq!(running_tasks(&mut console), 1);
+
+    console.window.run_until_parked();
+
+    assert_eq!(running_tasks(&mut console), 0, "the task ended");
+    console.window.update(|_, cx| {
+        let document = hidden.read(cx);
+        assert_eq!(document.state(), DocumentState::Clean, "the tab's spinner");
+        assert_eq!(document.result_tabs.result_tabs.len(), 1, "the output");
+    });
+}
+
+/// An inspector that isn't drawn ends with its result: a dashboard behind another
+/// tab waits for that to free the run slot.
+#[gpui::test]
+fn an_inspector_not_showing_ends_with_its_result(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let (app_state, profile_id) = (console.app_state.clone(), console.profile_id);
+    let inspector = console.window.update(|_, cx| {
+        cx.new(|cx| {
+            crate::instance_inspector::InspectorPanel::new(
+                profile_id,
+                "sessions".to_string(),
+                app_state,
+                cx,
+            )
+        })
+    });
+
+    let finishes: Rc<RefCell<usize>> = Rc::default();
+    let sink = finishes.clone();
+    console.window.update(|_, cx| {
+        cx.subscribe(&inspector, move |_, event: &DocumentEvent, _| {
+            if matches!(event, DocumentEvent::ExecutionFinished) {
+                *sink.borrow_mut() += 1;
+            }
+        })
+        .detach();
+    });
+
+    let handle = inspector.clone();
+    console
+        .window
+        .update(|_, cx| handle.update(cx, |inspector, cx| inspector.request_reexec(cx)));
+    assert_eq!(running_tasks(&mut console), 1);
+
+    console.window.run_until_parked();
+
+    assert_eq!(running_tasks(&mut console), 0, "the task ended");
+    assert_eq!(*finishes.borrow(), 1);
 }
 
 /// A query that fails in a tab that isn't showing says so when it fails, not when

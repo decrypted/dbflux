@@ -241,12 +241,14 @@ cx.spawn(async move |_this, cx| {
     let result = task.await;
     cx.update(|cx| {
         entity.update(cx, |state, cx| {
-            state.pending_result = Some(result);
+            state.apply_result(result, cx);
             cx.notify();
         });
     }).ok();
 }).detach();
 ```
+
+Apply a result where it arrives, not from `render`: a document in a tab that isn't showing doesn't draw, so its task, spinner and whatever waits for the run would wait for the user to come back. `update_in` gives it the window if it needs one. A `pending_*` field is for work that has to happen while drawing (see Entity Updates in Render).
 
 Task handling:
 

@@ -284,7 +284,7 @@ fn editor_layer_does_not_steal_unmodified_letters() {
 
 /// Pairs with `editor_layer_does_not_steal_unmodified_letters`: these
 /// single-letter bindings are intentionally claimed by the Results layer,
-/// which is exactly why `CodeDocument::process_pending_result` must keep
+/// which is exactly why `CodeDocument::process_pending_results_focus` must keep
 /// `focus_mode = Editor` while the input is focused — otherwise the same
 /// letters would get routed here and never reach the editor.
 #[test]

@@ -1661,6 +1661,35 @@ impl CodeDocument {
         .push(cx);
     }
 
+    /// Moves the keyboard's mode to a new result, when the document is drawn: a tab
+    /// that isn't showing has no keyboard to move, and one coming back by key gets
+    /// its focus back before this runs.
+    ///
+    /// Only flips the internal focus_mode to Results when the user is not actively
+    /// typing in the editor input. Otherwise the GPUI focus stays on the input but
+    /// our key-routing thinks Results is active, so Workspace::on_key_down sends
+    /// single-letter keys (l, r, o, x, …) through the Results keymap layer and
+    /// steals them from the editor.
+    pub(super) fn process_pending_results_focus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !std::mem::take(&mut self.pending.results_focus) {
+            return;
+        }
+
+        let input_focused = self
+            .editor
+            .input_state
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+        if !input_focused {
+            self.focus_mode = SqlQueryFocus::Results;
+        }
+    }
+
     /// Ends a run with its result. Called when the result arrives, not from
     /// render: a document in a tab that isn't showing doesn't draw, and its task
     /// would count on until someone looks at it.
@@ -1756,21 +1785,7 @@ impl CodeDocument {
                     self.layout = SqlQueryLayout::Split;
                 }
 
-                // Only flip the internal focus_mode to Results when the user is
-                // not actively typing in the editor input. Otherwise the GPUI
-                // focus stays on the input but our key-routing thinks Results
-                // is active, so Workspace::on_key_down sends single-letter keys
-                // (l, r, o, x, …) through the Results keymap layer and steals
-                // them from the editor.
-                let input_focused = self
-                    .editor
-                    .input_state
-                    .read(cx)
-                    .focus_handle(cx)
-                    .is_focused(window);
-                if !input_focused {
-                    self.focus_mode = SqlQueryFocus::Results;
-                }
+                self.pending.results_focus = true;
 
                 // Emit audit event for successful execution (query or script)
                 let summary = if is_script {

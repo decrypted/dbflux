@@ -315,6 +315,13 @@ chart type and Y scale included, and upserts a `SavedChart` into the app state's
 existing `saved_chart_id` when present so the record is overwritten rather than
 duplicated.
 
+Running saves nothing. While anything saving would keep differs from what is stored, the
+chip next to the title reads "Unsaved changes" instead of "saved", and the Save button takes
+the primary style. That counts SQL typed in the Query section even if nobody ran it, and
+clears on saving or when the change is undone. It is the test behind the `Escape` warning
+above, except for collected samples, which saving does not keep. A chart never saved has no
+chip, and its button changes once something differs from how the chart opened.
+
 Saving keeps where the chart runs, taken from its current execution context: the
 database, the schema and the container, the targets (such as CloudWatch log
 groups) and the query mode. A chart opened from an editor holds the editor's, and

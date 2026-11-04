@@ -413,8 +413,7 @@ impl ChartDocument {
             let weak_self_for_save = cx.weak_entity();
             let weak_self_for_refresh = cx.weak_entity();
 
-            // A panel has no toolbar to show it on.
-            let has_unsaved_changes = !embedded && self.has_unsaved_changes(cx);
+            let has_unsaved_changes = self.shows_unsaved_changes(cx);
 
             let tint = ChromeColors::tint(&theme);
             let leading = div()

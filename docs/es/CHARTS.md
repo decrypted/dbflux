@@ -337,6 +337,14 @@ gráfico guardado se reabre con ellos. Guardar reutiliza el `saved_chart_id`
 existente cuando está presente, así que el registro se sobrescribe en lugar de
 duplicarse.
 
+Ejecutar no guarda nada. Mientras algo que Guardar conservaría difiera de lo almacenado, la
+etiqueta junto al título dice "Cambios sin guardar" en lugar de "guardado", y el botón de
+guardar toma el estilo primario. Eso incluye el SQL escrito en la sección Consulta aunque
+nadie lo haya ejecutado, y desaparece al guardar o al deshacer el cambio. Es la misma
+comprobación que el aviso de `Escape` de arriba, salvo por las muestras recogidas, que
+Guardar no conserva. Un gráfico nunca guardado no tiene etiqueta, y su botón cambia en cuanto
+algo difiere de cómo se abrió.
+
 Guardar conserva dónde se ejecuta el gráfico, tomado de su contexto de ejecución
 actual: la base de datos, el esquema y el contenedor, los destinos (como los grupos
 de logs de CloudWatch) y el modo de consulta. Un gráfico abierto desde un editor

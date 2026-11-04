@@ -4537,9 +4537,26 @@ fn a_replaced_run_leaves_the_newer_one_spinning(cx: &mut TestAppContext) {
 }
 
 impl Fixture<'_> {
+    /// The toolbar's answer, and every time that the full compare Escape uses agrees.
     fn unsaved(&mut self, chart: &Entity<ChartDocument>) -> bool {
-        self.window
-            .update(|_, cx| chart.read(cx).has_unsaved_changes(cx))
+        self.window.update(|_, cx| {
+            let chart = chart.read(cx);
+            let unsaved = chart.has_unsaved_changes(cx);
+            assert_eq!(unsaved, chart.settings_differ_in_full_for_test(cx));
+            unsaved
+        })
+    }
+
+    /// The connection drops, as anything may make it.
+    fn disconnect(&mut self) {
+        let (app_state, profile_id) = (self.app_state.clone(), self.profile_id);
+        self.window.update(|_, cx| {
+            app_state.update(cx, |state, cx| {
+                state.connections_mut().remove(&profile_id);
+                cx.emit(dbflux_ui_base::AppStateChanged);
+            });
+        });
+        self.window.run_until_parked();
     }
 
     fn set_kind(&mut self, chart: &Entity<ChartDocument>, kind: ChartKind) {
@@ -4609,10 +4626,15 @@ fn opening_a_saved_chart_leaves_nothing_unsaved(cx: &mut TestAppContext) {
         y: vec![1],
         ..BindingSpec::default()
     };
+    let mut crlf = console.saved_with(SavedChartContext::default());
+    crlf.source = dbflux_components::saved_chart::SavedChartSource::Query {
+        query: "select 1\r\nfrom api_call_log\r\n".to_string(),
+    };
     for saved in [
         console.saved_with(SavedChartContext::default()),
         console.saved_with(database_context("analytics")),
         picked,
+        crlf,
     ] {
         let chart = console.reopen(&saved);
         assert!(!console.unsaved(&chart), "opened: {:?}", saved.context);
@@ -4863,8 +4885,108 @@ fn a_metric_chart_counts_a_swapped_metric_but_not_samples(cx: &mut TestAppContex
     });
     assert!(console.unsaved(&chart), "swapped");
 
+    let swap = |console: &mut Fixture<'_>, metric_id: &str| {
+        let (handle, metric_id) = (chart.clone(), metric_id.to_string());
+        console.window.update(|window, cx| {
+            handle.update(cx, |chart, cx| {
+                chart.set_data_source(Box::new(InstanceMetricSource { metric_id }), window, cx);
+            });
+        });
+    };
+    swap(&mut console, "connections");
+    assert!(!console.unsaved(&chart), "swapped back to what is stored");
+
+    swap(&mut console, "sessions");
+    assert!(console.unsaved(&chart), "swapped again");
     console.save(&chart, "saved");
     assert!(!console.unsaved(&chart), "saved");
+
+    swap(&mut console, "connections");
+    assert!(
+        console.unsaved(&chart),
+        "what it opened with is no longer what is stored"
+    );
+}
+
+/// A connection dropping is no edit. On a driver with one fixed database a name a console
+/// handed over must not start to count, nor be stored by a save in that state.
+#[gpui::test]
+fn a_dropped_connection_leaves_a_fixed_database_chart_as_it_was(cx: &mut TestAppContext) {
+    use crate::pane::EscapeClose;
+
+    let mut console = console_on(cx, DbKind::SQLite, CALLS_QUERY);
+    console
+        .driver
+        .set_query_outcome(CALLS_QUERY, FakeQueryOutcome::success(calls_columns()));
+    let handed_over = |console: &mut Fixture<'_>| {
+        let (app_state, profile_id) = (console.app_state.clone(), console.profile_id);
+        let chart = console.window.update(|window, cx| {
+            cx.new(|cx| {
+                let mut chart = ChartDocument::new(
+                    Some(profile_id),
+                    CALLS_QUERY.to_string(),
+                    app_state,
+                    window,
+                    cx,
+                );
+                chart.set_execution_context(
+                    ExecutionContext {
+                        database: Some("main".to_string()),
+                        ..ExecutionContext::default()
+                    },
+                    cx,
+                );
+                chart
+            })
+        });
+        console.run_chart(&chart);
+        chart
+    };
+    let never_saved = handed_over(&mut console);
+    let saved = handed_over(&mut console);
+    console.save(&saved, "saved");
+    assert!(!console.unsaved(&saved));
+
+    console.disconnect();
+
+    assert!(!console.unsaved(&never_saved), "never saved");
+    assert_eq!(console.escape(&never_saved), EscapeClose::Close);
+    assert!(!console.unsaved(&saved), "saved");
+
+    let stored = console.save(&saved, "saved");
+    assert_eq!(
+        stored.context.database, None,
+        "a save stores no name either"
+    );
+    assert!(!console.unsaved(&saved));
+}
+
+/// On a driver with databases, a stored one is neither changed nor lost by a connection
+/// dropping, and a real edit from before it stays one.
+#[gpui::test]
+fn a_dropped_connection_leaves_a_stored_database_as_it_was(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::Postgres, "");
+    console.list_databases(&["analytics", "billing"]);
+    console
+        .driver
+        .set_query_outcome(CALLS_QUERY, FakeQueryOutcome::success(calls_columns()));
+    let opened = console.saved_with(database_context("analytics"));
+    let chart = console.reopen(&opened);
+    console.run_chart(&chart);
+    let edited = console.reopen(&opened);
+    console.run_chart(&edited);
+    console.open_section(&edited);
+    console.pick_database(&edited, "billing");
+    console.save(&chart, "saved");
+
+    console.disconnect();
+
+    assert!(!console.unsaved(&chart), "untouched");
+    assert!(console.unsaved(&edited), "the pick is still unsaved");
+
+    let stored = console.save(&chart, "saved");
+    assert_eq!(stored.context.database.as_deref(), Some("analytics"));
+    assert!(!console.unsaved(&chart));
 }
 
 /// What a chart draws for a state: which chip, and what the Save button says about it.
@@ -4948,6 +5070,13 @@ fn a_panel_shows_no_chip(cx: &mut TestAppContext) {
     });
     console.set_kind(&panel, ChartKind::Bar);
 
+    assert!(console.unsaved(&panel), "it differs");
+    assert!(
+        !console
+            .window
+            .update(|_, cx| panel.read(cx).shows_unsaved_changes(cx)),
+        "and nothing shows it, so the compare is not run for a panel"
+    );
     assert_eq!(save_state(&mut console, &panel), (None, None));
 }
 

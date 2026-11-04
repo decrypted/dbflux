@@ -36,11 +36,6 @@ pub type ActionHandler = Arc<dyn Fn(&mut Window, &mut App)>;
 /// Handler called when a chart-kind chip is clicked; receives the chosen kind.
 pub type ChartKindHandler = Arc<dyn Fn(ChartKind, &mut Window, &mut App)>;
 
-/// All read-only state the toolbar needs to render itself.
-///
-/// Callers build this from their own fields; the shared function does not
-/// read from any concrete entity directly (except through the provided
-/// `Entity` handles).
 /// How "Save chart" looks, standing out while it has something to keep. Not green: that
 /// means saved on the chip next to the title.
 fn save_button_variant(has_unsaved_changes: bool) -> ButtonVariant {
@@ -51,6 +46,11 @@ fn save_button_variant(has_unsaved_changes: bool) -> ButtonVariant {
     }
 }
 
+/// All read-only state the toolbar needs to render itself.
+///
+/// Callers build this from their own fields; the shared function does not
+/// read from any concrete entity directly (except through the provided
+/// `Entity` handles).
 pub struct ChartToolbarContext<'a> {
     /// The active theme.
     pub theme: &'a Theme,

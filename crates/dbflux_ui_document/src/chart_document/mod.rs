@@ -11,6 +11,7 @@ mod keyboard_tests;
 pub mod pane;
 mod render;
 
+use std::cell::Cell;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -155,17 +156,21 @@ pub(crate) fn saved_chart_context(
     context: &ExecutionContext,
     cx: &App,
 ) -> SavedChartContext {
-    SavedChartContext::capture(context, connection_has_databases(app_state, profile_id, cx))
+    SavedChartContext::capture(
+        context,
+        connection_has_databases(app_state, profile_id, cx).unwrap_or(true),
+    )
 }
 
+/// `None` without a connection to ask.
 fn connection_has_databases(
     app_state: &Entity<AppStateEntity>,
     profile_id: Option<Uuid>,
     cx: &App,
-) -> bool {
+) -> Option<bool> {
     profile_id
         .and_then(|id| app_state.read(cx).connections().get(&id))
-        .is_none_or(|connected| {
+        .map(|connected| {
             connected.connection.schema_loading_strategy() != SchemaLoadingStrategy::SingleDatabase
         })
 }
@@ -246,7 +251,7 @@ fn connection_lacks_database(
 }
 
 /// The chart settings the user can change and Save keeps.
-#[derive(Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Default)]
 struct ChartSettings {
     selection: Option<ManualChartSelection>,
     kind: ChartKind,
@@ -255,6 +260,8 @@ struct ChartSettings {
     query: String,
     /// As picked, which a run may not have applied yet.
     database: Option<String>,
+    /// What a source that is not a query stores. A query is `query` above.
+    source: Option<SavedChartSource>,
 }
 
 impl ChartSettings {
@@ -268,7 +275,29 @@ impl ChartSettings {
                 _ => String::new(),
             },
             database: saved.context.database.clone(),
+            source: match &saved.source {
+                SavedChartSource::Query { .. } => None,
+                source => Some(source.clone()),
+            },
         }
+    }
+
+    /// All but the query, which can be large and is compared on its own on each frame.
+    fn same_but_for_query(&self, other: &Self) -> bool {
+        let Self {
+            selection,
+            kind,
+            y_scale,
+            query: _,
+            database,
+            source,
+        } = self;
+
+        *selection == other.selection
+            && *kind == other.kind
+            && *y_scale == other.y_scale
+            && *database == other.database
+            && *source == other.source
     }
 }
 
@@ -380,8 +409,10 @@ pub struct ChartDocument {
     /// Not read from storage on each compare: another tab or a panel's Configure
     /// writing the record is no edit made here, and must not make this tab warn.
     stored_settings: ChartSettings,
-    /// The metric picker replaced the source, which Save does not undo.
-    source_replaced: bool,
+    /// What the connection last said about having databases. A connection that drops
+    /// can't be asked, and that is no reason for the answer to change: a chart on a driver
+    /// with one fixed database must not start to count, or store, the name it was given.
+    has_databases: Cell<Option<bool>>,
     /// The settings Escape last warned about losing. A second Escape closes
     /// only while they are still the settings on screen.
     escape_warned_for: Option<ChartSettings>,
@@ -619,7 +650,7 @@ impl ChartDocument {
                 query: baseline_query,
                 ..ChartSettings::default()
             },
-            source_replaced: false,
+            has_databases: Cell::new(None),
             escape_warned_for: None,
             chart_shell,
             time_range_panel: None,
@@ -783,6 +814,7 @@ impl ChartDocument {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let source_at_open = data_source.saved_source();
         let chart_shell = cx.new(ChartShell::new_standalone);
 
         // Bridge the metric picker's Apply emission into this document.
@@ -876,8 +908,11 @@ impl ChartDocument {
             truncation_reported: false,
             refusal_reported: None,
             saved_selection: None,
-            stored_settings: ChartSettings::default(),
-            source_replaced: false,
+            stored_settings: ChartSettings {
+                source: source_at_open,
+                ..ChartSettings::default()
+            },
+            has_databases: Cell::new(None),
             escape_warned_for: None,
             chart_shell,
             time_range_panel: None,
@@ -1137,6 +1172,13 @@ impl ChartDocument {
     /// the applied query has not had yet: neither is something to lose. A driver with
     /// one fixed database has no picker, and Save keeps no database for it.
     fn current_settings(&self, cx: &App) -> ChartSettings {
+        ChartSettings {
+            query: self.query_in_box(cx),
+            ..self.current_settings_but_for_query(cx)
+        }
+    }
+
+    fn current_settings_but_for_query(&self, cx: &App) -> ChartSettings {
         let shell = self.chart_shell.read(cx);
         let pick = self
             .columns_before_edit
@@ -1153,20 +1195,46 @@ impl ChartDocument {
             selection: pick.or_else(|| self.stored_settings.selection.clone()),
             kind: shell.chart_kind(),
             y_scale: shell.y_scale(),
-            query: self.query_in_box(cx),
-            database: if connection_has_databases(&self.app_state, self.profile_id, cx) {
+            query: String::new(),
+            database: if self.has_databases(cx) {
                 self.database_in_picker()
             } else {
                 self.stored_settings.database.clone()
             },
+            source: self.data_source.saved_source(),
         }
+    }
+
+    /// Whether the connection has databases to choose from, as far as anyone can tell.
+    fn has_databases(&self, cx: &App) -> bool {
+        if let Some(answer) = connection_has_databases(&self.app_state, self.profile_id, cx) {
+            self.has_databases.set(Some(answer));
+        }
+
+        self.has_databases.get().unwrap_or(true)
     }
 
     /// Whether anything Save keeps differs from what is stored. The Escape warning and
     /// the Save button both read this, so that they cannot disagree. The time range,
     /// the refresh interval and hidden series do not count: Save does not keep them.
+    ///
+    /// Asked on each frame, so the query is compared where it is, not copied out of the
+    /// box.
     pub(crate) fn has_unsaved_changes(&self, cx: &App) -> bool {
-        self.source_replaced || self.current_settings(cx) != self.stored_settings
+        let stored = &self.stored_settings;
+
+        !self
+            .current_settings_but_for_query(cx)
+            .same_but_for_query(stored)
+            || match &self.query_section {
+                Some(section) => *section.editor.read(cx).text() != stored.query.as_str(),
+                None => self.query != stored.query,
+            }
+    }
+
+    /// What the toolbar shows. A panel has no toolbar, and is not asked.
+    pub(crate) fn shows_unsaved_changes(&self, cx: &App) -> bool {
+        !self.embedded && self.has_unsaved_changes(cx)
     }
 
     /// Whether closing drops something the user cannot get back: anything unsaved, or
@@ -1583,7 +1651,6 @@ impl ChartDocument {
         }
 
         self.data_source = source;
-        self.source_replaced = true;
         self.truncation_reported = false;
         self.pending_chart_reexecute = true;
 
@@ -3006,7 +3073,6 @@ impl ChartDocument {
 
         self.saved_chart_id = Some(id);
         self.title = name;
-        self.source_replaced = false;
         self.pending_toast = Some(PendingToast {
             message: dbflux_i18n::t!("document.chart.toast.chart_saved"),
             is_error: false,
@@ -3087,7 +3153,7 @@ impl ChartDocument {
             context.container = None;
         }
 
-        saved_chart_context(&self.app_state, self.profile_id, &context, cx)
+        SavedChartContext::capture(&context, self.has_databases(cx))
     }
 
     /// Dismiss the name-prompt modal without saving.
@@ -3104,7 +3170,7 @@ impl ChartDocument {
     /// schema and source. Without this the chart sends no database.
     pub fn set_execution_context(&mut self, context: ExecutionContext, cx: &App) {
         self.stored_settings.database =
-            saved_chart_context(&self.app_state, self.profile_id, &context, cx).database;
+            SavedChartContext::capture(&context, self.has_databases(cx)).database;
         self.console_database = context.database.clone();
         self.execution_context = context;
     }
@@ -3382,6 +3448,12 @@ impl ChartDocument {
                 section.database.read(cx).item_count(),
             )
         })
+    }
+
+    /// Whether the settings as Escape compares them differ, in full, query included.
+    #[cfg(test)]
+    pub(crate) fn settings_differ_in_full_for_test(&self, cx: &App) -> bool {
+        self.current_settings(cx) != self.stored_settings
     }
 
     /// Opens the picker's menu.

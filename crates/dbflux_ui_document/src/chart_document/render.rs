@@ -714,7 +714,8 @@ impl ChartDocument {
         // but dashboard panels skip the data-grid chrome entirely, so the
         // legend would otherwise be invisible — series identity is then only
         // surfaced in the hover readout, which doesn't match what users see
-        // in CloudWatch / Grafana.
+        // in CloudWatch / Grafana. A panel too short to spare its room leaves it out;
+        // see `panel_has_room_for_legend`.
         let embedded_legend: Option<AnyElement> = if embedded && self.panel_has_room_for_legend() {
             self.build_embedded_legend(cx)
         } else {

@@ -99,6 +99,10 @@ a Y column draws the chart on a numeric axis. While a chart cannot draw, its
 area says why and what to do next: pick a Y column, change the query to return a
 numeric column, or that the query returned no rows or failed.
 
+In a short or narrow area, Y labels that would touch are left out. Under a plot of
+40 by 60 px the area says *Too small to draw* in place of the plot, with no hover or
+keyboard point, until it has room again.
+
 ### Why `type_name` and driver IDs are never inspected
 
 The module-level documentation in `detect.rs` states that the detection module

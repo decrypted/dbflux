@@ -3011,6 +3011,10 @@ impl ChartDocument {
         }
     }
 
+    pub(crate) fn panel_rows(&self) -> Option<u32> {
+        self.panel_rows
+    }
+
     /// The rows of the dashboard panel holding this chart. Takes no `cx`: the
     /// dashboard calls it while drawing, right before this chart draws.
     pub fn set_panel_rows(&mut self, rows: u32) {

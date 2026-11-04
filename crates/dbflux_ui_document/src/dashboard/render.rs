@@ -285,7 +285,11 @@ impl Render for DashboardDocument {
                     DashboardMetrics::PANEL_PADDING_ONE_ROW
                 };
 
-                if let DashboardPanelSlot::Loaded { panel, .. } = slot {
+                // Here, because a drag resize draws a height nothing has stored yet.
+                // It takes no notify: the chart draws right after this.
+                if let DashboardPanelSlot::Loaded { panel, .. } = slot
+                    && panel.read(cx).panel_rows() != Some(eff_h)
+                {
                     panel.update(cx, |chart, _| chart.set_panel_rows(eff_h));
                 }
 

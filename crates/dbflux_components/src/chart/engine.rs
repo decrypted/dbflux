@@ -4,7 +4,7 @@
 //! happens in `ChartView::build`. `Render::render` is a pure read of the
 //! stored `RenderModel`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -150,6 +150,9 @@ pub struct ChartView {
     /// `render` to convert the window-space hover X to data space and to
     /// position the readout overlay.
     plot_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
+    /// The last paint found the canvas too small for a plot. A keyboard point has no
+    /// point to name then. It comes back with the plot.
+    too_small: Rc<Cell<bool>>,
     /// Series indices that are hidden. Hidden series are skipped when painting
     /// polylines, hover dots, and the readout overlay.
     hidden: HashSet<usize>,
@@ -448,6 +451,7 @@ impl ChartView {
             hover_y_screen: None,
             focused_series_idx: 0,
             plot_bounds: Rc::new(RefCell::new(None)),
+            too_small: Rc::new(Cell::new(false)),
             hidden: HashSet::new(),
             keyboard_point: None,
         })
@@ -629,16 +633,16 @@ impl ChartView {
         }
     }
 
-    /// Access the decimated points for a specific series by index.
-    ///
-    /// Returns `None` when `series_idx` is out of range. Used by the host to
-    /// resolve the Y value of the nearest decimated point for the inspector.
     /// Whether the last paint drew a plot: `false` before the first paint and
     /// while the canvas is too small for one.
     pub fn has_plot_area(&self) -> bool {
         self.plot_bounds.borrow().is_some()
     }
 
+    /// Access the decimated points for a specific series by index.
+    ///
+    /// Returns `None` when `series_idx` is out of range. Used by the host to
+    /// resolve the Y value of the nearest decimated point for the inspector.
     pub fn render_model_decimated_series(&self, series_idx: usize) -> Option<&[(f64, f64)]> {
         self.render_model
             .decimated
@@ -697,6 +701,10 @@ impl ChartView {
 
     /// The point highlighted from the keyboard, if any.
     pub fn keyboard_point(&self) -> Option<crate::chart::DataPointRef> {
+        if self.too_small.get() {
+            return None;
+        }
+
         let point_idx_in_series = self.keyboard_point?;
 
         Some(crate::chart::DataPointRef {
@@ -708,6 +716,10 @@ impl ChartView {
     /// The `(x, y)` data value of the keyboard point, when it still names a
     /// point of the focused series.
     fn keyboard_point_value(&self) -> Option<(f64, f64)> {
+        if self.too_small.get() {
+            return None;
+        }
+
         let index = self.keyboard_point?;
 
         self.render_model
@@ -722,6 +734,10 @@ impl ChartView {
     /// first point (or the last, for a negative `delta`). Returns whether a
     /// point is highlighted afterwards.
     pub fn step_keyboard_point(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        if self.too_small.get() {
+            return false;
+        }
+
         let Some(count) = self.focused_series_len() else {
             return false;
         };
@@ -739,6 +755,10 @@ impl ChartView {
     /// Moves the keyboard point to the first or the last point of the
     /// focused series. Returns whether a point is highlighted afterwards.
     pub fn jump_keyboard_point(&mut self, to_last: bool, cx: &mut Context<Self>) -> bool {
+        if self.too_small.get() {
+            return false;
+        }
+
         let Some(count) = self.focused_series_len() else {
             return false;
         };
@@ -753,6 +773,10 @@ impl ChartView {
     /// at the first point of the series it lands on. Returns whether the
     /// focused series changed.
     pub fn step_keyboard_series(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        if self.too_small.get() {
+            return false;
+        }
+
         let series_count = self.spec.series.len();
         let visible: Vec<usize> = (0..series_count)
             .filter(|index| !self.hidden.contains(index))
@@ -1447,6 +1471,7 @@ impl Render for ChartView {
         // listener (next render after the cursor moves).
         let plot_bounds_rc = self.plot_bounds.clone();
         let plot_bounds_for_canvas = plot_bounds_rc.clone();
+        let too_small_for_canvas = self.too_small.clone();
 
         // Derive the readout (series label + formatted X/Y) from the bounds
         // captured during the previous paint. `None` until the first paint
@@ -1520,11 +1545,12 @@ impl Render for ChartView {
                                 // larger, hover detection in the outer gutter maps to
                                 // off-data coordinates — no incorrect data is shown.
                                 // Tracked for follow-up: align plot_bounds with effective padding.
-                                *plot_bounds_for_canvas.borrow_mut() = plot_fits(
+                                let fits = plot_fits(
                                     f32::from(bounds.size.width),
                                     f32::from(bounds.size.height),
-                                )
-                                .then(|| gpui::Bounds {
+                                );
+                                too_small_for_canvas.set(!fits);
+                                *plot_bounds_for_canvas.borrow_mut() = fits.then(|| gpui::Bounds {
                                     origin: point(
                                         bounds.origin.x + gpui::px(MARGIN_LEFT),
                                         bounds.origin.y,
@@ -3868,80 +3894,7 @@ mod tests {
         )
     }
 
-    /// A plot is drawn from the smallest size worth reading, and not below it.
-    #[test]
-    fn a_plot_needs_a_real_size() {
-        let (tall, wide) = (
-            MARGIN_TOP + MARGIN_BOTTOM + MIN_PLOT_HEIGHT,
-            MARGIN_LEFT + MARGIN_RIGHT + MIN_PLOT_WIDTH,
-        );
-
-        assert!(plot_fits(wide, tall));
-        assert!(!plot_fits(wide, tall - 1.0));
-        assert!(!plot_fits(wide - 1.0, tall));
-    }
-
-    /// Five ticks on a 20 px plot: only labels a line apart are drawn.
-    #[test]
-    fn y_labels_never_touch() {
-        let kept: Vec<usize> = y_labels_that_fit(&[20.0, 15.0, 10.0, 5.0, 0.0], 13.0)
-            .into_iter()
-            .map(|(index, _)| index)
-            .collect();
-        assert_eq!(kept, [0, 3]);
-
-        assert_eq!(y_labels_that_fit(&[30.0, 15.0, 0.0], 13.0).len(), 3);
-        assert!(y_labels_that_fit(&[], 13.0).is_empty());
-    }
-
-    struct SizedChart {
-        chart: gpui::Entity<ChartView>,
-        size: gpui::Size<Pixels>,
-    }
-
-    impl gpui::Render for SizedChart {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .w(self.size.width)
-                .h(self.size.height)
-                .child(self.chart.clone())
-        }
-    }
-
-    /// Too small to draw, a chart leaves no plot area behind for the hover and
-    /// the keyboard point to land in; large enough, it has one.
-    #[gpui::test]
-    fn a_small_canvas_has_no_plot_area(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::theme::init);
-
-        let mut drawn_at = |width: f32, height: f32| {
-            let chart = cx.new(|_| {
-                ChartView::build(&partially_overlapping_hosts(), simple_spec(0, &[1]))
-                    .expect("build should succeed")
-            });
-            let (_host, window) = cx.add_window_view({
-                let chart = chart.clone();
-                move |_, _| SizedChart {
-                    chart,
-                    size: gpui::size(gpui::px(width), gpui::px(height)),
-                }
-            });
-            window.run_until_parked();
-            window.update(|_, cx| chart.read(cx).has_plot_area())
-        };
-
-        assert!(drawn_at(600.0, 200.0));
-        assert!(!drawn_at(600.0, 30.0), "too short");
-        assert!(!drawn_at(70.0, 200.0), "too narrow");
-    }
-
-    #[test]
-    fn the_too_small_note_resolves_in_every_locale() {
-        for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
-            let note = dbflux_i18n::t!("chart.too_small_to_draw", locale = locale);
-            assert_ne!(note, "chart.too_small_to_draw", "{locale}");
-        }
-    }
+    mod plot_size;
 
     /// H and L walk the keyboard point along the focused series, J and K
     /// move it to the other series at the nearest X, and the point stands in

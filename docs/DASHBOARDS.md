@@ -174,7 +174,8 @@ success.
   (`Chart { saved_chart_id }` | `Divider { markdown }` |
   `Inspector { metric_id }`), `DashboardPanelDraft`. New dashboards are
   created with `grid_columns = 12`; new panels are appended at
-  `grid_column = 0` on a new row with `grid_width = 12, grid_height = 4`.
+  `grid_column = 0` on a new row with `grid_width = 12, grid_height = 4`. A dashboard
+  stored with a lower `grid_columns` moves to 12 once, when it is first opened.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`)
   — owns the `SavedChart` lifecycle, including `SavedChartRefreshPolicy`
   (`Off` / `Interval { every_secs }`).

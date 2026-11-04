@@ -18,6 +18,7 @@ use std::rc::Rc;
 mod chart_escape;
 mod close_flush;
 mod dashboard_layout;
+mod dashboard_rescale;
 
 fn new_workspace(
     cx: &mut TestAppContext,

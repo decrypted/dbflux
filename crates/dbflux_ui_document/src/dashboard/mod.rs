@@ -64,7 +64,7 @@ pub(crate) fn refresh_policy_from_index(index: usize) -> SavedChartRefreshPolicy
 
 /// Grid column count for every dashboard. The persisted `grid_columns` field
 /// is preserved for forward compatibility but ignored by the UI.
-pub const DASHBOARD_GRID_COLUMNS: u32 = 12;
+pub use dbflux_ui_base::dashboard_manager::DASHBOARD_GRID_COLUMNS;
 
 /// Pixel height of one grid row. Matches Grafana's default panel row height.
 pub const DASHBOARD_ROW_PX: f32 = 80.0;
@@ -107,27 +107,7 @@ impl GridRect {
     }
 }
 
-/// Rescale a legacy panel coordinate written against a `K`-column grid onto
-/// the canonical 12-column grid.
-///
-/// Returns the new `(grid_column, grid_width)` pair. `K = 0` is treated as
-/// `K = 1` to avoid division-by-zero.
-pub fn rescale_panel_to_12_cols(
-    grid_column: u32,
-    grid_width: u32,
-    legacy_grid_columns: u32,
-) -> (u32, u32) {
-    let k = legacy_grid_columns.max(1);
-
-    if k >= DASHBOARD_GRID_COLUMNS {
-        return (grid_column.min(11), grid_width.clamp(1, 12));
-    }
-
-    let factor = DASHBOARD_GRID_COLUMNS / k;
-    let new_column = grid_column.saturating_mul(factor).min(11);
-    let new_width = grid_width.saturating_mul(factor).clamp(1, 12);
-    (new_column, new_width)
-}
+pub use dbflux_ui_base::dashboard_manager::rescale_panel_to_12_cols;
 
 /// Maximum number of panels that may re-execute concurrently.
 ///

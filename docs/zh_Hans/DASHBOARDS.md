@@ -109,7 +109,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 两个管理器都在 SQLite 存储库之上包了一层内存缓存，用于同步读取。写入操作先落到存储库，缓存只在写入成功后才更新。
 
-- **`DashboardManager`**（`crates/dbflux_ui_base/src/dashboard_manager.rs`）—— 领域类型包括 `Dashboard`、`DashboardPanel`、`DashboardPanelKind`（`Chart { saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`）和 `DashboardPanelDraft`。新建仪表盘时 `grid_columns = 12`；新建面板会追加到新的一行，取 `grid_column = 0`、`grid_width = 12`、`grid_height = 4`。
+- **`DashboardManager`**（`crates/dbflux_ui_base/src/dashboard_manager.rs`）—— 领域类型包括 `Dashboard`、`DashboardPanel`、`DashboardPanelKind`（`Chart { saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`）和 `DashboardPanelDraft`。新建仪表盘时 `grid_columns = 12`；新建面板会追加到新的一行，取 `grid_column = 0`、`grid_width = 12`、`grid_height = 4`。以较小 `grid_columns` 存储的仪表盘会在首次打开时迁移到 12 列，且只迁移一次。
 - **`SavedChartManager`**（`crates/dbflux_ui_base/src/saved_chart_manager.rs`）—— 负责 `SavedChart` 的整个生命周期，包括 `SavedChartRefreshPolicy`（`Off` / `Interval { every_secs }`）。
 - **`RemoteDashboardCache`**（`crates/dbflux_app/src/remote_dashboard_cache.rs`）—— 上游仪表盘列表的会话级内存缓存，重启后不会保留。
 

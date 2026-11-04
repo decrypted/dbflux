@@ -158,7 +158,8 @@ DBFlux는 차트 구성을 **저장된 차트**로 유지하고 이를 **대시�
   (`Chart { saved_chart_id }` | `Divider { markdown }` |
   `Inspector { metric_id }`), `DashboardPanelDraft`. 새 대시보드는
   `grid_columns = 12`로 생성되고, 새 패널은 `grid_width = 12, grid_height = 4`로
-  새 행의 `grid_column = 0`에 추가됩니다.
+  새 행의 `grid_column = 0`에 추가됩니다. 더 작은 `grid_columns`로 저장된 대시보드는 처음
+  열 때 한 번만 12로 옮겨집니다.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`)
   — `SavedChart` 수명 주기를 소유하며, 여기에는 `SavedChartRefreshPolicy`
   (`Off` / `Interval { every_secs }`)가 포함됩니다.

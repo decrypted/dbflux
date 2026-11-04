@@ -344,6 +344,56 @@ fn refresh_policy_kind_to_str(p: SavedChartRefreshPolicy) -> String {
     .to_string()
 }
 
+/// Grid column count for every dashboard.
+pub const DASHBOARD_GRID_COLUMNS: u32 = 12;
+
+/// Rescale a panel written against a `K`-column grid onto the canonical 12-column
+/// grid. Returns the new `(grid_column, grid_width)`, which stays on the grid. `K = 0`
+/// is treated as `K = 1` to avoid division-by-zero.
+pub fn rescale_panel_to_12_cols(
+    grid_column: u32,
+    grid_width: u32,
+    legacy_grid_columns: u32,
+) -> (u32, u32) {
+    let k = legacy_grid_columns.max(1);
+
+    if k >= DASHBOARD_GRID_COLUMNS {
+        return (grid_column.min(11), grid_width.clamp(1, 12));
+    }
+
+    let factor = DASHBOARD_GRID_COLUMNS / k;
+    let new_column = grid_column.saturating_mul(factor).min(11);
+    let new_width = grid_width
+        .saturating_mul(factor)
+        .clamp(1, DASHBOARD_GRID_COLUMNS - new_column);
+    (new_column, new_width)
+}
+
+/// Rows of a `K`-column dashboard as they should be on the 12-column grid. A row past
+/// `K` columns isn't in that grid's coordinates: earlier versions rescaled on every open,
+/// so such a dashboard has been rescaled already and scaling it again would only
+/// damage it. All of its rows stay as they are.
+fn rows_on_12_columns(panels: &[DashboardPanel], legacy_grid_columns: u32) -> Vec<DashboardPanel> {
+    let already_rescaled = panels
+        .iter()
+        .any(|p| p.grid_column.saturating_add(p.grid_width) > legacy_grid_columns.max(1));
+
+    panels
+        .iter()
+        .cloned()
+        .map(|mut panel| {
+            if !already_rescaled {
+                (panel.grid_column, panel.grid_width) = rescale_panel_to_12_cols(
+                    panel.grid_column,
+                    panel.grid_width,
+                    legacy_grid_columns,
+                );
+            }
+            panel
+        })
+        .collect()
+}
+
 /// Default grid width for a panel appended via `append_panels`.
 ///
 /// The dashboard grid is now fixed at 12 columns. New panels land full-width on
@@ -408,7 +458,8 @@ pub struct DashboardManager {
     panels: HashMap<Uuid, Vec<DashboardPanel>>,
     /// Dashboards with a panel that could not be read. Panel writes replace
     /// the whole stored set, so writing the incomplete cache would delete the
-    /// unread panels; writes to these dashboards are refused instead.
+    /// unread panels; writes to these dashboards are refused instead. Also those
+    /// `move_to_12_columns` could not write, for the reason it gives.
     incompletely_loaded: HashSet<Uuid>,
     dashboards_repo: Arc<DashboardsRepository>,
     panels_repo: Arc<DashboardPanelsRepository>,
@@ -529,6 +580,68 @@ impl DashboardManager {
         }
 
         Ok(())
+    }
+
+    /// Moves a dashboard stored for a grid under 12 columns onto the 12-column grid, once:
+    /// its rows, hidden ones too, and its `grid_columns` are written in one transaction.
+    /// Nothing to do for any other dashboard.
+    ///
+    /// When the write fails, storage and this cache stay as they were, and the dashboard's
+    /// panels can't be written for this session: a move would store one row for the new
+    /// grid under the old `grid_columns`, and the next open would rescale it again.
+    pub fn move_to_12_columns(&mut self, dashboard_id: Uuid) -> Result<(), StorageError> {
+        let Some(legacy) = self
+            .dashboards
+            .iter()
+            .find(|d| d.id == dashboard_id)
+            .map(|d| d.grid_columns)
+            .filter(|columns| *columns < DASHBOARD_GRID_COLUMNS)
+        else {
+            return Ok(());
+        };
+
+        let result = self.write_12_columns(dashboard_id, legacy);
+        if result.is_err() {
+            self.incompletely_loaded.insert(dashboard_id);
+        }
+        result
+    }
+
+    fn write_12_columns(&mut self, dashboard_id: Uuid, legacy: u32) -> Result<(), StorageError> {
+        let panels = rows_on_12_columns(&self.writable_panels(dashboard_id)?, legacy);
+
+        let dtos: Vec<DashboardPanelDto> = panels.iter().map(panel_to_dto).collect();
+        self.panels_repo.replace_panels_and_grid_columns(
+            dashboard_id,
+            &dtos,
+            i64::from(DASHBOARD_GRID_COLUMNS),
+        )?;
+
+        self.panels.insert(dashboard_id, panels);
+        if let Some(dashboard) = self.dashboards.iter_mut().find(|d| d.id == dashboard_id) {
+            dashboard.grid_columns = DASHBOARD_GRID_COLUMNS;
+        }
+        Ok(())
+    }
+
+    /// `shown_panels` as they draw on the 12-column grid, for a dashboard
+    /// `move_to_12_columns` could not write. Works from the stored rows each time, so
+    /// opening it again doesn't scale it again.
+    pub fn shown_panels_on_12_columns(&self, dashboard_id: Uuid) -> Vec<DashboardPanel> {
+        let legacy = self
+            .dashboards
+            .iter()
+            .find(|d| d.id == dashboard_id)
+            .map_or(DASHBOARD_GRID_COLUMNS, |d| d.grid_columns);
+
+        if legacy >= DASHBOARD_GRID_COLUMNS {
+            return self.shown_panels(dashboard_id);
+        }
+
+        shown_rows(&rows_on_12_columns(
+            self.panels_for_dashboard(dashboard_id),
+            legacy,
+        ))
     }
 
     /// The panels a dashboard shows, in the order of its slots: a chart's first row.
@@ -1470,6 +1583,7 @@ mod tests {
         assert_eq!(left, [(0, Some(other))]);
     }
 
+    mod move_to_12_columns;
     mod remove_keeps_layout;
     mod shown_panels;
 

@@ -250,57 +250,32 @@ impl Workspace {
             return;
         };
 
+        // A dashboard stored for a narrower grid moves to the 12-column one, once. If that
+        // can't be written it still draws right, and stays as stored.
+        let move_failure = self
+            .app_state
+            .update(cx, |state, _| {
+                state.dashboards.move_to_12_columns(dashboard_id)
+            })
+            .err();
+        if let Some(error) = move_failure {
+            self.app_state.update(cx, |state, _cx| {
+                state.record_storage_failure(
+                    dbflux_core::observability::actions::CONFIG_UPDATE,
+                    "dashboard_panel",
+                    dashboard_id.to_string(),
+                    dbflux_i18n::t!("charts.error.rescale_failed"),
+                    error.to_string(),
+                );
+            });
+        }
+
         // Build panel slots from persisted panels, in the order edits go by.
-        let mut panels: Vec<dbflux_ui_base::DashboardPanel> = self
+        let panels: Vec<dbflux_ui_base::DashboardPanel> = self
             .app_state
             .read(cx)
             .dashboards
-            .shown_panels(dashboard_id);
-
-        // One-shot rescale of pre-12-col data. Old dashboards persisted with
-        // `grid_columns < 12` are widened in place so subsequent loads see
-        // canonical 12-col-native coordinates. No SQL migration is required —
-        // the new positions are written back through `update_panel_position`.
-        use crate::ui::document::dashboard::{DASHBOARD_GRID_COLUMNS, rescale_panel_to_12_cols};
-        if dashboard.grid_columns < DASHBOARD_GRID_COLUMNS && !panels.is_empty() {
-            for (shown_index, panel) in panels.iter_mut().enumerate() {
-                let (new_col, new_w) = rescale_panel_to_12_cols(
-                    panel.grid_column,
-                    panel.grid_width,
-                    dashboard.grid_columns,
-                );
-                if new_col != panel.grid_column || new_w != panel.grid_width {
-                    let dashboard_id_local = dashboard_id;
-                    let panel_index = shown_index as u32;
-                    let new_row = panel.grid_row;
-                    let new_h = panel.grid_height;
-                    let result = self.app_state.update(cx, |state, _cx| {
-                        state.dashboards.update_panel_position(
-                            dashboard_id_local,
-                            panel_index,
-                            new_col,
-                            new_row,
-                            new_w,
-                            new_h,
-                        )
-                    });
-                    if let Err(e) = result {
-                        let message = e.to_string();
-                        self.app_state.update(cx, |state, _cx| {
-                            state.record_storage_failure(
-                                dbflux_core::observability::actions::CONFIG_UPDATE,
-                                "dashboard_panel",
-                                format!("{dashboard_id_local}#{panel_index}"),
-                                dbflux_i18n::t!("charts.error.rescale_failed"),
-                                message,
-                            );
-                        });
-                    }
-                    panel.grid_column = new_col;
-                    panel.grid_width = new_w;
-                }
-            }
-        }
+            .shown_panels_on_12_columns(dashboard_id);
 
         let app_state = self.app_state.clone();
         let doc = cx.new(|cx| {

@@ -246,3 +246,68 @@ fn an_older_dashboard_that_cannot_be_written_draws_the_same_and_stores_nothing(
         assert_eq!(stored(&app_state, dashboard_id, window), (rows.clone(), 2));
     }
 }
+
+/// A failed move draws what was stored on 12 columns, and an app-state change reconciles
+/// the slots with the manager. They have to agree, or every divider and inspector off the
+/// first column finds no match and is added again.
+#[gpui::test]
+fn a_failed_move_does_not_add_panels_when_the_app_state_changes(cx: &mut TestAppContext) {
+    use dbflux_ui_base::{AppStateChanged, DashboardPanel, DashboardPanelKind};
+
+    let (workspace, app_state, window) = new_workspace(cx);
+    let dashboard_id = stored_dashboard(&app_state, 2, &[(0, 0, 1, 4)], window);
+
+    app_state.update(window, |state, _| {
+        let mut rows = state.dashboards.panels_for_dashboard(dashboard_id).to_vec();
+        rows.push(DashboardPanel {
+            dashboard_id,
+            panel_index: 1,
+            kind: DashboardPanelKind::Inspector {
+                metric_id: "pg.cache_hit_ratio".to_string(),
+            },
+            title_override: None,
+            grid_row: 0,
+            grid_column: 1,
+            grid_width: 1,
+            grid_height: 4,
+        });
+        rows.push(DashboardPanel {
+            dashboard_id,
+            panel_index: 2,
+            kind: DashboardPanelKind::Divider {
+                markdown: "## notes".to_string(),
+            },
+            title_override: None,
+            grid_row: 4,
+            grid_column: 1,
+            grid_width: 1,
+            grid_height: 1,
+        });
+        state
+            .dashboards
+            .replace_panels(dashboard_id, rows)
+            .expect("rows stored");
+
+        let conn = state
+            .storage_runtime()
+            .viz_connection()
+            .expect("viz connection");
+        conn.lock()
+            .expect("connection")
+            .execute_batch(
+                "CREATE TRIGGER refuse_grid BEFORE UPDATE OF grid_columns ON viz_dashboards
+                 BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            )
+            .expect("trigger");
+    });
+
+    open(&workspace, dashboard_id, window);
+    let first = shown_slots(window);
+    assert_eq!(first.len(), 3);
+
+    for _ in 0..2 {
+        app_state.update(window, |_, cx| cx.emit(AppStateChanged));
+        window.run_until_parked();
+        assert_eq!(shown_slots(window), first);
+    }
+}

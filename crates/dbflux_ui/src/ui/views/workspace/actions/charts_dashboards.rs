@@ -275,7 +275,7 @@ impl Workspace {
             .app_state
             .read(cx)
             .dashboards
-            .shown_panels_on_12_columns(dashboard_id);
+            .shown_panels(dashboard_id);
 
         let app_state = self.app_state.clone();
         let doc = cx.new(|cx| {

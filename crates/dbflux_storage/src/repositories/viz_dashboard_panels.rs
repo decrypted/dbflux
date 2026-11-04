@@ -187,17 +187,6 @@ impl DashboardPanelsRepository {
                 source,
             })?;
 
-        if let Some(grid_columns) = grid_columns {
-            tx.execute(
-                "UPDATE viz_dashboards SET grid_columns = ?1 WHERE id = ?2",
-                rusqlite::params![grid_columns, dashboard_id.to_string()],
-            )
-            .map_err(|source| StorageError::Sqlite {
-                path: DB_PATH.into(),
-                source,
-            })?;
-        }
-
         tx.execute(
             "DELETE FROM viz_dashboard_panels WHERE dashboard_id = ?1",
             [dashboard_id.to_string()],
@@ -227,6 +216,17 @@ impl DashboardPanelsRepository {
                     panel.grid_width,
                     panel.grid_height,
                 ],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
+        }
+
+        if let Some(grid_columns) = grid_columns {
+            tx.execute(
+                "UPDATE viz_dashboards SET grid_columns = ?1 WHERE id = ?2",
+                rusqlite::params![grid_columns, dashboard_id.to_string()],
             )
             .map_err(|source| StorageError::Sqlite {
                 path: DB_PATH.into(),

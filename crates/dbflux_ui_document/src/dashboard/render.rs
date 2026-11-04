@@ -1,8 +1,8 @@
 //! `Render` implementation for `DashboardDocument`.
 //!
 //! Layout model (Grafana-style 12-column free grid):
-//! - Every dashboard uses a fixed 12-column grid; the persisted
-//!   `viz_dashboards.grid_columns` value is ignored by the UI.
+//! - Every dashboard uses a fixed 12-column grid. One stored with a lower
+//!   `viz_dashboards.grid_columns` is moved onto it by `DashboardManager::move_to_12_columns`.
 //! - The grid container is `position: relative`; each panel is absolutely
 //!   positioned with `left = col * (100/12)%`, `width = w * (100/12)%`,
 //!   `top = row * DASHBOARD_ROW_PX`, `height = h * DASHBOARD_ROW_PX`.

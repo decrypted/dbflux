@@ -62,8 +62,8 @@ pub(crate) fn refresh_policy_from_index(index: usize) -> SavedChartRefreshPolicy
         .unwrap_or(SavedChartRefreshPolicy::Off)
 }
 
-/// Grid column count for every dashboard. The persisted `grid_columns` field
-/// is preserved for forward compatibility but ignored by the UI.
+/// Grid column count for every dashboard. A dashboard stored with a lower
+/// `grid_columns` is moved onto this grid once, by `DashboardManager::move_to_12_columns`.
 pub use dbflux_ui_base::dashboard_manager::DASHBOARD_GRID_COLUMNS;
 
 /// Pixel height of one grid row. Matches Grafana's default panel row height.
@@ -373,9 +373,8 @@ impl DashboardDocument {
     /// by `shared_time_range` so all panels execute over the same window.
     /// Construct a new `DashboardDocument`.
     ///
-    /// The dashboard grid is fixed at 12 columns; the persisted
-    /// `viz_dashboards.grid_columns` field is ignored by the UI (it is kept in
-    /// the schema for forward compatibility only).
+    /// The dashboard grid is fixed at 12 columns. A lower `viz_dashboards.grid_columns`
+    /// is dealt with before a dashboard opens, by `DashboardManager::move_to_12_columns`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         dashboard_id: Uuid,
@@ -763,8 +762,8 @@ impl DashboardDocument {
 
     /// Returns the number of grid columns for this dashboard.
     ///
-    /// Always returns `DASHBOARD_GRID_COLUMNS` (12). The persisted
-    /// `viz_dashboards.grid_columns` field is ignored at this layer.
+    /// Always returns `DASHBOARD_GRID_COLUMNS` (12). A lower `viz_dashboards.grid_columns`
+    /// is dealt with before a dashboard opens, by `DashboardManager::move_to_12_columns`.
     pub fn grid_columns(&self) -> u32 {
         DASHBOARD_GRID_COLUMNS
     }

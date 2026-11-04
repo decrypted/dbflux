@@ -188,6 +188,7 @@ fn rows_rescaled_by_an_earlier_version_stay_as_they_are() {
     for rows in [
         vec![(0, 0, 6, 4), (0, 6, 6, 4)],
         vec![(0, 0, 12, 4), (0, 11, 12, 4)],
+        vec![(0, 0, 6, 4), (4, 6, 2, 4)],
     ] {
         let (rt, dash_id) = stored(2, rows.iter().map(|rect| chart(*rect)).collect());
 
@@ -200,42 +201,105 @@ fn rows_rescaled_by_an_earlier_version_stay_as_they_are() {
     }
 }
 
-/// The rows and `grid_columns` go together. If the second write fails the first is
-/// undone, later edits are refused, and the dashboard still draws on 12 columns from
-/// what is stored, however often it opens.
+/// A row can overrun a narrow grid without any earlier rescale: a resize there limits the
+/// width alone. It is still in that grid's coordinates, so the dashboard moves, and only
+/// that row is held to the edge.
 #[test]
-fn a_failed_write_changes_nothing_and_refuses_later_edits() {
-    let rows = vec![(0, 0, 1, 2), (0, 1, 1, 2)];
+fn a_row_overrunning_its_grid_that_was_never_opened_still_moves() {
+    let rows = vec![(0, 0, 1, 4), (4, 1, 2, 4)];
     let (rt, dash_id) = stored(2, rows.iter().map(|rect| chart(*rect)).collect());
-    {
-        let conn = rt.viz_connection().expect("viz connection");
-        let conn = conn.lock().unwrap();
-        conn.execute_batch(
-            "CREATE TRIGGER refuse_grid BEFORE UPDATE OF grid_columns ON viz_dashboards
-             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
-        )
-        .unwrap();
-    }
 
     let mut mgr = manager_over(&rt);
-    assert!(mgr.move_to_12_columns(dash_id).is_err());
+    mgr.move_to_12_columns(dash_id).unwrap();
 
-    assert_eq!(rects(&mgr, dash_id), rows, "the cache is as it was");
-    assert_eq!(rects(&manager_over(&rt), dash_id), rows, "and storage");
-    assert_eq!(stored_grid_columns(&rt, dash_id), 2);
+    let expected = vec![(0, 0, 6, 4), (4, 6, 6, 4)];
+    assert_eq!(rects(&mgr, dash_id), expected);
+    assert_eq!(rects(&manager_over(&rt), dash_id), expected);
+    assert_eq!(stored_grid_columns(&rt, dash_id), 12);
 
-    let drawn = |mgr: &DashboardManager| -> Vec<u32> {
-        mgr.shown_panels_on_12_columns(dash_id)
-            .iter()
-            .map(|p| p.grid_column)
-            .collect()
+    let mut mgr = manager_over(&rt);
+    mgr.move_to_12_columns(dash_id).unwrap();
+    assert_eq!(rects(&manager_over(&rt), dash_id), expected);
+}
+
+/// What can't be told apart: at 4 or 6 columns a layout rescaled once can still fit its
+/// grid. It scales once more, and stays on the grid with no overlap.
+#[test]
+fn a_layout_rescaled_once_that_still_fits_its_grid_scales_again() {
+    for (grid_columns, once, again) in [
+        (4, vec![(0, 0, 3, 4)], vec![(0, 0, 9, 4)]),
+        (
+            6,
+            vec![(0, 0, 2, 4), (0, 2, 2, 4)],
+            vec![(0, 0, 4, 4), (0, 4, 4, 4)],
+        ),
+    ] {
+        let (rt, dash_id) = stored(grid_columns, once.iter().map(|rect| chart(*rect)).collect());
+
+        let mut mgr = manager_over(&rt);
+        mgr.move_to_12_columns(dash_id).unwrap();
+
+        assert_eq!(rects(&manager_over(&rt), dash_id), again);
+        assert_eq!(stored_grid_columns(&rt, dash_id), 12);
+    }
+}
+
+/// The rows and `grid_columns` go together: the refused `grid_columns` update comes after
+/// the rows are written, so this checks that they are undone. Later edits are refused,
+/// and the dashboard draws on 12 columns however often it opens.
+#[test]
+fn a_failed_write_stores_nothing_and_refuses_later_edits() {
+    let rows = vec![(0, 0, 1, 2), (0, 1, 1, 2)];
+    let (rt, dash_id) = stored(2, rows.iter().map(|rect| chart(*rect)).collect());
+    let run = |sql: &str| {
+        let conn = rt.viz_connection().expect("viz connection");
+        let conn = conn.lock().unwrap();
+        conn.execute_batch(sql).unwrap();
     };
-    assert_eq!(drawn(&mgr), [0, 6]);
-    assert!(mgr.move_to_12_columns(dash_id).is_err());
-    assert_eq!(drawn(&mgr), [0, 6], "opening again doesn't scale again");
+    run(
+        "CREATE TRIGGER refuse_grid BEFORE UPDATE OF grid_columns ON viz_dashboards
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    );
 
-    assert!(mgr.update_panel_position(dash_id, 1, 0, 9, 1, 2).is_err());
+    let mut mgr = manager_over(&rt);
+    let on_12_columns = vec![(0, 0, 6, 2), (0, 6, 6, 2)];
+
+    assert!(mgr.move_to_12_columns(dash_id).is_err());
+    assert_eq!(
+        rects(&manager_over(&rt), dash_id),
+        rows,
+        "storage is undone"
+    );
+    assert_eq!(stored_grid_columns(&rt, dash_id), 2);
+    assert_eq!(
+        rects(&mgr, dash_id),
+        on_12_columns,
+        "the cache is what draws"
+    );
+
+    mgr.move_to_12_columns(dash_id).unwrap();
+    assert_eq!(
+        rects(&mgr, dash_id),
+        on_12_columns,
+        "opening again adds nothing"
+    );
+
+    let refused = mgr
+        .update_panel_position(dash_id, 1, 0, 9, 1, 2)
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("could not be moved"), "{refused}");
     assert_eq!(rects(&manager_over(&rt), dash_id), rows);
+
+    // The next start tries again, from what is stored.
+    run("DROP TRIGGER refuse_grid");
+    let mut next_start = manager_over(&rt);
+    next_start.move_to_12_columns(dash_id).unwrap();
+    assert_eq!(rects(&manager_over(&rt), dash_id), on_12_columns);
+    assert_eq!(stored_grid_columns(&rt, dash_id), 12);
+    next_start
+        .update_panel_position(dash_id, 1, 0, 9, 1, 2)
+        .unwrap();
 }
 
 /// A row wider than its grid stays on the 12-column one.

@@ -991,7 +991,7 @@ según driver IDs.
   `viz_dashboard_panels.rs` y `viz_saved_charts.rs`. `SavedChartDto` es un
   aggregate root que escribe atómicamente en tres tablas.
 - **Managers** (cachés en memoria sobre repositorios): `DashboardManager`
-  (`crates/dbflux_ui_base/src/dashboard_manager.rs`) con `Dashboard`,
+  (`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`) con `Dashboard`,
   `DashboardPanel`, `DashboardPanelKind { Chart { saved_chart_id } | Divider {
   markdown } | Inspector { metric_id } }`, `DashboardPanelDraft`;
   `SavedChartManager` (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) posee

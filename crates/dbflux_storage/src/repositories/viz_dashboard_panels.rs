@@ -158,6 +158,26 @@ impl DashboardPanelsRepository {
         dashboard_id: Uuid,
         panels: &[DashboardPanelDto],
     ) -> Result<(), StorageError> {
+        self.replace_panels_in_transaction(dashboard_id, panels, None)
+    }
+
+    /// Replaces a dashboard's panels and sets its `grid_columns`, all or nothing: panels
+    /// written for a grid must not outlive a crash with the old grid's width stored.
+    pub fn replace_panels_and_grid_columns(
+        &self,
+        dashboard_id: Uuid,
+        panels: &[DashboardPanelDto],
+        grid_columns: i64,
+    ) -> Result<(), StorageError> {
+        self.replace_panels_in_transaction(dashboard_id, panels, Some(grid_columns))
+    }
+
+    fn replace_panels_in_transaction(
+        &self,
+        dashboard_id: Uuid,
+        panels: &[DashboardPanelDto],
+        grid_columns: Option<i64>,
+    ) -> Result<(), StorageError> {
         let conn = self.conn.lock().map_err(lock_err)?;
 
         let tx = conn
@@ -196,6 +216,17 @@ impl DashboardPanelsRepository {
                     panel.grid_width,
                     panel.grid_height,
                 ],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
+        }
+
+        if let Some(grid_columns) = grid_columns {
+            tx.execute(
+                "UPDATE viz_dashboards SET grid_columns = ?1 WHERE id = ?2",
+                rusqlite::params![grid_columns, dashboard_id.to_string()],
             )
             .map_err(|source| StorageError::Sqlite {
                 path: DB_PATH.into(),

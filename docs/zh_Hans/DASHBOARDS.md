@@ -109,7 +109,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 两个管理器都在 SQLite 存储库之上包了一层内存缓存，用于同步读取。写入操作先落到存储库，缓存只在写入成功后才更新。
 
-- **`DashboardManager`**（`crates/dbflux_ui_base/src/dashboard_manager.rs`）—— 领域类型包括 `Dashboard`、`DashboardPanel`、`DashboardPanelKind`（`Chart { saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`）和 `DashboardPanelDraft`。新建仪表盘时 `grid_columns = 12`；新建面板会追加到新的一行，取 `grid_column = 0`、`grid_width = 12`、`grid_height = 4`。
+- **`DashboardManager`**（`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`）—— 领域类型包括 `Dashboard`、`DashboardPanel`、`DashboardPanelKind`（`Chart { saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`）和 `DashboardPanelDraft`。新建仪表盘时 `grid_columns = 12`；新建面板会追加到新的一行，取 `grid_column = 0`、`grid_width = 12`、`grid_height = 4`。以较小 `grid_columns` 存储的仪表盘会在首次打开时迁移到 12 列，且只迁移一次。其各行随之缩放；但如果某一行比该网格更宽或起始位置超出该网格，说明旧版本已缩放过，此时只修改 `grid_columns`。旧版本缩放后仍能放入原网格的布局（4 列或 6 列时可能出现）无法区分，会再缩放一次。如果写入失败，则不保存任何内容，仪表盘按 12 列绘制，面板不能修改，并在下次启动时重试。
 - **`SavedChartManager`**（`crates/dbflux_ui_base/src/saved_chart_manager.rs`）—— 负责 `SavedChart` 的整个生命周期，包括 `SavedChartRefreshPolicy`（`Off` / `Interval { every_secs }`）。
 - **`RemoteDashboardCache`**（`crates/dbflux_app/src/remote_dashboard_cache.rs`）—— 上游仪表盘列表的会话级内存缓存，重启后不会保留。
 
@@ -163,7 +163,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 | `Divider` | 内联 markdown | 标题条；没有工具栏 |
 | `Inspector` | `DashboardPanelKind::Inspector { metric_id }` | 表格快照；按共享间隔刷新 |
 
-`DashboardPanelKind::Inspector { metric_id }`（`crates/dbflux_ui_base/src/dashboard_manager.rs`）不携带任何图表引用——检查器仅由 `metric_id` 标识。每个检查器面板承载一个 `DataGridPanel`，显示 `InstanceCatalog::fetch_inspector_snapshot` 返回的当前快照（例如 PostgreSQL 的 `pg_stat_activity`、MySQL 的 `PROCESSLIST`、MongoDB 的 `currentOp`、Redis 的 `CLIENT LIST`）。
+`DashboardPanelKind::Inspector { metric_id }`（`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`）不携带任何图表引用——检查器仅由 `metric_id` 标识。每个检查器面板承载一个 `DataGridPanel`，显示 `InstanceCatalog::fetch_inspector_snapshot` 返回的当前快照（例如 PostgreSQL 的 `pg_stat_activity`、MySQL 的 `PROCESSLIST`、MongoDB 的 `currentOp`、Redis 的 `CLIENT LIST`）。
 
 持久化方面：`Inspector` 取值存放在 `viz_dashboard_panels.panel_kind` 中，检查器的键存放在 `inspector_metric_id`。两者都由**迁移 014**（`014_viz_inspector_and_instance_metric`）引入；该迁移扩展了 `panel_kind` 的 CHECK 约束——这一约束最早由迁移 013 引入，当时只接受 `chart` / `divider`——使其也接受 `inspector`。（从侧边栏的「实例检查器」文件夹直接打开的独立检查器标签页，使用的是 `DocumentKey::InstanceInspector { profile_id, metric_id }`。）
 

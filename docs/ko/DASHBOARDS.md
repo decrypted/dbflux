@@ -153,12 +153,17 @@ DBFlux는 차트 구성을 **저장된 차트**로 유지하고 이를 **대시�
 두 관리자 모두 동기 읽기를 위해 인메모리 캐시로 SQLite 리포지토리를 감쌉니다. 쓰기는
 먼저 리포지토리로 이루어지며, 캐시는 성공 시에만 갱신됩니다.
 
-- **`DashboardManager`** (`crates/dbflux_ui_base/src/dashboard_manager.rs`) —
+- **`DashboardManager`** (`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`) —
   도메인 타입 `Dashboard`, `DashboardPanel`, `DashboardPanelKind`
   (`Chart { saved_chart_id }` | `Divider { markdown }` |
   `Inspector { metric_id }`), `DashboardPanelDraft`. 새 대시보드는
   `grid_columns = 12`로 생성되고, 새 패널은 `grid_width = 12, grid_height = 4`로
-  새 행의 `grid_column = 0`에 추가됩니다.
+  새 행의 `grid_column = 0`에 추가됩니다. 더 작은 `grid_columns`로 저장된 대시보드는 처음
+  열 때 한 번만 12로 옮겨집니다. 행도 함께 조정되지만, 어떤 행이 그 그리드보다 넓거나 그리드
+  밖에서 시작하면 이전 버전이 이미 조정한 것이므로 `grid_columns`만 바뀝니다. 이전 버전이
+  조정했지만 여전히 그리드 안에 들어가는 레이아웃(4열 또는 6열에서 가능)은 구분할 수 없어 한 번 더
+  조정됩니다. 쓰기에 실패하면 아무것도 저장되지 않고, 대시보드는 12열로 그려지며, 패널을 변경할 수
+  없고, 다음 시작 때 다시 시도합니다.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`)
   — `SavedChart` 수명 주기를 소유하며, 여기에는 `SavedChartRefreshPolicy`
   (`Off` / `Interval { every_secs }`)가 포함됩니다.
@@ -242,7 +247,7 @@ DBFlux는 차트 구성을 **저장된 차트**로 유지하고 이를 **대시�
 | `Inspector` | `DashboardPanelKind::Inspector { metric_id }` | 표 형태 스냅샷; 공유 간격에 따라 새로 고침 |
 
 `DashboardPanelKind::Inspector { metric_id }`
-(`crates/dbflux_ui_base/src/dashboard_manager.rs`)는 차트 참조를 갖지 않습니다 —
+(`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`)는 차트 참조를 갖지 않습니다 —
 검사기는 `metric_id`만으로 식별됩니다. 각 검사기 패널은
 `InstanceCatalog::fetch_inspector_snapshot`이 반환한 현재 스냅샷을 표시하는
 `DataGridPanel`을 호스팅합니다(예: PostgreSQL `pg_stat_activity`,

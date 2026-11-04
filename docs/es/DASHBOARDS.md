@@ -180,12 +180,19 @@ Ambos gestores envuelven los repositorios SQLite con cachés en memoria para
 lecturas síncronas. Las escrituras van primero al repositorio; las cachés se
 actualizan solo si tienen éxito.
 
-- **`DashboardManager`** (`crates/dbflux_ui_base/src/dashboard_manager.rs`) —
+- **`DashboardManager`** (`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`) —
   tipos de dominio `Dashboard`, `DashboardPanel`, `DashboardPanelKind` (`Chart {
   saved_chart_id }` | `Divider { markdown }` | `Inspector { metric_id }`),
   `DashboardPanelDraft`. Los dashboards nuevos se crean con `grid_columns = 12`;
   los paneles nuevos se añaden en `grid_column = 0` en una fila nueva con
-  `grid_width = 12, grid_height = 4`.
+  `grid_width = 12, grid_height = 4`. Un dashboard guardado con un `grid_columns`
+  menor pasa a 12 una sola vez, la primera vez que se abre. Sus filas se escalan con él,
+  salvo que una fila sea más ancha que esa cuadrícula o empiece más allá de ella: una versión
+  anterior ya las escaló, así que solo cambia `grid_columns`. Una disposición escalada por una
+  versión anterior que aún cabe en su cuadrícula, posible con 4 o 6 columnas, no se puede
+  distinguir y se escala una vez más. Si la escritura falla, no se guarda nada, el dashboard
+  se dibuja en 12 columnas, sus paneles no se pueden cambiar y se reintenta en el siguiente
+  inicio.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) —
   gestiona el ciclo de vida de `SavedChart`, incluyendo
   `SavedChartRefreshPolicy` (`Off` / `Interval { every_secs }`).
@@ -291,7 +298,7 @@ Los inspectores son el tercer tipo de panel de dashboard, junto a `Chart` y
 | `Inspector`   | `DashboardPanelKind::Inspector { metric_id }` | Snapshot tabular; se refresca en el intervalo compartido |
 
 `DashboardPanelKind::Inspector { metric_id }`
-(`crates/dbflux_ui_base/src/dashboard_manager.rs`) no lleva ninguna referencia a
+(`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`) no lleva ninguna referencia a
 chart — el inspector se identifica únicamente por `metric_id`. Cada panel de
 inspector aloja un `DataGridPanel` que muestra el snapshot actual devuelto por
 `InstanceCatalog::fetch_inspector_snapshot` (por ejemplo `pg_stat_activity` de

@@ -671,7 +671,7 @@ crates/
 DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고 이를 **대시보드(Dashboards)**로 묶습니다(차트 패널의 그리드와 선택적 마크다운 구분선, 공유 시간 범위 + 새로고침 정책). 드라이버는 일반 코어 접점을 통해 대시보드 가져오기/탐색에 참여하며, UI는 드라이버 ID로 분기하지 않습니다.
 
 - **저장소**: `~/.local/share/dbflux/dbflux.db`의 `viz_*` 테이블. 리포지토리는 `crates/dbflux_storage/src/repositories/viz_dashboards.rs`, `viz_dashboard_panels.rs`, `viz_saved_charts.rs`에 있습니다. `SavedChartDto`는 세 테이블에 원자적으로 쓰기하는 애그리게이트 루트입니다.
-- **매니저** (리포지토리 위의 인메모리 캐시): `Dashboard`, `DashboardPanel`, `DashboardPanelKind { Chart { saved_chart_id } | Divider { markdown } | Inspector { metric_id } }`, `DashboardPanelDraft`를 갖춘 `DashboardManager`(`crates/dbflux_ui_base/src/dashboard_manager.rs`), 그리고 `SavedChart` 수명 주기와 `SavedChartRefreshPolicy`(`Off` | `Interval { every_secs }`)를 소유한 `SavedChartManager`(`crates/dbflux_ui_base/src/saved_chart_manager.rs`).
+- **매니저** (리포지토리 위의 인메모리 캐시): `Dashboard`, `DashboardPanel`, `DashboardPanelKind { Chart { saved_chart_id } | Divider { markdown } | Inspector { metric_id } }`, `DashboardPanelDraft`를 갖춘 `DashboardManager`(`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`), 그리고 `SavedChart` 수명 주기와 `SavedChartRefreshPolicy`(`Off` | `Interval { every_secs }`)를 소유한 `SavedChartManager`(`crates/dbflux_ui_base/src/saved_chart_manager.rs`).
 - **원격 목록의 세션 캐시**: `RemoteDashboardCache`(`crates/dbflux_app/src/remote_dashboard_cache.rs`) — 재시작 간에 영속화되지 않습니다.
 - **문서**: `DocumentKey::Chart`로 키가 지정되는 `ChartDocument`(`crates/dbflux_ui_document/src/chart_document/`), `DocumentKey::Dashboard`로 키가 지정되는 `DashboardDocument`(`crates/dbflux_ui_document/src/dashboard/`). 대시보드 패널은 `ChartDocument` 엔티티(`Loaded` / `Orphan`)를 내장하며, 공유 `TimeRangePanel`은 구독을 통해 시간 창(window)의 변경을 로드된 모든 패널에 전파합니다.
 - **드라이버 접점**:

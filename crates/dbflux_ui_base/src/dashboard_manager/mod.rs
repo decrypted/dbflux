@@ -17,6 +17,10 @@ use dbflux_storage::{
 };
 use uuid::Uuid;
 
+mod grid;
+
+pub use grid::{DASHBOARD_GRID_COLUMNS, rescale_panel_to_12_cols};
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -410,6 +414,9 @@ pub struct DashboardManager {
     /// the whole stored set, so writing the incomplete cache would delete the
     /// unread panels; writes to these dashboards are refused instead.
     incompletely_loaded: HashSet<Uuid>,
+    /// Dashboards `move_to_12_columns` could not write this session. Their cached rows
+    /// are on 12 columns and storage isn't, so writes are refused until the next start.
+    move_failed: HashSet<Uuid>,
     dashboards_repo: Arc<DashboardsRepository>,
     panels_repo: Arc<DashboardPanelsRepository>,
 }
@@ -474,6 +481,7 @@ impl DashboardManager {
             dashboards,
             panels,
             incompletely_loaded,
+            move_failed: HashSet::new(),
             dashboards_repo,
             panels_repo,
         }
@@ -525,6 +533,13 @@ impl DashboardManager {
             return Err(StorageError::Data(format!(
                 "some panels of dashboard {dashboard_id} could not be read; \
                  refusing to change its panels so they are not overwritten"
+            )));
+        }
+
+        if self.move_failed.contains(&dashboard_id) {
+            return Err(StorageError::Data(format!(
+                "dashboard {dashboard_id} could not be moved to the 12-column grid; \
+                 its panels can't be changed until the app restarts and tries again"
             )));
         }
 
@@ -1470,6 +1485,7 @@ mod tests {
         assert_eq!(left, [(0, Some(other))]);
     }
 
+    mod move_to_12_columns;
     mod remove_keeps_layout;
     mod shown_panels;
     mod upsert_keeps_panels;

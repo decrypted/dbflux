@@ -169,12 +169,18 @@ Both managers wrap the SQLite repositories with in-memory caches for
 synchronous reads. Writes go to the repository first; caches update only on
 success.
 
-- **`DashboardManager`** (`crates/dbflux_ui_base/src/dashboard_manager.rs`) —
+- **`DashboardManager`** (`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`) —
   domain types `Dashboard`, `DashboardPanel`, `DashboardPanelKind`
   (`Chart { saved_chart_id }` | `Divider { markdown }` |
   `Inspector { metric_id }`), `DashboardPanelDraft`. New dashboards are
   created with `grid_columns = 12`; new panels are appended at
-  `grid_column = 0` on a new row with `grid_width = 12, grid_height = 4`.
+  `grid_column = 0` on a new row with `grid_width = 12, grid_height = 4`. A dashboard
+  stored with a lower `grid_columns` moves to 12 once, when it is first opened. Its rows
+  scale with it, unless a row is wider than that grid or starts past it: an earlier version
+  scaled those rows already, so only `grid_columns` changes. A layout an earlier version
+  scaled that still fits its grid, possible at 4 or 6 columns, can't be told apart and
+  scales once more. If the write fails, nothing is stored, the dashboard draws on 12
+  columns, its panels can't be changed, and the move is tried again at the next start.
 - **`SavedChartManager`** (`crates/dbflux_ui_base/src/saved_chart_manager.rs`)
   — owns the `SavedChart` lifecycle, including `SavedChartRefreshPolicy`
   (`Off` / `Interval { every_secs }`).
@@ -271,7 +277,7 @@ Inspectors are the third dashboard panel kind, alongside `Chart` and `Divider`:
 | `Inspector` | `DashboardPanelKind::Inspector { metric_id }` | Tabular snapshot; refreshes on the shared interval |
 
 `DashboardPanelKind::Inspector { metric_id }`
-(`crates/dbflux_ui_base/src/dashboard_manager.rs`) carries no chart reference —
+(`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`) carries no chart reference —
 the inspector is identified by `metric_id` alone. Each inspector panel hosts a
 `DataGridPanel` showing the current snapshot returned by
 `InstanceCatalog::fetch_inspector_snapshot` (e.g. PostgreSQL `pg_stat_activity`,

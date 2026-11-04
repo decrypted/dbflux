@@ -679,7 +679,7 @@ crates/
 DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**仪表盘**（由图表面板与可选的分隔条组成的网格，共享时间范围 + 刷新策略）。驱动程序通过通用的核心接缝接入仪表盘导入/浏览能力 —— 界面永远不会依据驱动程序 ID 做分支。
 
 - **存储**：`~/.local/share/dbflux/dbflux.db` 中的 `viz_*` 表。存储库位于 `crates/dbflux_storage/src/repositories/viz_dashboards.rs`、`viz_dashboard_panels.rs` 与 `viz_saved_charts.rs`。`SavedChartDto` 是一个聚合根，会原子性地跨三张表写入。
-- **管理器**（位于存储库之上的内存缓存）：`DashboardManager`（`crates/dbflux_ui_base/src/dashboard_manager.rs`），含 `Dashboard`、`DashboardPanel`、`DashboardPanelKind { Chart { saved_chart_id } | Divider { markdown } | Inspector { metric_id } }`、`DashboardPanelDraft`；`SavedChartManager`（`crates/dbflux_ui_base/src/saved_chart_manager.rs`）负责 `SavedChart` 生命周期与 `SavedChartRefreshPolicy`（`Off` | `Interval { every_secs }`）。
+- **管理器**（位于存储库之上的内存缓存）：`DashboardManager`（`crates/dbflux_ui_base/src/dashboard_manager/mod.rs`），含 `Dashboard`、`DashboardPanel`、`DashboardPanelKind { Chart { saved_chart_id } | Divider { markdown } | Inspector { metric_id } }`、`DashboardPanelDraft`；`SavedChartManager`（`crates/dbflux_ui_base/src/saved_chart_manager.rs`）负责 `SavedChart` 生命周期与 `SavedChartRefreshPolicy`（`Off` | `Interval { every_secs }`）。
 - **远程列表的会话缓存**：`RemoteDashboardCache`（`crates/dbflux_app/src/remote_dashboard_cache.rs`）—— 重启后不会保留。
 - **文档**：`ChartDocument`（`crates/dbflux_ui_document/src/chart_document/`）以 `DocumentKey::Chart` 为键；`DashboardDocument`（`crates/dbflux_ui_document/src/dashboard/`）以 `DocumentKey::Dashboard` 为键。仪表盘面板会嵌入 `ChartDocument` 实体（`Loaded` / `Orphan`）；共享的 `TimeRangePanel` 通过订阅机制把时间窗口的变化下发到每个已加载的面板。
 - **驱动程序接缝**：

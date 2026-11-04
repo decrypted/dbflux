@@ -1472,6 +1472,7 @@ mod tests {
 
     mod remove_keeps_layout;
     mod shown_panels;
+    mod upsert_keeps_panels;
 
     #[test]
     fn test_append_panels_with_layout_override_preserves_exact_positions() {

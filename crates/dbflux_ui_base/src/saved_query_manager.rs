@@ -566,6 +566,36 @@ mod tests {
         assert_eq!(list.len(), 1);
     }
 
+    /// Importing over a name the target profile already uses used to delete the
+    /// query that held it.
+    #[test]
+    fn test_import_to_keeps_a_query_with_the_same_name() {
+        let rt = StorageRuntime::in_memory().unwrap();
+        let conn = rt
+            .viz_connection()
+            .expect("viz connection should open in test");
+        insert_profile(&conn, "source-profile");
+        insert_profile(&conn, "target-profile");
+        let mut mgr = make_manager_from_conn(Arc::clone(&conn));
+
+        let source = mgr
+            .save("source-profile", "Same name", &sample_spec("users"))
+            .unwrap();
+        let held = mgr
+            .save("target-profile", "Same name", &sample_spec("orders"))
+            .unwrap();
+
+        let probe = MockTableProbe { succeeds: true };
+        let result = mgr.import_to(&source.id, "target-profile", &probe);
+        assert!(result.is_err(), "the name is taken on the target");
+
+        let mut fresh = make_manager_from_conn(conn);
+        let list = fresh.list("target-profile");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, held.id);
+        assert_eq!(list[0].table_name, "orders");
+    }
+
     #[test]
     fn test_import_to_fails_when_table_absent() {
         let rt = StorageRuntime::in_memory().unwrap();

@@ -100,7 +100,8 @@ sobrante sigue oculta y se elimina al quitar el panel.
 
 El botón de ajustes de cada panel (modo Edit) ofrece **Configure / Edit title /
 Remove panel**. El popover **Configure** te permite cambiar el tipo de chart (Line,
-Bar, Scatter, Area, Stacked, Pie), ajustar los axis bindings y ver **Stats**.
+Bar, Scatter, Area, Stacked, Pie), ajustar los axis bindings y ver **Stats**. Al
+quitar un panel, los demás se quedan donde están y queda un hueco en su lugar.
 
 Los dashboards también pueden contener tiras **Divider** — cabeceras markdown
 que agrupan visualmente los panels y colapsan los panels debajo al hacer clic. Los

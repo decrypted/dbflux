@@ -344,18 +344,6 @@ fn refresh_policy_kind_to_str(p: SavedChartRefreshPolicy) -> String {
     .to_string()
 }
 
-// ---------------------------------------------------------------------------
-// Grid helpers
-// ---------------------------------------------------------------------------
-
-/// Converts a dense linear `panel_index` to `(grid_row, grid_column)`.
-///
-/// `grid_columns` is clamped to a minimum of 1 to avoid division by zero.
-fn panel_index_to_grid(panel_index: u32, grid_columns: u32) -> (u32, u32) {
-    let cols = grid_columns.max(1);
-    (panel_index / cols, panel_index % cols)
-}
-
 /// Default grid width for a panel appended via `append_panels`.
 ///
 /// The dashboard grid is now fixed at 12 columns. New panels land full-width on
@@ -878,21 +866,23 @@ impl DashboardManager {
         Ok(())
     }
 
-    /// Removes the panel shown at `shown_index`, re-indexes remaining panels dense
-    /// (0..N-1), and persists via `replace_panels_for_dashboard`. Other rows for the
-    /// same saved chart go with it: reading the panels hides them, so they would come
-    /// back as a panel on the next open.
+    /// Removes the panel shown at `shown_index` and persists via
+    /// `replace_panels_for_dashboard`. Other rows for the same saved chart go with it:
+    /// reading the panels hides them, so they would come back as a panel on the next
+    /// open.
+    ///
+    /// The other panels keep their place and size, which is what the screen shows, and
+    /// the gap stays. Only `panel_index` is renumbered, dense (0..N-1).
     pub fn remove_panel(
         &mut self,
         dashboard_id: Uuid,
         shown_index: u32,
     ) -> Result<(), StorageError> {
-        let grid_columns = self
-            .dashboards
-            .iter()
-            .find(|d| d.id == dashboard_id)
-            .map(|d| d.grid_columns)
-            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
+        if !self.dashboards.iter().any(|d| d.id == dashboard_id) {
+            return Err(StorageError::Data(format!(
+                "dashboard not found: {dashboard_id}"
+            )));
+        }
 
         let mut panels = self.writable_panels(dashboard_id)?;
 
@@ -906,90 +896,15 @@ impl DashboardManager {
             });
         }
 
-        // Re-index dense with recomputed grid positions.
-        let updated_panels: Vec<DashboardPanel> = panels
-            .into_iter()
-            .enumerate()
-            .map(|(i, mut p)| {
-                p.panel_index = i as u32;
-                let (row, col) = panel_index_to_grid(i as u32, grid_columns);
-                p.grid_row = row;
-                p.grid_column = col;
-                p
-            })
-            .collect();
-
-        let dtos: Vec<DashboardPanelDto> = updated_panels.iter().map(panel_to_dto).collect();
-        self.panels_repo
-            .replace_panels_for_dashboard(dashboard_id, &dtos)?;
-
-        self.panels.insert(dashboard_id, updated_panels);
-        Ok(())
-    }
-
-    /// Reorders panels using insert-at-position semantics: the panel at
-    /// `from_index` is removed and inserted at `to_index`; all panels between
-    /// shift by one slot. Indices are rewritten dense (0..N-1).
-    pub fn reorder_panels(
-        &mut self,
-        dashboard_id: Uuid,
-        from_index: u32,
-        to_index: u32,
-    ) -> Result<(), StorageError> {
-        let grid_columns = self
-            .dashboards
-            .iter()
-            .find(|d| d.id == dashboard_id)
-            .map(|d| d.grid_columns)
-            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
-
-        let mut panels = self.writable_panels(dashboard_id)?;
-        panels.sort_by_key(|p| p.panel_index);
-
-        // Both are positions among the shown panels; the rows they name are moved.
-        let shown = shown_rows(&panels);
-        let Some(from_row) = shown.get(from_index as usize).map(|p| p.panel_index) else {
-            return Err(StorageError::Data(format!(
-                "reorder_panels: from={from_index} out of range (len={})",
-                shown.len()
-            )));
-        };
-        let to_row = shown
-            .get(to_index as usize)
-            .map_or(panels.len() as u32, |p| p.panel_index);
-        let (from_index, to_index) = (from_row, to_row);
-
-        if from_index as usize >= panels.len() || to_index as usize > panels.len() {
-            return Err(StorageError::Data(format!(
-                "reorder_panels: from={from_index} to={to_index} out of range (len={})",
-                panels.len()
-            )));
+        for (index, panel) in panels.iter_mut().enumerate() {
+            panel.panel_index = index as u32;
         }
 
-        let panel = panels.remove(from_index as usize);
-
-        // Clamp to_index after removal (length is now N-1).
-        let insert_at = (to_index as usize).min(panels.len());
-        panels.insert(insert_at, panel);
-
-        // Re-index dense with recomputed grid positions.
-        let updated_panels: Vec<DashboardPanel> = panels
-            .into_iter()
-            .enumerate()
-            .map(|(i, mut p)| {
-                p.panel_index = i as u32;
-                let (row, col) = panel_index_to_grid(i as u32, grid_columns);
-                p.grid_row = row;
-                p.grid_column = col;
-                p
-            })
-            .collect();
-
-        let dtos: Vec<DashboardPanelDto> = updated_panels.iter().map(panel_to_dto).collect();
+        let dtos: Vec<DashboardPanelDto> = panels.iter().map(panel_to_dto).collect();
         self.panels_repo
             .replace_panels_for_dashboard(dashboard_id, &dtos)?;
 
-        self.panels.insert(dashboard_id, updated_panels);
+        self.panels.insert(dashboard_id, panels);
         Ok(())
     }
 
@@ -1407,51 +1322,6 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_panels_insert_at_position_semantics() {
-        let (mut mgr, rt) = make_manager_with_rt();
-        let profile_id = insert_profile(&rt);
-        let dash_id = mgr
-            .create_dashboard(
-                "D".to_string(),
-                None,
-                profile_id,
-                None,
-                SavedChartRefreshPolicy::Off,
-            )
-            .unwrap();
-
-        let chart_a = Uuid::new_v4();
-        let chart_b = Uuid::new_v4();
-        let chart_c = Uuid::new_v4();
-        mgr.append_panels(
-            dash_id,
-            vec![
-                DashboardPanelDraft::Chart {
-                    saved_chart_id: chart_a,
-                    layout: None,
-                },
-                DashboardPanelDraft::Chart {
-                    saved_chart_id: chart_b,
-                    layout: None,
-                },
-                DashboardPanelDraft::Chart {
-                    saved_chart_id: chart_c,
-                    layout: None,
-                },
-            ],
-        )
-        .unwrap();
-
-        // Move panel 0 (chart_a) to position 2 → [B, C, A].
-        mgr.reorder_panels(dash_id, 0, 2).unwrap();
-
-        let panels = mgr.panels_for_dashboard(dash_id);
-        assert_eq!(panels[0].saved_chart_id(), Some(chart_b));
-        assert_eq!(panels[1].saved_chart_id(), Some(chart_c));
-        assert_eq!(panels[2].saved_chart_id(), Some(chart_a));
-    }
-
-    #[test]
     fn test_resize_panel_clamps_to_grid_bounds() {
         let (mut mgr, rt) = make_manager_with_rt();
         let profile_id = insert_profile(&rt);
@@ -1600,6 +1470,7 @@ mod tests {
         assert_eq!(left, [(0, Some(other))]);
     }
 
+    mod remove_keeps_layout;
     mod shown_panels;
 
     #[test]
@@ -1733,23 +1604,6 @@ mod tests {
         assert_eq!(panel.grid_row, 5);
         assert_eq!(panel.grid_width, 1);
         assert_eq!(panel.grid_height, 12);
-    }
-
-    // ---- panel_index_to_grid ------------------------------------------------
-
-    #[test]
-    fn test_panel_index_to_grid_two_columns() {
-        assert_eq!(panel_index_to_grid(0, 2), (0, 0));
-        assert_eq!(panel_index_to_grid(1, 2), (0, 1));
-        assert_eq!(panel_index_to_grid(2, 2), (1, 0));
-        assert_eq!(panel_index_to_grid(3, 2), (1, 1));
-    }
-
-    #[test]
-    fn test_panel_index_to_grid_zero_columns_does_not_panic() {
-        // grid_columns = 0 should be clamped to 1.
-        assert_eq!(panel_index_to_grid(0, 0), (0, 0));
-        assert_eq!(panel_index_to_grid(3, 0), (3, 0));
     }
 
     /// Design test #31: replace_panels is atomic; cache is updated only on

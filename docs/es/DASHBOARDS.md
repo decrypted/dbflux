@@ -113,6 +113,11 @@ La cabecera tiene:
   Un panel cuya base de datos guardada no se puede abrir lo dice en el panel. El
   temporizador no la vuelve a intentar; este botón sí.
 
+Un panel con un intervalo de auto-refresh propio, como un chart guardado de una
+métrica de instancia, se ejecuta con el más corto entre su intervalo y el del
+dashboard. Conserva su propio intervalo cuando el auto-refresh del dashboard está
+en Off o en refresh al abrir.
+
 > **Las conexiones desconectadas se gestionan con elegancia.** Cuando la
 > conexión de un panel se cierra, su tick de refresh se salta — el timer sigue
 > vivo y se reanuda automáticamente al reconectar, sin necesidad de volver a
@@ -330,10 +335,6 @@ Los timers de refresco de dashboard, chart independiente e inspector comprueban
 su trabajo cuando la conexión está cerrada. El timer en sí permanece activo, así
 que el refresco se reanuda automáticamente al reconectar sin necesidad de
 rearmarlo.
-
-Un panel con un timer propio, como un gráfico guardado de una métrica de instancia,
-deja sus ejecuciones al timer del dashboard mientras el dashboard tenga uno. Con el
-refresco del dashboard desactivado, el timer propio del panel lo mantiene al día.
 
 ### Cobertura de drivers integrados
 

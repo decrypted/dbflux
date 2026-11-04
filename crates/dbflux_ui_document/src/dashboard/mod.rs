@@ -270,11 +270,14 @@ pub struct DashboardDocument {
 
     // Concurrency control: bounded by PANEL_REEXEC_CAP.
     // `slots_held` counts, per panel, the runs this dashboard asked of it that have
-    // not reported yet: a replaced run still holds its slot until it ends. A panel's
-    // first run or a run from its own timer took none and gives none back.
+    // not ended: a replaced run still holds its slot until it ends. A run it did not
+    // ask for takes none and frees none, whichever panel it belongs to.
     // `pending_reexec` holds slot indices (deduped) waiting for a free slot.
+    // `retired_slots` keeps removed panels alive while their runs hold slots, so
+    // those runs can still report their end.
     slots_held: HashMap<EntityId, usize>,
     pending_reexec: VecDeque<usize>,
+    retired_slots: Vec<DashboardPanelSlot>,
 
     // Background / focus state.
     // When `is_backgrounded = true`, requests are queued without execution.
@@ -487,10 +490,9 @@ impl DashboardDocument {
         );
         subscriptions.push(preset_persist_sub);
 
-        // Subscribe each loaded panel and inspector slot to ExecutionFinished
-        // to drain the semaphore queue. Inspector slots emit ExecutionFinished
-        // from InspectorPanel::apply_result; without this subscription their
-        // semaphore slots are never released.
+        // A run that held a slot reports it when it ends, however it ended, which
+        // frees the slot and drains the queue. Without this subscription a slot is
+        // never released.
         for slot in &panel_slots {
             match slot {
                 DashboardPanelSlot::Loaded { panel, .. } => {
@@ -500,8 +502,8 @@ impl DashboardDocument {
                          panel,
                          event: &super::handle::DocumentEvent,
                          cx: &mut Context<Self>| {
-                            if matches!(event, super::handle::DocumentEvent::ExecutionFinished) {
-                                this.on_panel_execution_finished(panel.entity_id(), cx);
+                            if matches!(event, super::handle::DocumentEvent::RunSlotFreed) {
+                                this.on_run_slot_freed(panel.entity_id(), cx);
                             }
                         },
                     );
@@ -514,8 +516,8 @@ impl DashboardDocument {
                          entity,
                          event: &super::handle::DocumentEvent,
                          cx: &mut Context<Self>| {
-                            if matches!(event, super::handle::DocumentEvent::ExecutionFinished) {
-                                this.on_panel_execution_finished(entity.entity_id(), cx);
+                            if matches!(event, super::handle::DocumentEvent::RunSlotFreed) {
+                                this.on_run_slot_freed(entity.entity_id(), cx);
                             }
                         },
                     );
@@ -577,6 +579,7 @@ impl DashboardDocument {
             profile_id: None,
             shared_time_range,
             slots_held: HashMap::new(),
+            retired_slots: Vec::new(),
             pending_reexec: VecDeque::new(),
             is_backgrounded: false,
             is_active_tab: true,
@@ -946,6 +949,11 @@ impl DashboardDocument {
             return;
         }
 
+        // The run it is marked for already covers this request, at the cap too.
+        if self.slot_is_marked(slot_idx, cx) {
+            return;
+        }
+
         if self.inflight_reexec_count() < PANEL_REEXEC_CAP {
             self.dispatch_reexec(slot_idx, cx);
         } else if !self.pending_reexec.contains(&slot_idx) {
@@ -953,9 +961,8 @@ impl DashboardDocument {
         }
     }
 
-    /// A panel reported the end of a run. Only a run this dashboard asked for frees
-    /// a slot for the next panel in the queue.
-    fn on_panel_execution_finished(&mut self, panel: EntityId, cx: &mut Context<Self>) {
+    /// A run this dashboard asked for has ended.
+    fn on_run_slot_freed(&mut self, panel: EntityId, cx: &mut Context<Self>) {
         let Some(held) = self.slots_held.get_mut(&panel) else {
             return;
         };
@@ -963,6 +970,8 @@ impl DashboardDocument {
         *held -= 1;
         if *held == 0 {
             self.slots_held.remove(&panel);
+            self.retired_slots
+                .retain(|slot| slot.runner_id() != Some(panel));
         }
 
         self.dispatch_next_queued(cx);
@@ -976,9 +985,17 @@ impl DashboardDocument {
         }
     }
 
-    /// Asks the panel at `slot_idx` to run, under a slot of its own. False when that
-    /// took no slot: nothing there can run or started, or the panel is already marked
-    /// and runs once whoever else asks, which reports once.
+    fn slot_is_marked(&self, slot_idx: usize, cx: &App) -> bool {
+        matches!(
+            self.panel_slots.get(slot_idx),
+            Some(DashboardPanelSlot::Loaded { panel, .. })
+                if panel.read(cx).has_pending_reexecute()
+        )
+    }
+
+    /// Asks the panel at `slot_idx` to run, under a slot of its own. Returns false
+    /// when no slot was taken: the index holds nothing that can run, the inspector
+    /// started no run, or the chart is already marked and so runs and reports once.
     fn dispatch_reexec(&mut self, slot_idx: usize, cx: &mut Context<Self>) -> bool {
         let Some(slot) = self.panel_slots.get(slot_idx) else {
             return false;
@@ -993,11 +1010,11 @@ impl DashboardDocument {
                     return false;
                 }
                 panel.update(cx, |doc, cx| {
-                    doc.mark_pending_reexecute(cx);
+                    doc.mark_pending_reexecute_holding_slot(cx);
                 });
             }
             DashboardPanelSlot::Inspector { entity, .. } => {
-                if !entity.update(cx, |panel, cx| panel.request_reexec(cx)) {
+                if !entity.update(cx, |panel, cx| panel.request_reexec_holding_slot(cx)) {
                     return false;
                 }
             }
@@ -1130,14 +1147,22 @@ impl DashboardDocument {
                     }
                 }
 
-                // A panel gone mid-run may never report, as its run finds nobody
-                // left to report to.
-                let held = removed
+                // Its run is off, but one in the driver goes on until it ends. Its slot
+                // stays taken until then, which takes the panel staying alive to say so.
+                match &removed {
+                    DashboardPanelSlot::Loaded { panel, .. } => {
+                        panel.update(cx, |doc, cx| doc.stop_on_removal(cx));
+                    }
+                    DashboardPanelSlot::Inspector { entity, .. } => {
+                        entity.update(cx, |inspector, cx| inspector.stop_on_removal(cx));
+                    }
+                    DashboardPanelSlot::Orphan { .. } | DashboardPanelSlot::Divider { .. } => {}
+                }
+                if removed
                     .runner_id()
-                    .and_then(|runner| self.slots_held.remove(&runner))
-                    .unwrap_or(0);
-                for _ in 0..held {
-                    self.dispatch_next_queued(cx);
+                    .is_some_and(|runner| self.slots_held.contains_key(&runner))
+                {
+                    self.retired_slots.push(removed);
                 }
             }
 
@@ -1277,16 +1302,14 @@ impl DashboardDocument {
         }
     }
 
-    /// A panel with a timer of its own leaves its runs to this dashboard's timer, or
-    /// each panel would run on both.
+    /// A panel with a timer of its own runs on the faster of the two timers, or it
+    /// would run on both.
     fn sync_panels_refresh_owner(&self, cx: &mut Context<Self>) {
-        let left_to_host = self.refresh_interval().is_some();
+        let interval = self.refresh_interval();
 
         for slot in &self.panel_slots {
             if let DashboardPanelSlot::Loaded { panel, .. } = slot {
-                panel.update(cx, |panel, _| {
-                    panel.set_refresh_left_to_host(left_to_host);
-                });
+                panel.update(cx, |panel, _| panel.set_host_refresh_interval(interval));
             }
         }
     }
@@ -1344,7 +1367,7 @@ impl DashboardDocument {
                         if !doc.auto_refresh_tick_allowed(cx) {
                             return;
                         }
-                        doc.request_all_loaded_panels(cx);
+                        doc.request_panels_on_timer(cx);
                     });
                     true
                 });
@@ -1406,6 +1429,28 @@ impl DashboardDocument {
             .collect();
 
         for idx in changed {
+            self.request_reexec_for_slot(idx, cx);
+        }
+    }
+
+    /// A tick of the dashboard's timer: every panel but one on a faster timer of its
+    /// own, which has just run or is about to.
+    fn request_panels_on_timer(&mut self, cx: &mut Context<Self>) {
+        let due: Vec<usize> = self
+            .panel_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, slot)| {
+                let due = match slot {
+                    DashboardPanelSlot::Loaded { panel, .. } => panel.read(cx).runs_on_host_timer(),
+                    DashboardPanelSlot::Inspector { .. } => true,
+                    DashboardPanelSlot::Orphan { .. } | DashboardPanelSlot::Divider { .. } => false,
+                };
+                due.then_some(idx)
+            })
+            .collect();
+
+        for idx in due {
             self.request_reexec_for_slot(idx, cx);
         }
     }
@@ -2064,8 +2109,8 @@ impl DashboardDocument {
                          inspector,
                          event: &DocumentEvent,
                          cx: &mut Context<Self>| {
-                            if matches!(event, DocumentEvent::ExecutionFinished) {
-                                this.on_panel_execution_finished(inspector.entity_id(), cx);
+                            if matches!(event, DocumentEvent::RunSlotFreed) {
+                                this.on_run_slot_freed(inspector.entity_id(), cx);
                             }
                         },
                     );
@@ -2131,13 +2176,12 @@ impl DashboardDocument {
                         doc
                     });
 
-                    // Subscribe the new panel to ExecutionFinished for the
-                    // semaphore.
+                    // Its runs report their slots to the semaphore.
                     let sub = cx.subscribe(
                         &panel_entity,
                         |this: &mut Self, panel, event: &DocumentEvent, cx: &mut Context<Self>| {
-                            if matches!(event, DocumentEvent::ExecutionFinished) {
-                                this.on_panel_execution_finished(panel.entity_id(), cx);
+                            if matches!(event, DocumentEvent::RunSlotFreed) {
+                                this.on_run_slot_freed(panel.entity_id(), cx);
                             }
                         },
                     );
@@ -2190,6 +2234,11 @@ impl DashboardDocument {
                 cx.emit(dbflux_ui_base::AppStateChanged);
             });
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn panel_slots_for_testing(&self) -> &[DashboardPanelSlot] {
+        &self.panel_slots
     }
 
     pub fn inflight_reexec_count_for_testing(&self) -> usize {
@@ -2281,7 +2330,7 @@ mod tests {
 
     // ---- Semaphore state-machine tests (no GPUI runtime required) ----
     //
-    // These tests exercise `request_reexec_for_slot` / `on_panel_execution_finished`
+    // These tests exercise `request_reexec_for_slot` / `on_run_slot_freed`
     // directly by constructing a mock `DashboardSemaphoreState` struct that mirrors
     // the relevant fields. This avoids the full GPUI entity runtime while validating
     // the concurrency invariants required by FR-04.

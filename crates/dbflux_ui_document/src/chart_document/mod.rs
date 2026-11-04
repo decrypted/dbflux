@@ -10,10 +10,9 @@
 mod keyboard_tests;
 pub mod pane;
 mod render;
-#[cfg(test)]
-mod run_count_tests;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::chart::keyboard::{
     ChartKeyOutcome, chart_shell_pane_actions, step_time_range, time_range_pane_actions,
@@ -71,6 +70,7 @@ struct PendingResult {
     task_id: dbflux_core::TaskId,
     result: Result<QueryResult, dbflux_core::DbError>,
     ran: RunTarget,
+    holds_slot: bool,
 }
 
 /// What a run ran. A run still under way when a save or a panel follow moves the
@@ -401,8 +401,14 @@ pub struct ChartDocument {
     pending_time_window: Option<(i64, i64)>,
     pending_chart_reexecute: bool,
 
-    /// Keeps this chart's own timer from running it while its dashboard's does.
-    refresh_left_to_host: bool,
+    /// The next marked run holds a run slot of the dashboard that marked it.
+    marked_holds_slot: bool,
+
+    /// The run waiting for its database holds a run slot.
+    awaited_holds_slot: bool,
+
+    /// The interval of the dashboard's timer, whichever chart it hosts.
+    host_refresh_interval: Option<std::time::Duration>,
 
     /// Applied display window for accumulating sources (`is_accumulating()`).
     ///
@@ -617,7 +623,9 @@ impl ChartDocument {
             is_active_tab: true,
             pending_time_window: None,
             pending_chart_reexecute: false,
-            refresh_left_to_host: false,
+            marked_holds_slot: false,
+            awaited_holds_slot: false,
+            host_refresh_interval: None,
             applied_display_window: None,
             external_window_staged: false,
             pending_data_source: None,
@@ -873,7 +881,9 @@ impl ChartDocument {
             is_active_tab: true,
             pending_time_window: None,
             pending_chart_reexecute: false,
-            refresh_left_to_host: false,
+            marked_holds_slot: false,
+            awaited_holds_slot: false,
+            host_refresh_interval: None,
             applied_display_window: None,
             external_window_staged: false,
             pending_data_source: None,
@@ -1454,7 +1464,7 @@ impl ChartDocument {
                         {
                             return;
                         }
-                        if doc.refresh_left_to_host || !doc.auto_refresh_tick_allowed(cx) {
+                        if doc.runs_on_host_timer() || !doc.auto_refresh_tick_allowed(cx) {
                             return;
                         }
                         doc.mark_pending_reexecute(cx);
@@ -1468,9 +1478,16 @@ impl ChartDocument {
         self.is_active_tab = active;
     }
 
-    /// A dashboard with a timer runs its panels itself, through its cap.
-    pub(crate) fn set_refresh_left_to_host(&mut self, left_to_host: bool) {
-        self.refresh_left_to_host = left_to_host;
+    pub(crate) fn set_host_refresh_interval(&mut self, interval: Option<std::time::Duration>) {
+        self.host_refresh_interval = interval;
+    }
+
+    /// One timer drives a panel, the faster: a slower dashboard must not thin out
+    /// what a rolling window collects, and a faster one already covers this chart's.
+    pub(crate) fn runs_on_host_timer(&self) -> bool {
+        self.host_refresh_interval.is_some_and(|host| {
+            refresh_timer_duration(self.refresh_policy).is_none_or(|own| host <= own)
+        })
     }
 
     fn auto_refresh_tick_allowed(&self, cx: &App) -> bool {
@@ -1572,14 +1589,34 @@ impl ChartDocument {
     /// started: a dashboard holds one of its few run slots until it does, so a
     /// silent exit stops every other panel.
     pub fn request_reexecute(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.start_run(cx) {
-            cx.emit(DocumentEvent::ExecutionFinished);
+        self.request_run(false, cx);
+    }
+
+    /// Runs once for the first frame and whatever marked this chart since.
+    fn run_if_marked(&mut self, cx: &mut Context<Self>) {
+        let first_run = std::mem::take(&mut self.pending_run_on_first_render);
+        if std::mem::take(&mut self.pending_chart_reexecute) || first_run {
+            let holds_slot = std::mem::take(&mut self.marked_holds_slot);
+            self.request_run(holds_slot, cx);
         }
     }
 
-    /// Starts a run, whose end reports `ExecutionFinished`. False when none
-    /// started.
-    fn start_run(&mut self, cx: &mut Context<Self>) -> bool {
+    fn request_run(&mut self, holds_slot: bool, cx: &mut Context<Self>) {
+        if !self.start_run(holds_slot, cx) {
+            self.report_run_end(holds_slot, cx);
+        }
+    }
+
+    fn report_run_end(&mut self, holds_slot: bool, cx: &mut Context<Self>) {
+        cx.emit(DocumentEvent::ExecutionFinished);
+        if holds_slot {
+            cx.emit(DocumentEvent::RunSlotFreed);
+        }
+    }
+
+    /// Starts a run, whose end reports `ExecutionFinished`, and frees its slot if it
+    /// `holds_slot`. False when none started.
+    fn start_run(&mut self, holds_slot: bool, cx: &mut Context<Self>) -> bool {
         // Build the execution request through the data source seam.
         // EmptyQuery → silent early return (preserves the old inline empty-query guard).
         // Other errors → show a toast and return.
@@ -1656,7 +1693,7 @@ impl ChartDocument {
             Some(Ok(resolved)) => resolved,
             Some(Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
                 database,
-            })) => return self.open_database_for_run(profile_id, database, cx),
+            })) => return self.open_database_for_run(profile_id, database, holds_slot, cx),
             None => {
                 self.report_failure(
                     UserFacingError::new(
@@ -1747,6 +1784,7 @@ impl ChartDocument {
 
         let conn_cleanup = conn.clone();
         let ran = self.run_target();
+        let reached_driver = Arc::new(AtomicBool::new(false));
 
         let task = dbflux_ui_base::work_queue::spawn_query_db(
             &self.app_state,
@@ -1754,6 +1792,7 @@ impl ChartDocument {
                 .for_task(task_id, &cancel_token),
             {
                 let cancel = cancel_token.clone();
+                let reached_driver = reached_driver.clone();
                 async move {
                     // Replaced before a thread picked it up, so it never reaches
                     // the driver. Past this point the token only reaches a driver
@@ -1762,6 +1801,7 @@ impl ChartDocument {
                     if cancel.is_cancelled() {
                         return Err(dbflux_core::DbError::Cancelled);
                     }
+                    reached_driver.store(true, Ordering::SeqCst);
 
                     // A driver's own metric dispatch has nothing to leave behind,
                     // and goes where it always went.
@@ -1780,9 +1820,12 @@ impl ChartDocument {
 
             cx.update(|cx| {
                 // A run apart left the console's connection alone, and cleaning up
-                // there could end what the console is doing.
+                // there could end what the console is doing. A run that never reached
+                // the driver left nothing, and a client lock taken here for nothing
+                // would hold up the UI behind whatever runs now.
                 let clean_up = || {
                     if cancel_token.is_cancelled()
+                        && reached_driver.load(Ordering::SeqCst)
                         && !runs_apart
                         && let Err(e) = conn_cleanup.cleanup_after_cancel()
                     {
@@ -1797,7 +1840,7 @@ impl ChartDocument {
 
                 if cancel_token.is_cancelled() {
                     clean_up();
-                    entity.update(cx, |_, cx| cx.emit(DocumentEvent::ExecutionFinished));
+                    entity.update(cx, |doc, cx| doc.report_run_end(holds_slot, cx));
                     return;
                 }
 
@@ -1806,11 +1849,12 @@ impl ChartDocument {
                         task_id,
                         result,
                         ran,
+                        holds_slot,
                     });
                     // Only the newest result gets applied, so the run it replaced
                     // ends here.
-                    if replaced.is_some() {
-                        cx.emit(DocumentEvent::ExecutionFinished);
+                    if let Some(replaced) = replaced {
+                        doc.report_run_end(replaced.holds_slot, cx);
                     }
                     cx.notify();
                 });
@@ -2129,7 +2173,8 @@ impl ChartDocument {
         if self.awaited_database.take().is_some() {
             self.exec_state = ExecState::Idle;
             self.state = DocumentState::Clean;
-            cx.emit(DocumentEvent::ExecutionFinished);
+            let holds_slot = std::mem::take(&mut self.awaited_holds_slot);
+            self.report_run_end(holds_slot, cx);
         }
     }
 
@@ -2283,6 +2328,7 @@ impl ChartDocument {
         &mut self,
         profile_id: Uuid,
         database: String,
+        holds_slot: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         if self.awaited_database.as_ref() == Some(&database) {
@@ -2316,6 +2362,7 @@ impl ChartDocument {
         }
 
         self.awaited_database = Some(database.clone());
+        self.awaited_holds_slot = holds_slot;
         self.exec_state = ExecState::Running;
         self.state = DocumentState::Executing;
         cx.notify();
@@ -2349,6 +2396,7 @@ impl ChartDocument {
         }
 
         self.awaited_database = None;
+        let holds_slot = std::mem::take(&mut self.awaited_holds_slot);
         self.exec_state = ExecState::Idle;
         self.state = DocumentState::Clean;
 
@@ -2362,7 +2410,7 @@ impl ChartDocument {
         let started = match &event.outcome {
             _ if connection_is_open => {
                 self.opened_database = Some(database.clone());
-                self.start_run(cx)
+                self.start_run(holds_slot, cx)
             }
             ObjectTreeOutcome::Failed(error) => {
                 let message = dbflux_i18n::t!(
@@ -2404,7 +2452,7 @@ impl ChartDocument {
         };
 
         if !started {
-            cx.emit(DocumentEvent::ExecutionFinished);
+            self.report_run_end(holds_slot, cx);
         }
         cx.notify();
     }
@@ -2482,6 +2530,7 @@ impl ChartDocument {
     /// shell receives the full accumulated series. For all other sources the
     /// raw result is forwarded directly.
     fn apply_result(&mut self, pending: PendingResult, cx: &mut Context<Self>) {
+        let holds_slot = pending.holds_slot;
         self.runner.complete_primary(pending.task_id, cx);
 
         // A run that the chart moved on from: the result can still draw, but it says
@@ -2583,7 +2632,7 @@ impl ChartDocument {
             }
         }
 
-        cx.emit(DocumentEvent::ExecutionFinished);
+        self.report_run_end(holds_slot, cx);
         cx.notify();
     }
 
@@ -2717,6 +2766,31 @@ impl ChartDocument {
     pub fn mark_pending_reexecute(&mut self, cx: &mut Context<Self>) {
         self.pending_chart_reexecute = true;
         cx.notify();
+    }
+
+    /// As `mark_pending_reexecute`, for a run that holds one of the dashboard's run
+    /// slots until it ends. A chart already marked runs once and takes no second one.
+    pub(crate) fn mark_pending_reexecute_holding_slot(&mut self, cx: &mut Context<Self>) {
+        self.marked_holds_slot = true;
+        self.mark_pending_reexecute(cx);
+    }
+
+    /// The dashboard removed this panel: what it was asked to do is off. A run in the
+    /// driver reports when it ends, so the slot stays taken as long as it is there.
+    pub(crate) fn stop_on_removal(&mut self, cx: &mut Context<Self>) {
+        self._refresh_timer = None;
+        self.runner.cancel_primary(cx);
+        self.drop_database_wait(cx);
+
+        if let Some(pending) = self.pending_result.take() {
+            self.report_run_end(pending.holds_slot, cx);
+        }
+
+        self.pending_run_on_first_render = false;
+        if std::mem::take(&mut self.pending_chart_reexecute) {
+            let holds_slot = std::mem::take(&mut self.marked_holds_slot);
+            self.report_run_end(holds_slot, cx);
+        }
     }
 
     /// Apply the custom date/time picker values and trigger a chart re-execution.
@@ -3313,12 +3387,10 @@ impl ChartDocument {
     #[cfg(test)]
     pub(crate) fn drain_pending_reexecute_for_test(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if std::mem::take(&mut self.pending_chart_reexecute) {
-            self.request_reexecute(window, cx);
-        }
+        self.run_if_marked(cx);
     }
 
     /// Cancels the running query, as the tasks panel does.
@@ -3716,6 +3788,8 @@ fn toggle_stats_rail(
 
 #[cfg(test)]
 mod tests {
+    mod run_count;
+
     use super::*;
     use dbflux_core::Value as TestValue;
 

@@ -4,18 +4,20 @@
 //! scheduler polls a job only once the test parks, so a run the next frame replaced
 //! has not reached the driver here, where in the app it already had.
 
-use super::{ChartDocument, TimeRangePanel};
+use crate::chart_document::ChartDocument;
 use crate::dashboard::{DashboardDocument, DashboardPanelSlot, PANEL_REEXEC_CAP, PanelGridPos};
 use crate::handle::DocumentEvent;
 use crate::instance_inspector::InspectorPanel;
 use crate::keyboard_test_support::init_keyboard_runtime;
+use crate::types::DocumentState;
 use dbflux_components::chart::{BindingSpec, ChartSpec, InstanceMetricSource};
+use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::saved_chart::{SavedChart, SavedChartRefreshPolicy};
 use dbflux_core::chrono::NaiveDate;
 use dbflux_core::{
     CancelToken, ColumnKind, ColumnMeta, Connection, ConnectionProfile, DbConfig, DbDriver,
-    DbError, DbKind, DriverMetadata, QueryHandle, QueryRequest, QueryResult, RefreshPolicy,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    DbError, DbKind, DriverMetadata, ExecutionSourceContext, QueryHandle, QueryRequest,
+    QueryResult, RefreshPolicy, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, Value,
 };
 use dbflux_driver_sqlite::SqliteDriver;
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -25,6 +27,7 @@ use gpui::{AnyView, Context, Entity, TestAppContext, VisualTestContext, Window, 
 use gpui_component::calendar::Date;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
@@ -35,6 +38,8 @@ const QUERY: &str = "SELECT ts, value FROM samples";
 struct CountingConnection {
     inner: Arc<dyn Connection>,
     statements: Arc<Mutex<Vec<String>>>,
+    cleanups: Arc<AtomicUsize>,
+    cancel_mid_run: Arc<AtomicBool>,
 }
 
 impl Connection for CountingConnection {
@@ -54,6 +59,27 @@ impl Connection for CountingConnection {
         if let Ok(mut statements) = self.statements.lock() {
             statements.push(request.sql.clone());
         }
+
+        // SQLite has no instance catalog: answer as a driver's metric dispatch does,
+        // with the current sample.
+        if matches!(
+            request
+                .execution_context
+                .as_ref()
+                .and_then(|context| context.source.as_ref()),
+            Some(ExecutionSourceContext::InstanceMetricQuery { .. })
+        ) {
+            return Ok(QueryResult::table(
+                sample_columns().to_vec(),
+                vec![vec![
+                    Value::Text("2026-01-01 00:00:00".to_string()),
+                    Value::Float(1.0),
+                ]],
+                None,
+                Duration::ZERO,
+            ));
+        }
+
         self.inner.execute(request)
     }
 
@@ -61,9 +87,17 @@ impl Connection for CountingConnection {
     fn execute_unattended(
         &self,
         request: &QueryRequest,
-        _cancel: &CancelToken,
+        cancel: &CancelToken,
     ) -> Result<QueryResult, DbError> {
+        if self.cancel_mid_run.load(Ordering::SeqCst) {
+            cancel.cancel();
+        }
         self.execute(request)
+    }
+
+    fn cleanup_after_cancel(&self) -> Result<(), DbError> {
+        self.cleanups.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {
@@ -105,6 +139,8 @@ struct Rig<'a> {
     profile_id: Uuid,
     statements: Arc<Mutex<Vec<String>>>,
     finished: Rc<Cell<usize>>,
+    cleanups: Arc<AtomicUsize>,
+    cancel_mid_run: Arc<AtomicBool>,
 }
 
 /// What something set off: statements at the driver, and runs that reported an end.
@@ -150,9 +186,13 @@ fn rig(cx: &mut TestAppContext) -> Rig<'_> {
         .expect("insert");
 
     let statements: Arc<Mutex<Vec<String>>> = Arc::default();
+    let cleanups: Arc<AtomicUsize> = Arc::default();
+    let cancel_mid_run: Arc<AtomicBool> = Arc::default();
     let connection: Arc<dyn Connection> = Arc::new(CountingConnection {
         inner,
         statements: statements.clone(),
+        cleanups: cleanups.clone(),
+        cancel_mid_run: cancel_mid_run.clone(),
     });
 
     let app_state = cx.update(|cx| {
@@ -191,11 +231,13 @@ fn rig(cx: &mut TestAppContext) -> Rig<'_> {
         profile_id,
         statements,
         finished: Rc::default(),
+        cleanups,
+        cancel_mid_run,
     }
 }
 
-fn saved_chart(profile_id: Uuid, name: &str) -> SavedChart {
-    let columns = [
+fn sample_columns() -> [ColumnMeta; 2] {
+    [
         ColumnMeta {
             name: "ts".to_string(),
             type_name: String::new(),
@@ -210,13 +252,15 @@ fn saved_chart(profile_id: Uuid, name: &str) -> SavedChart {
             nullable: true,
             is_primary_key: false,
         },
-    ];
+    ]
+}
 
+fn saved_chart(profile_id: Uuid, name: &str) -> SavedChart {
     SavedChart::new_query(
         name.to_string(),
         profile_id,
         QUERY.to_string(),
-        ChartSpec::from_detection(0, vec![1], &columns, 10_000).expect("a spec"),
+        ChartSpec::from_detection(0, vec![1], &sample_columns(), 10_000).expect("a spec"),
         BindingSpec::default(),
     )
 }
@@ -419,6 +463,53 @@ impl Rig<'_> {
         self.window.executor().advance_clock(every);
     }
 
+    fn executing(&mut self, panels: &[Entity<ChartDocument>]) -> usize {
+        self.window.update(|_, cx| {
+            panels
+                .iter()
+                .filter(|panel| panel.read(cx).state() == DocumentState::Executing)
+                .count()
+        })
+    }
+
+    /// Draws each panel alone once and takes it off the screen again: the first
+    /// runs are over, and no frame reaches the panels until the dashboard is shown.
+    fn run_first_frames_apart(&mut self, panels: &[Entity<ChartDocument>]) {
+        for panel in panels {
+            self.show(panel.clone());
+        }
+        self.settle();
+        let host = self.host.clone();
+        self.window.update(|_, cx| {
+            host.update(cx, |host, cx| {
+                host.views.clear();
+                cx.notify();
+            });
+        });
+        self.settle();
+    }
+
+    fn open_metric_chart(&mut self) -> Entity<ChartDocument> {
+        let app_state = self.app_state.clone();
+        let profile_id = self.profile_id;
+        let chart = self.window.update(|window, cx| {
+            cx.new(|cx| {
+                ChartDocument::new_with_source(
+                    Some(profile_id),
+                    "metric".to_string(),
+                    Box::new(InstanceMetricSource {
+                        metric_id: "pg.tps".to_string(),
+                    }),
+                    app_state,
+                    window,
+                    cx,
+                )
+            })
+        });
+        self.watch(&chart);
+        chart
+    }
+
     fn on_dashboard(
         &mut self,
         dashboard: &Entity<DashboardDocument>,
@@ -560,8 +651,9 @@ fn each_tick_of_a_dashboard_timer_runs_each_panel_once(cx: &mut TestAppContext) 
     assert_eq!(rig.inflight(&dashboard), 0, "no run slot left taken");
 }
 
-/// A panel with a timer of its own, as an instance overview's and a saved instance
-/// metric's have, under a dashboard whose own timer already runs it.
+/// A panel with a timer of its own under a dashboard whose timer already runs it,
+/// on another beat: an instance overview's two timers start in one frame, and their
+/// ticks join into one run.
 #[gpui::test]
 fn a_panel_runs_once_per_tick_of_the_timer_of_its_dashboard(cx: &mut TestAppContext) {
     let mut rig = rig(cx);
@@ -795,8 +887,77 @@ fn removing_a_running_panel_gives_its_slot_back(cx: &mut TestAppContext) {
 }
 
 impl Rig<'_> {
+    fn samples(&mut self, chart: &Entity<ChartDocument>) -> usize {
+        self.window.update(|_, cx| {
+            chart
+                .read(cx)
+                .instance_metric_buffer
+                .as_ref()
+                .map_or(0, |buffer| buffer.sample_count())
+        })
+    }
+
+    fn dashboard_with_panel(
+        &mut self,
+        panel: Entity<ChartDocument>,
+        policy: SavedChartRefreshPolicy,
+    ) -> Entity<DashboardDocument> {
+        let app_state = self.app_state.clone();
+        self.window.update(|window, cx| {
+            let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+            cx.new(|cx| {
+                DashboardDocument::new(
+                    Uuid::new_v4(),
+                    "Dashboard".to_string(),
+                    vec![DashboardPanelSlot::Loaded {
+                        panel,
+                        grid_pos: PanelGridPos {
+                            grid_row: 0,
+                            grid_column: 0,
+                            grid_width: 12,
+                            grid_height: 2,
+                        },
+                        title_override: None,
+                    }],
+                    shared_time_range,
+                    None,
+                    policy,
+                    false,
+                    app_state,
+                    cx,
+                )
+            })
+        })
+    }
+
     fn dashboard_of_one_inspector(&mut self, profile_id: Uuid) -> Entity<DashboardDocument> {
         let app_state = self.app_state.clone();
+        let owner = self.profile_id;
+        let dashboard_id = self.window.update(|_, cx| {
+            app_state.update(cx, |state, _| {
+                let id = state
+                    .dashboards
+                    .create_dashboard(
+                        "Dashboard".to_string(),
+                        None,
+                        owner,
+                        None,
+                        SavedChartRefreshPolicy::Off,
+                    )
+                    .expect("dashboard");
+                state
+                    .dashboards
+                    .append_panels(
+                        id,
+                        vec![DashboardPanelDraft::Inspector {
+                            metric_id: "pg.activity".to_string(),
+                            layout: None,
+                        }],
+                    )
+                    .expect("panel stored");
+                id
+            })
+        });
         self.window.update(|window, cx| {
             let state = app_state.clone();
             let inspector =
@@ -804,7 +965,7 @@ impl Rig<'_> {
             let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
             cx.new(|cx| {
                 DashboardDocument::new(
-                    Uuid::new_v4(),
+                    dashboard_id,
                     "Dashboard".to_string(),
                     vec![DashboardPanelSlot::Inspector {
                         entity: inspector,
@@ -892,23 +1053,7 @@ fn a_run_replaced_before_it_started_stays_off_the_driver(cx: &mut TestAppContext
 #[gpui::test]
 fn a_metric_run_replaced_before_it_started_stays_off_the_driver(cx: &mut TestAppContext) {
     let mut rig = rig(cx);
-    let app_state = rig.app_state.clone();
-    let profile_id = rig.profile_id;
-    let chart = rig.window.update(|window, cx| {
-        cx.new(|cx| {
-            ChartDocument::new_with_source(
-                Some(profile_id),
-                "metric".to_string(),
-                Box::new(InstanceMetricSource {
-                    metric_id: "pg.tps".to_string(),
-                }),
-                app_state,
-                window,
-                cx,
-            )
-        })
-    });
-    rig.watch(&chart);
+    let chart = rig.open_metric_chart();
     rig.show(chart.clone());
     rig.settle();
 
@@ -924,4 +1069,308 @@ fn a_metric_run_replaced_before_it_started_stays_off_the_driver(cx: &mut TestApp
             finished: 2
         }
     );
+}
+
+/// A run that took no slot ends after the run that did has started: the slot stays
+/// with the run that took it.
+#[gpui::test]
+fn the_slot_stays_with_the_run_that_took_it(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let (dashboard, panels) = rig.build_dashboard(2, SavedChartRefreshPolicy::Off);
+    rig.run_first_frames_apart(&panels);
+
+    // This run reaches the driver and its result waits for a frame.
+    rig.request(&panels[0]);
+    rig.settle();
+    rig.on_dashboard(&dashboard, |dashboard, cx| {
+        dashboard.request_reexec_for_slot(0, cx);
+    });
+    assert_eq!(rig.inflight(&dashboard), 1);
+
+    // The frame starts the slotted run and applies the earlier one, without parking.
+    rig.show(dashboard.clone());
+    assert_eq!(rig.inflight(&dashboard), 1, "the slotted run is under way");
+
+    rig.settle();
+    assert_eq!(rig.inflight(&dashboard), 0, "until it ends");
+}
+
+/// The same run ending must not let a queued panel past the cap.
+#[gpui::test]
+fn a_run_without_a_slot_does_not_let_the_queue_past_the_cap(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let (dashboard, panels) =
+        rig.build_dashboard(PANEL_REEXEC_CAP + 1, SavedChartRefreshPolicy::Off);
+    rig.run_first_frames_apart(&panels);
+
+    rig.request(&panels[0]);
+    rig.settle();
+    rig.on_dashboard(&dashboard, |dashboard, cx| {
+        dashboard.refresh_all_loaded_panels(cx);
+    });
+    rig.show(dashboard.clone());
+
+    assert_eq!(
+        rig.executing(&panels[PANEL_REEXEC_CAP..]),
+        0,
+        "the panel in the queue waits for a slot"
+    );
+    assert_eq!(rig.inflight(&dashboard), PANEL_REEXEC_CAP);
+
+    rig.settle();
+    assert_eq!(rig.inflight(&dashboard), 0, "no run slot left taken");
+}
+
+/// An inspector's own refresh ending leaves the slot of the run the dashboard asked.
+#[gpui::test]
+fn an_inspector_slot_stays_with_the_run_that_took_it(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let profile_id = rig.profile_id;
+    let dashboard = rig.dashboard_of_one_inspector(profile_id);
+    let inspector =
+        rig.window.update(
+            |_, cx| match &dashboard.read(cx).panel_slots_for_testing()[0] {
+                DashboardPanelSlot::Inspector { entity, .. } => entity.clone(),
+                _ => unreachable!("the only slot is an inspector"),
+            },
+        );
+
+    // Its own refresh, as F5 makes, whose result waits for a frame.
+    let refreshed = inspector.clone();
+    rig.window.update(|_, cx| {
+        refreshed.update(cx, |inspector, cx| {
+            inspector.request_reexec(cx);
+        });
+    });
+    rig.settle();
+    rig.on_dashboard(&dashboard, |dashboard, cx| {
+        dashboard.request_reexec_for_slot(0, cx);
+    });
+
+    rig.show(dashboard.clone());
+    assert_eq!(
+        rig.inflight(&dashboard),
+        1,
+        "the run it asked for is under way"
+    );
+
+    rig.settle();
+    assert_eq!(rig.inflight(&dashboard), 0);
+}
+
+/// At the cap, a panel already marked to run has that run coming: asking again does
+/// not queue another.
+#[gpui::test]
+fn at_the_cap_a_marked_panel_does_not_queue_again(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let panel_count = PANEL_REEXEC_CAP + 3;
+    let (dashboard, panels) = rig.build_dashboard(panel_count, SavedChartRefreshPolicy::Off);
+    rig.run_first_frames_apart(&panels);
+
+    let asked = rig.count(|rig| {
+        rig.on_dashboard(&dashboard, |dashboard, cx| {
+            dashboard.refresh_all_loaded_panels(cx);
+            dashboard.refresh_all_loaded_panels(cx);
+        });
+        rig.show(dashboard.clone());
+    });
+
+    assert_eq!(asked, ran(panel_count));
+    assert_eq!(rig.inflight(&dashboard), 0, "no run slot left taken");
+}
+
+/// A run replaced before it started never touched the driver, so there is nothing
+/// to clean up, and on a driver with one client mutex that would block the UI.
+#[gpui::test]
+fn a_run_that_never_reached_the_driver_cleans_nothing_up(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let chart = rig.open_new_chart();
+    rig.settle();
+
+    rig.count(|rig| {
+        rig.request(&chart);
+        rig.request(&chart);
+    });
+
+    assert_eq!(rig.cleanups.load(Ordering::SeqCst), 0);
+}
+
+#[gpui::test]
+fn an_inspector_run_that_never_reached_the_driver_cleans_nothing_up(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let profile_id = rig.profile_id;
+    let dashboard = rig.dashboard_of_one_inspector(profile_id);
+
+    rig.on_dashboard(&dashboard, |dashboard, cx| {
+        dashboard.request_reexec_for_slot(0, cx);
+        dashboard.request_reexec_for_slot(0, cx);
+    });
+    rig.settle();
+
+    assert_eq!(rig.cleanups.load(Ordering::SeqCst), 0);
+}
+
+/// A run cancelled while in the driver still gets its cleanup.
+#[gpui::test]
+fn a_run_cancelled_in_the_driver_is_cleaned_up(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let chart = rig.open_new_chart();
+    rig.settle();
+
+    rig.cancel_mid_run.store(true, Ordering::SeqCst);
+    let cancelled = rig.count(|rig| rig.request(&chart));
+
+    assert_eq!(cancelled, ran(1));
+    assert_eq!(rig.cleanups.load(Ordering::SeqCst), 1);
+}
+
+/// A removed panel's run may still be on the server, so its slot stays taken until
+/// the run ends. Its run is cancelled, as nobody wants it any more.
+#[gpui::test]
+fn a_removed_panel_holds_its_slot_until_its_run_ends(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let (dashboard, panels) = rig.build_dashboard(2, SavedChartRefreshPolicy::Off);
+    rig.show(dashboard.clone());
+    rig.settle();
+
+    let removed = panels[0].clone();
+    drop(panels);
+    let statements = rig.statements();
+    rig.on_dashboard(&dashboard, |dashboard, cx| {
+        dashboard.request_reexec_for_slot(0, cx);
+    });
+    rig.window
+        .update(|_, cx| assert!(removed.read(cx).state() == DocumentState::Executing));
+    drop(removed);
+    rig.on_dashboard(&dashboard, |dashboard, cx| {
+        dashboard.remove_panel(0, cx);
+    });
+
+    assert_eq!(rig.inflight(&dashboard), 1, "its run has not ended");
+
+    rig.settle();
+    assert_eq!(rig.inflight(&dashboard), 0, "and now it has");
+    assert_eq!(rig.statements(), statements, "cancelled before it started");
+}
+
+/// The same for an inspector, whose result would otherwise wait for a frame that
+/// never comes.
+#[gpui::test]
+fn a_removed_inspector_holds_its_slot_until_its_run_ends(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let profile_id = rig.profile_id;
+    let dashboard = rig.dashboard_of_one_inspector(profile_id);
+
+    rig.on_dashboard(&dashboard, |dashboard, cx| {
+        dashboard.request_reexec_for_slot(0, cx);
+        dashboard.remove_panel(0, cx);
+    });
+
+    assert_eq!(rig.inflight(&dashboard), 1, "its run has not ended");
+
+    rig.settle();
+    assert_eq!(rig.inflight(&dashboard), 0, "and now it has");
+}
+
+/// The inspector's first fetch is deferred to its first frame. A run asked before
+/// that frame is that fetch.
+#[gpui::test]
+fn an_inspector_asked_before_its_first_frame_runs_once(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let profile_id = rig.profile_id;
+    let dashboard = rig.dashboard_of_one_inspector(profile_id);
+    let inspector =
+        rig.window.update(
+            |_, cx| match &dashboard.read(cx).panel_slots_for_testing()[0] {
+                DashboardPanelSlot::Inspector { entity, .. } => entity.clone(),
+                _ => unreachable!("the only slot is an inspector"),
+            },
+        );
+    rig.window.update(|_, cx| {
+        inspector.update(cx, |inspector, _| inspector.defer_initial_exec());
+    });
+
+    let statements = rig.statements();
+    rig.on_dashboard(&dashboard, |dashboard, cx| {
+        dashboard.request_reexec_for_slot(0, cx);
+    });
+    rig.settle();
+    rig.show(dashboard.clone());
+    rig.settle();
+
+    assert_eq!(rig.statements() - statements, 1);
+    assert_eq!(rig.inflight(&dashboard), 0);
+}
+
+/// A chart keeps collecting samples at its own pace under a dashboard with a much
+/// longer interval, and the dashboard's tick does not add a run to that.
+#[gpui::test]
+fn a_panel_faster_than_its_dashboard_keeps_its_own_timer(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let chart = rig.open_metric_chart();
+    let timed = chart.clone();
+    rig.window.update(|_, cx| {
+        timed.update(cx, |chart, cx| {
+            chart.set_embedded(true, cx);
+            chart.set_active_tab(true);
+            chart.set_refresh_policy(RefreshPolicy::Interval { every_secs: 30 }, cx);
+        });
+    });
+    // Off the dashboard's beat, so that a tick of each cannot join into one run.
+    rig.tick(Duration::from_secs(1));
+    let dashboard = rig.dashboard_with_panel(
+        chart.clone(),
+        SavedChartRefreshPolicy::Interval { every_secs: 300 },
+    );
+    rig.show(dashboard.clone());
+    rig.settle();
+    let samples = rig.samples(&chart);
+
+    let ticked = rig.count(|rig| {
+        for _ in 0..10 {
+            rig.tick(Duration::from_secs(30));
+            rig.settle();
+        }
+    });
+
+    assert_eq!(ticked, ran(10));
+    assert_eq!(
+        rig.samples(&chart) - samples,
+        10,
+        "the rolling window fills"
+    );
+    assert_eq!(rig.inflight(&dashboard), 0);
+}
+
+/// A dashboard faster than the panel runs it, and the panel's slower timer adds no
+/// run on top.
+#[gpui::test]
+fn a_dashboard_faster_than_its_panel_runs_it(cx: &mut TestAppContext) {
+    let mut rig = rig(cx);
+    let chart = rig.open_metric_chart();
+    let timed = chart.clone();
+    rig.window.update(|_, cx| {
+        timed.update(cx, |chart, cx| {
+            chart.set_embedded(true, cx);
+            chart.set_active_tab(true);
+            chart.set_refresh_policy(RefreshPolicy::Interval { every_secs: 30 }, cx);
+        });
+    });
+    rig.tick(Duration::from_secs(1));
+    let dashboard = rig.dashboard_with_panel(
+        chart.clone(),
+        SavedChartRefreshPolicy::Interval { every_secs: 10 },
+    );
+    rig.show(dashboard.clone());
+    rig.settle();
+
+    let ticked = rig.count(|rig| {
+        for _ in 0..6 {
+            rig.tick(Duration::from_secs(10));
+            rig.settle();
+        }
+    });
+
+    assert_eq!(ticked, ran(6));
+    assert_eq!(rig.inflight(&dashboard), 0, "no run slot left taken");
 }

@@ -108,6 +108,10 @@ The header has:
   A panel whose stored database cannot be opened says so in the panel. The timer
   does not try it again; this button does.
 
+A panel with an auto-refresh interval of its own, such as a saved instance metric
+chart, runs on the shorter of its own interval and the dashboard's. It keeps its own
+interval when the dashboard's auto-refresh is off or set to refresh on open.
+
 > **Disconnected connections are handled gracefully.** When a panel's connection
 > is closed, its refresh tick is skipped — the timer stays alive and resumes
 > automatically when you reconnect, with no need to re-open the dashboard.
@@ -299,10 +303,6 @@ Dashboard, standalone-chart, and inspector refresh timers all check
 `AppState::connections()` for the panel's profile before each tick and skip
 their work when the connection is closed. The timer itself stays alive, so
 refresh resumes automatically on reconnect without re-arming.
-
-A panel with a timer of its own, such as a saved instance metric chart, leaves its
-runs to the dashboard's timer while the dashboard has one. With the dashboard's
-refresh off, the panel's own timer keeps it current.
 
 ### Built-in driver coverage
 

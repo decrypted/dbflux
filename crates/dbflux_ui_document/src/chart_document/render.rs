@@ -137,13 +137,7 @@ impl Render for ChartDocument {
             self.set_data_source(source, window, cx);
         }
 
-        // -- Run once, for the first frame and whatever asked since --
-        // A panel marked before its first frame holds one run slot and reports
-        // once, so these two are one run.
-        let first_run = std::mem::take(&mut self.pending_run_on_first_render);
-        if std::mem::take(&mut self.pending_chart_reexecute) || first_run {
-            self.request_reexecute(window, cx);
-        }
+        self.run_if_marked(cx);
 
         // -- Apply pending query result --
         if let Some(pending) = self.pending_result.take() {

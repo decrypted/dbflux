@@ -676,3 +676,77 @@ fn the_dashboard_tab_is_covered(cx: &mut TestAppContext) {
         "{checked:?}"
     );
 }
+
+fn moved_panels_dashboard(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<KeymapHost<DashboardDocument>>,
+    Entity<DashboardDocument>,
+    &mut VisualTestContext,
+) {
+    init_keyboard_runtime(cx);
+    let app_state = app_state(cx);
+
+    let dashboard_id = app_state.update(cx, |state, _| {
+        let profile = dbflux_core::ConnectionProfile::new(
+            "test",
+            dbflux_core::DbConfig::SQLite {
+                path: std::path::PathBuf::from(":memory:"),
+                connection_id: None,
+            },
+        );
+        let profile_id = profile.id;
+        state.add_profile_in_folder(profile, None);
+
+        let id = state
+            .dashboards
+            .create_dashboard(
+                "Keys".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .expect("dashboard created");
+        let draft = |row| DashboardPanelDraft::Inspector {
+            metric_id: "sessions".to_string(),
+            layout: Some(DraftGridLayout {
+                grid_row: row,
+                grid_column: 0,
+                grid_width: 6,
+                grid_height: 2,
+            }),
+        };
+        state
+            .dashboards
+            .append_panels(id, vec![draft(4), draft(0)])
+            .expect("panels appended");
+        id
+    });
+
+    dashboard_with_keyboard(
+        cx,
+        dashboard_id,
+        app_state,
+        Box::new(|_, _, _| vec![orphan(pos(4, 0, 6, 2)), orphan(pos(0, 0, 6, 2))]),
+    )
+}
+
+/// Removing goes by the slot the user chose, whatever the panels' order on the grid:
+/// the first slot here is the lower panel.
+#[gpui::test]
+fn removing_a_moved_panel_removes_its_own_slot(cx: &mut TestAppContext) {
+    let (_host, dashboard, window) = moved_panels_dashboard(cx);
+
+    window.update(|_, cx| dashboard.update(cx, |dashboard, cx| dashboard.remove_panel(0, cx)));
+
+    let left: Vec<PanelGridPos> = window.update(|_, cx| {
+        dashboard
+            .read(cx)
+            .panel_slots()
+            .iter()
+            .map(|s| s.grid_pos())
+            .collect()
+    });
+    assert_eq!(left, [pos(0, 0, 6, 2)], "the upper panel is left");
+}

@@ -99,7 +99,8 @@ Remove panel**. The **Configure** popover lets you change the chart type (Line, 
 Scatter, Area, Stacked, Pie), adjust axis bindings, and view **Stats**.
 
 Dashboards can also contain **Divider** strips — markdown headers that visually
-group panels and collapse the panels beneath them when clicked.
+group panels and collapse the panels beneath them when clicked. Collapsed panels
+don't refresh; a refresh asked for meanwhile runs when the section opens.
 
 > A **Chart** panel references a saved chart. If you delete that saved chart, the
 > panel becomes a placeholder ("Chart not found — saved chart was deleted") rather

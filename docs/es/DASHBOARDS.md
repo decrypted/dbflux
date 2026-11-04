@@ -103,7 +103,9 @@ Remove panel**. El popover **Configure** te permite cambiar el tipo de chart (Li
 Bar, Scatter, Area, Stacked, Pie), ajustar los axis bindings y ver **Stats**.
 
 Los dashboards también pueden contener tiras **Divider** — cabeceras markdown
-que agrupan visualmente los panels y colapsan los panels debajo al hacer clic.
+que agrupan visualmente los panels y colapsan los panels debajo al hacer clic. Los
+panels colapsados no se refrescan; un refresco pedido entretanto se ejecuta al abrir
+la sección.
 
 > Un panel **Chart** referencia un chart guardado. Si borras ese chart guardado,
 > el panel se convierte en un placeholder ("Chart not found — saved chart was

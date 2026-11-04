@@ -206,6 +206,7 @@ pub struct Button {
     tooltip: Option<SharedString>,
     aria_label: Option<SharedString>,
     aria_expanded: Option<bool>,
+    aria_description: Option<SharedString>,
     text_color: Option<Hsla>,
     disabled: bool,
     selected: bool,
@@ -234,6 +235,7 @@ impl Button {
             tooltip: None,
             aria_label: None,
             aria_expanded: None,
+            aria_description: None,
             text_color: None,
             disabled: false,
             selected: false,
@@ -338,6 +340,12 @@ impl Button {
     /// Says whether what this button folds is open, for a disclosure.
     pub fn aria_expanded(mut self, expanded: bool) -> Self {
         self.aria_expanded = Some(expanded);
+        self
+    }
+
+    /// Says what state the button is in, for what its look alone says on screen.
+    pub fn aria_description(mut self, description: impl Into<SharedString>) -> Self {
+        self.aria_description = Some(description.into());
         self
     }
 
@@ -513,6 +521,9 @@ impl RenderOnce for Button {
             .when_some(accessible_name, |button, name| button.aria_label(name))
             .when_some(self.aria_expanded, |button, expanded| {
                 button.aria_expanded(expanded)
+            })
+            .when_some(self.aria_description, |button, description| {
+                button.aria_description(description)
             })
             .when_some(toggled, |button, toggled| {
                 button.aria_toggled(if toggled {

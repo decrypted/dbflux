@@ -413,6 +413,8 @@ impl ChartDocument {
             let weak_self_for_save = cx.weak_entity();
             let weak_self_for_refresh = cx.weak_entity();
 
+            let has_unsaved_changes = self.shows_unsaved_changes(cx);
+
             let tint = ChromeColors::tint(&theme);
             let leading = div()
                 .flex()
@@ -425,11 +427,27 @@ impl ChartDocument {
                     self.title.clone(),
                     cx,
                 ))
+                // Not on a chart never saved: nothing is stored to differ from.
                 .when(self.saved_chart_id.is_some(), |title| {
-                    title.child(Badge::new(
-                        dbflux_i18n::t!("document.chart.shell.saved_badge"),
-                        BadgeTone::Success,
-                    ))
+                    let (selector, label, tone) = if has_unsaved_changes {
+                        (
+                            "chart-unsaved-chip",
+                            dbflux_i18n::t!("document.chart.shell.unsaved_badge"),
+                            BadgeTone::Warning,
+                        )
+                    } else {
+                        (
+                            "chart-saved-chip",
+                            dbflux_i18n::t!("document.chart.shell.saved_badge"),
+                            BadgeTone::Success,
+                        )
+                    };
+
+                    title.child(
+                        div()
+                            .debug_selector(move || selector.to_string())
+                            .child(Badge::new(label, tone)),
+                    )
                 })
                 .into_any_element();
 
@@ -446,6 +464,7 @@ impl ChartDocument {
                     .is_some_and(|result| result.rows_truncated()),
                 resolved_window,
                 source_supports_save: true,
+                has_unsaved_changes,
                 refresh_variant: dbflux_components::controls::ButtonVariant::Secondary,
                 leading: Some(leading),
                 show_window: false,

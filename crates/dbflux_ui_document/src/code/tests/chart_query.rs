@@ -4536,6 +4536,550 @@ fn a_replaced_run_leaves_the_newer_one_spinning(cx: &mut TestAppContext) {
     }
 }
 
+impl Fixture<'_> {
+    /// The toolbar's answer, and every time that the full compare Escape uses agrees.
+    fn unsaved(&mut self, chart: &Entity<ChartDocument>) -> bool {
+        self.window.update(|_, cx| {
+            let chart = chart.read(cx);
+            let unsaved = chart.has_unsaved_changes(cx);
+            assert_eq!(unsaved, chart.settings_differ_in_full_for_test(cx));
+            unsaved
+        })
+    }
+
+    /// The connection drops, as anything may make it.
+    fn disconnect(&mut self) {
+        let (app_state, profile_id) = (self.app_state.clone(), self.profile_id);
+        self.window.update(|_, cx| {
+            app_state.update(cx, |state, cx| {
+                state.connections_mut().remove(&profile_id);
+                cx.emit(dbflux_ui_base::AppStateChanged);
+            });
+        });
+        self.window.run_until_parked();
+    }
+
+    fn set_kind(&mut self, chart: &Entity<ChartDocument>, kind: ChartKind) {
+        let handle = chart.clone();
+        self.window.update(|_, cx| {
+            handle.update(cx, |chart, cx| {
+                chart
+                    .chart_shell_for_test()
+                    .clone()
+                    .update(cx, |shell, cx| shell.set_chart_kind(kind, cx));
+            });
+        });
+    }
+
+    fn set_scale(&mut self, chart: &Entity<ChartDocument>, scale: YScale) {
+        let handle = chart.clone();
+        self.window.update(|_, cx| {
+            handle.update(cx, |chart, cx| {
+                chart
+                    .chart_shell_for_test()
+                    .clone()
+                    .update(cx, |shell, cx| shell.set_y_scale(scale, cx));
+            });
+        });
+    }
+
+    fn pick_y(&mut self, chart: &Entity<ChartDocument>, y: Vec<usize>) {
+        let handle = chart.clone();
+        self.window.update(|_, cx| {
+            handle.update(cx, |chart, cx| {
+                chart.apply_binding_spec(
+                    BindingSpec {
+                        x: 0,
+                        y,
+                        ..BindingSpec::default()
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn open_section(&mut self, chart: &Entity<ChartDocument>) {
+        let handle = chart.clone();
+        self.window.update(|window, cx| {
+            handle.update(cx, |chart, cx| {
+                chart.open_query_section_for_test(window, cx)
+            });
+        });
+        self.window.run_until_parked();
+    }
+}
+
+/// Being opened changes nothing: a chart stored before charts kept a database, one with
+/// a database, the same with the section open, and after their first result.
+#[gpui::test]
+fn opening_a_saved_chart_leaves_nothing_unsaved(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::Postgres, "");
+    console.list_databases(&["analytics", "billing"]);
+    console
+        .driver
+        .set_query_outcome(CALLS_QUERY, FakeQueryOutcome::success(calls_columns()));
+
+    let mut picked = console.saved_with(database_context("analytics"));
+    picked.bindings = BindingSpec {
+        x: 0,
+        y: vec![1],
+        ..BindingSpec::default()
+    };
+    let mut crlf = console.saved_with(SavedChartContext::default());
+    crlf.source = dbflux_components::saved_chart::SavedChartSource::Query {
+        query: "select 1\r\nfrom api_call_log\r\n".to_string(),
+    };
+    for saved in [
+        console.saved_with(SavedChartContext::default()),
+        console.saved_with(database_context("analytics")),
+        picked,
+        crlf,
+    ] {
+        let chart = console.reopen(&saved);
+        assert!(!console.unsaved(&chart), "opened: {:?}", saved.context);
+        console.open_section(&chart);
+        assert!(!console.unsaved(&chart), "section: {:?}", saved.context);
+        console.run_chart(&chart);
+        assert!(!console.unsaved(&chart), "run: {:?}", saved.context);
+    }
+}
+
+/// A database a record holds on a driver with one fixed database is nothing to pick,
+/// and nothing Save would keep.
+#[gpui::test]
+fn a_stored_name_on_a_fixed_database_driver_is_no_change(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::SQLite, "");
+    let saved = console.saved_with(database_context("main"));
+    let chart = console.reopen(&saved);
+
+    assert!(!console.unsaved(&chart));
+}
+
+/// Everything Save keeps counts, the same for Escape, and Save clears it: the query as
+/// typed even if nobody ran it, the database as picked, columns, type and scale.
+#[gpui::test]
+fn anything_save_keeps_counts_until_it_is_saved(cx: &mut TestAppContext) {
+    use crate::pane::EscapeClose;
+
+    let mut console = console_on(cx, DbKind::Postgres, "");
+    console.list_databases(&["analytics", "billing"]);
+    let chart = chart_picking_calls(&mut console);
+    console.open_section(&chart);
+    console.save(&chart, "saved");
+    assert!(!console.unsaved(&chart), "saved");
+
+    type Change = fn(&mut Fixture<'_>, &Entity<ChartDocument>);
+    let changes: [(&str, Change); 6] = [
+        ("typed", |console, chart| {
+            console.type_query(chart, REORDERED_QUERY)
+        }),
+        ("typed and run", |console, chart| {
+            console.type_query(chart, EDITED_QUERY);
+            console.run_by_hand(chart);
+        }),
+        ("picked", |console, chart| {
+            console.pick_database(chart, "billing")
+        }),
+        ("kind", |console, chart| {
+            console.set_kind(chart, ChartKind::Bar)
+        }),
+        ("scale", |console, chart| {
+            console.set_scale(chart, YScale::Log)
+        }),
+        ("columns", |console, chart| console.pick_y(chart, vec![2])),
+    ];
+    console
+        .driver
+        .set_query_outcome(EDITED_QUERY, FakeQueryOutcome::success(calls_columns()));
+
+    for (name, change) in changes {
+        change(&mut console, &chart);
+        assert!(console.unsaved(&chart), "{name} counts");
+        assert_eq!(console.escape(&chart), EscapeClose::Handled, "{name} warns");
+
+        console.save(&chart, "saved");
+        assert!(!console.unsaved(&chart), "{name} saved");
+        console.apply_marked_run(&chart);
+        assert!(!console.unsaved(&chart), "{name} saved and run");
+    }
+}
+
+/// Undone, there is nothing left to save.
+#[gpui::test]
+fn an_undone_edit_leaves_nothing_unsaved(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::Postgres, "");
+    console.list_databases(&["analytics", "billing"]);
+    let chart = chart_picking_calls(&mut console);
+    let stored = console.save(&chart, "saved");
+    let chart = console.reopen(&stored);
+    console.run_chart(&chart);
+    console.open_section(&chart);
+    assert!(!console.unsaved(&chart));
+
+    console.type_query(&chart, REORDERED_QUERY);
+    assert!(console.unsaved(&chart));
+    console.type_query(&chart, CALLS_QUERY);
+    assert!(!console.unsaved(&chart), "the query");
+
+    console.pick_database(&chart, "billing");
+    assert!(console.unsaved(&chart));
+    console.pick_database(&chart, "");
+    assert!(!console.unsaved(&chart), "the database");
+
+    console.set_kind(&chart, ChartKind::Bar);
+    assert!(console.unsaved(&chart));
+    console.set_kind(&chart, ChartKind::Line);
+    assert!(!console.unsaved(&chart), "the type");
+
+    console.set_scale(&chart, YScale::Log);
+    assert!(console.unsaved(&chart));
+    console.set_scale(&chart, YScale::Linear);
+    assert!(!console.unsaved(&chart), "the scale");
+
+    console.pick_y(&chart, vec![2]);
+    assert!(console.unsaved(&chart));
+    console.pick_y(&chart, vec![1]);
+    assert!(!console.unsaved(&chart), "the columns");
+}
+
+/// A save that failed stored nothing, so the change is still unsaved.
+#[gpui::test]
+fn a_failed_save_leaves_the_change_unsaved(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let saved = console.saved_with(SavedChartContext::default());
+    console
+        .driver
+        .set_query_outcome(CALLS_QUERY, FakeQueryOutcome::success(calls_columns()));
+    let chart = console.reopen(&saved);
+    console.run_chart(&chart);
+    console.set_kind(&chart, ChartKind::Bar);
+    assert!(console.unsaved(&chart));
+
+    // Without `Fixture::save` no profile row exists, so the upsert fails.
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| chart.save_as("saved".to_string(), cx));
+    });
+
+    assert!(console.unsaved(&chart));
+}
+
+/// A save of an edited query stores columns only once its run finds them. It is saved
+/// all that while, also if that run fails, and stays so as the columns are written.
+#[gpui::test]
+fn a_column_store_after_save_never_shows_as_unsaved(cx: &mut TestAppContext) {
+    let flaky = "select runtime, ts, calls from api_call_log limit 10";
+    let mut console = console_with(cx, "");
+    let chart = chart_picking_calls(&mut console);
+    console
+        .driver
+        .set_query_outcome(flaky, FakeQueryOutcome::Error("lost connection".into()));
+
+    console.type_query(&chart, flaky);
+    let id = console.save(&chart, "saved").id;
+    assert!(!console.unsaved(&chart), "before its run");
+
+    console.apply_marked_run(&chart);
+    assert!(!console.unsaved(&chart), "its run failed");
+
+    console
+        .driver
+        .set_query_outcome(flaky, FakeQueryOutcome::success(reordered_columns()));
+    console.run_by_hand(&chart);
+    assert_eq!(stored_record(&mut console, id).bindings.y, vec![2]);
+    assert!(!console.unsaved(&chart), "the columns are stored");
+}
+
+/// Save keeps neither: nothing to show on the button for them.
+#[gpui::test]
+fn the_time_range_and_refresh_are_not_unsaved(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let chart = chart_picking_calls(&mut console);
+    console.save(&chart, "saved");
+
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| {
+            chart.set_refresh_policy(RefreshPolicy::Interval { every_secs: 60 }, cx);
+            chart.stage_time_window(
+                0,
+                1_000,
+                crate::chart_document::MetricDisplayWindow::Absolute {
+                    start_ms: 0,
+                    end_ms: 1_000,
+                },
+                cx,
+            );
+        });
+    });
+
+    assert!(!console.unsaved(&chart));
+}
+
+/// Never saved, Save always has something to do, but a chart as it opened is no work to
+/// lose, and Escape closes it. A change is, and Save then clears it.
+#[gpui::test]
+fn a_chart_never_saved_counts_changes_from_how_it_opened(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    console
+        .driver
+        .set_query_outcome(CALLS_QUERY, FakeQueryOutcome::success(calls_columns()));
+    let (app_state, profile_id) = (console.app_state.clone(), console.profile_id);
+    let chart = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            ChartDocument::new(
+                Some(profile_id),
+                CALLS_QUERY.to_string(),
+                app_state,
+                window,
+                cx,
+            )
+        })
+    });
+    console.run_chart(&chart);
+    assert!(!console.unsaved(&chart), "as it opened, detection included");
+
+    console.set_kind(&chart, ChartKind::Bar);
+    assert!(console.unsaved(&chart));
+
+    console.save(&chart, "saved");
+    assert!(!console.unsaved(&chart));
+}
+
+/// Samples a metric chart collected make Escape warn, but Save does not keep them, so a
+/// lit Save button would never go out. A metric swapped in the picker it does keep.
+#[gpui::test]
+fn a_metric_chart_counts_a_swapped_metric_but_not_samples(cx: &mut TestAppContext) {
+    use crate::pane::EscapeClose;
+    use dbflux_components::saved_chart::SavedChartSource;
+
+    let mut console = console_on(cx, DbKind::CloudWatchLogs, "");
+    let mut saved = console.saved_with(SavedChartContext::default());
+    saved.source = SavedChartSource::InstanceMetric {
+        metric_id: "connections".to_string(),
+    };
+    let chart = console.reopen(&saved);
+    assert!(!console.unsaved(&chart), "as it opened");
+
+    let handle = chart.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |chart, cx| {
+            chart.show_result_for_test(api_call_log_result(), cx);
+        });
+    });
+    assert!(!console.unsaved(&chart), "samples are not saved");
+    assert_eq!(console.escape(&chart), EscapeClose::Handled, "but are lost");
+
+    let handle = chart.clone();
+    console.window.update(|window, cx| {
+        handle.update(cx, |chart, cx| {
+            chart.set_data_source(
+                Box::new(InstanceMetricSource {
+                    metric_id: "sessions".to_string(),
+                }),
+                window,
+                cx,
+            );
+        });
+    });
+    assert!(console.unsaved(&chart), "swapped");
+
+    let swap = |console: &mut Fixture<'_>, metric_id: &str| {
+        let (handle, metric_id) = (chart.clone(), metric_id.to_string());
+        console.window.update(|window, cx| {
+            handle.update(cx, |chart, cx| {
+                chart.set_data_source(Box::new(InstanceMetricSource { metric_id }), window, cx);
+            });
+        });
+    };
+    swap(&mut console, "connections");
+    assert!(!console.unsaved(&chart), "swapped back to what is stored");
+
+    swap(&mut console, "sessions");
+    assert!(console.unsaved(&chart), "swapped again");
+    console.save(&chart, "saved");
+    assert!(!console.unsaved(&chart), "saved");
+
+    swap(&mut console, "connections");
+    assert!(
+        console.unsaved(&chart),
+        "what it opened with is no longer what is stored"
+    );
+}
+
+/// A connection dropping is no edit. On a driver with one fixed database a name a console
+/// handed over must not start to count, nor be stored by a save in that state.
+#[gpui::test]
+fn a_dropped_connection_leaves_a_fixed_database_chart_as_it_was(cx: &mut TestAppContext) {
+    use crate::pane::EscapeClose;
+
+    let mut console = console_on(cx, DbKind::SQLite, CALLS_QUERY);
+    console
+        .driver
+        .set_query_outcome(CALLS_QUERY, FakeQueryOutcome::success(calls_columns()));
+    let handed_over = |console: &mut Fixture<'_>| {
+        let (app_state, profile_id) = (console.app_state.clone(), console.profile_id);
+        let chart = console.window.update(|window, cx| {
+            cx.new(|cx| {
+                let mut chart = ChartDocument::new(
+                    Some(profile_id),
+                    CALLS_QUERY.to_string(),
+                    app_state,
+                    window,
+                    cx,
+                );
+                chart.set_execution_context(
+                    ExecutionContext {
+                        database: Some("main".to_string()),
+                        ..ExecutionContext::default()
+                    },
+                    cx,
+                );
+                chart
+            })
+        });
+        console.run_chart(&chart);
+        chart
+    };
+    let never_saved = handed_over(&mut console);
+    let saved = handed_over(&mut console);
+    console.save(&saved, "saved");
+    assert!(!console.unsaved(&saved));
+
+    console.disconnect();
+
+    assert!(!console.unsaved(&never_saved), "never saved");
+    assert_eq!(console.escape(&never_saved), EscapeClose::Close);
+    assert!(!console.unsaved(&saved), "saved");
+
+    let stored = console.save(&saved, "saved");
+    assert_eq!(
+        stored.context.database, None,
+        "a save stores no name either"
+    );
+    assert!(!console.unsaved(&saved));
+}
+
+/// On a driver with databases, a stored one is neither changed nor lost by a connection
+/// dropping, and a real edit from before it stays one.
+#[gpui::test]
+fn a_dropped_connection_leaves_a_stored_database_as_it_was(cx: &mut TestAppContext) {
+    let mut console = console_on(cx, DbKind::Postgres, "");
+    console.list_databases(&["analytics", "billing"]);
+    console
+        .driver
+        .set_query_outcome(CALLS_QUERY, FakeQueryOutcome::success(calls_columns()));
+    let opened = console.saved_with(database_context("analytics"));
+    let chart = console.reopen(&opened);
+    console.run_chart(&chart);
+    let edited = console.reopen(&opened);
+    console.run_chart(&edited);
+    console.open_section(&edited);
+    console.pick_database(&edited, "billing");
+    console.save(&chart, "saved");
+
+    console.disconnect();
+
+    assert!(!console.unsaved(&chart), "untouched");
+    assert!(console.unsaved(&edited), "the pick is still unsaved");
+
+    let stored = console.save(&chart, "saved");
+    assert_eq!(stored.context.database.as_deref(), Some("analytics"));
+    assert!(!console.unsaved(&chart));
+}
+
+/// What a chart draws for a state: which chip, and what the Save button says about it.
+fn save_state(
+    console: &mut Fixture<'_>,
+    chart: &Entity<ChartDocument>,
+) -> (Option<&'static str>, Option<String>) {
+    use dbflux_components::accessibility::FrameCapture;
+
+    let host = ShownChart(chart.clone());
+    let (_, shown) = console.window.add_window_view(move |_, _| host);
+    shown.simulate_resize(gpui::size(gpui::px(1600.0), gpui::px(800.0)));
+    let capture = FrameCapture::observe(shown);
+    let frame = capture.frame(shown);
+
+    let chip = ["chart-saved-chip", "chart-unsaved-chip"]
+        .into_iter()
+        .find(|chip| shown.debug_bounds(chip).is_some());
+    let description = frame
+        .nodes()
+        .find(|(_, node)| node.id().to_string().ends_with("chart-toolbar-save"))
+        .and_then(|(_, node)| frame.accessibility_node(node))
+        .and_then(|node| node.description().map(str::to_string));
+
+    (chip, description)
+}
+
+/// The chip and the button follow the same test, the chip only with a record to differ
+/// from, and the button says so to assistive technology too.
+#[gpui::test]
+fn the_chip_and_the_button_say_what_differs(cx: &mut TestAppContext) {
+    let unsaved = dbflux_i18n::t!("document.chart.shell.unsaved_badge").to_string();
+    let mut console = console_with(cx, "");
+    let tab = chart_picking_calls(&mut console);
+    let stored = console.save(&tab, "saved");
+
+    let clean = console.reopen(&stored);
+    assert_eq!(
+        save_state(&mut console, &clean),
+        (Some("chart-saved-chip"), None)
+    );
+
+    let changed = console.reopen(&stored);
+    console.set_kind(&changed, ChartKind::Bar);
+    assert_eq!(
+        save_state(&mut console, &changed),
+        (Some("chart-unsaved-chip"), Some(unsaved.clone()))
+    );
+
+    let (app_state, profile_id) = (console.app_state.clone(), console.profile_id);
+    let new_chart = console.window.update(|window, cx| {
+        cx.new(|cx| {
+            ChartDocument::new(
+                Some(profile_id),
+                CALLS_QUERY.to_string(),
+                app_state,
+                window,
+                cx,
+            )
+        })
+    });
+    assert_eq!(save_state(&mut console, &new_chart), (None, None));
+    console.set_kind(&new_chart, ChartKind::Bar);
+    assert_eq!(
+        save_state(&mut console, &new_chart),
+        (None, Some(unsaved)),
+        "no record to differ from, but Save has something to keep"
+    );
+}
+
+/// A panel has no toolbar, whatever it holds.
+#[gpui::test]
+fn a_panel_shows_no_chip(cx: &mut TestAppContext) {
+    let mut console = console_with(cx, "");
+    let tab = chart_picking_calls(&mut console);
+    let stored = console.save(&tab, "saved");
+    let panel = console.reopen(&stored);
+    let handle = panel.clone();
+    console.window.update(|_, cx| {
+        handle.update(cx, |panel, cx| panel.set_embedded(true, cx));
+    });
+    console.set_kind(&panel, ChartKind::Bar);
+
+    assert!(console.unsaved(&panel), "it differs");
+    assert!(
+        !console
+            .window
+            .update(|_, cx| panel.read(cx).shows_unsaved_changes(cx)),
+        "and nothing shows it, so the compare is not run for a panel"
+    );
+    assert_eq!(save_state(&mut console, &panel), (None, None));
+}
+
 /// A saved metric chart stays a metric chart.
 #[gpui::test]
 fn a_save_keeps_a_metric_source(cx: &mut TestAppContext) {

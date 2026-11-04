@@ -1329,6 +1329,7 @@ document:
         last: "Last"
         series: "Series"
       saved_badge: "saved"
+      unsaved_badge: "Unsaved changes"
     status:
       task_label: Chart query
     toast:

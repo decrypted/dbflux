@@ -1329,6 +1329,7 @@ document:
         last: "마지막"
         series: "시리즈"
       saved_badge: "저장됨"
+      unsaved_badge: "저장되지 않은 변경 사항"
     status:
       task_label: 차트 쿼리
     toast:

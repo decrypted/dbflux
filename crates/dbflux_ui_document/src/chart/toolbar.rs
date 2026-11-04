@@ -36,6 +36,16 @@ pub type ActionHandler = Arc<dyn Fn(&mut Window, &mut App)>;
 /// Handler called when a chart-kind chip is clicked; receives the chosen kind.
 pub type ChartKindHandler = Arc<dyn Fn(ChartKind, &mut Window, &mut App)>;
 
+/// How "Save chart" looks, standing out while it has something to keep. Not green: that
+/// means saved on the chip next to the title.
+fn save_button_variant(has_unsaved_changes: bool) -> ButtonVariant {
+    if has_unsaved_changes {
+        ButtonVariant::Primary
+    } else {
+        ButtonVariant::default()
+    }
+}
+
 /// All read-only state the toolbar needs to render itself.
 ///
 /// Callers build this from their own fields; the shared function does not
@@ -64,6 +74,8 @@ pub struct ChartToolbarContext<'a> {
     /// Show the "Save chart" button. DataGridPanel gates on collection source;
     /// ChartDocument always passes `true` here.
     pub source_supports_save: bool,
+    /// The chart differs from what is stored, so Save has something to keep.
+    pub has_unsaved_changes: bool,
     /// Variant of the refresh split. It must match the `chevron_trigger`
     /// variant of `refresh_dropdown`, whose chevron takes that variant's
     /// content color.
@@ -235,13 +247,20 @@ pub fn render_chart_toolbar(
     .on_click(move |_, window, cx| on_stats(window, cx));
 
     let save_btn = ctx.source_supports_save.then(|| {
-        Button::new(
+        let button = Button::new(
             "chart-toolbar-save",
             dbflux_i18n::t!("document.chart.toolbar.save_chart"),
         )
+        .variant(save_button_variant(ctx.has_unsaved_changes))
         .icon(AppIcon::Save)
         .tab_stop(false)
-        .on_click(move |_, window, cx| on_save(window, cx))
+        .on_click(move |_, window, cx| on_save(window, cx));
+
+        if ctx.has_unsaved_changes {
+            button.aria_description(dbflux_i18n::t!("document.chart.shell.unsaved_badge"))
+        } else {
+            button
+        }
     });
 
     let has_leading = ctx.leading.is_some();
@@ -314,6 +333,7 @@ mod tests {
                 rows_truncated: false,
                 resolved_window: Some((0, 3_600_000)),
                 source_supports_save: true,
+                has_unsaved_changes: false,
                 refresh_variant: dbflux_components::controls::ButtonVariant::Secondary,
                 leading: None,
                 show_window: true,
@@ -437,6 +457,18 @@ mod tests {
 
             assert_eq!(found, Some(&kind));
         }
+    }
+
+    #[test]
+    fn save_stands_out_only_with_something_to_keep() {
+        assert_eq!(
+            super::save_button_variant(false),
+            super::ButtonVariant::Secondary
+        );
+        assert_eq!(
+            super::save_button_variant(true),
+            super::ButtonVariant::Primary
+        );
     }
 
     /// When `source_supports_save` is `false`, the Save button block is skipped.

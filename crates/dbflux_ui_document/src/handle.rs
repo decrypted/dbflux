@@ -8,6 +8,8 @@ pub enum DocumentEvent {
     MetaChanged,
     ExecutionStarted,
     ExecutionFinished,
+    /// The run a host gave one of its run slots to has ended.
+    RunSlotFreed,
     /// A save attempt finished.
     ///
     /// `succeeded: false` covers a dismissed Save As picker, a failed write,

@@ -31,12 +31,14 @@ use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Task, Window};
 use gpui_component::ActiveTheme;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
 /// A pending query result from the background task runner.
 struct PendingResult {
     task_id: dbflux_core::TaskId,
     result: Result<QueryResult, dbflux_core::DbError>,
+    holds_slot: bool,
 }
 
 /// State held while the kill-confirmation modal is visible.
@@ -101,9 +103,9 @@ pub struct InspectorPanel {
     /// Deferred first-fetch flag.
     ///
     /// Set on construction; drained on the first render pass after all parent
-    /// subscriptions (e.g. the dashboard semaphore) have been installed. This
-    /// guarantees the initial `ExecutionFinished` event is observed and the
-    /// semaphore is correctly decremented.
+    /// subscriptions have been installed, so that they see the first
+    /// `ExecutionFinished`. This first run holds no slot of a dashboard. A run asked
+    /// for before that frame is this fetch, and clears the flag.
     pending_initial_exec: bool,
 }
 
@@ -287,7 +289,39 @@ impl InspectorPanel {
     /// Builds an `InstanceInspectorQuery` execution context (no time window)
     /// and dispatches through the connection. The query text is empty — the
     /// driver dispatches based solely on the source context variant.
-    pub fn request_reexec(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// True when a run started, whose end reports `ExecutionFinished` once, also
+    /// when a newer run replaces it.
+    pub fn request_reexec(&mut self, cx: &mut Context<Self>) -> bool {
+        self.start_fetch(false, cx)
+    }
+
+    /// As `request_reexec`, for a run that holds one of the dashboard's run slots
+    /// until it ends. False when none started, which takes no slot.
+    pub(crate) fn request_reexec_holding_slot(&mut self, cx: &mut Context<Self>) -> bool {
+        self.start_fetch(true, cx)
+    }
+
+    fn report_run_end(&mut self, holds_slot: bool, cx: &mut Context<Self>) {
+        cx.emit(DocumentEvent::ExecutionFinished);
+        if holds_slot {
+            cx.emit(DocumentEvent::RunSlotFreed);
+        }
+    }
+
+    /// The dashboard removed this panel. A run in the driver reports when it ends, so
+    /// the slot stays taken as long as it is there.
+    pub(crate) fn stop_on_removal(&mut self, cx: &mut Context<Self>) {
+        self._timer = None;
+        self.pending_initial_exec = false;
+        self.runner.cancel_primary(cx);
+
+        if let Some(pending) = self.pending_result.take() {
+            self.report_run_end(pending.holds_slot, cx);
+        }
+    }
+
+    fn start_fetch(&mut self, holds_slot: bool, cx: &mut Context<Self>) -> bool {
         let profile_id = self.profile_id;
 
         let conn = {
@@ -298,7 +332,7 @@ impl InspectorPanel {
                 ));
                 self.state = DocumentState::Error;
                 cx.notify();
-                return;
+                return false;
             };
             match connected.resolve_connection_for_execution(None) {
                 Ok(c) => c,
@@ -309,10 +343,12 @@ impl InspectorPanel {
                     ));
                     self.state = DocumentState::Error;
                     cx.notify();
-                    return;
+                    return false;
                 }
             }
         };
+
+        self.pending_initial_exec = false;
 
         let request = build_inspector_request(&self.metric_id);
         let (task_id, cancel_token) = self.runner.start_primary(
@@ -328,32 +364,60 @@ impl InspectorPanel {
         cx.notify();
 
         let conn_cleanup = conn.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { conn.execute(&request) });
+        let cancel = cancel_token.clone();
+        let reached_driver = Arc::new(AtomicBool::new(false));
+        let reached = reached_driver.clone();
+        let task = cx.background_executor().spawn(async move {
+            // Replaced before a thread picked it up, so it never reaches the driver.
+            if cancel.is_cancelled() {
+                return Err(dbflux_core::DbError::Cancelled);
+            }
+            reached.store(true, Ordering::SeqCst);
+
+            conn.execute(&request)
+        });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
 
             cx.update(|cx| {
                 if cancel_token.is_cancelled() {
-                    if let Err(e) = conn_cleanup.cleanup_after_cancel() {
+                    // A run that never reached the driver left nothing, and a client
+                    // lock taken here for nothing would hold up the UI.
+                    if reached_driver.load(Ordering::SeqCst)
+                        && let Err(e) = conn_cleanup.cleanup_after_cancel()
+                    {
                         log::warn!("[inspector] cleanup after cancel failed: {}", e);
+                    }
+                    if let Some(entity) = this.upgrade() {
+                        entity.update(cx, |panel, cx| panel.report_run_end(holds_slot, cx));
                     }
                     return;
                 }
 
                 let Some(entity) = this.upgrade() else { return };
                 entity.update(cx, |panel, cx| {
-                    panel.pending_result = Some(PendingResult { task_id, result });
+                    let replaced = panel.pending_result.replace(PendingResult {
+                        task_id,
+                        result,
+                        holds_slot,
+                    });
+                    // Only the newest result gets applied, so the run it replaced
+                    // ends here.
+                    if let Some(replaced) = replaced {
+                        panel.report_run_end(replaced.holds_slot, cx);
+                    }
                     cx.notify();
                 });
             });
         })
         .detach();
+
+        true
     }
 
     fn apply_result(&mut self, pending: PendingResult, cx: &mut Context<Self>) {
+        let holds_slot = pending.holds_slot;
         self.runner.complete_primary(pending.task_id, cx);
 
         match pending.result {
@@ -377,7 +441,7 @@ impl InspectorPanel {
             }
         }
 
-        cx.emit(DocumentEvent::ExecutionFinished);
+        self.report_run_end(holds_slot, cx);
         cx.notify();
     }
 
@@ -946,6 +1010,7 @@ mod tests {
                 p.pending_result = Some(super::PendingResult {
                     task_id: uuid::Uuid::nil(),
                     result: Ok(synthetic_result),
+                    holds_slot: false,
                 });
                 p.pending_initial_exec = true;
             });
@@ -1049,6 +1114,7 @@ mod tests {
                     super::PendingResult {
                         task_id,
                         result: Ok(synthetic_result),
+                        holds_slot: false,
                     },
                     cx,
                 );

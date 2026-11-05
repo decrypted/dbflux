@@ -19,6 +19,8 @@ use uuid::Uuid;
 
 mod sync;
 #[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
 mod tests;
 
 pub(super) use sync::PaletteSync;
@@ -26,6 +28,11 @@ pub(super) use sync::PaletteSync;
 /// Database fetches the palette keeps in flight at once, so a server with
 /// many databases is walked a few at a time instead of all at once.
 pub(super) const PALETTE_FETCHES_IN_FLIGHT: usize = 2;
+
+/// Database fetches one palette open starts at most. A server with more
+/// databases is walked further by the next opens, and what earlier sessions
+/// stored stays searchable meanwhile.
+pub(super) const PALETTE_FETCHES_PER_OPEN: usize = 50;
 
 /// The objects of one database, when this session has listed them.
 enum DatabaseListing {
@@ -137,6 +144,17 @@ impl PaletteObjectCache {
         self.failed_fetches
             .get(&(profile_id, database.to_string()))
             .is_some_and(|failed_in| *failed_in == session)
+    }
+
+    /// Forgets everything known of `profile_id`, for a deleted profile or
+    /// one now pointing at another server: its lists, the writes and the
+    /// read not started yet, and its failed fetches.
+    pub(super) fn forget_profile(&mut self, profile_id: Uuid) {
+        self.profiles.remove(&profile_id);
+        self.loads.retain(|loading| *loading != profile_id);
+        self.writes.retain(|write| write.profile_id != profile_id);
+        self.failed_fetches
+            .retain(|(failed_profile, _), _| *failed_profile != profile_id);
     }
 
     /// Drops the in-memory copy of a list whose write failed, so the next
@@ -300,6 +318,16 @@ impl PaletteFetchQueue {
         self.queued_keys.remove(&key);
         self.in_flight.insert(key.clone());
         Some(key)
+    }
+
+    #[cfg(test)]
+    pub(super) fn in_flight(&self) -> usize {
+        self.in_flight.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn queued(&self) -> usize {
+        self.queued.len()
     }
 
     /// Drops the requests not started yet; those in flight still settle.
@@ -481,15 +509,34 @@ pub(super) fn remember_database(
     database: &str,
     cache: &mut PaletteObjectCache,
 ) {
-    if !cache.has_profile(profile_id)
-        || connected.connection.schema_loading_strategy() != SchemaLoadingStrategy::LazyPerDatabase
-    {
+    if !cache.has_profile(profile_id) {
         return;
     }
 
-    let Some(snapshot) = &connected.schema else {
-        return;
-    };
+    if let Some(objects) = database_items(state, profile_id, connected, database) {
+        cache.remember(
+            profile_id,
+            database,
+            objects.iter().filter_map(indexed_object).collect(),
+        );
+    }
+}
+
+/// The palette items of one loaded database of a lazily loaded profile, the
+/// same items a full listing of the profile holds for it. `None` when the
+/// profile does not load its databases on demand, does not show this
+/// database, or has not loaded it.
+pub(super) fn database_items(
+    state: &AppStateEntity,
+    profile_id: Uuid,
+    connected: &ConnectedProfile,
+    database: &str,
+) -> Option<Vec<PaletteItem>> {
+    if connected.connection.schema_loading_strategy() != SchemaLoadingStrategy::LazyPerDatabase {
+        return None;
+    }
+
+    let snapshot = connected.schema.as_ref()?;
 
     let listed: Vec<&str> = match state.get_database_list(profile_id) {
         Some(list) => list.iter().map(|entry| entry.name.as_str()).collect(),
@@ -502,15 +549,15 @@ pub(super) fn remember_database(
     if only_shown_database(&connected.profile, listed.into_iter())
         .is_some_and(|only| only != database)
     {
-        return;
+        return None;
     }
 
+    // A lazily loaded profile always names its databases (see
+    // `shows_one_unnamed_database`), as the full listing does.
     let profile_name = connected.profile.name.as_str();
     let listing = match snapshot.database_layout() {
         DatabaseLayout::Schemas => {
-            let Some(node) = project_database_node(state, profile_id, database) else {
-                return;
-            };
+            let node = project_database_node(state, profile_id, database)?;
             let target = RelationalTarget {
                 profile_id,
                 profile_name,
@@ -532,12 +579,9 @@ pub(super) fn remember_database(
         DatabaseLayout::Keyspaces => DatabaseListing::Unloaded,
     };
 
-    if let DatabaseListing::Loaded(objects) = listing {
-        cache.remember(
-            profile_id,
-            database,
-            objects.iter().filter_map(indexed_object).collect(),
-        );
+    match listing {
+        DatabaseListing::Loaded(objects) => Some(objects),
+        DatabaseListing::Unloaded => None,
     }
 }
 
@@ -601,23 +645,41 @@ fn item_database(item: &PaletteItem) -> Option<&str> {
     }
 }
 
+/// The profile a resource item belongs to, and its database when it names
+/// one.
+pub(super) fn item_owner(item: &PaletteItem) -> Option<(Uuid, Option<&str>)> {
+    let PaletteItem::Resource(resource) = item else {
+        return None;
+    };
+    let profile_id = match resource {
+        ResourceItem::Table { profile_id, .. }
+        | ResourceItem::View { profile_id, .. }
+        | ResourceItem::Collection { profile_id, .. }
+        | ResourceItem::KeyValueDb { profile_id, .. } => *profile_id,
+    };
+
+    Some((profile_id, item_database(item)))
+}
+
 /// A database is fetched for the palette once per connection session: not
-/// while a fetch for it runs, and not again after the palette's fetch failed
-/// in this session.
+/// while a fetch for it runs, not again after the palette's fetch failed in
+/// this session, and not after the user closed it in the sidebar.
 fn worth_fetching(
     state: &AppStateEntity,
     cache: &PaletteObjectCache,
     profile_id: Uuid,
     database: &str,
 ) -> bool {
-    !cache.fetch_failed(
-        profile_id,
-        database,
-        state.profile_session_generation(profile_id),
-    ) && !state.object_tree_is_pending(&ObjectTreeRequestKey::DatabaseSchema {
-        profile_id,
-        database: database.to_string(),
-    })
+    !state.object_tree_database_closed(profile_id, database)
+        && !cache.fetch_failed(
+            profile_id,
+            database,
+            state.profile_session_generation(profile_id),
+        )
+        && !state.object_tree_is_pending(&ObjectTreeRequestKey::DatabaseSchema {
+            profile_id,
+            database: database.to_string(),
+        })
 }
 
 fn collection_item(

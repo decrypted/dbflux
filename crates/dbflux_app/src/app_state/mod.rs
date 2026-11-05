@@ -168,6 +168,17 @@ pub struct AppState {
     pub schema_snapshot_repo: Arc<SchemaSnapshotRepo>,
     /// Repository for `pal_object_index`.
     pub palette_object_index_repo: Arc<dbflux_storage::PaletteObjectIndexRepo>,
+    /// Profiles deleted or pointed at another server since the palette last
+    /// asked: their stored palette objects no longer apply. The palette
+    /// deletes them off the UI thread, after the writes it queued before.
+    palette_profiles_to_forget: Vec<Uuid>,
+}
+
+/// Whether two versions of a profile reach the same databases: the same
+/// driver and the same connection settings.
+fn same_server(before: &ConnectionProfile, after: &ConnectionProfile) -> bool {
+    before.driver_id() == after.driver_id()
+        && serde_json::to_value(&before.config).ok() == serde_json::to_value(&after.config).ok()
 }
 
 impl AppState {
@@ -1318,15 +1329,7 @@ impl AppState {
             log::error!("Failed to delete profile from storage: {}", e);
         }
 
-        if let Err(e) = self
-            .palette_object_index_repo
-            .delete_profile(&removed.id.to_string())
-        {
-            log::error!(
-                "Failed to delete the palette's objects of the profile: {}",
-                e
-            );
-        }
+        self.palette_profiles_to_forget.push(removed.id);
 
         Some(removed)
     }
@@ -1334,6 +1337,14 @@ impl AppState {
     pub fn update_profile(&mut self, profile: ConnectionProfile) {
         let profile_name = profile.name.clone();
         let profile_id = profile.id.to_string();
+        if self
+            .profiles()
+            .iter()
+            .find(|known| known.id == profile.id)
+            .is_some_and(|known| !same_server(known, &profile))
+        {
+            self.palette_profiles_to_forget.push(profile.id);
+        }
         self.facade.connections.clear_connect_failure(profile.id);
         self.remembered_connection_passwords.remove(&profile.id);
 
@@ -1365,6 +1376,12 @@ impl AppState {
         // was disabled or the call path skipped that step, the edit would
         // not survive a restart.
         self.save_profiles();
+    }
+
+    /// The profiles whose stored palette objects no longer apply, since the
+    /// last call.
+    pub fn take_palette_profiles_to_forget(&mut self) -> Vec<Uuid> {
+        std::mem::take(&mut self.palette_profiles_to_forget)
     }
 
     pub fn save_profiles(&self) {
@@ -4078,6 +4095,44 @@ mod tests {
             .expect("profile present");
         state.remove_profile(removed_index);
         assert_eq!(state.connect_failure(removed_id), None);
+    }
+
+    #[test]
+    fn the_palette_forgets_a_removed_profile_or_one_pointed_at_another_server() {
+        let renamed = ConnectionProfile::new("renamed", DbConfig::default_postgres());
+        let moved = ConnectionProfile::new("moved", DbConfig::default_mysql());
+        let removed = ConnectionProfile::new("removed", DbConfig::default_postgres());
+        let (moved_id, removed_id) = (moved.id, removed.id);
+        let mut state = test_state_with_profiles(
+            HashMap::new(),
+            vec![renamed.clone(), moved.clone(), removed.clone()],
+        );
+
+        let mut renamed_again = renamed;
+        renamed_again.name = "renamed again".to_string();
+        state.update_profile(renamed_again);
+        assert!(
+            state.take_palette_profiles_to_forget().is_empty(),
+            "the same server keeps its objects"
+        );
+
+        let mut moved_again = moved;
+        if let DbConfig::MySQL { host, .. } = &mut moved_again.config {
+            *host = "other.example".to_string();
+        }
+        state.update_profile(moved_again);
+        let removed_index = state
+            .profiles()
+            .iter()
+            .position(|profile| profile.id == removed_id)
+            .expect("profile present");
+        state.remove_profile(removed_index);
+
+        assert_eq!(
+            state.take_palette_profiles_to_forget(),
+            vec![moved_id, removed_id]
+        );
+        assert!(state.take_palette_profiles_to_forget().is_empty());
     }
 
     /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain

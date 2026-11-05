@@ -4,7 +4,7 @@ use super::*;
 
 #[tokio::test]
 async fn ssm_managed_access_names_the_missing_field_before_any_aws_call() {
-    let manager = McpAccessManager::new(None);
+    let manager = McpAccessManager::new(None, None);
     let params = std::collections::HashMap::from([
         ("instance_id".to_string(), "i-abc".to_string()),
         ("remote_port".to_string(), "5432".to_string()),

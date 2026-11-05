@@ -777,6 +777,41 @@ fn mysql_script_starting_with_start_transaction_rolls_back_and_commits() -> Resu
     })
 }
 
+/// A lone statement followed by a comment runs as that one statement on
+/// every execution path: unbounded, bounded and read-only.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_runs_a_lone_statement_followed_by_a_comment() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        for sql in [
+            "SELECT 1 AS one; -- the void snapshot's occurredAt",
+            "SELECT 1 AS one;\n-- end of script\n",
+            "SELECT 1 AS one; /* done */",
+        ] {
+            let result = connection.execute(&QueryRequest::new(sql))?;
+            assert_eq!(result.rows, vec![vec![Value::Int(1)]], "{sql:?}");
+
+            let bounded = connection.execute(&QueryRequest::new(sql).with_limit(10))?;
+            assert_eq!(bounded.rows, vec![vec![Value::Int(1)]], "bounded {sql:?}");
+
+            let read_only = connection.execute(&read_only_request(sql))?;
+            assert_eq!(
+                read_only.rows,
+                vec![vec![Value::Int(1)]],
+                "read-only {sql:?}"
+            );
+        }
+
+        connection.execute(&QueryRequest::new("SET @settled_at = 1793286396; -- note"))?;
+        let variable = connection.execute(&QueryRequest::new("SELECT @settled_at"))?;
+        assert_eq!(variable.rows, vec![vec![Value::Int(1_793_286_396)]]);
+
+        Ok(())
+    })
+}
+
 #[test]
 #[ignore = "requires Docker daemon"]
 fn mysql_bounded_script_starting_with_start_transaction_succeeds() -> Result<(), DbError> {

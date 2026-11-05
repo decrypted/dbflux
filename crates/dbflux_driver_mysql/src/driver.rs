@@ -2200,7 +2200,7 @@ impl Connection for MysqlConnection {
 
             return mysql_execute_read_only(
                 &mut state.conn,
-                &req.sql,
+                lone_statement_sql(&req.sql, &statements),
                 &statements,
                 start,
                 &self.cancelled,
@@ -2226,7 +2226,13 @@ impl Connection for MysqlConnection {
                 req.limit,
             )
         } else {
-            mysql_execute_request(&mut state.conn, &req.sql, start, &self.cancelled, req.limit)
+            mysql_execute_request(
+                &mut state.conn,
+                lone_statement_sql(&req.sql, &statements),
+                start,
+                &self.cancelled,
+                req.limit,
+            )
         };
 
         state.table_locks_possible =
@@ -3016,6 +3022,16 @@ impl ConnectionExt for MysqlConnection {
 
     fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
         None
+    }
+}
+
+/// The text a request with at most one statement runs: that statement as
+/// the splitter located it, without the trailing `;` or comment the
+/// prepared-statement protocol, which takes exactly one command, may refuse.
+fn lone_statement_sql<'a>(sql: &'a str, statements: &'a [String]) -> &'a str {
+    match statements {
+        [statement] => statement,
+        _ => sql,
     }
 }
 
@@ -5857,7 +5873,10 @@ mod picker_tests {
 
 #[cfg(test)]
 mod read_only_tests {
-    use super::{ensure_read_only_statements, set_transaction_probe_verdict, table_locks_after};
+    use super::{
+        ensure_read_only_statements, lone_statement_sql, set_transaction_probe_verdict,
+        table_locks_after,
+    };
     use dbflux_core::{DbError, QueryLanguage};
 
     fn server_error(code: u16) -> mysql::Error {
@@ -5870,6 +5889,31 @@ mod read_only_tests {
 
     fn statements(sql: &str) -> Vec<String> {
         QueryLanguage::Sql.split_statements(sql)
+    }
+
+    #[test]
+    fn a_lone_statement_runs_without_its_trailing_comment() {
+        for sql in [
+            "SET @settled_at = 1793286396; -- the void snapshot's occurredAt",
+            "SET @settled_at = 1793286396;\n-- end of script\n",
+            "  SET @settled_at = 1793286396  ",
+        ] {
+            let split = statements(sql);
+            assert_eq!(
+                lone_statement_sql(sql, &split),
+                "SET @settled_at = 1793286396",
+                "{sql:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_script_or_an_empty_request_runs_as_written() {
+        let script = "SET @a = 1; SELECT @a;";
+        assert_eq!(lone_statement_sql(script, &statements(script)), script);
+
+        let comment = "-- nothing to run";
+        assert_eq!(lone_statement_sql(comment, &statements(comment)), comment);
     }
 
     #[test]

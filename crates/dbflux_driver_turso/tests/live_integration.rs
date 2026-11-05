@@ -244,6 +244,27 @@ fn turso_row_limit_is_enforced_and_timeouts_refused() -> Result<(), DbError> {
     })
 }
 
+/// A lone statement followed by a comment is sent as typed and runs as that
+/// one statement.
+#[test]
+#[ignore = "requires Docker daemon or TURSO_TEST_URL"]
+fn turso_runs_a_lone_statement_followed_by_a_comment() -> Result<(), DbError> {
+    containers::with_libsql_server(|url| {
+        let connection = connect(&url)?;
+
+        for sql in [
+            "SELECT 1 AS one; -- note",
+            "SELECT 1 AS one;\n-- end of script\n",
+            "SELECT 1 AS one; /* done */",
+        ] {
+            let result = connection.execute(&QueryRequest::new(sql))?;
+            assert_eq!(result.rows, vec![vec![Value::Int(1)]], "{sql:?}");
+        }
+
+        Ok(())
+    })
+}
+
 #[test]
 #[ignore = "requires Docker daemon or TURSO_TEST_URL"]
 fn turso_multi_statement_script_runs_as_one_batch() -> Result<(), DbError> {

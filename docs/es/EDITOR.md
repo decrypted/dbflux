@@ -45,7 +45,11 @@ Si existe una selección de texto no vacía, solo se ejecuta el texto
 seleccionado. Sin selección y con varias sentencias separadas por `;` en el
 buffer, solo se ejecuta la sentencia bajo el cursor: un cursor después del `;`
 de una sentencia o en las líneas en blanco debajo de ella ejecuta esa sentencia,
-y un cursor por encima de todas las sentencias ejecuta la primera. Para ejecutar
+y un cursor por encima de todas las sentencias ejecuta la primera. Las líneas de
+comentario justo encima de una sentencia le pertenecen, así que un cursor sobre
+ellas ejecuta esa sentencia, mientras que un comentario tras un `;` en la misma
+línea pertenece a la sentencia a la que sigue. El marcador de ejecución de cada
+sentencia está en su primera línea de código. Para ejecutar
 el buffer completo, selecciona todo (`Ctrl+A`) primero. Un buffer con una sola
 sentencia, o en un lenguaje sin división en sentencias, se ejecuta completo.
 También un buffer con un bloque compuesto, como el cuerpo `BEGIN ... END` de un
@@ -84,7 +88,9 @@ propia pestaña de resultado.
 La división en sentencias es consciente del lenguaje para los lenguajes de la
 familia SQL: los separadores dentro de strings, identificadores, comentarios de
 línea/bloque y los cuerpos dollar-quoted de PostgreSQL no se tratan como límites
-de sentencia. Los lenguajes no SQL siguen siendo de sentencia única. El soporte
+de sentencia. Una parte que solo contiene comentarios, como una nota final tras
+el último `;`, no es una sentencia y no se envía a la base de datos. Los
+lenguajes no SQL siguen siendo de sentencia única. El soporte
 de batch es por driver — entre los drivers SQL integrados, PostgreSQL,
 MySQL/MariaDB, SQLite y Microsoft SQL Server lo soportan. Una selección siempre
 se ejecuta tal cual.

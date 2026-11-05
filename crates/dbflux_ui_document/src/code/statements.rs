@@ -9,7 +9,7 @@
 
 use super::*;
 use dbflux_components::tokens::{ChromeColors, EditorMetrics};
-use gpui_base::input::{GutterStatementStyle, GutterStatements};
+use gpui_base::input::{GutterStatement, GutterStatementStyle, GutterStatements};
 use std::ops::Range;
 
 /// Gutter colours and sizes from the active theme: line-2 markers, the tint
@@ -30,6 +30,25 @@ fn gutter_style(theme: &gpui_component::theme::Theme) -> GutterStatementStyle {
         statement_fill: tint.opacity(EditorMetrics::STATEMENT_FILL_ALPHA),
         cursor_line_fill: tint.opacity(EditorMetrics::CURSOR_LINE_FILL_ALPHA),
     }
+}
+
+/// The gutter's statements for `ranges` of `buffer`, each marked on its
+/// first code rather than on the comments that lead into it.
+fn gutter_statements(
+    language: &QueryLanguage,
+    buffer: &str,
+    ranges: &[Range<usize>],
+) -> Vec<GutterStatement> {
+    ranges
+        .iter()
+        .map(|range| GutterStatement {
+            range: range.clone(),
+            marker: range.start
+                + buffer
+                    .get(range.clone())
+                    .map_or(0, |statement| language.statement_code_offset(statement)),
+        })
+        .collect()
 }
 
 /// The range of `buffer` a run without a selection executes, or `None` to
@@ -227,23 +246,29 @@ impl CodeDocument {
     /// Number of statements in the buffer, or `None` for a language without
     /// a statement splitter.
     pub(super) fn statement_count(&self) -> Option<usize> {
-        self.editor.statement_ranges.as_ref().map(Vec::len)
+        self.editor.statements.as_ref().map(Vec::len)
     }
 
     /// Re-splits the buffer into statements and reinstalls the gutter. Runs
     /// after every edit and whenever the effective language changes.
     pub(super) fn refresh_statements(&mut self, cx: &mut Context<Self>) {
         let text = self.editor.input_state.read(cx).value();
-        let ranges = self.effective_language().statement_ranges(&text);
+        let language = self.effective_language();
+        // An edit inside a statement can move its marker without moving the
+        // statement (a comment line above it becoming code), so the markers
+        // are compared along with the ranges.
+        let statements = language
+            .statement_ranges(&text)
+            .map(|ranges| gutter_statements(language, &text, &ranges));
 
-        let unchanged = ranges == self.editor.statement_ranges
+        let unchanged = statements == self.editor.statements
             && self.editor.gutter_style.is_some()
             && self.editor.gutter_shown == self.shows_statement_gutter();
         if unchanged {
             return;
         }
 
-        self.editor.statement_ranges = ranges;
+        self.editor.statements = statements;
         self.install_statement_gutter(cx);
     }
 
@@ -277,11 +302,11 @@ impl CodeDocument {
 
         let gutter = self
             .editor
-            .statement_ranges
+            .statements
             .clone()
             .filter(|_| shown)
-            .map(|ranges| GutterStatements {
-                ranges,
+            .map(|statements| GutterStatements {
+                statements,
                 style,
                 on_run: Rc::new(move |range, window, cx| {
                     let updated = document.update(cx, |document, cx| {
@@ -325,8 +350,8 @@ impl CodeDocument {
 #[cfg(test)]
 mod tests {
     use super::{
-        cursor_statement, guard_offers_script, is_transaction_boundary, result_statement_captions,
-        run_summary_label, statement_at_cursor,
+        cursor_statement, guard_offers_script, gutter_statements, is_transaction_boundary,
+        result_statement_captions, run_summary_label, statement_at_cursor,
     };
     use dbflux_core::QueryLanguage;
 
@@ -450,6 +475,87 @@ mod tests {
         assert_eq!(&transaction[range], "DELETE FROM logs");
     }
 
+    const COMMENTED: &str = "-- Fixture header; two lines\n-- of notes.\n\nSET @fx = 'TF_3LK';\nSET @settled_at = 1793286396; -- the void snapshot's occurredAt\n\n-- 1. Preview. Expect 38 markets.\nSELECT COUNT(*) FROM f3_market WHERE fixture_id = @fx;\n\n-- 2. Apply. Check ROW_COUNT() before COMMIT; ROLLBACK if off.\nSTART TRANSACTION;\n\nUPDATE f3_market SET settled_at = @settled_at WHERE fixture_id = @fx;\n-- end of script\n";
+
+    fn commented_offset(needle: &str) -> usize {
+        COMMENTED
+            .find(needle)
+            .expect("needle in the commented buffer")
+    }
+
+    fn line_of(buffer: &str, offset: usize) -> usize {
+        buffer[..offset].matches('\n').count() + 1
+    }
+
+    #[test]
+    fn a_comment_after_a_semicolon_runs_the_statement_it_follows() {
+        let trailing = commented_offset("the void snapshot");
+        let blank_below = commented_offset("\n\n-- 1. Preview") + 1;
+
+        for cursor in [trailing, blank_below] {
+            assert_eq!(
+                statement_under(COMMENTED, cursor),
+                Some("SET @settled_at = 1793286396"),
+                "cursor at {cursor}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_comment_line_above_a_statement_runs_that_statement() {
+        let preview = commented_offset("-- 1. Preview");
+        assert!(
+            statement_under(COMMENTED, preview)
+                .is_some_and(|statement| statement.ends_with("WHERE fixture_id = @fx"))
+        );
+
+        let apply = commented_offset("-- 2. Apply");
+        let statement = statement_under(COMMENTED, apply).expect("a statement");
+        assert!(statement.starts_with("-- 2. Apply"));
+        assert!(
+            is_transaction_boundary(statement),
+            "the transaction guard still sees START TRANSACTION behind its comment"
+        );
+    }
+
+    #[test]
+    fn a_trailing_comment_is_not_a_statement() {
+        let ranges = QueryLanguage::Sql
+            .statement_ranges(COMMENTED)
+            .expect("SQL splits into statements");
+
+        assert_eq!(ranges.len(), 5);
+        assert_eq!(
+            statement_under(COMMENTED, COMMENTED.len()),
+            Some("UPDATE f3_market SET settled_at = @settled_at WHERE fixture_id = @fx")
+        );
+    }
+
+    #[test]
+    fn every_run_marker_sits_on_its_statements_first_code_line() {
+        let ranges = QueryLanguage::Sql
+            .statement_ranges(COMMENTED)
+            .expect("SQL splits into statements");
+
+        let marker_lines: Vec<usize> = gutter_statements(&QueryLanguage::Sql, COMMENTED, &ranges)
+            .iter()
+            .map(|statement| line_of(COMMENTED, statement.marker))
+            .collect();
+
+        let code_lines: Vec<usize> = [
+            "SET @fx",
+            "SET @settled_at",
+            "SELECT COUNT",
+            "START TRANSACTION",
+            "UPDATE f3_market",
+        ]
+        .iter()
+        .map(|code| line_of(COMMENTED, commented_offset(code)))
+        .collect();
+
+        assert_eq!(marker_lines, code_lines);
+    }
+
     #[test]
     fn statement_at_cursor_above_every_statement_runs_the_first() {
         let buffer = "\n\nSELECT 1;\nSELECT 2;";
@@ -558,6 +664,17 @@ mod gutter_tests {
         Entity<ToastHost>,
         &mut VisualTestContext,
     ) {
+        open_editor_with(cx, SCRIPT)
+    }
+
+    fn open_editor_with<'cx>(
+        cx: &'cx mut TestAppContext,
+        script: &'static str,
+    ) -> (
+        Entity<CodeDocument>,
+        Entity<ToastHost>,
+        &'cx mut VisualTestContext,
+    ) {
         cx.update(theme::init);
         cx.update(dbflux_ui_base::keymap::init_keymap);
         let toasts = cx.update(|cx| {
@@ -577,7 +694,7 @@ mod gutter_tests {
         });
 
         window.update(|window, cx| {
-            document.update(cx, |document, cx| document.set_content(SCRIPT, window, cx));
+            document.update(cx, |document, cx| document.set_content(script, window, cx));
         });
         window.run_until_parked();
 
@@ -601,9 +718,9 @@ mod gutter_tests {
                 .expect("a SQL buffer carries the statement gutter");
 
             let statements: Vec<&str> = gutter
-                .ranges
+                .statements
                 .iter()
-                .filter_map(|range| SCRIPT.get(range.clone()))
+                .filter_map(|statement| SCRIPT.get(statement.range.clone()))
                 .collect();
             assert_eq!(statements, vec!["SELECT 1", "SELECT name\nFROM people"]);
             assert_eq!(document.statement_count(), Some(2));
@@ -652,7 +769,11 @@ mod gutter_tests {
         let (second_start, marker) = window.update(|_, cx| {
             let editor = document.read(cx).editor.input_state.read(cx);
             let gutter = editor.gutter_statements().expect("statement gutter");
-            let second = gutter.ranges.get(1).cloned().expect("second statement");
+            let second = gutter
+                .statements
+                .get(1)
+                .map(|statement| statement.range.clone())
+                .expect("second statement");
 
             let line = editor
                 .range_to_bounds(&(second.start..second.start))
@@ -677,6 +798,104 @@ mod gutter_tests {
             window.update(|_, cx| document.read(cx).execution.query_origin),
             Some(second_start),
             "the marker ran the statement it stands beside"
+        );
+    }
+
+    const COMMENTED_SCRIPT: &str =
+        "SET @at = 1; -- trailing note\n\n-- 1. Preview\n-- of the rows\nSELECT @at;\n-- end\n";
+
+    #[gpui::test]
+    fn a_commented_statement_is_run_from_its_first_code_line(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_editor_with(cx, COMMENTED_SCRIPT);
+
+        let (second_start, marker) = window.update(|_, cx| {
+            let editor = document.read(cx).editor.input_state.read(cx);
+            let gutter = editor.gutter_statements().expect("statement gutter");
+            assert_eq!(
+                gutter.statements.len(),
+                2,
+                "the trailing comment is no statement"
+            );
+
+            let second = gutter.statements.get(1).cloned().expect("second statement");
+            assert_eq!(
+                COMMENTED_SCRIPT.get(second.range.clone()),
+                Some("-- 1. Preview\n-- of the rows\nSELECT @at")
+            );
+            assert_eq!(
+                COMMENTED_SCRIPT.get(second.marker..second.range.end),
+                Some("SELECT @at")
+            );
+
+            let line = editor
+                .range_to_bounds(&(second.marker..second.marker))
+                .expect("the second statement is laid out");
+            let line_height = editor.line_height().expect("the editor is laid out");
+            let gutter_left = editor.input_bounds().origin.x;
+
+            (
+                second.range.start,
+                point(
+                    gutter_left + EditorMetrics::GUTTER_MARKER_SLOT / 2.0,
+                    line.origin.y + line_height / 2.0,
+                ),
+            )
+        });
+
+        window.simulate_click(marker, Modifiers::default());
+        window.run_until_parked();
+
+        assert!(ran_a_query(window, &toasts), "the marker ran a query");
+        assert_eq!(
+            window.update(|_, cx| document.read(cx).execution.query_origin),
+            Some(second_start),
+            "the marker on the SELECT line ran the SELECT with its comments"
+        );
+    }
+
+    /// Typing over a comment can turn its line into code without moving any
+    /// statement, and the run marker still moves to that line.
+    #[gpui::test]
+    fn a_same_length_edit_moves_the_marker_to_the_new_first_code(cx: &mut TestAppContext) {
+        const BEFORE: &str = "SELECT 1;\n-- note\nSELECT 2;\n";
+        const AFTER: &str = "SELECT 1;\nx- note\nSELECT 2;\n";
+
+        let (document, _toasts, window) = open_editor_with(cx, BEFORE);
+        let installed = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                let editor = document.read(cx).editor.input_state.read(cx);
+                editor
+                    .gutter_statements()
+                    .expect("statement gutter")
+                    .statements
+                    .clone()
+            })
+        };
+
+        let before = installed(window);
+        assert_eq!(before[1].marker, BEFORE.find("SELECT 2").expect("code"));
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.set_content(AFTER, window, cx));
+        });
+        window.run_until_parked();
+
+        let after = installed(window);
+        assert_eq!(
+            after
+                .iter()
+                .map(|statement| statement.range.clone())
+                .collect::<Vec<_>>(),
+            before
+                .iter()
+                .map(|statement| statement.range.clone())
+                .collect::<Vec<_>>(),
+            "the edit moves no statement"
+        );
+        assert_eq!(
+            after[1].marker,
+            AFTER.find("x- note").expect("code"),
+            "the marker follows the line that became code"
         );
     }
 

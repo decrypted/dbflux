@@ -21,7 +21,8 @@ pub const WINDOW_HEIGHT: f32 = 1000.0;
 pub const WINDOW_MIN_WIDTH: f32 = 600.0;
 pub const WINDOW_MIN_HEIGHT: f32 = 500.0;
 
-/// Bounds of a new Connection Manager window, fitted to the primary display.
+/// Bounds of a new Connection Manager window, fitted to a display by
+/// [`dbflux_ui_base::platform::fitted_window_bounds`].
 pub fn window_bounds(cx: &gpui::App) -> gpui::Bounds<gpui::Pixels> {
     dbflux_ui_base::platform::fitted_window_bounds(WINDOW_WIDTH, WINDOW_HEIGHT, cx)
 }

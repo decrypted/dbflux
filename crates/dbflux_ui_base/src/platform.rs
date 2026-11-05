@@ -395,20 +395,63 @@ pub fn inset_by_screen_margin(area: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<
 }
 
 /// Bounds for a new secondary window of `width` by `height`, shrunk to fit
-/// the primary display's visible area (see [`fit_window_size`]) and centered
-/// in it. Without a known display the requested size is centered as-is.
+/// the visible area chosen by [`secondary_window_work_area`] (see
+/// [`fit_window_size`]) and centered in it. Without a known display the
+/// requested size is centered as-is.
 pub fn fitted_window_bounds(width: f32, height: f32, cx: &App) -> gpui::Bounds<gpui::Pixels> {
     let requested = gpui::size(px(width), px(height));
+    let displays: Vec<gpui::Bounds<gpui::Pixels>> = cx
+        .displays()
+        .iter()
+        .map(|display| display.visible_bounds())
+        .collect();
+    let primary = cx.primary_display().map(|display| display.visible_bounds());
 
-    match cx.primary_display() {
-        Some(display) => {
-            let visible = display.visible_bounds();
+    match secondary_window_work_area(primary, &displays) {
+        Some(visible) => {
             let fitted = fit_window_size(requested, visible.size);
 
             gpui::Bounds::centered_at(visible.center(), fitted)
         }
         None => gpui::Bounds::centered(None, requested, cx),
     }
+}
+
+/// The visible area a secondary window is fitted to: the primary display's,
+/// or, when the platform names no primary display, the narrowest width and
+/// the shortest height among the attached displays, centered on the smallest
+/// one.
+///
+/// Wayland never reports a primary display and the compositor picks the
+/// output, so an area no wider and no taller than any display keeps the window
+/// on screen on each of them, also when one display is the narrowest and
+/// another the shortest (a portrait panel next to an ultrawide one).
+pub fn secondary_window_work_area(
+    primary: Option<gpui::Bounds<gpui::Pixels>>,
+    displays: &[gpui::Bounds<gpui::Pixels>],
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    if primary.is_some() {
+        return primary;
+    }
+
+    let smallest = displays.iter().copied().min_by(|left, right| {
+        let left_area = f32::from(left.size.width) * f32::from(left.size.height);
+        let right_area = f32::from(right.size.width) * f32::from(right.size.height);
+        left_area.total_cmp(&right_area)
+    })?;
+    let width = displays
+        .iter()
+        .map(|display| display.size.width)
+        .fold(smallest.size.width, gpui::Pixels::min);
+    let height = displays
+        .iter()
+        .map(|display| display.size.height)
+        .fold(smallest.size.height, gpui::Pixels::min);
+
+    Some(gpui::Bounds::centered_at(
+        smallest.center(),
+        gpui::size(width, height),
+    ))
 }
 
 /// Applies DBFlux window options to the main window: `WindowKind::Normal`, min
@@ -458,7 +501,7 @@ fn apply_window_size_and_decorations(options: &mut WindowOptions, min_width: f32
 mod window_size_tests {
     use super::{
         WINDOW_SCREEN_MARGIN, apply_main_window_options, apply_window_options, fit_window_size,
-        inset_by_screen_margin,
+        inset_by_screen_margin, secondary_window_work_area,
     };
     use gpui::{Bounds, WindowKind, WindowOptions, point, px, size};
 
@@ -508,6 +551,54 @@ mod window_size_tests {
         let fitted = fit_window_size(size(px(1180.0), px(1000.0)), size(px(1920.0), px(1000.0)));
 
         assert_eq!(fitted, size(px(1180.0), px(952.0)));
+    }
+
+    #[test]
+    fn a_secondary_window_fits_the_primary_display_when_there_is_one() {
+        let primary = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1400.0)));
+        let small = Bounds::new(point(px(2560.0), px(0.0)), size(px(1440.0), px(960.0)));
+
+        assert_eq!(
+            secondary_window_work_area(Some(primary), &[small, primary]),
+            Some(primary)
+        );
+    }
+
+    /// Wayland reports displays but never a primary one. The Connection
+    /// Manager then opened at its full 1180x1000 on a 1440x960 laptop panel,
+    /// with its footer below the screen.
+    #[test]
+    fn without_a_primary_display_a_secondary_window_fits_the_smallest_display() {
+        let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(1440.0), px(960.0)));
+        let external = Bounds::new(point(px(1440.0), px(0.0)), size(px(2560.0), px(1440.0)));
+
+        let area = secondary_window_work_area(None, &[external, laptop]).expect("a display");
+        let fitted = fit_window_size(size(px(1180.0), px(1000.0)), area.size);
+
+        assert_eq!(area, laptop);
+        assert_eq!(fitted, size(px(1180.0), px(912.0)));
+    }
+
+    /// A portrait panel has the least area but is not the shortest: fitting
+    /// to it alone would leave a window taller than the landscape display.
+    #[test]
+    fn without_a_primary_display_the_work_area_is_the_smallest_in_each_dimension() {
+        let portrait = Bounds::new(point(px(0.0), px(0.0)), size(px(1200.0), px(1920.0)));
+        let ultrawide = Bounds::new(point(px(1200.0), px(0.0)), size(px(2560.0), px(1080.0)));
+
+        let area = secondary_window_work_area(None, &[ultrawide, portrait]).expect("a display");
+        let fitted = fit_window_size(size(px(1180.0), px(1100.0)), area.size);
+
+        assert_eq!(area.size, size(px(1200.0), px(1080.0)));
+        assert_eq!(area.center(), portrait.center());
+        assert_eq!(fitted, size(px(1152.0), px(1032.0)));
+        assert!(fitted.width <= portrait.size.width && fitted.height <= portrait.size.height);
+        assert!(fitted.width <= ultrawide.size.width && fitted.height <= ultrawide.size.height);
+    }
+
+    #[test]
+    fn with_no_display_known_there_is_no_work_area() {
+        assert_eq!(secondary_window_work_area(None, &[]), None);
     }
 
     #[test]

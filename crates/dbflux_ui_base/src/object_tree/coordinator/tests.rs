@@ -2523,10 +2523,12 @@ fn a_background_schema_failure_settles_without_a_report(cx: &mut TestAppContext)
     });
     cx.run_until_parked();
 
-    assert!(matches!(
+    assert_eq!(
         state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
-        Some(ObjectTreeOutcome::Failed(_))
-    ));
+        None,
+        "a failure nobody asked for is not shown as a failed load"
+    );
+    assert!(!state.read_with(cx, |state, _| state.object_tree_is_pending(&key)));
     assert_eq!(
         state.read_with(cx, |state, _| state.unread_error_count),
         0,
@@ -2564,6 +2566,10 @@ fn asking_for_a_background_request_reports_its_failure(cx: &mut TestAppContext) 
         1,
         "the user's request shares the attempt and gets its failure reported"
     );
+    assert!(matches!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+        Some(ObjectTreeOutcome::Failed(_))
+    ));
     assert_eq!(fake.schema_calls(), vec!["analytics"]);
 }
 
@@ -2629,9 +2635,32 @@ fn a_background_request_behind_a_failing_slot_install_is_not_reported(cx: &mut T
     });
     cx.run_until_parked();
 
-    assert!(matches!(
+    assert_eq!(
         state.read_with(cx, |state, _| state.object_tree_outcome(&schema).cloned()),
-        Some(ObjectTreeOutcome::Failed(_))
-    ));
+        None
+    );
     assert_eq!(state.read_with(cx, |state, _| state.unread_error_count), 0);
+}
+
+#[gpui::test]
+fn a_cancelled_background_request_leaves_no_outcome(cx: &mut TestAppContext) {
+    let state = test_app_state(cx);
+    let profile_id = Uuid::new_v4();
+    let fake = FakeTreeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+    connect_profile(&state, cx, profile_id, fake.clone(), None);
+
+    let key = schema_request_key(profile_id, "analytics");
+    state.update(cx, |state, cx| {
+        assert_eq!(
+            state.object_tree_request_in_background(key.clone(), cx),
+            ObjectTreeRequestStatus::Dispatched,
+        );
+        state.object_tree_cancel(&key, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+        None
+    );
 }

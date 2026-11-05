@@ -160,6 +160,32 @@ impl PaletteObjectIndexRepo {
         transaction.commit().map_err(sqlite_err)
     }
 
+    /// Forgets the rows of every profile not in `profile_ids`, such as one
+    /// deleted while a write for it was still queued.
+    pub fn retain_profiles(&self, profile_ids: &[String]) -> Result<(), StorageError> {
+        let conn = self.conn.lock().map_err(lock_err)?;
+
+        let indexed: Vec<String> = conn
+            .prepare("SELECT DISTINCT profile_id FROM pal_object_index")
+            .map_err(sqlite_err)?
+            .query_map([], |row| row.get(0))
+            .map_err(sqlite_err)?
+            .collect::<Result<_, _>>()
+            .map_err(sqlite_err)?;
+
+        for profile_id in indexed {
+            if !profile_ids.contains(&profile_id) {
+                conn.execute(
+                    "DELETE FROM pal_object_index WHERE profile_id = ?1",
+                    rusqlite::params![profile_id],
+                )
+                .map_err(sqlite_err)?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Forgets every database indexed for `profile_id`.
     pub fn delete_profile(&self, profile_id: &str) -> Result<(), StorageError> {
         let conn = self.conn.lock().map_err(lock_err)?;

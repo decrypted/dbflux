@@ -150,3 +150,21 @@ fn deleting_a_profile_forgets_only_its_databases() {
     assert!(repo.load_profile("profile-1").expect("load").is_empty());
     assert_eq!(repo.load_profile("profile-2").expect("load").len(), 1);
 }
+
+#[test]
+fn retaining_profiles_forgets_the_others() {
+    let repo = repo();
+    for profile_id in ["kept", "deleted"] {
+        repo.replace_database(
+            profile_id,
+            "app",
+            &[object(Some("public"), "users", IndexedObjectKind::Table)],
+        )
+        .expect("list");
+    }
+
+    repo.retain_profiles(&["kept".to_string()]).expect("retain");
+
+    assert_eq!(repo.load_profile("kept").expect("load").len(), 1);
+    assert!(repo.load_profile("deleted").expect("load").is_empty());
+}

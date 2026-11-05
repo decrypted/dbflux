@@ -1,5 +1,5 @@
 use super::{
-    PaletteFetchQueue, PaletteObjectCache, build_resource_items_for_connection,
+    PaletteFetchQueue, PaletteObjectCache, build_resource_items_for_connection, remember_database,
     write_palette_objects,
 };
 use crate::app::AppStateEntity;
@@ -12,7 +12,7 @@ use dbflux_core::{
 };
 use dbflux_storage::{IndexedObject, IndexedObjectKind};
 use dbflux_ui_base::object_tree::ObjectTreeRequestKey;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -788,4 +788,212 @@ fn the_fetch_queue_ignores_requests_it_already_holds() {
 
     assert_eq!(queue.next(1), Some(schema_key(profile_id, "b")));
     assert_eq!(queue.next(1), None, "each database is queued once");
+}
+
+#[test]
+fn a_database_whose_background_load_failed_is_not_asked_for_again() {
+    let mut state = app_state();
+    let profile_id = Uuid::new_v4();
+    state
+        .connections_mut()
+        .insert(profile_id, lazy_mysql(&["f3base", "f3trade"]));
+    let mut cache = new_cache(&state);
+
+    cache.mark_fetch_failed(profile_id, "f3base", None);
+    assert_eq!(
+        open_palette(&state, profile_id, &mut cache).to_fetch,
+        vec!["f3trade"]
+    );
+
+    cache.mark_fetch_failed(profile_id, "f3trade", Some(7));
+    assert_eq!(
+        open_palette(&state, profile_id, &mut cache).to_fetch,
+        vec!["f3trade"],
+        "a failure from another connection session does not hold"
+    );
+}
+
+#[test]
+fn a_fetched_database_is_remembered_once_the_profile_was_read() {
+    let mut state = app_state();
+    let profile_id = Uuid::new_v4();
+    let mut profile = lazy_mysql(&["f3base", "f3trade"]);
+    profile.database_schemas.insert(
+        "f3trade".to_string(),
+        group("f3trade", vec![table("f3_sport", Some("f3trade"))], vec![]),
+    );
+    state.connections_mut().insert(profile_id, profile);
+    let connected = state.connections().get(&profile_id).expect("connected");
+    let mut cache = new_cache(&state);
+
+    remember_database(&state, profile_id, connected, "f3trade", &mut cache);
+    assert!(
+        cache.take_writes().is_empty(),
+        "a profile the palette never read is left for its next open"
+    );
+
+    open_palette(&state, profile_id, &mut cache);
+    let mut profile = lazy_mysql(&["f3base", "f3trade"]);
+    profile.database_schemas.insert(
+        "f3trade".to_string(),
+        group(
+            "f3trade",
+            vec![
+                table("f3_sport", Some("f3trade")),
+                table("f3_fix", Some("f3trade")),
+            ],
+            vec![],
+        ),
+    );
+    state.connections_mut().insert(profile_id, profile);
+    let connected = state.connections().get(&profile_id).expect("connected");
+
+    remember_database(&state, profile_id, connected, "f3trade", &mut cache);
+    write_palette_objects(&state.palette_object_index_repo, cache.take_writes());
+
+    let stored = state
+        .palette_object_index_repo
+        .load_profile(&profile_id.to_string())
+        .expect("load");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(
+        stored[0]
+            .objects
+            .iter()
+            .map(|object| object.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["f3_sport", "f3_fix"]
+    );
+}
+
+#[test]
+fn a_list_that_failed_to_save_is_written_again() {
+    let state = app_state();
+    let profile_id = Uuid::new_v4();
+    let mut cache = new_cache(&state);
+    let users = vec![IndexedObject {
+        schema: Some("app".to_string()),
+        name: "users".to_string(),
+        kind: IndexedObjectKind::Table,
+    }];
+
+    cache.remember(profile_id, "app", users.clone());
+    assert_eq!(cache.take_writes().len(), 1);
+
+    cache.forget_unsaved(profile_id, "app");
+    cache.remember(profile_id, "app", users);
+    assert_eq!(cache.take_writes().len(), 1);
+}
+
+#[test]
+fn closing_drops_the_queued_fetches_but_not_those_in_flight() {
+    let profile_id = Uuid::new_v4();
+    let mut queue = PaletteFetchQueue::default();
+    queue.enqueue(["a", "b", "c"].map(|database| schema_key(profile_id, database)));
+    assert_eq!(queue.next(1), Some(schema_key(profile_id, "a")));
+
+    queue.clear_queued();
+
+    assert_eq!(queue.next(2), None);
+    assert!(queue.settled(&schema_key(profile_id, "a")));
+    queue.enqueue([schema_key(profile_id, "b")]);
+    assert_eq!(
+        queue.next(2),
+        Some(schema_key(profile_id, "b")),
+        "a cleared database can be queued again"
+    );
+}
+
+#[test]
+fn an_empty_database_list_forgets_nothing() {
+    let state = app_state();
+    let profile_id = Uuid::new_v4();
+    let mut cache = new_cache(&state);
+    cache.remember(
+        profile_id,
+        "app",
+        vec![IndexedObject {
+            schema: Some("app".to_string()),
+            name: "users".to_string(),
+            kind: IndexedObjectKind::Table,
+        }],
+    );
+    cache.take_writes();
+
+    cache.forget_unlisted(profile_id, &HashSet::new());
+
+    assert!(cache.take_writes().is_empty());
+}
+
+#[test]
+fn a_write_that_fails_is_reported_back() {
+    let runtime =
+        dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+    let connection = runtime.viz_connection().expect("connection");
+    connection
+        .lock()
+        .expect("lock")
+        .execute("DROP TABLE pal_object_index", [])
+        .expect("drop the index table");
+    let repo = dbflux_storage::PaletteObjectIndexRepo::new(connection);
+    let profile_id = Uuid::new_v4();
+    let state = app_state();
+    let mut cache = new_cache(&state);
+    cache.remember(
+        profile_id,
+        "app",
+        vec![IndexedObject {
+            schema: Some("app".to_string()),
+            name: "users".to_string(),
+            kind: IndexedObjectKind::Table,
+        }],
+    );
+
+    assert_eq!(
+        write_palette_objects(&repo, cache.take_writes()),
+        vec![(profile_id, "app".to_string())]
+    );
+}
+
+#[test]
+fn a_fetched_document_database_is_remembered_and_a_hidden_one_is_not() {
+    let mut state = app_state();
+    let profile_id = Uuid::new_v4();
+    let mut profile = connected(
+        SchemaLoadingStrategy::LazyPerDatabase,
+        Some(SchemaSnapshot::document(DocumentSchema {
+            databases: databases(&["shop", "logs"], None),
+            ..Default::default()
+        })),
+    );
+    let mut config = dbflux_core::DbConfig::default_mongodb();
+    if let dbflux_core::DbConfig::MongoDB { database, .. } = &mut config {
+        *database = Some("shop".to_string());
+    }
+    profile.profile.config = config;
+    profile.profile.show_all_databases = false;
+    for database in ["shop", "logs"] {
+        profile.database_schemas.insert(
+            database.to_string(),
+            group(database, vec![table("events", Some(database))], vec![]),
+        );
+    }
+    state.connections_mut().insert(profile_id, profile);
+    let connected = state.connections().get(&profile_id).expect("connected");
+    let mut cache = new_cache(&state);
+    cache.recall(profile_id, "shop");
+
+    remember_database(&state, profile_id, connected, "logs", &mut cache);
+    assert!(cache.take_writes().is_empty(), "the profile hides 'logs'");
+
+    remember_database(&state, profile_id, connected, "shop", &mut cache);
+    write_palette_objects(&state.palette_object_index_repo, cache.take_writes());
+
+    let stored = state
+        .palette_object_index_repo
+        .load_profile(&profile_id.to_string())
+        .expect("load");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].database, "shop");
+    assert_eq!(stored[0].objects[0].kind, IndexedObjectKind::Collection);
 }

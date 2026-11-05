@@ -17,8 +17,8 @@ impl Workspace {
                         .meta_right(now_hms())
                         .push(cx);
                 } else {
-                    // Prepend the chart items before any other items so the
-                    // palette opens showing only charts (the user searched "open chart").
+                    // Open with only the chart items (the user searched "open chart");
+                    // a background palette refresh must not replace them.
                     self.palette_sync.set_lists_workspace(false);
                     self.command_palette.update(cx, |palette, cx| {
                         palette.open_with_items(chart_items, window, cx);

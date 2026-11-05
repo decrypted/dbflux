@@ -254,7 +254,6 @@ impl ObjectTreeCoordinator {
 
     /// Removes a fetch entry, dropping (and thereby cancelling) its task.
     fn remove_fetch(&mut self, key: &ObjectTreeRequestKey) -> Option<PendingFetch> {
-        self.quiet.remove(key);
         self.fetches.remove(key)
     }
 
@@ -359,9 +358,11 @@ impl AppStateEntity {
     }
 
     /// Requests work no user action asked for, such as the palette loading
-    /// the databases it can list. A failure settles as usual but is logged
-    /// rather than reported, unless a consumer asks for the same request
-    /// through [`Self::object_tree_request`] before it settles.
+    /// the databases it can list. A failure is logged rather than reported,
+    /// and only a success is kept as the request's outcome, so the caller
+    /// tracks the rest from the settle event; asking for the same request through
+    /// [`Self::object_tree_request`] before it settles makes it an ordinary
+    /// request again.
     pub fn object_tree_request_in_background(
         &mut self,
         key: ObjectTreeRequestKey,
@@ -775,10 +776,21 @@ impl AppStateEntity {
         outcome: ObjectTreeOutcome,
         cx: &mut gpui::Context<Self>,
     ) {
+        let quiet = self.object_tree.quiet.remove(&key);
         self.object_tree.remove_fetch(&key);
-        let generation = self.profile_session_generation(key.profile_id());
-        self.object_tree
-            .set_outcome(key.clone(), generation, outcome.clone());
+        // Only a background request's success is kept: a stored failure,
+        // rejection or cancellation would show as a load the user never
+        // started. The caller tracks the rest from the settle event.
+        if !quiet
+            || matches!(
+                outcome,
+                ObjectTreeOutcome::Applied | ObjectTreeOutcome::Cached
+            )
+        {
+            let generation = self.profile_session_generation(key.profile_id());
+            self.object_tree
+                .set_outcome(key.clone(), generation, outcome.clone());
+        }
         cx.emit(ObjectTreeEvent { key, outcome });
     }
 
@@ -1001,7 +1013,6 @@ impl AppStateEntity {
                 }
                 let message = format!("Failed to open the database: {error}");
                 for waiter in waiters {
-                    self.object_tree.remove_fetch(&waiter);
                     self.object_tree_settle(waiter, ObjectTreeOutcome::Failed(message.clone()), cx);
                 }
             }

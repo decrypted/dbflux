@@ -3,8 +3,8 @@
 //! thread, and refills an open palette as results land.
 
 use super::{
-    PALETTE_FETCHES_IN_FLIGHT, PaletteFetchQueue, PaletteObjectCache,
-    build_resource_items_for_connection, write_palette_objects,
+    PALETTE_FETCHES_IN_FLIGHT, PaletteFetchQueue, PaletteObjectCache, remember_database,
+    write_palette_objects,
 };
 use crate::ui::views::workspace::Workspace;
 use dbflux_storage::PaletteObjectIndexRepo;
@@ -12,6 +12,7 @@ use dbflux_ui_base::object_tree::{
     ObjectTreeEvent, ObjectTreeOutcome, ObjectTreeRequestKey, ObjectTreeRequestStatus,
 };
 use gpui::{Context, Task};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -47,6 +48,12 @@ impl PaletteSync {
     pub(in crate::ui::views::workspace) fn set_lists_workspace(&mut self, lists_workspace: bool) {
         self.lists_workspace = lists_workspace;
     }
+
+    /// Drops the databases not fetched yet once the palette closes; the
+    /// fetches already running still settle and are kept.
+    pub(in crate::ui::views::workspace) fn stop_fetching(&mut self) {
+        self.fetches.clear_queued();
+    }
 }
 
 impl Workspace {
@@ -74,18 +81,39 @@ impl Workspace {
         event: &ObjectTreeEvent,
         cx: &mut Context<Self>,
     ) {
-        let profile_id = match &event.key {
-            ObjectTreeRequestKey::DatabaseSchema { profile_id, .. }
-            | ObjectTreeRequestKey::DatabaseList { profile_id } => profile_id,
-            ObjectTreeRequestKey::TableDetails { .. } => return,
-        };
+        let ours = self.palette_sync.fetches.settled(&event.key);
 
-        if event.outcome == ObjectTreeOutcome::Applied {
-            self.remember_palette_profile(*profile_id, cx);
-            self.schedule_palette_refresh(cx);
+        match (&event.key, &event.outcome) {
+            (
+                ObjectTreeRequestKey::DatabaseSchema {
+                    profile_id,
+                    database,
+                },
+                outcome,
+            ) => match outcome {
+                ObjectTreeOutcome::Applied => {
+                    self.remember_palette_database(*profile_id, database, cx);
+                    self.schedule_palette_refresh(cx);
+                }
+                ObjectTreeOutcome::Failed(_) if ours => {
+                    self.palette_sync.cache.mark_fetch_failed(
+                        *profile_id,
+                        database,
+                        self.app_state
+                            .read(cx)
+                            .profile_session_generation(*profile_id),
+                    );
+                }
+                _ => {}
+            },
+            (ObjectTreeRequestKey::DatabaseList { profile_id }, ObjectTreeOutcome::Applied) => {
+                self.forget_unlisted_palette_databases(*profile_id, cx);
+                self.schedule_palette_refresh(cx);
+            }
+            _ => {}
         }
 
-        if self.palette_sync.fetches.settled(&event.key) {
+        if ours {
             self.pump_palette_fetches(cx);
         }
     }
@@ -96,38 +124,70 @@ impl Workspace {
                 state.object_tree_request_in_background(key.clone(), cx)
             });
 
-            if matches!(
-                status,
-                ObjectTreeRequestStatus::Cached | ObjectTreeRequestStatus::Failed(_)
-            ) {
-                self.palette_sync.fetches.finished(&key);
+            match status {
+                ObjectTreeRequestStatus::Cached => self.palette_sync.fetches.finished(&key),
+                ObjectTreeRequestStatus::Failed(_) => {
+                    self.palette_sync.fetches.finished(&key);
+                    if let ObjectTreeRequestKey::DatabaseSchema {
+                        profile_id,
+                        database,
+                    } = &key
+                    {
+                        self.palette_sync.cache.mark_fetch_failed(
+                            *profile_id,
+                            database,
+                            self.app_state
+                                .read(cx)
+                                .profile_session_generation(*profile_id),
+                        );
+                    }
+                }
+                ObjectTreeRequestStatus::Dispatched
+                | ObjectTreeRequestStatus::Pending
+                | ObjectTreeRequestStatus::WaitingForSlotInstall => {}
             }
         }
     }
 
-    /// Records the lists of one profile after a fetch, so they are kept
-    /// even when no palette is open to rebuild them.
-    fn remember_palette_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+    /// Records the list of one fetched database, even with no palette open.
+    fn remember_palette_database(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        cx: &mut Context<Self>,
+    ) {
         let state = self.app_state.read(cx);
-        if let Some(connected) = state.connections().get(&profile_id).filter(|connected| {
-            connected.connection.schema_loading_strategy()
-                == dbflux_core::SchemaLoadingStrategy::LazyPerDatabase
-        }) {
-            let mut scratch = Vec::new();
-            build_resource_items_for_connection(
+        if let Some(connected) = state.connections().get(&profile_id) {
+            remember_database(
                 state,
                 profile_id,
                 connected,
+                database,
                 &mut self.palette_sync.cache,
-                &mut scratch,
             );
         }
 
         self.flush_palette_writes(cx);
     }
 
+    fn forget_unlisted_palette_databases(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        if !self.palette_sync.cache.has_profile(profile_id) {
+            return;
+        }
+
+        let state = self.app_state.read(cx);
+        if let Some(list) = state.get_database_list(profile_id) {
+            let listed: HashSet<&str> = list.iter().map(|entry| entry.name.as_str()).collect();
+            self.palette_sync.cache.forget_unlisted(profile_id, &listed);
+        }
+
+        self.flush_palette_writes(cx);
+    }
+
     /// Writes the queued index changes off the UI thread, each batch after
-    /// the previous one, so a newer list never lands before an older one.
+    /// the previous one, so a newer list never lands before an older one. A
+    /// list that failed to save is dropped from memory so it is written
+    /// again next time.
     fn flush_palette_writes(&mut self, cx: &mut Context<Self>) {
         let writes = self.palette_sync.cache.take_writes();
         if writes.is_empty() {
@@ -136,11 +196,28 @@ impl Workspace {
 
         let repo = self.palette_sync.cache.repo();
         let previous = self.palette_sync.last_write.take();
-        self.palette_sync.last_write = Some(cx.background_executor().spawn(async move {
+        self.palette_sync.last_write = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
-            write_palette_objects(&repo, writes);
+
+            let failed = cx
+                .background_executor()
+                .spawn(async move { write_palette_objects(&repo, writes) })
+                .await;
+            if failed.is_empty() {
+                return;
+            }
+
+            if let Err(error) = this.update(cx, |this, _| {
+                for (profile_id, database) in failed {
+                    this.palette_sync
+                        .cache
+                        .forget_unsaved(profile_id, &database);
+                }
+            }) {
+                log::debug!("The palette's index writes outlived their workspace: {error}");
+            }
         }));
     }
 

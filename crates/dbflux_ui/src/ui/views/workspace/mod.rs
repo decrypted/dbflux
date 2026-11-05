@@ -792,6 +792,7 @@ impl Workspace {
         .detach();
 
         cx.subscribe(&command_palette, |this, _, _: &CommandPaletteClosed, cx| {
+            this.palette_sync.stop_fetching();
             this.needs_focus_restore = true;
             cx.notify();
         })

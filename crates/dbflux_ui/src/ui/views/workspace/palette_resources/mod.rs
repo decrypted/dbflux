@@ -9,8 +9,8 @@ use dbflux_core::{
 };
 use dbflux_storage::{IndexedObject, IndexedObjectKind, PaletteObjectIndexRepo};
 use dbflux_ui_base::object_tree::{
-    FolderObjects, NodeContent, ObjectTreeKey, ObjectTreeNode, ObjectTreeOutcome,
-    ObjectTreeRequestKey, folder_objects, is_current_database, only_shown_database,
+    FolderObjects, NodeContent, ObjectTreeKey, ObjectTreeNode, ObjectTreeRequestKey,
+    folder_objects, is_current_database, only_shown_database, project_database_node,
     project_profile_tree, shows_one_unnamed_database,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -40,12 +40,14 @@ pub(super) struct PaletteObjectWrite {
     objects: Vec<IndexedObject>,
 }
 
-/// Applies `writes` in order. A failure is logged: the index only speeds up
-/// the next search, and the live lists stay correct without it.
+/// Applies `writes` in order and returns the databases whose write failed,
+/// so their cached copy can be dropped and written again later.
 pub(super) fn write_palette_objects(
     repo: &PaletteObjectIndexRepo,
     writes: Vec<PaletteObjectWrite>,
-) {
+) -> Vec<(Uuid, String)> {
+    let mut failed = Vec::new();
+
     for write in writes {
         if let Err(error) = repo.replace_database(
             &write.profile_id.to_string(),
@@ -56,8 +58,11 @@ pub(super) fn write_palette_objects(
                 "Could not save the palette's objects of '{}': {error}",
                 write.database
             );
+            failed.push((write.profile_id, write.database));
         }
     }
+
+    failed
 }
 
 /// The objects the palette last saw in the databases of each profile, kept
@@ -68,6 +73,9 @@ pub(super) struct PaletteObjectCache {
     repo: Arc<PaletteObjectIndexRepo>,
     profiles: HashMap<Uuid, HashMap<String, Vec<IndexedObject>>>,
     writes: Vec<PaletteObjectWrite>,
+    /// Databases whose background fetch failed, with the connection session
+    /// it failed in; they are not asked for again until a new session.
+    failed_fetches: HashMap<(Uuid, String), Option<u64>>,
 }
 
 impl PaletteObjectCache {
@@ -76,11 +84,41 @@ impl PaletteObjectCache {
             repo,
             profiles: HashMap::new(),
             writes: Vec::new(),
+            failed_fetches: HashMap::new(),
         }
     }
 
     pub(super) fn repo(&self) -> Arc<PaletteObjectIndexRepo> {
         Arc::clone(&self.repo)
+    }
+
+    /// Whether this session has read the cached lists of `profile_id`.
+    pub(super) fn has_profile(&self, profile_id: Uuid) -> bool {
+        self.profiles.contains_key(&profile_id)
+    }
+
+    pub(super) fn mark_fetch_failed(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        session: Option<u64>,
+    ) {
+        self.failed_fetches
+            .insert((profile_id, database.to_string()), session);
+    }
+
+    fn fetch_failed(&self, profile_id: Uuid, database: &str, session: Option<u64>) -> bool {
+        self.failed_fetches
+            .get(&(profile_id, database.to_string()))
+            .is_some_and(|failed_in| *failed_in == session)
+    }
+
+    /// Drops the in-memory copy of a list whose write failed, so the next
+    /// list for that database is written again.
+    pub(super) fn forget_unsaved(&mut self, profile_id: Uuid, database: &str) {
+        if let Some(databases) = self.profiles.get_mut(&profile_id) {
+            databases.remove(database);
+        }
     }
 
     /// The writes queued since the last call, in the order they were made.
@@ -136,7 +174,12 @@ impl PaletteObjectCache {
     }
 
     /// Forgets the databases of `profile_id` the server no longer lists.
-    fn forget_unlisted(&mut self, profile_id: Uuid, listed: &HashSet<&str>) {
+    pub(super) fn forget_unlisted(&mut self, profile_id: Uuid, listed: &HashSet<&str>) {
+        // An empty list says nothing about which databases are gone.
+        if listed.is_empty() {
+            return;
+        }
+
         let gone: Vec<String> = self
             .databases(profile_id)
             .keys()
@@ -154,6 +197,7 @@ impl PaletteObjectCache {
 #[derive(Default)]
 pub(super) struct PaletteFetchQueue {
     queued: VecDeque<ObjectTreeRequestKey>,
+    queued_keys: HashSet<ObjectTreeRequestKey>,
     in_flight: HashSet<ObjectTreeRequestKey>,
 }
 
@@ -161,7 +205,7 @@ impl PaletteFetchQueue {
     /// Queues `keys` that are neither queued nor in flight already.
     pub(super) fn enqueue(&mut self, keys: impl IntoIterator<Item = ObjectTreeRequestKey>) {
         for key in keys {
-            if !self.in_flight.contains(&key) && !self.queued.contains(&key) {
+            if !self.in_flight.contains(&key) && self.queued_keys.insert(key.clone()) {
                 self.queued.push_back(key);
             }
         }
@@ -175,8 +219,15 @@ impl PaletteFetchQueue {
         }
 
         let key = self.queued.pop_front()?;
+        self.queued_keys.remove(&key);
         self.in_flight.insert(key.clone());
         Some(key)
+    }
+
+    /// Drops the requests not started yet; those in flight still settle.
+    pub(super) fn clear_queued(&mut self) {
+        self.queued.clear();
+        self.queued_keys.clear();
     }
 
     /// Marks a request that ended without a settle event.
@@ -282,7 +333,7 @@ pub(super) fn build_resource_items_for_connection(
                         .map(|object| cached_item(profile_id, profile_name, &database, object)),
                 );
 
-                if worth_fetching(state, profile_id, &database) {
+                if worth_fetching(state, cache, profile_id, &database) {
                     to_fetch.push(database);
                 }
             }
@@ -326,16 +377,90 @@ fn relational_listings(
         .iter()
         .filter_map(|node| {
             let database = node.key.database()?;
-            let listing = if node.state == NodeContent::Unloaded {
-                DatabaseListing::Unloaded
-            } else {
-                let mut objects = Vec::new();
-                push_projected_relational_items(&target, node, None, &mut objects);
-                DatabaseListing::Loaded(objects)
-            };
-            Some((database.to_string(), listing))
+            Some((database.to_string(), relational_listing(&target, node)))
         })
         .collect()
+}
+
+fn relational_listing(target: &RelationalTarget<'_>, node: &ObjectTreeNode) -> DatabaseListing {
+    if node.state == NodeContent::Unloaded {
+        return DatabaseListing::Unloaded;
+    }
+
+    let mut objects = Vec::new();
+    push_projected_relational_items(target, node, None, &mut objects);
+    DatabaseListing::Loaded(objects)
+}
+
+/// Records the list of one database of a lazily loaded profile after its
+/// fetch lands, without rebuilding the rest of the profile. A profile whose
+/// cached lists this session has not read yet is left for the next palette
+/// open.
+pub(super) fn remember_database(
+    state: &AppStateEntity,
+    profile_id: Uuid,
+    connected: &ConnectedProfile,
+    database: &str,
+    cache: &mut PaletteObjectCache,
+) {
+    if !cache.has_profile(profile_id)
+        || connected.connection.schema_loading_strategy() != SchemaLoadingStrategy::LazyPerDatabase
+    {
+        return;
+    }
+
+    let Some(snapshot) = &connected.schema else {
+        return;
+    };
+
+    let listed: Vec<&str> = match state.get_database_list(profile_id) {
+        Some(list) => list.iter().map(|entry| entry.name.as_str()).collect(),
+        None => snapshot
+            .databases()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect(),
+    };
+    if only_shown_database(&connected.profile, listed.into_iter())
+        .is_some_and(|only| only != database)
+    {
+        return;
+    }
+
+    let profile_name = connected.profile.name.as_str();
+    let listing = match snapshot.database_layout() {
+        DatabaseLayout::Schemas => {
+            let Some(node) = project_database_node(state, profile_id, database) else {
+                return;
+            };
+            let target = RelationalTarget {
+                profile_id,
+                profile_name,
+                names_database: true,
+            };
+            relational_listing(&target, &node)
+        }
+        DatabaseLayout::Folder(folder) => {
+            let objects = folder_objects(
+                connected,
+                folder,
+                snapshot,
+                database,
+                true,
+                is_current_database(snapshot, database),
+            );
+            folder_listing(profile_id, profile_name, database, objects)
+        }
+        DatabaseLayout::Keyspaces => DatabaseListing::Unloaded,
+    };
+
+    if let DatabaseListing::Loaded(objects) = listing {
+        cache.remember(
+            profile_id,
+            database,
+            objects.iter().filter_map(indexed_object).collect(),
+        );
+    }
 }
 
 fn folder_listings(
@@ -353,28 +478,38 @@ fn folder_listings(
         .flat_map(|root| root.children.iter())
         .filter_map(|node| node.key.database())
         .map(|database| {
-            let listing = match folder_objects(
+            let objects = folder_objects(
                 connected,
                 folder,
                 snapshot,
                 database,
                 lazy,
                 is_current_database(snapshot, database),
-            ) {
-                FolderObjects::Listed(objects) => DatabaseListing::Loaded(
-                    objects
-                        .iter()
-                        .map(|object| {
-                            collection_item(profile_id, profile_name, database, &object.name)
-                        })
-                        .collect(),
-                ),
-                FolderObjects::Unlisted => DatabaseListing::Loaded(Vec::new()),
-                FolderObjects::Unloaded => DatabaseListing::Unloaded,
-            };
-            (database.to_string(), listing)
+            );
+            (
+                database.to_string(),
+                folder_listing(profile_id, profile_name, database, objects),
+            )
         })
         .collect()
+}
+
+fn folder_listing(
+    profile_id: Uuid,
+    profile_name: &str,
+    database: &str,
+    objects: FolderObjects<'_>,
+) -> DatabaseListing {
+    match objects {
+        FolderObjects::Listed(objects) => DatabaseListing::Loaded(
+            objects
+                .iter()
+                .map(|object| collection_item(profile_id, profile_name, database, &object.name))
+                .collect(),
+        ),
+        FolderObjects::Unlisted => DatabaseListing::Loaded(Vec::new()),
+        FolderObjects::Unloaded => DatabaseListing::Unloaded,
+    }
 }
 
 /// The database a resource item lives in, if it names one.
@@ -388,19 +523,23 @@ fn item_database(item: &PaletteItem) -> Option<&str> {
     }
 }
 
-/// A database is fetched for the palette once per session: not while a
-/// fetch for it runs, and not again after one failed.
-fn worth_fetching(state: &AppStateEntity, profile_id: Uuid, database: &str) -> bool {
-    let key = ObjectTreeRequestKey::DatabaseSchema {
+/// A database is fetched for the palette once per connection session: not
+/// while a fetch for it runs, and not again after the palette's fetch failed
+/// in this session.
+fn worth_fetching(
+    state: &AppStateEntity,
+    cache: &PaletteObjectCache,
+    profile_id: Uuid,
+    database: &str,
+) -> bool {
+    !cache.fetch_failed(
+        profile_id,
+        database,
+        state.profile_session_generation(profile_id),
+    ) && !state.object_tree_is_pending(&ObjectTreeRequestKey::DatabaseSchema {
         profile_id,
         database: database.to_string(),
-    };
-
-    !state.object_tree_is_pending(&key)
-        && !matches!(
-            state.object_tree_outcome(&key),
-            Some(ObjectTreeOutcome::Failed(_))
-        )
+    })
 }
 
 fn collection_item(

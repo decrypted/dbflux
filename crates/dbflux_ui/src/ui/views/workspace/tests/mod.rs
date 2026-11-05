@@ -16,6 +16,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 mod close_flush;
+mod document_focus;
 
 fn new_workspace(
     cx: &mut TestAppContext,
@@ -1381,6 +1382,54 @@ fn open_buckets_tab(
     });
 
     (document, notifications, subscription)
+}
+
+/// Root section events open the presentation their declaration names: the
+/// containers table for a section, the object browser for an item. Without a
+/// connection each opener answers with its own no-connection toast.
+#[gpui::test]
+fn root_section_events_route_by_declared_presentation(cx: &mut TestAppContext) {
+    use crate::ui::labels::{NoActiveConnectionKind, documents_no_active_connection_message};
+    use dbflux_ui_sidebar::SidebarEvent;
+
+    let (workspace, _app_state, window) = new_workspace(cx);
+    let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+    let profile_id = uuid::Uuid::new_v4();
+
+    window.update(|_, cx| {
+        sidebar.update(cx, |_, cx| {
+            cx.emit(SidebarEvent::OpenRootSection {
+                profile_id,
+                section_id: "buckets".to_string(),
+                presentation: dbflux_core::RootSectionPresentation::ObjectContainerTable,
+            });
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        last_toast_title(window),
+        Some(documents_no_active_connection_message(
+            NoActiveConnectionKind::ObjectStorageAccount
+        ))
+    );
+
+    window.update(|_, cx| {
+        sidebar.update(cx, |_, cx| {
+            cx.emit(SidebarEvent::OpenRootSectionItem {
+                profile_id,
+                section_id: "buckets".to_string(),
+                item_id: "assets".to_string(),
+                presentation: dbflux_core::RootItemPresentation::ObjectBrowser,
+            });
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        last_toast_title(window),
+        Some(documents_no_active_connection_message(
+            NoActiveConnectionKind::Bucket
+        ))
+    );
 }
 
 #[gpui::test]

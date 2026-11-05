@@ -24,8 +24,8 @@ crates/dbflux_components/src/components/data_table/table.rs:render: focus on pre
 crates/dbflux_components/src/components/data_table/table.rs:render_expression_suggestions: focus guard
 crates/dbflux_components/src/components/data_table/table.rs:render_expression_toggle: focus guard
 crates/dbflux_components/src/composites/notification_center.rs:render: propagation guard
-crates/bolt/src/components/grid/mod.rs:render_rows: selection start
-crates/bolt/src/components/grid/mod.rs:render_rows: selection start
+crates/bolt/src/components/grid/mod.rs:with_cell_callbacks: selection start
+crates/bolt/src/components/grid/mod.rs:row_number_cell: selection start
 crates/bolt/src/components/grid/resize.rs:resize_handle: resize grip
 crates/bolt/src/components/document_tree/row.rs:render_chevron: propagation guard
 crates/bolt/src/components/document_tree/row.rs:render_row: propagation guard

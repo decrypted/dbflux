@@ -24,14 +24,16 @@ mod resize;
 #[cfg(test)]
 mod tests;
 
+use std::borrow::Cow;
 use std::ops::Range;
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AccessibleAction, AnyElement, App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement,
-    IntoElement, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels,
-    Role, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    AccessibleAction, AnyElement, App, ClickEvent, Div, ElementId, FontWeight, Hsla,
+    InteractiveElement, IntoElement, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement, Pixels, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Window, div, px,
 };
 use gpui_component::Theme;
 
@@ -319,10 +321,21 @@ pub fn render_rows(
     colors: &GridColors,
 ) -> Vec<AnyElement> {
     let mut editor = editor;
-    let drawn_columns: Vec<usize> = match host.columns {
-        Some(columns) => columns.to_vec(),
-        None => (0..source.column_count()).collect(),
+    let drawn_columns: Cow<'_, [usize]> = match host.columns {
+        Some(columns) => Cow::Borrowed(columns),
+        None => Cow::Owned((0..source.column_count()).collect()),
     };
+
+    // The column facts the cells read, once per render and only for the
+    // drawn columns: a flattened collection can hide hundreds of them.
+    let group_children: Vec<bool> = drawn_columns
+        .iter()
+        .map(|&col_ix| {
+            source
+                .column(col_ix)
+                .is_some_and(|column| column.group_child)
+        })
+        .collect();
 
     visible_range
         .map(|visual_ix| {
@@ -356,18 +369,10 @@ pub fn render_rows(
                 visual_ix + 1
             };
 
-            // The column facts the cells read, once per row render.
-            let group_children: Vec<bool> = (0..source.column_count())
-                .map(|col_ix| {
-                    source
-                        .column(col_ix)
-                        .is_some_and(|column| column.group_child)
-                })
-                .collect();
-
-            let mut cells: Vec<AnyElement> = drawn_columns
+            let cells: Vec<AnyElement> = drawn_columns
                 .iter()
-                .map(|&col_ix| {
+                .zip(&group_children)
+                .map(|(&col_ix, &group_child)| {
                     let view = source.cell(visual_ix, col_ix).unwrap_or_else(|| {
                         CellView::new(
                             SharedString::default(),
@@ -399,7 +404,7 @@ pub fn render_rows(
 
                     let paint = cell_paint(
                         &view,
-                        group_children.get(col_ix).copied().unwrap_or(false),
+                        group_child,
                         is_pending_delete,
                         is_active,
                         colors,
@@ -454,23 +459,7 @@ pub fn render_rows(
                         })
                         .when(paint.italic, |d| d.italic())
                         .when(paint.line_through, |d| d.line_through())
-                        .when_some(host.on_cell_press.clone(), |d, on_press| {
-                            d.on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                                on_press(coord, event, window, cx)
-                            })
-                        })
-                        .when_some(host.on_cell_drag.clone(), |d, on_drag| {
-                            d.on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
-                                if event.pressed_button == Some(MouseButton::Left) {
-                                    on_drag(coord, event, window, cx)
-                                }
-                            })
-                        })
-                        .when_some(host.on_cell_aux_click.clone(), |d, on_aux| {
-                            d.on_aux_click(move |event: &ClickEvent, window, cx| {
-                                on_aux(coord, event, window, cx)
-                            })
-                        })
+                        .map(|d| with_cell_callbacks(d, coord, host))
                         .on_click({
                             let on_cell_click = Arc::clone(&host.on_cell_click);
                             move |event: &ClickEvent, window, cx| {
@@ -595,26 +584,7 @@ pub fn render_rows(
                         gutter.child(row_number.to_string())
                     }
                 });
-            let gutter = match host.on_row_press.clone() {
-                Some(on_press) => {
-                    let on_accessible_press = Arc::clone(&on_press);
-                    gutter
-                        .id(("row-number", visual_ix))
-                        .role(Role::Button)
-                        .aria_label(SharedString::from(row_number.to_string()))
-                        .cursor_pointer()
-                        // The row is selected on press, before the release a
-                        // click needs, so a drag can start from it.
-                        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                            on_press(visual_ix, event.modifiers, window, cx)
-                        })
-                        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
-                            on_accessible_press(visual_ix, Modifiers::default(), window, cx)
-                        })
-                        .into_any_element()
-                }
-                None => gutter.into_any_element(),
-            };
+            let gutter = row_number_cell(gutter, visual_ix, row_number, host);
 
             let row = div()
                 .id(("row", visual_ix))
@@ -631,24 +601,85 @@ pub fn render_rows(
                     d.border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
                 });
 
-            let Some(pinned) = host.pinned.as_ref().filter(|pinned| pinned.count > 0) else {
-                return row.child(gutter).children(cells).into_any_element();
-            };
-
-            // The gutter and the pinned cells move into the host's strip; a
-            // spacer of the same width keeps the scrolling cells where they
-            // were.
-            let scrolled = cells.split_off(pinned.count.min(cells.len()));
-            row.child(
-                div()
-                    .flex_shrink_0()
-                    .w(GridMetrics::ROW_NUMBER_WIDTH + px(pinned.width)),
-            )
-            .children(scrolled)
-            .child((pinned.strip)(row_fill, gutter, cells))
-            .into_any_element()
+            place_cells(row, gutter, cells, row_fill, host.pinned.as_ref())
         })
         .collect()
+}
+
+/// The host's optional cell callbacks. A drag only counts with the left
+/// button held: a move after the release must not extend the selection.
+fn with_cell_callbacks(
+    cell: Stateful<Div>,
+    coord: GridCellCoord,
+    host: &GridHost<'_>,
+) -> Stateful<Div> {
+    cell.when_some(host.on_cell_press.clone(), |d, on_press| {
+        d.on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            on_press(coord, event, window, cx)
+        })
+    })
+    .when_some(host.on_cell_drag.clone(), |d, on_drag| {
+        d.on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+            if event.pressed_button == Some(MouseButton::Left) {
+                on_drag(coord, event, window, cx)
+            }
+        })
+    })
+    .when_some(host.on_cell_aux_click.clone(), |d, on_aux| {
+        d.on_aux_click(move |event: &ClickEvent, window, cx| on_aux(coord, event, window, cx))
+    })
+}
+
+/// With [`GridHost::on_row_press`] set the row number is a button. The row
+/// is selected on press, before the release a click needs, so a drag can
+/// start from it.
+fn row_number_cell(
+    gutter: Div,
+    visual_ix: usize,
+    row_number: usize,
+    host: &GridHost<'_>,
+) -> AnyElement {
+    let Some(on_press) = host.on_row_press.clone() else {
+        return gutter.into_any_element();
+    };
+    let on_accessible_press = Arc::clone(&on_press);
+    gutter
+        .id(("row-number", visual_ix))
+        .role(Role::Button)
+        .aria_label(SharedString::from(row_number.to_string()))
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            on_press(visual_ix, event.modifiers, window, cx)
+        })
+        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+            on_accessible_press(visual_ix, Modifiers::default(), window, cx)
+        })
+        .into_any_element()
+}
+
+/// Puts the gutter and the cells into the row. With pinned columns the
+/// gutter and the pinned cells move into the host's strip, and a spacer of
+/// the same width keeps the scrolling cells where they were.
+fn place_cells(
+    row: Stateful<Div>,
+    gutter: AnyElement,
+    mut cells: Vec<AnyElement>,
+    row_fill: Option<Hsla>,
+    pinned: Option<&GridPinned<'_>>,
+) -> AnyElement {
+    let Some(pinned) = pinned.filter(|pinned| pinned.count > 0) else {
+        return row.child(gutter).children(cells).into_any_element();
+    };
+
+    let scrolled = cells.split_off(pinned.count.min(cells.len()));
+    row.child(
+        div()
+            .flex_shrink_0()
+            .w(GridMetrics::ROW_NUMBER_WIDTH + px(pinned.width)),
+    )
+    .children(scrolled)
+    .child((pinned.strip)(row_fill, gutter, cells))
+    .into_any_element()
 }
 
 /// The width column `col_ix` draws at: the host's laid-out width, or the

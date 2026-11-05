@@ -465,6 +465,13 @@ impl AppStateEntity {
         self.object_tree.is_fetch_pending(key)
     }
 
+    /// Whether the request is in flight only for work nobody asked for (see
+    /// [`Self::object_tree_request_in_background`]). Its failure would leave
+    /// no outcome, so a view that waits on it asks for it too.
+    pub fn object_tree_is_pending_in_background(&self, key: &ObjectTreeRequestKey) -> bool {
+        self.object_tree.is_fetch_pending(key) && self.object_tree.quiet.contains(key)
+    }
+
     /// The generation captured when a pending attempt began. The outer `None`
     /// means no attempt; `Some(None)` means an attempt without a connected session.
     /// Reading this does not cancel or mutate shared work.

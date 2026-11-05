@@ -16,6 +16,9 @@ pub use repositories::audit::{
     AppendAuditEvent, AppendAuditEventExtended, AuditAggregateParams, AuditEventDto,
     AuditGroupColumn, AuditQueryFilter, AuditRepository,
 };
+pub use repositories::pal_object_index::{
+    IndexedDatabase, IndexedObject, IndexedObjectKind, PaletteObjectIndexRepo,
+};
 pub use repositories::qry_saved_document_queries::{
     DOCUMENT_QUERY_FORMAT_VERSION, DocumentQueryRepo, DocumentQueryScope, SavedDocumentQuery,
     SavedDocumentQuerySummary,

@@ -166,6 +166,8 @@ pub struct AppState {
     pub document_query_repo: Arc<DocumentQueryRepo>,
     /// Repository for `sch_schema_snapshots` and its child tables.
     pub schema_snapshot_repo: Arc<SchemaSnapshotRepo>,
+    /// Repository for `pal_object_index`.
+    pub palette_object_index_repo: Arc<dbflux_storage::PaletteObjectIndexRepo>,
 }
 
 impl AppState {
@@ -1314,6 +1316,16 @@ impl AppState {
             .delete(&removed.id.to_string())
         {
             log::error!("Failed to delete profile from storage: {}", e);
+        }
+
+        if let Err(e) = self
+            .palette_object_index_repo
+            .delete_profile(&removed.id.to_string())
+        {
+            log::error!(
+                "Failed to delete the palette's objects of the profile: {}",
+                e
+            );
         }
 
         Some(removed)

@@ -19,6 +19,7 @@ impl Workspace {
                 } else {
                     // Prepend the chart items before any other items so the
                     // palette opens showing only charts (the user searched "open chart").
+                    self.palette_sync.set_lists_workspace(false);
                     self.command_palette.update(cx, |palette, cx| {
                         palette.open_with_items(chart_items, window, cx);
                     });

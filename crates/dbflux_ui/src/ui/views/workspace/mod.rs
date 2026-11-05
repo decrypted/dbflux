@@ -4,6 +4,7 @@ pub mod inspector;
 #[cfg(test)]
 mod keyboard_coverage_tests;
 mod notifications;
+mod palette_resources;
 mod pane_actions;
 pub mod pipeline;
 mod render;
@@ -38,9 +39,10 @@ use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, 
 use dbflux_ui_base::keymap::{RunCommand, run_command};
 
 use crate::ui::icons::AppIcon;
+#[cfg(test)]
+use crate::ui::overlays::command_palette::ResourceItem;
 use crate::ui::overlays::command_palette::{
     CommandPalette, CommandPaletteClosed, PaletteCommand, PaletteItem, PaletteSelection,
-    ResourceItem,
 };
 use crate::ui::overlays::login_modal::{LoginModal, LoginModalEvent};
 use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
@@ -65,88 +67,9 @@ use gpui_component::Root;
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use std::path::PathBuf;
 
-/// Extract resource items from a schema snapshot into a palette item list.
-///
-/// Separated from `Workspace` for testability — this is pure data transformation
-/// with no GPUI dependency.
-pub(super) fn build_resource_items_from_schema(
-    profile_id: uuid::Uuid,
-    profile_name: &str,
-    structure: &dbflux_core::DataStructure,
-    items: &mut Vec<PaletteItem>,
-) {
-    match structure {
-        dbflux_core::DataStructure::Relational(rel) => {
-            let database = rel.current_database.clone();
-            for table in &rel.tables {
-                items.push(PaletteItem::Resource(ResourceItem::Table {
-                    profile_id,
-                    profile_name: profile_name.to_string(),
-                    database: database.clone(),
-                    schema: table.schema.clone(),
-                    name: table.name.clone(),
-                }));
-            }
-            for view in &rel.views {
-                items.push(PaletteItem::Resource(ResourceItem::View {
-                    profile_id,
-                    profile_name: profile_name.to_string(),
-                    database: database.clone(),
-                    schema: view.schema.clone(),
-                    name: view.name.clone(),
-                }));
-            }
-            for db_schema in &rel.schemas {
-                let schema_name = db_schema.name.clone();
-                for table in &db_schema.tables {
-                    items.push(PaletteItem::Resource(ResourceItem::Table {
-                        profile_id,
-                        profile_name: profile_name.to_string(),
-                        database: database.clone(),
-                        schema: Some(schema_name.clone()),
-                        name: table.name.clone(),
-                    }));
-                }
-                for view in &db_schema.views {
-                    items.push(PaletteItem::Resource(ResourceItem::View {
-                        profile_id,
-                        profile_name: profile_name.to_string(),
-                        database: database.clone(),
-                        schema: Some(schema_name.clone()),
-                        name: view.name.clone(),
-                    }));
-                }
-            }
-        }
-        dbflux_core::DataStructure::Document(doc) => {
-            let default_db = doc
-                .current_database
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            for collection in &doc.collections {
-                items.push(PaletteItem::Resource(ResourceItem::Collection {
-                    profile_id,
-                    profile_name: profile_name.to_string(),
-                    database: collection
-                        .database
-                        .clone()
-                        .unwrap_or_else(|| default_db.clone()),
-                    name: collection.name.clone(),
-                }));
-            }
-        }
-        dbflux_core::DataStructure::KeyValue(kv) => {
-            for ks in &kv.keyspaces {
-                items.push(PaletteItem::Resource(ResourceItem::KeyValueDb {
-                    profile_id,
-                    profile_name: profile_name.to_string(),
-                    database: format!("db{}", ks.db_index),
-                }));
-            }
-        }
-        _ => {}
-    }
-}
+use palette_resources::build_resource_items_for_connection;
+#[cfg(test)]
+use palette_resources::build_resource_items_from_schema;
 
 /// Map a `PaletteItem` to its corresponding `PaletteSelection`.
 ///
@@ -325,6 +248,8 @@ pub struct Workspace {
     tasks_panel: Entity<TasksPanel>,
     toast_host: Entity<ToastHost>,
     command_palette: Entity<CommandPalette>,
+    /// The palette's database lists between opens.
+    palette_sync: palette_resources::PaletteSync,
     sql_preview_modal: Entity<SqlPreviewModal>,
     login_modal: Entity<LoginModal>,
     sso_wizard: Entity<SsoWizard>,
@@ -477,6 +402,14 @@ impl Workspace {
         })
         .detach();
 
+        cx.subscribe(
+            &app_state,
+            |this, _, event: &dbflux_ui_base::object_tree::ObjectTreeEvent, cx| {
+                this.on_palette_object_tree_event(event, cx);
+            },
+        )
+        .detach();
+
         let hook_load_errors = app_state.update(cx, |state, _| {
             drain_hook_load_diagnostics(&mut state.hook_load_diagnostics)
         });
@@ -505,6 +438,9 @@ impl Workspace {
             cx.new(|cx| StatusBar::new(app_state.clone(), tab_manager.clone(), window, cx));
 
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
+        let palette_sync = palette_resources::PaletteSync::new(std::sync::Arc::clone(
+            &app_state.read(cx).palette_object_index_repo,
+        ));
 
         let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
         let login_modal = cx.new(|cx| LoginModal::new(window, cx));
@@ -1719,6 +1655,7 @@ impl Workspace {
             tasks_panel,
             toast_host,
             command_palette,
+            palette_sync,
             sql_preview_modal,
             login_modal,
             sso_wizard,
@@ -2366,10 +2303,12 @@ impl Workspace {
         let was_visible = self.command_palette.read(cx).is_visible();
 
         if !was_visible {
-            let items = self.build_palette_items(cx);
+            let (items, to_fetch) = self.build_palette_items(cx);
+            self.palette_sync.set_lists_workspace(true);
             self.command_palette.update(cx, |palette, cx| {
                 palette.open_with_items(items, window, cx);
             });
+            self.sync_palette_after_build(to_fetch, cx);
         } else {
             self.command_palette.update(cx, |palette, cx| {
                 palette.hide(cx);
@@ -2378,8 +2317,12 @@ impl Workspace {
         }
     }
 
-    /// Build the palette item list from current app state.
-    fn build_palette_items(&self, cx: &Context<Self>) -> Vec<PaletteItem> {
+    /// Build the palette item list from current app state, with the databases
+    /// it could list once they are fetched.
+    fn build_palette_items(
+        &mut self,
+        cx: &Context<Self>,
+    ) -> (Vec<PaletteItem>, Vec<(uuid::Uuid, String)>) {
         let mut items: Vec<PaletteItem> = Self::default_commands()
             .into_iter()
             .map(|cmd| cmd.into())
@@ -2406,17 +2349,19 @@ impl Workspace {
             });
         }
 
+        let mut to_fetch = Vec::new();
         for (&profile_id, connected) in connections.iter() {
-            let profile_name = connected.profile.name.clone();
-
-            if let Some(schema) = &connected.schema {
-                build_resource_items_from_schema(
+            to_fetch.extend(
+                build_resource_items_for_connection(
+                    app_state,
                     profile_id,
-                    &profile_name,
-                    &schema.structure,
+                    connected,
+                    &mut self.palette_sync.cache,
                     &mut items,
-                );
-            }
+                )
+                .into_iter()
+                .map(|database| (profile_id, database)),
+            );
         }
 
         if let Some(dir) = app_state.scripts_directory() {
@@ -2459,7 +2404,7 @@ impl Workspace {
             });
         }
 
-        items
+        (items, to_fetch)
     }
 
     /// Recursively flatten script directory entries into palette items.

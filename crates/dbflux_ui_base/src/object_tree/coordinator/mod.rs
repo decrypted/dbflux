@@ -17,7 +17,7 @@
 //! pending state or write a stale snapshot: core apply fences reject it and
 //! the coordinator releases the pending state and notifies subscribers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use dbflux_core::connection_manager::PrepareFetchError;
 use dbflux_core::{
@@ -193,6 +193,9 @@ pub struct ObjectTreeCoordinator {
     /// Each outcome keeps the profile session generation it settled under,
     /// so a failure from a previous session never blocks a new one.
     outcomes: HashMap<ObjectTreeRequestKey, (Option<u64>, ObjectTreeOutcome)>,
+    /// Pending requests nobody asked for directly; their failures are
+    /// logged instead of reported.
+    quiet: HashSet<ObjectTreeRequestKey>,
 }
 
 impl ObjectTreeCoordinator {
@@ -251,6 +254,7 @@ impl ObjectTreeCoordinator {
 
     /// Removes a fetch entry, dropping (and thereby cancelling) its task.
     fn remove_fetch(&mut self, key: &ObjectTreeRequestKey) -> Option<PendingFetch> {
+        self.quiet.remove(key);
         self.fetches.remove(key)
     }
 
@@ -346,6 +350,36 @@ impl AppStateEntity {
     /// requests, defers behind a shared slot install for missing
     /// `ConnectionPerDatabase` targets, and reports failures once.
     pub fn object_tree_request(
+        &mut self,
+        key: ObjectTreeRequestKey,
+        cx: &mut gpui::Context<Self>,
+    ) -> ObjectTreeRequestStatus {
+        self.object_tree.quiet.remove(&key);
+        self.object_tree_request_inner(key, cx)
+    }
+
+    /// Requests work no user action asked for, such as the palette loading
+    /// the databases it can list. A failure settles as usual but is logged
+    /// rather than reported, unless a consumer asks for the same request
+    /// through [`Self::object_tree_request`] before it settles.
+    pub fn object_tree_request_in_background(
+        &mut self,
+        key: ObjectTreeRequestKey,
+        cx: &mut gpui::Context<Self>,
+    ) -> ObjectTreeRequestStatus {
+        if !self.object_tree.is_fetch_pending(&key) {
+            self.object_tree.quiet.insert(key.clone());
+        }
+
+        let status = self.object_tree_request_inner(key.clone(), cx);
+        if !self.object_tree.is_fetch_pending(&key) {
+            self.object_tree.quiet.remove(&key);
+        }
+
+        status
+    }
+
+    fn object_tree_request_inner(
         &mut self,
         key: ObjectTreeRequestKey,
         cx: &mut gpui::Context<Self>,
@@ -641,7 +675,12 @@ impl AppStateEntity {
             }
             Err(PrepareFetchError::Failed(error)) => {
                 let message = format!("Failed to prepare the schema load: {error}");
-                self.object_tree_report_failure("Failed to load the database schema", error, cx);
+                self.object_tree_report_failure_of(
+                    &key,
+                    "Failed to load the database schema",
+                    error,
+                    cx,
+                );
                 self.object_tree_settle(key, ObjectTreeOutcome::Failed(message.clone()), cx);
                 ObjectTreeRequestStatus::Failed(message)
             }
@@ -694,7 +733,12 @@ impl AppStateEntity {
             {
                 Err(error) => {
                     let message = format!("Failed to prepare the database connection: {error}");
-                    self.object_tree_report_failure("Failed to open the database", error, cx);
+                    self.object_tree_report_failure_of(
+                        &key,
+                        "Failed to open the database",
+                        error,
+                        cx,
+                    );
                     self.object_tree_settle(key, ObjectTreeOutcome::Failed(message.clone()), cx);
                     return ObjectTreeRequestStatus::Failed(message);
                 }
@@ -809,7 +853,8 @@ impl AppStateEntity {
             },
             Err(error) => {
                 let message = format!("Failed to load the database schema: {error}");
-                self.object_tree_report_failure(
+                self.object_tree_report_failure_of(
+                    &key,
                     "Failed to load the database schema",
                     format!("{error}"),
                     cx,
@@ -916,8 +961,13 @@ impl AppStateEntity {
                 match rejection {
                     None => {
                         for waiter in waiters {
+                            let quiet = self.object_tree.quiet.contains(&waiter);
                             self.object_tree.remove_fetch(&waiter);
-                            self.object_tree_request(waiter, cx);
+                            if quiet {
+                                self.object_tree_request_in_background(waiter, cx);
+                            } else {
+                                self.object_tree_request(waiter, cx);
+                            }
                         }
                     }
                     Some(rejection) => {
@@ -935,7 +985,20 @@ impl AppStateEntity {
             Err(error) => {
                 // One shared preparation failing is reported once; every
                 // waiter resolves to the same failure without re-reporting.
-                self.object_tree_report_failure("Failed to open the database", error.clone(), cx);
+                if waiters
+                    .iter()
+                    .all(|waiter| self.object_tree.quiet.contains(waiter))
+                {
+                    log::warn!(
+                        "background object tree load failed: Failed to open the database: {error}"
+                    );
+                } else {
+                    self.object_tree_report_failure(
+                        "Failed to open the database",
+                        error.clone(),
+                        cx,
+                    );
+                }
                 let message = format!("Failed to open the database: {error}");
                 for waiter in waiters {
                     self.object_tree.remove_fetch(&waiter);
@@ -943,6 +1006,27 @@ impl AppStateEntity {
                 }
             }
         }
+    }
+
+    /// Reports the failure of `key`, or only logs it when the request was
+    /// made in the background.
+    fn object_tree_report_failure_of(
+        &mut self,
+        key: &ObjectTreeRequestKey,
+        summary: impl Into<String>,
+        cause: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.object_tree.quiet.contains(key) {
+            log::warn!(
+                "background object tree load failed: {}: {}",
+                summary.into(),
+                cause
+            );
+            return;
+        }
+
+        self.object_tree_report_failure(summary, cause, cx);
     }
 
     /// Reports a user-triggered failure once through the centralized seam.

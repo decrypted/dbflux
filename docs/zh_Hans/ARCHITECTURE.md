@@ -672,7 +672,7 @@ crates/
 - **Schema 可视化**：`crates/dbflux_schema_viz/` 提供 `SchemaGraph`（表节点与外键边）、布局算法（LeftRight、Snowflake、Compact）、DBML 导出与 SQL DDL 导出。通过 `crates/dbflux_ui_document/src/schema_viz/mod.rs` 中的 `SchemaVizDocument` 访问，带工具栏下拉菜单（Layout、Export）、Toast 提示、审计事件与可取消的后台任务加载。通过 `schema_viz/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
 - 单元格编辑器模态框：`crates/dbflux_components/src/modals/cell_editor.rs` 为 JSON 列与长文本/多行文本提供模态编辑器，带 JSON 校验与格式化。
 - 文档预览模态框：`crates/dbflux_components/src/modals/document_preview.rs` 全屏 JSON 文档预览，带内联 JSON 编辑器。
-- 命令面板：`crates/dbflux_ui/src/ui/overlays/command_palette.rs` 面向全部应用动作的模糊搜索命令面板。
+- 命令面板：`crates/dbflux_ui/src/ui/overlays/command_palette.rs` 面向全部应用动作的模糊搜索命令面板。面板中的表、视图与集合来自 `crates/dbflux_ui/src/ui/views/workspace/palette_resources/`，它按侧边栏绘制的投影列出每个已打开的连接。对于按需加载数据库的驱动程序，面板见过的列表保存在 `pal_object_index`（迁移 `065_pal_object_index`，`PaletteObjectIndexRepo`）中，并在 UI 线程之外读写，因此尚未展开的数据库也可被搜索；本次会话尚未加载的数据库会通过 `ObjectTreeCoordinator` 在后台获取。
 
 ### 仪表盘与已保存图表
 
@@ -805,6 +805,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - `aud_*` —— 审计领域（审计事件、实体、属性）
 - `viz_*` —— 可视化领域（仪表盘、仪表盘面板、已保存图表及其绑定/序列）
 - `qry_*` —— 已保存的可视化查询构建器规格（根表 + 投影列、排序、连接）
+- `pal_*`：命令面板领域（按需加载连接中每个数据库最近一次看到的对象）
 - `sys_*` —— 系统领域（迁移、元数据、旧版导入）
 
 **存储 crate**（`dbflux_storage/`）：

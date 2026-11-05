@@ -204,6 +204,7 @@ impl MigrationRegistry {
         registry.register(mod_062_general_settings_ssh_accept_new_host_keys::MigrationImpl);
         registry.register(mod_063_viz_saved_chart_context::MigrationImpl);
         registry.register(mod_064_general_settings_grid_copy_protect_formulas::MigrationImpl);
+        registry.register(mod_065_pal_object_index::MigrationImpl);
         registry
     }
 
@@ -455,6 +456,7 @@ mod mod_061_general_settings_max_concurrent_queries;
 mod mod_062_general_settings_ssh_accept_new_host_keys;
 mod mod_063_viz_saved_chart_context;
 mod mod_064_general_settings_grid_copy_protect_formulas;
+mod mod_065_pal_object_index;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1318,6 +1320,7 @@ mod tests {
             "062_general_settings_ssh_accept_new_host_keys",
             "063_viz_saved_chart_context",
             "064_general_settings_grid_copy_protect_formulas",
+            "065_pal_object_index",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

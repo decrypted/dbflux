@@ -454,6 +454,39 @@ where
         cx.notify();
     }
 
+    /// Replaces the items of an open palette, for results that arrive after
+    /// it opened: the typed query stays and filters the new items, and the
+    /// selection stays on the item it was on while that item is still
+    /// listed, matched by its search text.
+    pub fn replace_items(&mut self, items: Vec<T>, cx: &mut Context<Self>) {
+        let selected_text = self
+            .filtered
+            .get(self.selected_index)
+            .and_then(|filtered| self.items.get(filtered.index))
+            .map(PaletteEntry::search_text);
+
+        self.items = items;
+
+        let query = self.input_state.read(cx).value().to_string();
+        let filtered = filter_items(&self.items, &self.matcher, &query);
+        self.filtered = arrange_results(&self.items, filtered, &query);
+
+        let kept = selected_text.and_then(|text| {
+            self.filtered.iter().position(|filtered| {
+                self.items
+                    .get(filtered.index)
+                    .is_some_and(|item| item.search_text() == text)
+            })
+        });
+        self.selected_index = kept.unwrap_or_else(|| {
+            self.selected_index
+                .min(self.filtered.len().saturating_sub(1))
+        });
+        self.ensure_selected_visible();
+
+        cx.notify();
+    }
+
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = !self.visible;
 
@@ -1248,6 +1281,66 @@ mod tests {
             let host = host.read(cx);
             assert!(!host.palette.read(cx).is_visible());
             assert_eq!((host.body_presses, host.body_clicks), (0, 0));
+        });
+    }
+
+    /// Items replaced while the palette is open are filtered by the query
+    /// already typed, the query stays in the search field, and the
+    /// selection follows its item when a better match arrives above it.
+    #[gpui::test]
+    fn replaced_items_keep_the_typed_query_and_the_selected_item(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (palette, window) = cx.add_window_view(CommandPalette::<TestItem, TestHost>::new);
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            palette.update(cx, |palette, cx| {
+                palette.open_with_items(
+                    vec![
+                        TestItem::resource("sport_rules"),
+                        TestItem::resource("sport_rates"),
+                        TestItem::resource("orders"),
+                    ],
+                    window,
+                    cx,
+                );
+                palette.input_state.update(cx, |state, cx| {
+                    state.set_value("sport", window, cx);
+                });
+                palette.update_filter("sport", cx);
+                palette.select_next(cx);
+            });
+        });
+        window.run_until_parked();
+
+        let selected_name = |palette: &CommandPalette<TestItem, TestHost>| {
+            palette.items[palette.filtered[palette.selected_index].index].search_text()
+        };
+
+        window.update(|_, cx| {
+            assert_eq!(palette.read(cx).filtered.len(), 2);
+            let before = selected_name(palette.read(cx));
+
+            palette.update(cx, |palette, cx| {
+                palette.replace_items(
+                    vec![
+                        TestItem::resource("sport"),
+                        TestItem::resource("sport_rules"),
+                        TestItem::resource("sport_rates"),
+                        TestItem::resource("orders"),
+                    ],
+                    cx,
+                );
+            });
+
+            let palette = palette.read(cx);
+            assert_eq!(palette.input_state.read(cx).value(), "sport");
+            assert_eq!(palette.filtered.len(), 3);
+            assert_eq!(selected_name(palette), before);
+            assert_ne!(
+                palette.selected_index, 1,
+                "the new best match moved the row down"
+            );
         });
     }
 

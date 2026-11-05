@@ -72,7 +72,8 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::InstanceMetricLeaf
         | SchemaNodeKind::InstanceInspectorsFolder
         | SchemaNodeKind::InstanceInspectorLeaf
-        | SchemaNodeKind::InstanceOverviewLeaf => true,
+        | SchemaNodeKind::InstanceOverviewLeaf
+        | SchemaNodeKind::RootSectionItem => true,
 
         SchemaNodeKind::Loading
         | SchemaNodeKind::EmptyDatabasesFolder
@@ -114,8 +115,8 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::Placeholder
         | SchemaNodeKind::DependentsFolder
         | SchemaNodeKind::DependentItem
-        | SchemaNodeKind::Bucket
-        | SchemaNodeKind::BucketsFolder
+        | SchemaNodeKind::RootSection
+        | SchemaNodeKind::RootSectionLoadMore
         | SchemaNodeKind::SecretStore
         | SchemaNodeKind::SecretPath
         | SchemaNodeKind::InstanceFolder => false,
@@ -221,7 +222,7 @@ impl ContextMenuState {
 }
 
 impl Sidebar {
-    fn append_menu_section(
+    pub(crate) fn append_menu_section(
         items: &mut Vec<ContextMenuItem>,
         section: impl IntoIterator<Item = ContextMenuItem>,
     ) {
@@ -1484,6 +1485,8 @@ impl Sidebar {
                 items
             }
 
+            SchemaNodeKind::RootSectionItem => self.root_section_item_menu(item_id),
+
             _ => vec![],
         }
     }
@@ -1885,7 +1888,8 @@ impl Sidebar {
                     | SchemaNodeKind::SavedChartItem
                     | SchemaNodeKind::InstanceMetricLeaf
                     | SchemaNodeKind::InstanceInspectorLeaf
-                    | SchemaNodeKind::InstanceOverviewLeaf => {
+                    | SchemaNodeKind::InstanceOverviewLeaf
+                    | SchemaNodeKind::RootSectionItem => {
                         // Delegate to execute_item which emits the correct sidebar event.
                         self.execute_item(&item_id, cx);
                     }
@@ -2161,6 +2165,7 @@ impl Sidebar {
             ContextMenuAction::CompareSchema => {
                 self.open_schema_diff_from_context(&item_id, cx);
             }
+<<<<<<< bb09478a
             ContextMenuAction::ToggleConnectOnStartup(enabled) => {
                 if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     self.app_state.update(cx, |state, cx| {
@@ -2169,6 +2174,10 @@ impl Sidebar {
                         }
                     });
                 }
+=======
+            ContextMenuAction::RootSectionAction(action_id) => {
+                self.request_root_section_action(&item_id, &action_id, cx);
+>>>>>>> 08605376
             }
         }
 
@@ -2601,7 +2610,7 @@ mod menu_availability_tests {
     ];
 
     /// Kinds whose rows open a context menu.
-    const KINDS_WITH_MENU: [SchemaNodeKind; 24] = [
+    const KINDS_WITH_MENU: [SchemaNodeKind; 25] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
@@ -2626,13 +2635,15 @@ mod menu_availability_tests {
         SchemaNodeKind::InstanceInspectorsFolder,
         SchemaNodeKind::InstanceInspectorLeaf,
         SchemaNodeKind::InstanceOverviewLeaf,
+        SchemaNodeKind::RootSectionItem,
     ];
 
     #[test]
     fn every_node_kind_declares_whether_it_has_a_menu() {
         let mut all_kinds = ALL_KINDS.to_vec();
-        all_kinds.push(SchemaNodeKind::Bucket);
-        all_kinds.push(SchemaNodeKind::BucketsFolder);
+        all_kinds.push(SchemaNodeKind::RootSection);
+        all_kinds.push(SchemaNodeKind::RootSectionItem);
+        all_kinds.push(SchemaNodeKind::RootSectionLoadMore);
         all_kinds.push(SchemaNodeKind::SecretStore);
         all_kinds.push(SchemaNodeKind::SecretPath);
 

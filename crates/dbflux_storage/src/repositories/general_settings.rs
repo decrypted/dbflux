@@ -4,7 +4,8 @@
 //! replacing the JSON blob previously stored in app_settings.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::types::ValueRef;
+use rusqlite::{Connection, Row, params};
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
@@ -43,9 +44,13 @@ impl GeneralSettingsRepository {
                        ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        table_alias_completion, table_alias_use_as,
+<<<<<<< bb09478a
                        grid_fk_labels, grid_pk_sort_desc, grid_copy_column_names, grid_review_before_save, grid_filter_autoquote, grid_header_click_sorts,
                        max_concurrent_queries, max_queued_queries, grid_copy_protect_formulas,
                        ssh_accept_new_host_keys,
+=======
+                       grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
+>>>>>>> 08605376
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -90,6 +95,7 @@ impl GeneralSettingsRepository {
                 table_alias_completion: row.get(30)?,
                 table_alias_use_as: row.get(31)?,
                 grid_fk_labels: row.get(32)?,
+<<<<<<< bb09478a
                 grid_pk_sort_desc: row.get(33)?,
                 grid_copy_column_names: row.get(34)?,
                 grid_review_before_save: row.get(35)?,
@@ -100,6 +106,11 @@ impl GeneralSettingsRepository {
                 grid_copy_protect_formulas: row.get(40)?,
                 ssh_accept_new_host_keys: row.get(41)?,
                 updated_at: row.get(42)?,
+=======
+                scrollbar_visibility: row.get(33)?,
+                workspace_inspector_width_px: read_inspector_width(row, 34)?,
+                updated_at: row.get(35)?,
+>>>>>>> 08605376
             })
         });
 
@@ -131,11 +142,17 @@ impl GeneralSettingsRepository {
                     ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     table_alias_completion, table_alias_use_as,
+<<<<<<< bb09478a
                     grid_fk_labels, grid_pk_sort_desc, grid_copy_column_names, grid_review_before_save, grid_filter_autoquote, grid_header_click_sorts,
                     max_concurrent_queries, max_queued_queries, grid_copy_protect_formulas,
                     ssh_accept_new_host_keys,
                     updated_at
                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, datetime('now'))
+=======
+                    grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
+                    updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, datetime('now'))
+>>>>>>> 08605376
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -169,6 +186,7 @@ impl GeneralSettingsRepository {
                     table_alias_completion = excluded.table_alias_completion,
                     table_alias_use_as = excluded.table_alias_use_as,
                     grid_fk_labels = excluded.grid_fk_labels,
+<<<<<<< bb09478a
                     grid_pk_sort_desc = excluded.grid_pk_sort_desc,
                     grid_copy_column_names = excluded.grid_copy_column_names,
                     grid_review_before_save = excluded.grid_review_before_save,
@@ -178,6 +196,10 @@ impl GeneralSettingsRepository {
                     max_queued_queries = excluded.max_queued_queries,
                     grid_copy_protect_formulas = excluded.grid_copy_protect_formulas,
                     ssh_accept_new_host_keys = excluded.ssh_accept_new_host_keys,
+=======
+                    scrollbar_visibility = excluded.scrollbar_visibility,
+                    workspace_inspector_width_px = excluded.workspace_inspector_width_px,
+>>>>>>> 08605376
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -213,6 +235,7 @@ impl GeneralSettingsRepository {
                     settings.table_alias_completion,
                     settings.table_alias_use_as,
                     settings.grid_fk_labels,
+<<<<<<< bb09478a
                     settings.grid_pk_sort_desc,
                     settings.grid_copy_column_names,
                     settings.grid_review_before_save,
@@ -222,6 +245,10 @@ impl GeneralSettingsRepository {
                     settings.max_queued_queries,
                     settings.grid_copy_protect_formulas,
                     settings.ssh_accept_new_host_keys,
+=======
+                    settings.scrollbar_visibility,
+                    settings.workspace_inspector_width_px,
+>>>>>>> 08605376
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -232,6 +259,23 @@ impl GeneralSettingsRepository {
         info!("Upserted general settings");
         Ok(())
     }
+}
+
+/// Reads the inspector width without failing the whole row.
+///
+/// SQLite stores any type in a column, and a value written by hand or by an
+/// older build can be text or a blob. Only the width falls back in that case;
+/// the rest of the row still loads.
+fn read_inspector_width(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<f64>> {
+    Ok(match row.get_ref(index)? {
+        ValueRef::Null => None,
+        ValueRef::Integer(value) => Some(value as f64),
+        ValueRef::Real(value) => Some(value),
+        ValueRef::Text(bytes) => std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|text| text.trim().parse::<f64>().ok()),
+        ValueRef::Blob(_) => None,
+    })
 }
 
 /// DTO for general_settings table.
@@ -297,6 +341,7 @@ pub struct GeneralSettingsDto {
     /// Whether foreign-key grid cells resolve to the referenced row's label:
     /// 1 on, 0 off.
     pub grid_fk_labels: i32,
+<<<<<<< bb09478a
     /// Whether tables open ordered by primary key descending: 1 on, 0 off.
     pub grid_pk_sort_desc: i32,
     pub grid_copy_column_names: i32,
@@ -316,6 +361,15 @@ pub struct GeneralSettingsDto {
     pub grid_copy_protect_formulas: i32,
     /// 1 when SSH tunnels pin new host keys without asking.
     pub ssh_accept_new_host_keys: i32,
+=======
+    /// Serialized `ScrollbarVisibility` value: `"while_scrolling"`,
+    /// `"on_hover"` or `"always"`. Unknown values fall back to
+    /// `"while_scrolling"` at the loader layer.
+    pub scrollbar_visibility: String,
+    /// Width in pixels the row inspector was last resized to, or `None` to
+    /// open it at its default width.
+    pub workspace_inspector_width_px: Option<f64>,
+>>>>>>> 08605376
     pub updated_at: String,
 }
 
@@ -336,6 +390,32 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
         path
+    }
+
+    #[test]
+    fn a_non_numeric_inspector_width_only_drops_the_width() {
+        let path = temp_db("width_text");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+        conn.execute(
+            "UPDATE cfg_general_settings SET theme = 'light', ui_font_size = 15.0, \
+             workspace_inspector_width_px = 'wide' WHERE id = 1",
+            [],
+        )
+        .expect("store text in the width column");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let fetched = repo
+            .get()
+            .expect("a text width must not fail the row read")
+            .expect("the row exists");
+        assert_eq!(fetched.workspace_inspector_width_px, None);
+        assert_eq!(fetched.theme, "light", "other settings still load");
+        assert_eq!(fetched.ui_font_size, 15.0);
     }
 
     #[test]
@@ -383,6 +463,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+<<<<<<< bb09478a
             grid_pk_sort_desc: 0,
             grid_copy_column_names: 0,
             grid_review_before_save: 0,
@@ -392,6 +473,10 @@ mod tests {
             max_queued_queries: 50,
             grid_copy_protect_formulas: 0,
             ssh_accept_new_host_keys: 0,
+=======
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+>>>>>>> 08605376
             updated_at: String::new(),
         };
 
@@ -454,6 +539,7 @@ mod tests {
                 table_alias_completion: 1,
                 table_alias_use_as: 0,
                 grid_fk_labels: 0,
+<<<<<<< bb09478a
                 grid_pk_sort_desc: 0,
                 grid_copy_column_names: 0,
                 grid_review_before_save: 0,
@@ -463,6 +549,10 @@ mod tests {
                 max_queued_queries: 50,
                 grid_copy_protect_formulas: 0,
                 ssh_accept_new_host_keys: 0,
+=======
+                scrollbar_visibility: "while_scrolling".to_string(),
+                workspace_inspector_width_px: None,
+>>>>>>> 08605376
                 updated_at: String::new(),
             };
 
@@ -545,6 +635,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+<<<<<<< bb09478a
             grid_pk_sort_desc: 0,
             grid_copy_column_names: 0,
             grid_review_before_save: 0,
@@ -554,6 +645,10 @@ mod tests {
             max_queued_queries: 50,
             grid_copy_protect_formulas: 0,
             ssh_accept_new_host_keys: 0,
+=======
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+>>>>>>> 08605376
             updated_at: String::new(),
         };
 
@@ -658,6 +753,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+<<<<<<< bb09478a
             grid_pk_sort_desc: 0,
             grid_copy_column_names: 0,
             grid_review_before_save: 0,
@@ -667,6 +763,10 @@ mod tests {
             max_queued_queries: 50,
             grid_copy_protect_formulas: 0,
             ssh_accept_new_host_keys: 0,
+=======
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+>>>>>>> 08605376
             updated_at: String::new(),
         };
 
@@ -723,6 +823,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+<<<<<<< bb09478a
             grid_pk_sort_desc: 0,
             grid_copy_column_names: 0,
             grid_review_before_save: 0,
@@ -732,6 +833,10 @@ mod tests {
             max_queued_queries: 50,
             grid_copy_protect_formulas: 0,
             ssh_accept_new_host_keys: 0,
+=======
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+>>>>>>> 08605376
             updated_at: String::new(),
         };
 
@@ -820,6 +925,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+<<<<<<< bb09478a
             grid_pk_sort_desc: 0,
             grid_copy_column_names: 0,
             grid_review_before_save: 0,
@@ -829,6 +935,10 @@ mod tests {
             max_queued_queries: 50,
             grid_copy_protect_formulas: 0,
             ssh_accept_new_host_keys: 0,
+=======
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+>>>>>>> 08605376
             updated_at: String::new(),
         };
 
@@ -907,6 +1017,7 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 1,
+<<<<<<< bb09478a
             grid_pk_sort_desc: 1,
             grid_copy_column_names: 0,
             grid_review_before_save: 0,
@@ -916,6 +1027,10 @@ mod tests {
             max_queued_queries: 50,
             grid_copy_protect_formulas: 0,
             ssh_accept_new_host_keys: 0,
+=======
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+>>>>>>> 08605376
             updated_at: String::new(),
         };
 
@@ -923,6 +1038,7 @@ mod tests {
 
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.grid_fk_labels, 1);
+<<<<<<< bb09478a
         assert_eq!(fetched.grid_pk_sort_desc, 1);
 
         drop(repo);
@@ -1130,6 +1246,18 @@ mod tests {
             fetched.max_concurrent_background_tasks, 8,
             "a column of its own"
         );
+=======
+        assert_eq!(fetched.scrollbar_visibility, "while_scrolling");
+
+        repo.upsert(&GeneralSettingsDto {
+            scrollbar_visibility: "always".to_string(),
+            ..dto
+        })
+        .expect("should upsert the scrollbar visibility");
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.scrollbar_visibility, "always");
+        assert_eq!(fetched.grid_fk_labels, 1);
+>>>>>>> 08605376
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");

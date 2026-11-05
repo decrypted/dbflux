@@ -16,6 +16,7 @@ pub(crate) mod profile;
 pub mod profile_manager;
 pub(crate) mod proxy;
 pub mod proxy_manager;
+pub(crate) mod root_section;
 pub(crate) mod secret_store;
 pub mod ssh_tunnel_manager;
 pub(crate) mod tree;
@@ -70,7 +71,8 @@ pub use manager::{
     MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
     ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews,
     ResolvedProxy, SchemaCacheKey, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
-    SwitchDatabaseResult, TableDetailsPrepareError, WritePrivilege, compose_mutation_policy,
+    SwitchDatabaseResult, SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError,
+    WritePrivilege, compose_mutation_policy,
 };
 #[allow(deprecated)]
 pub use profile::{

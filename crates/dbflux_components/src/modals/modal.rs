@@ -1,3 +1,4 @@
+<<<<<<< bb09478a
 use crate::actions::{RunCommand, shortcut_label};
 use crate::controls::Button;
 use crate::icon::IconSource;
@@ -11,13 +12,23 @@ use gpui::{
     AbsoluteLength, AnyElement, AnyWindowHandle, App, Bounds, CursorStyle, DefiniteLength, Div,
     ElementId, FocusHandle, Hsla, KeyContext, MouseButton, Pixels, Point, ScrollHandle,
     SharedString, Size, Stateful, Window, canvas, div, point, px, relative,
-};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::{ActiveTheme, FocusTrapElement};
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::Arc;
+=======
+//! Keymap and copy extensions over bolt's generic [`Modal`].
+//!
+//! The modal itself — its card, scrim, focus trap, key scrolling and the
+//! [`ModalSeams`] key seam — lives in `bolt` and is re-exported here so call
+//! sites keep compiling. What stays here is the product half: the keymap
+//! actions a modal answers, the deferred commands, the Escape keycap read
+//! from the keymap, the close icon and its translated name.
 
+pub use bolt::modals::modal::{
+    AttachModalKeys, MODAL_BACKDROP_ID, MODAL_BODY_SELECTOR, MODAL_CLOSE_ID, MODAL_FOOTER_SELECTOR,
+    MODAL_KEY_CONTEXT, Modal, ModalFocus, ModalKey, ModalKeyHandler, ModalSeams, ModalVariant,
+    ScrollKey, on_modal_key,
+>>>>>>> 08605376
+};
+
+<<<<<<< bb09478a
 type CloseHandler = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync + 'static>;
 type ConfirmHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 type ResizeStartHandler = Rc<dyn Fn(ResizeEdge, Point<Pixels>, &mut Window, &mut App) + 'static>;
@@ -69,10 +80,15 @@ struct ModalResize {
     on_move: ResizeMoveHandler,
     on_end: ResizeEndHandler,
 }
+=======
+use dbflux_core::keymap_types::{Command, ContextId};
+use gpui::{App, Div, Stateful, Window};
+>>>>>>> 08605376
 
-/// Element id of the modal's close button.
-pub const MODAL_CLOSE_ID: &str = "modal-close";
+use crate::actions::{self, RunCommand, shortcut_label};
+use crate::icons::AppIcon;
 
+<<<<<<< bb09478a
 /// Element id of the title bar of a modal with [`Modal::on_title_double_click`].
 pub const MODAL_TITLE_BAR_ID: &str = "modal-title-bar";
 
@@ -113,25 +129,61 @@ enum ScrollKey {
     PageDown,
     Top,
     Bottom,
+=======
+/// Installs the seams the moved modal reads: the keymap actions bound in the
+/// `Modal` key context, the commands a deferring modal runs, the Escape
+/// keycap and the close button's icon and name.
+///
+/// Call it once at startup, before the first window; `theme::init` does. A
+/// modal rendered before it runs answers no keys.
+pub fn install_modal_seams(cx: &mut App) {
+    cx.set_global(ModalSeams {
+        attach_keys: attach_modal_keys,
+        defer_to_owner: run_owner_command,
+        escape_label: |cx| shortcut_label(cx, ContextId::Modal.id(), Command::Cancel.id(), "Esc"),
+        close_icon: AppIcon::CircleX.into(),
+        close_label: || dbflux_i18n::t!("modals.close").into(),
+    });
+>>>>>>> 08605376
 }
 
-/// The vertical offset `key` moves a region to, clamped to its content.
-///
-/// Offsets follow gpui: `0` is the top and scrolling down makes the offset
-/// more negative, down to `-max_offset`. A page is the viewport height less
-/// one step, so a line of context stays in view.
-fn scrolled_offset(key: ScrollKey, offset: Pixels, max_offset: Pixels, viewport: Pixels) -> Pixels {
-    let page = (viewport - KEY_SCROLL_STEP).max(KEY_SCROLL_STEP);
+/// Registers the backdrop handlers of the actions the keymap binds in the
+/// `Modal` key context.
+fn attach_modal_keys(backdrop: Stateful<Div>, handler: ModalKeyHandler) -> Stateful<Div> {
+    let backdrop = on_modal_key::<actions::Cancel>(backdrop, ModalKey::Cancel, &handler);
+    let backdrop = on_modal_key::<actions::Execute>(backdrop, ModalKey::Execute, &handler);
+    let backdrop =
+        on_modal_key::<actions::ScrollUp>(backdrop, ModalKey::Scroll(ScrollKey::LineUp), &handler);
+    let backdrop = on_modal_key::<actions::ScrollDown>(
+        backdrop,
+        ModalKey::Scroll(ScrollKey::LineDown),
+        &handler,
+    );
+    let backdrop = on_modal_key::<actions::ScrollPageUp>(
+        backdrop,
+        ModalKey::Scroll(ScrollKey::PageUp),
+        &handler,
+    );
+    let backdrop = on_modal_key::<actions::ScrollPageDown>(
+        backdrop,
+        ModalKey::Scroll(ScrollKey::PageDown),
+        &handler,
+    );
+    let backdrop =
+        on_modal_key::<actions::ScrollToTop>(backdrop, ModalKey::Scroll(ScrollKey::Top), &handler);
+    on_modal_key::<actions::ScrollToBottom>(backdrop, ModalKey::Scroll(ScrollKey::Bottom), &handler)
+}
 
-    let target = match key {
-        ScrollKey::LineUp => offset + KEY_SCROLL_STEP,
-        ScrollKey::LineDown => offset - KEY_SCROLL_STEP,
-        ScrollKey::PageUp => offset + page,
-        ScrollKey::PageDown => offset - page,
-        ScrollKey::Top => Pixels::ZERO,
-        ScrollKey::Bottom => -max_offset,
+/// Runs the keymap's Cancel or Execute command for a modal that leaves those
+/// keys to its owner.
+fn run_owner_command(key: ModalKey, window: &mut Window, cx: &mut App) {
+    let command = match key {
+        ModalKey::Cancel => Command::Cancel,
+        ModalKey::Execute => Command::Execute,
+        ModalKey::Scroll(_) => return,
     };
 
+<<<<<<< bb09478a
     target.min(Pixels::ZERO).max(-max_offset)
 }
 
@@ -862,6 +914,9 @@ impl RenderOnce for Modal {
             None => backdrop.into_any_element(),
         }
     }
+=======
+    window.dispatch_action(Box::new(RunCommand::new(command.id())), cx);
+>>>>>>> 08605376
 }
 
 /// The title, the extra header content and the free space after them. A
@@ -965,14 +1020,15 @@ fn resize_drag_mask(on_move: ResizeMoveHandler, on_end: ResizeEndHandler) -> Sta
 
 /// The modal keys the app keymap binds in the `Modal` context (see the modal
 /// layer in `dbflux_ui_base::keymap`), for component tests that run without
-/// the app keymap.
+/// the app keymap. Also installs [`install_modal_seams`], which the app does
+/// at startup.
 #[cfg(test)]
 pub(crate) fn bind_modal_keys_for_tests(cx: &mut gpui::TestAppContext) {
-    use crate::actions;
     use gpui::KeyBinding;
 
     let context = Some(MODAL_KEY_CONTEXT);
     cx.update(|cx| {
+        install_modal_seams(cx);
         cx.bind_keys([
             KeyBinding::new("escape", actions::Cancel, context),
             KeyBinding::new("enter", actions::Execute, context),
@@ -991,17 +1047,13 @@ mod tests {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
-    use super::{
-        KEY_SCROLL_STEP, MODAL_BACKDROP_ID, MODAL_CLOSE_ID, Modal, ModalFocus, ScrollKey,
-        scrolled_offset,
-    };
-    use crate::controls::{Input, InputState};
+    use super::{MODAL_CLOSE_ID, Modal};
+    use crate::actions::RunCommand;
     use gpui::{
-        AccessibilityFrame, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable as _,
-        FrameObserver, InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Pixels,
-        Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+        AccessibilityFrame, Context, FocusHandle, FrameObserver, InteractiveElement as _,
+        IntoElement, ParentElement as _, Render, SharedString, Styled as _, TestAppContext,
+        VisualTestContext, Window, div,
     };
-    use gpui_component::input::{Editor, EditorState};
     use std::sync::{Arc, Mutex};
 
     /// Keeps the latest rendered frame of the window it observes.
@@ -1014,18 +1066,54 @@ mod tests {
         }
     }
 
-    impl FrameCapture {
-        fn bounds_of(&self, id: &str) -> Option<Bounds<Pixels>> {
-            let frame = self.0.lock().expect("frame capture lock").clone()?;
-            frame
-                .nodes()
-                .find(|(_, node)| node.id() == id)
-                .map(|(_, node)| node.bounds())
+    type Log = Arc<Mutex<Vec<SharedString>>>;
+
+    /// A modal under an owner that records the commands reaching it.
+    struct Harness {
+        focus: FocusHandle,
+        defer_keys: bool,
+        log: Log,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let cancel_log = self.log.clone();
+            let confirm_log = self.log.clone();
+
+            let mut modal = Modal::new("Harness")
+                .body(div())
+                .footer(div())
+                .focus_handle(&self.focus)
+                .on_close(move |_, _| {
+                    cancel_log.lock().expect("log lock").push("cancel".into());
+                })
+                .on_confirm(move |_, _| {
+                    confirm_log.lock().expect("log lock").push("confirm".into());
+                });
+
+            if self.defer_keys {
+                modal = modal.defer_keys_to_owner();
+            }
+
+            div()
+                .size_full()
+                .on_action(cx.listener(|this, action: &RunCommand, _, _| {
+                    this.log
+                        .lock()
+                        .expect("log lock")
+                        .push(action.command.clone());
+                }))
+                .child(modal)
         }
     }
 
-    type Log = Arc<Mutex<Vec<&'static str>>>;
+    struct Setup<'a> {
+        window: &'a mut VisualTestContext,
+        capture: Arc<FrameCapture>,
+        log: Log,
+    }
 
+<<<<<<< bb09478a
     /// A modal with a title bar that maximizes and a button as extra header
     /// content, logging what each click reached.
     struct TitleBarHarness {
@@ -1110,9 +1198,49 @@ mod tests {
 
     /// The dialog's close button draws only an icon, so it announces the
     /// action it performs.
+=======
+    fn setup(cx: &mut TestAppContext, defer_keys: bool) -> Setup<'_> {
+        cx.update(gpui_component::init);
+        super::bind_modal_keys_for_tests(cx);
+
+        let log: Log = Arc::default();
+        let capture = Arc::new(FrameCapture::default());
+        let (view, window) = cx.add_window_view({
+            let log = log.clone();
+            let capture = capture.clone();
+            move |window, cx| {
+                window.observe_frames(&capture);
+                Harness {
+                    focus: cx.focus_handle(),
+                    defer_keys,
+                    log,
+                }
+            }
+        });
+        window.run_until_parked();
+
+        let focus = window.update(|_, cx| view.read(cx).focus.clone());
+        window.update(|window, cx| focus.focus(window, cx));
+        window.run_until_parked();
+
+        Setup {
+            window,
+            capture,
+            log,
+        }
+    }
+
+    impl Setup<'_> {
+        fn events(&self) -> Vec<SharedString> {
+            self.log.lock().expect("log lock").clone()
+        }
+    }
+
+    /// The close button announces the translated name the product supplies.
+>>>>>>> 08605376
     #[gpui::test]
     fn the_close_button_is_named(cx: &mut TestAppContext) {
-        let setup = setup(cx, true);
+        let setup = setup(cx, false);
         let frame = setup
             .capture
             .0
@@ -1131,352 +1259,28 @@ mod tests {
         assert_eq!(node.label(), Some(expected.as_str()));
     }
 
-    struct Harness {
-        focus: FocusHandle,
-        confirm_enabled: bool,
-        single_line: Entity<InputState>,
-        multi_line: Entity<EditorState>,
-        log: Log,
-    }
-
-    impl Render for Harness {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            let body = div()
-                .flex()
-                .flex_col()
-                .child(Input::new(&self.single_line))
-                .child(
-                    div()
-                        .id("harness-editor")
-                        .h(px(80.0))
-                        .child(Editor::new(&self.multi_line)),
-                );
-
-            let cancel_log = self.log.clone();
-            let confirm_log = self.log.clone();
-
-            div().size_full().child(
-                Modal::new("Harness")
-                    .body(body)
-                    .footer(div())
-                    .focus_handle(&self.focus)
-                    .on_close(move |_, _| {
-                        cancel_log.lock().expect("log lock").push("cancel");
-                    })
-                    .on_confirm(move |_, _| {
-                        confirm_log.lock().expect("log lock").push("confirm");
-                    })
-                    .confirm_enabled(self.confirm_enabled),
-            )
-        }
-    }
-
-    struct Setup<'a> {
-        view: Entity<Harness>,
-        window: &'a mut VisualTestContext,
-        capture: Arc<FrameCapture>,
-        log: Log,
-    }
-
-    fn setup(cx: &mut TestAppContext, confirm_enabled: bool) -> Setup<'_> {
-        cx.update(gpui_component::init);
-        super::bind_modal_keys_for_tests(cx);
-
-        let log: Log = Arc::default();
-        let capture = Arc::new(FrameCapture::default());
-        let (view, window) = cx.add_window_view({
-            let log = log.clone();
-            let capture = capture.clone();
-            move |window, cx| {
-                window.observe_frames(&capture);
-                Harness {
-                    focus: cx.focus_handle(),
-                    confirm_enabled,
-                    single_line: cx.new(|cx| InputState::new(window, cx)),
-                    multi_line: cx.new(|cx| EditorState::new(window, cx)),
-                    log,
-                }
-            }
-        });
-        window.run_until_parked();
-
-        Setup {
-            view,
-            window,
-            capture,
-            log,
-        }
-    }
-
-    impl Setup<'_> {
-        fn focus_shell(&mut self) {
-            let view = self.view.clone();
-            self.window.update(|window, cx| {
-                let handle = view.read(cx).focus.clone();
-                handle.focus(window, cx);
-            });
-            self.window.run_until_parked();
-        }
-
-        fn focus_single_line(&mut self) {
-            let view = self.view.clone();
-            self.window.update(|window, cx| {
-                let input = view.read(cx).single_line.clone();
-                input.update(cx, |state, cx| state.focus(window, cx));
-            });
-            self.window.run_until_parked();
-        }
-
-        fn focus_multi_line(&mut self) {
-            let view = self.view.clone();
-            self.window.update(|window, cx| {
-                let editor = view.read(cx).multi_line.clone();
-                editor.update(cx, |state, cx| state.focus(window, cx));
-            });
-            self.window.run_until_parked();
-        }
-
-        fn click(&mut self, position: gpui::Point<Pixels>) {
-            self.window.simulate_click(position, Modifiers::default());
-            self.window.run_until_parked();
-        }
-
-        fn events(&self) -> Vec<&'static str> {
-            self.log.lock().expect("log lock").clone()
-        }
-    }
-
-    #[test]
-    fn scrolling_by_key_stays_inside_the_content() {
-        let max = px(500.0);
-        let viewport = px(200.0);
-
-        assert_eq!(
-            scrolled_offset(ScrollKey::LineDown, Pixels::ZERO, max, viewport),
-            -KEY_SCROLL_STEP
-        );
-        assert_eq!(
-            scrolled_offset(ScrollKey::LineUp, Pixels::ZERO, max, viewport),
-            Pixels::ZERO
-        );
-        assert_eq!(
-            scrolled_offset(ScrollKey::PageDown, Pixels::ZERO, max, viewport),
-            -(viewport - KEY_SCROLL_STEP)
-        );
-        assert_eq!(
-            scrolled_offset(ScrollKey::PageDown, px(-450.0), max, viewport),
-            -max
-        );
-        assert_eq!(
-            scrolled_offset(ScrollKey::Bottom, Pixels::ZERO, max, viewport),
-            -max
-        );
-        assert_eq!(
-            scrolled_offset(ScrollKey::Top, px(-300.0), max, viewport),
-            Pixels::ZERO
-        );
-        assert_eq!(
-            scrolled_offset(ScrollKey::LineDown, Pixels::ZERO, Pixels::ZERO, viewport),
-            Pixels::ZERO
-        );
-    }
-
     #[gpui::test]
-    fn escape_cancels(cx: &mut TestAppContext) {
-        let mut setup = setup(cx, true);
-        setup.focus_shell();
+    fn the_keymap_actions_cancel_and_confirm(cx: &mut TestAppContext) {
+        let setup = setup(cx, false);
 
         setup.window.simulate_keystrokes("escape");
-
-        assert_eq!(setup.events(), ["cancel"]);
-    }
-
-    #[gpui::test]
-    fn escape_from_a_focused_input_cancels(cx: &mut TestAppContext) {
-        let mut setup = setup(cx, true);
-        setup.focus_single_line();
-
-        setup.window.simulate_keystrokes("escape");
-
-        assert_eq!(setup.events(), ["cancel"]);
-    }
-
-    #[gpui::test]
-    fn enter_confirms_when_the_modal_is_valid(cx: &mut TestAppContext) {
-        let mut setup = setup(cx, true);
-        setup.focus_shell();
-
         setup.window.simulate_keystrokes("enter");
 
-        assert_eq!(setup.events(), ["confirm"]);
+        assert_eq!(setup.events(), ["cancel", "confirm"]);
     }
 
     #[gpui::test]
-    fn enter_does_nothing_while_the_modal_is_invalid(cx: &mut TestAppContext) {
-        let mut setup = setup(cx, false);
-        setup.focus_shell();
+    fn a_deferring_modal_runs_the_owner_commands(cx: &mut TestAppContext) {
+        use dbflux_core::keymap_types::Command;
 
-        setup.window.simulate_keystrokes("enter");
-
-        assert!(setup.events().is_empty(), "{:?}", setup.events());
-    }
-
-    #[gpui::test]
-    fn enter_from_a_single_line_input_confirms(cx: &mut TestAppContext) {
-        let mut setup = setup(cx, true);
-        setup.focus_single_line();
-
-        setup.window.simulate_keystrokes("enter");
-
-        assert_eq!(setup.events(), ["confirm"]);
-    }
-
-    #[gpui::test]
-    fn enter_in_a_multi_line_editor_stays_in_the_editor(cx: &mut TestAppContext) {
-        let mut setup = setup(cx, true);
-        setup.focus_multi_line();
-
-        setup.window.simulate_keystrokes("enter");
-
-        assert!(setup.events().is_empty(), "{:?}", setup.events());
-        let text = setup
-            .window
-            .update(|_, cx| setup.view.read(cx).multi_line.read(cx).value().to_string());
-        assert_eq!(text, "\n", "the editor received the newline");
-    }
-
-    #[gpui::test]
-    fn the_close_button_is_rendered_and_cancels(cx: &mut TestAppContext) {
-        let mut setup = setup(cx, true);
-
-        let close = setup
-            .capture
-            .bounds_of(MODAL_CLOSE_ID)
-            .expect("the modal draws a close button");
-        setup.click(close.center());
-
-        assert_eq!(setup.events(), ["cancel"]);
-    }
-
-    #[gpui::test]
-    fn a_backdrop_click_cancels(cx: &mut TestAppContext) {
-        let mut setup = setup(cx, true);
-
-        let backdrop = setup
-            .capture
-            .bounds_of(MODAL_BACKDROP_ID)
-            .expect("the modal draws a backdrop");
-        setup.click(backdrop.origin + point(px(2.0), px(2.0)));
-
-        assert_eq!(setup.events(), ["cancel"]);
-    }
-
-    #[gpui::test]
-    fn a_click_inside_the_card_does_not_cancel(cx: &mut TestAppContext) {
-        let mut setup = setup(cx, true);
-
-        let editor = setup
-            .capture
-            .bounds_of("harness-editor")
-            .expect("the body is rendered");
-        setup.click(editor.center());
-
-        assert!(setup.events().is_empty(), "{:?}", setup.events());
-    }
-
-    /// A modal over a view that has its own focusable input, rendered under
-    /// the component `Root`, which answers Tab.
-    struct TrapHarness {
-        focus: FocusHandle,
-        outside: Entity<InputState>,
-        first: Entity<InputState>,
-        second: Entity<InputState>,
-    }
-
-    impl Render for TrapHarness {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            let body = div()
-                .flex()
-                .flex_col()
-                .child(Input::new(&self.first))
-                .child(Input::new(&self.second));
-
-            div().size_full().child(Input::new(&self.outside)).child(
-                Modal::new("Trap")
-                    .body(body)
-                    .focus_handle(&self.focus)
-                    .on_close(|_, _| {}),
-            )
-        }
-    }
-
-    #[gpui::test]
-    fn tab_and_shift_tab_stay_inside_an_open_modal(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
-
-        let harness: std::rc::Rc<std::cell::RefCell<Option<Entity<TrapHarness>>>> =
-            std::rc::Rc::default();
-        let (_, window) = cx.add_window_view({
-            let harness = harness.clone();
-            move |window, cx| {
-                let view = cx.new(|cx| TrapHarness {
-                    focus: cx.focus_handle(),
-                    outside: cx.new(|cx| InputState::new(window, cx)),
-                    first: cx.new(|cx| InputState::new(window, cx)),
-                    second: cx.new(|cx| InputState::new(window, cx)),
-                });
-                harness.replace(Some(view.clone()));
-                gpui_component::Root::new(view, window, cx)
-            }
-        });
-        let view = harness.borrow().clone().expect("harness view");
-        window.run_until_parked();
-
-        window.update(|window, cx| {
-            let first = view.read(cx).first.clone();
-            first.update(cx, |state, cx| state.focus(window, cx));
-        });
-        window.run_until_parked();
-
-        let focus_inside = |window: &mut VisualTestContext| {
-            window.update(|window, cx| {
-                let view = view.read(cx);
-                let outside_focused = view.outside.read(cx).focus_handle(cx).is_focused(window);
-                view.focus.contains_focused(window, cx) && !outside_focused
-            })
-        };
-
-        for step in 0..4 {
-            window.simulate_keystrokes("tab");
-            assert!(focus_inside(window), "Tab {step} left the modal");
-        }
-
-        for step in 0..4 {
-            window.simulate_keystrokes("shift-tab");
-            assert!(focus_inside(window), "Shift+Tab {step} left the modal");
-        }
-    }
-
-    #[gpui::test]
-    fn closing_gives_focus_back_to_what_had_it(cx: &mut TestAppContext) {
         let setup = setup(cx, true);
-        let (outside, mut modal_focus) = setup
-            .window
-            .update(|_, cx| (cx.focus_handle(), ModalFocus::new(cx)));
 
-        setup.window.update(|window, cx| outside.focus(window, cx));
-        let shell = setup.view.clone();
-        setup.window.update(|window, cx| {
-            let handle = shell.read(cx).focus.clone();
-            modal_focus.handle = handle;
-            modal_focus.focus(None, window, cx);
-        });
-        setup.window.run_until_parked();
+        setup.window.simulate_keystrokes("escape");
+        setup.window.simulate_keystrokes("enter");
 
-        setup.window.update(|_, cx| modal_focus.restore(cx));
-        setup.window.run_until_parked();
-
-        let restored = setup.window.update(|window, _| outside.is_focused(window));
-        assert!(restored, "focus returns to the element that had it");
+        assert_eq!(
+            setup.events(),
+            [Command::Cancel.id(), Command::Execute.id()]
+        );
     }
 }

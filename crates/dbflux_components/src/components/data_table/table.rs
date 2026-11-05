@@ -1,28 +1,50 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
+<<<<<<< bb09478a
 use crate::controls::{GpuiInput as Input, InputMoveDown, InputMoveUp, InputState};
+=======
+use crate::controls::GpuiInput as Input;
+>>>>>>> 08605376
 use crate::fonts;
 use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, ChamferRing, Icon};
-use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors, Spacing};
+use crate::primitives::Icon;
+use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, Spacing};
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
+<<<<<<< bb09478a
     Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
     IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
     ParentElement, Pixels, Role, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
     Styled, Toggled, Window, anchored, canvas, deferred, div, px, uniform_list,
+=======
+    Action, App, ClickEvent, Context, Entity, FontWeight, InteractiveElement, IntoElement,
+    Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, ScrollWheelEvent,
+    SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px, uniform_list,
+>>>>>>> 08605376
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
 
 use super::document::DocumentPresentation;
+<<<<<<< bb09478a
 use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge, SortState};
 use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
+=======
+use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge};
+use super::selection::CellCoord;
+use super::source::GridRowSource;
+>>>>>>> 08605376
 use super::state::DataTableState;
 use super::theme::{CELL_PADDING_X, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
+// The row list and cell painter moved to `bolt::components::grid`; the old
+// in-file names are the re-exported Bolt API.
+use bolt::components::grid::{
+    ColumnResizeDrag, GridCellCoord, GridColors, GridHost, column_resize_handle, render_rows,
+    track_column_resize,
+};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -125,28 +147,11 @@ pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Key
         .map(|keystroke| keystroke.inner().clone())
 }
 
-#[derive(Clone)]
-struct ResizeDragState {
-    col: Option<usize>,
-    start_x: gpui::Pixels,
-    original_width: f32,
-}
-
-impl Default for ResizeDragState {
-    fn default() -> Self {
-        Self {
-            col: None,
-            start_x: gpui::px(0.0),
-            original_width: 0.0,
-        }
-    }
-}
-
 pub struct DataTable {
     id: ElementId,
     state: Entity<DataTableState>,
     scroll_sync: Arc<Mutex<ScrollSyncState>>,
-    resize_drag: Arc<Mutex<ResizeDragState>>,
+    resize_drag: ColumnResizeDrag,
 }
 
 impl DataTable {
@@ -166,7 +171,7 @@ impl DataTable {
 
         Self {
             id: id.into(),
-            resize_drag: Arc::new(Mutex::new(ResizeDragState::default())),
+            resize_drag: ColumnResizeDrag::new(),
             state,
             scroll_sync: Arc::new(Mutex::new(ScrollSyncState::default())),
         }
@@ -497,9 +502,13 @@ impl gpui::Render for DataTable {
         let state_for_empty_context = self.state.clone();
         let focus_for_empty = focus_handle.clone();
 
+<<<<<<< bb09478a
         // Resize drag handlers live on the root div so they keep firing
         // even when the cursor leaves the narrow 6px resize handle.
         let drag_tracking = self.drag_tracking();
+=======
+        let state_for_resize_move = self.state.clone();
+>>>>>>> 08605376
 
         // Forward horizontal wheel/trackpad deltas to the horizontal scroll
         // handle. The handle is owned by a 1px phantom scroller at the bottom
@@ -593,6 +602,7 @@ impl gpui::Render for DataTable {
                 })
         };
 
+<<<<<<< bb09478a
         div()
             .id(self.id.clone())
             .key_context(CONTEXT)
@@ -684,72 +694,166 @@ impl gpui::Render for DataTable {
                 .absolute()
                 .top_0()
                 .left_0()
+=======
+        // Resize drag handlers live on the root div so they keep firing
+        // even when the cursor leaves the narrow resize handle.
+        track_column_resize(
+            div()
+                .id(self.id.clone())
+                .key_context(CONTEXT)
+                .track_focus(&focus_handle)
+                .relative()
+>>>>>>> 08605376
                 .size_full()
-            })
-            // Grid-only scroll chrome. Record mode owns a single vertical list
-            // and no horizontal axis, so it brings its own scrollbar instead.
-            .when(!record_mode, |root| {
-                root
-                    // Phantom scroller: owns the horizontal scroll handle for the scrollbar.
-                    // It's 1px tall and positioned at the bottom, so it never receives wheel events.
-                    // The mouse is always over the header or body, which don't capture horizontal wheel.
-                    .child(
-                        div()
-                            .id("table-hscroll-owner")
-                            .absolute()
-                            .left_0()
-                            .right(SCROLLBAR_WIDTH)
-                            .bottom_0()
-                            .h(px(1.0))
-                            .overflow_x_scroll()
-                            .track_scroll(&horizontal_scroll_handle)
-                            .child(div().min_w(px(total_width)).h(px(1.0))),
-                    )
-                    // Scrollbars as absolute overlays.
-                    .child(
-                        div()
-                            .absolute()
-                            .top(header_height)
-                            .right_0()
-                            .bottom_0()
-                            .w(SCROLLBAR_WIDTH)
-                            .when(row_count > 0, |this| {
-                                // The overlay strip below the header is the
-                                // visible viewport. The handle's own bounds are
-                                // the uniform_list element, which extends past
-                                // the visible area when the grid overflows
-                                // horizontally — deriving the hitbox from them
-                                // makes right-edge track clicks miss. Same
-                                // binding the horizontal bar above uses.
-                                this.child(
-                                    Scrollbar::vertical(&vertical_scroll_handle)
-                                        .viewport_from_layout(),
-                                )
-                            }),
-                    )
-                    // Horizontal scrollbar uses `ScrollbarMode::Always` because the phantom
-                    // scroller that owns the handle is 1px tall and never captures the wheel,
-                    // so the bar would otherwise stay transparent until the user navigates
-                    // off-screen with the keyboard.
-                    //
-                    // The scrollbar lays itself out over its handle's viewport by default,
-                    // which here is the 1px phantom, so the bar would be clipped to a
-                    // single pixel. It takes this overlay strip as its viewport instead;
-                    // the strip spans the phantom's width, so the thumb math matches.
-                    .child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .right(SCROLLBAR_WIDTH)
-                            .bottom_0()
-                            .h(SCROLLBAR_WIDTH)
-                            .child(
-                                Scrollbar::horizontal(&horizontal_scroll_handle)
-                                    .mode(ScrollbarMode::Always)
-                                    .viewport_from_layout(),
-                            ),
-                    )
-            })
+                .overflow_hidden()
+                .font_family(fonts::grid_family(cx))
+                .bg(theme.table)
+                // Navigation actions
+                .on_action(on_move_up)
+                .on_action(on_move_down)
+                .on_action(on_move_left)
+                .on_action(on_move_right)
+                .on_action(on_select_up)
+                .on_action(on_select_down)
+                .on_action(on_select_left)
+                .on_action(on_select_right)
+                .on_action(on_line_start)
+                .on_action(on_line_end)
+                .on_action(on_top)
+                .on_action(on_bottom)
+                .on_action(on_select_line_start)
+                .on_action(on_select_line_end)
+                .on_action(on_select_top)
+                .on_action(on_select_bottom)
+                .on_action(on_select_all)
+                .on_action(on_clear_selection)
+                .on_action(on_start_edit)
+                .on_action(on_confirm_edit)
+                .on_action(on_cancel_edit)
+                .on_action(on_save_row)
+                .on_action(on_copy)
+                .on_action(on_copy_row)
+                // Row operations (vim-style)
+                .on_action(on_delete_row)
+                .on_action(on_add_row)
+                .on_action(on_duplicate_row)
+                .on_action(on_set_null)
+                // Undo/Redo
+                .on_action(on_undo)
+                .on_action(on_redo)
+                .on_action(on_toggle_column_group)
+                .on_action(on_step_out),
+            &self.resize_drag,
+            move |resize, _window, cx| {
+                state_for_resize_move.update(cx, |state, cx| {
+                    state.set_column_width(resize.column, resize.width, cx);
+                });
+            },
+        )
+        .child(inner_table)
+        // Measure viewport size and sync horizontal scroll offset using canvas
+        .child({
+            let scroll_sync = self.scroll_sync.clone();
+            canvas(
+                move |bounds, _, cx| {
+                    let mut sync = match scroll_sync.lock() {
+                        Ok(guard) => guard,
+                        Err(poison_err) => {
+                            log::warn!("Scroll sync mutex poisoned, recovering");
+                            poison_err.into_inner()
+                        }
+                    };
+                    state_entity.update(cx, |state, cx| {
+                        let new_size = bounds.size;
+                        let viewport_changed = new_size != sync.last_viewport_size;
+
+                        if viewport_changed {
+                            sync.last_viewport_size = new_size;
+                            if state.viewport_size() != new_size {
+                                state.set_viewport_size(new_size, cx);
+                            }
+                        }
+
+                        // Only sync horizontal offset if viewport changed or offset actually changed
+                        let current_h_offset = state.horizontal_scroll_handle().offset().x;
+                        let h_offset_changed =
+                            (current_h_offset - sync.last_h_offset).abs() > gpui::px(0.5);
+
+                        if viewport_changed || h_offset_changed {
+                            sync.last_h_offset = current_h_offset;
+                            // Sync horizontal offset from scroll handle to trigger body re-render
+                            state.sync_horizontal_offset(cx);
+                        }
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full()
+        })
+        // Grid-only scroll chrome. Record mode owns a single vertical list
+        // and no horizontal axis, so it brings its own scrollbar instead.
+        .when(!record_mode, |root| {
+            root
+                // Phantom scroller: owns the horizontal scroll handle for the scrollbar.
+                // It's 1px tall and positioned at the bottom, so it never receives wheel events.
+                // The mouse is always over the header or body, which don't capture horizontal wheel.
+                .child(
+                    div()
+                        .id("table-hscroll-owner")
+                        .absolute()
+                        .left_0()
+                        .right(SCROLLBAR_WIDTH)
+                        .bottom_0()
+                        .h(px(1.0))
+                        .overflow_x_scroll()
+                        .track_scroll(&horizontal_scroll_handle)
+                        .child(div().min_w(px(total_width)).h(px(1.0))),
+                )
+                // Scrollbars as absolute overlays.
+                .child(
+                    div()
+                        .absolute()
+                        .top(header_height)
+                        .right_0()
+                        .bottom_0()
+                        .w(SCROLLBAR_WIDTH)
+                        .when(row_count > 0, |this| {
+                            // The overlay strip below the header is the
+                            // visible viewport. The handle's own bounds are
+                            // the uniform_list element, which extends past
+                            // the visible area when the grid overflows
+                            // horizontally — deriving the hitbox from them
+                            // makes right-edge track clicks miss. Same
+                            // binding the horizontal bar above uses.
+                            this.child(
+                                Scrollbar::vertical(&vertical_scroll_handle).viewport_from_layout(),
+                            )
+                        }),
+                )
+                // Horizontal scrollbar uses `ScrollbarMode::Always` because the phantom
+                // scroller that owns the handle is 1px tall and never captures the wheel,
+                // so the bar would otherwise stay transparent until the user navigates
+                // off-screen with the keyboard.
+                //
+                // The scrollbar lays itself out over its handle's viewport by default,
+                // which here is the 1px phantom, so the bar would be clipped to a
+                // single pixel. It takes this overlay strip as its viewport instead;
+                // the strip spans the phantom's width, so the thumb math matches.
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right(SCROLLBAR_WIDTH)
+                        .bottom_0()
+                        .h(SCROLLBAR_WIDTH)
+                        .child(
+                            Scrollbar::horizontal(&horizontal_scroll_handle)
+                                .mode(ScrollbarMode::Always)
+                                .viewport_from_layout(),
+                        ),
+                )
+        })
     }
 }
 
@@ -805,7 +909,6 @@ impl DataTable {
                 let annotation = state.header_annotation(col_ix).cloned();
 
                 let state_for_click = state_entity.clone();
-                let resize_drag_for_down = resize_drag.clone();
 
                 let header = div()
                     .id(("header-col", col_ix))
@@ -943,12 +1046,22 @@ impl DataTable {
                                 }),
                         )
                     })
+<<<<<<< bb09478a
                     .child(column_resize_handle(
                         state_entity.clone(),
                         resize_drag_for_down,
                         col_ix,
                         width,
                         ChromeColors::tint(theme),
+=======
+                    // Move and release are handled on the DataTable root div, so
+                    // the drag survives the cursor leaving the handle.
+                    .child(column_resize_handle(
+                        col_ix,
+                        width,
+                        &resize_drag,
+                        ChromeColors::tint(theme).opacity(0.3),
+>>>>>>> 08605376
                     ))
             })
             .map(IntoElement::into_any_element)
@@ -1009,6 +1122,7 @@ impl DataTable {
         let rank_font_size = fonts::grid_px(cx, GridMetrics::SORT_RANK_FONT);
         let sortable = state.is_sortable();
         let tint = ChromeColors::tint(theme);
+        let resize_drag = self.resize_drag.clone();
         let strong = ChromeColors::strong(theme);
         let muted = theme.muted_foreground;
         let has_presence = document.has_presence();
@@ -1083,8 +1197,11 @@ impl DataTable {
                 let sort_rank = state.sort_rank(col_ix);
                 let state_for_click = self.state.clone();
                 let state_for_menu = self.state.clone();
+<<<<<<< bb09478a
                 let state_for_sort = self.state.clone();
                 let resize_drag_for_down = self.resize_drag.clone();
+=======
+>>>>>>> 08605376
 
                 let name_line = div()
                     .flex()
@@ -1199,11 +1316,18 @@ impl DataTable {
                     .child(name_line)
                     .when_some(presence_line, |cell, line| cell.child(line))
                     .child(column_resize_handle(
+<<<<<<< bb09478a
                         self.state.clone(),
                         resize_drag_for_down,
                         col_ix,
                         width,
                         tint,
+=======
+                        col_ix,
+                        width,
+                        &resize_drag,
+                        tint.opacity(0.3),
+>>>>>>> 08605376
                     ))
             })
             .collect::<Vec<_>>();
@@ -1254,19 +1378,107 @@ impl DataTable {
                 let font_size = fonts::grid_font_size(cx);
                 let row_height = fonts::grid_row_height(cx);
                 let nested_icon = fonts::grid_px(cx, CollectionMetrics::NESTED_ICON);
-                let theme = cx.theme();
+                let grid_colors = GridColors::of(cx.theme());
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
+                let selection = state.selection();
 
+<<<<<<< bb09478a
                 let editing_cell = state.editing_cell();
                 let cell_input = state.cell_input().cloned();
                 let enum_dropdown = state.enum_dropdown().cloned();
                 let edit_buffer = state.edit_buffer();
                 let expression_editor = ExpressionEditorView::of(state);
+=======
+                let source = GridRowSource::with_document(
+                    &model,
+                    state.edit_buffer(),
+                    state.document_presentation(),
+                );
+
+                // The host state the Bolt row renderer reads: the grid's
+                // selection and editing facts, its interaction policy and
+                // its icons, all as plain values the renderer cannot
+                // misread. The selection test stays a borrow; the click
+                // callbacks are Arcs because gpui handlers are 'static.
+                let is_selected = |coord: GridCellCoord| {
+                    selection.is_selected(CellCoord::new(coord.row, coord.col))
+                };
+                let host = GridHost {
+                    column_widths: state.column_widths(),
+                    active: selection.active.map(|c| GridCellCoord::new(c.row, c.col)),
+                    editing: state
+                        .editing_cell()
+                        .map(|c| GridCellCoord::new(c.row, c.col)),
+                    is_selected: &is_selected,
+                    reference_row: state.has_reference_row(),
+                    on_cell_click: {
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |coord: GridCellCoord,
+                                  event: &ClickEvent,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                let coord = CellCoord::new(coord.row, coord.col);
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                });
+
+                                if event.click_count() == 2 {
+                                    state.update(cx, |state, cx| {
+                                        state.start_editing(coord, window, cx);
+                                    });
+                                    return;
+                                }
+
+                                let modifiers = event.modifiers();
+                                state.update(cx, |state, cx| {
+                                    state.click_cell(coord, modifiers, cx);
+                                });
+                            },
+                        )
+                    },
+                    on_cell_context: {
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |coord: GridCellCoord,
+                                  event: &MouseDownEvent,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                let coord = CellCoord::new(coord.row, coord.col);
+                                cx.stop_propagation();
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.select_cell(coord, cx);
+                                    cx.emit(DataTableEvent::ContextMenuRequested {
+                                        row: coord.row,
+                                        col: coord.col,
+                                        position: event.position,
+                                        is_column_header: false,
+                                    });
+                                });
+                            },
+                        )
+                    },
+                    braces_icon: AppIcon::Braces.into(),
+                    chevron_icon: AppIcon::ChevronRight.into(),
+                    reference_icon: AppIcon::Crosshair.into(),
+                };
+                // The inline editor the editing cell draws: a dropdown when
+                // the cell enumerates values, the text input otherwise.
+                let editor = state
+                    .enum_dropdown()
+                    .map(|dropdown| dropdown.clone().into_any_element())
+                    .or_else(|| {
+                        state
+                            .cell_input()
+                            .map(|input| Input::new(input).small().into_any_element())
+                    });
+>>>>>>> 08605376
 
                 render_rows(
-                    &state_entity,
                     visible_range,
+<<<<<<< bb09478a
                     &model,
                     state.visible_columns(),
                     PinnedColumns {
@@ -1284,12 +1496,17 @@ impl DataTable {
                     edit_buffer,
                     state.document_presentation(),
                     state.has_reference_row(),
+=======
+                    &source,
+                    &host,
+                    editor,
+>>>>>>> 08605376
                     total_width,
                     font_size,
                     row_height,
                     nested_icon,
                     null_color,
-                    theme,
+                    &grid_colors,
                 )
             },
         )
@@ -1321,6 +1538,7 @@ impl DataTable {
     }
 }
 
+<<<<<<< bb09478a
 /// What the open inline editor draws for a column that can hold a SQL
 /// expression: the `fx` switch, and the suggestions while it is on.
 struct ExpressionEditorView {
@@ -2335,8 +2553,11 @@ fn header_sort_control(
         })
 }
 
+=======
+>>>>>>> 08605376
 #[cfg(test)]
 mod tests {
+    use super::super::model::TableModel;
     use super::*;
     use gpui::{AppContext as _, Render, TestAppContext, VisualTestContext, div};
     use gpui_base::ScrollbarHandle as _;
@@ -3906,6 +4127,92 @@ mod tests {
         visual
     }
 
+    /// A one-column, one-row grid whose single cell holds `cell`, so the
+    /// debug selectors below name exactly one element.
+    fn single_cell_harness(
+        cx: &mut TestAppContext,
+        cell: super::super::model::CellValue,
+    ) -> &mut VisualTestContext {
+        use super::super::model::{ColumnKind, ColumnSpec, RowData};
+        use gpui::TextAlign;
+
+        cx.update(crate::theme::init);
+
+        let model = Arc::new(TableModel::new(
+            vec![ColumnSpec {
+                id: "v".into(),
+                title: "v".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            }],
+            vec![RowData { cells: vec![cell] }],
+        ));
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(model.clone(), cx));
+            let table = cx.new(|cx| DataTable::new("cell-test-table", state, cx));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+
+        visual
+    }
+
+    #[gpui::test]
+    fn an_array_cell_draws_the_braces_and_the_chevron(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::nested(true, 4));
+
+        assert!(
+            visual.debug_bounds("table-cell-braces").is_some(),
+            "a nested summary draws the braces marker"
+        );
+        assert!(
+            visual.debug_bounds("table-cell-chevron").is_some(),
+            "an array draws the step-in chevron"
+        );
+    }
+
+    #[gpui::test]
+    fn a_document_cell_draws_the_braces_but_not_the_chevron(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::nested(false, 3));
+
+        assert!(visual.debug_bounds("table-cell-braces").is_some());
+        assert!(
+            visual.debug_bounds("table-cell-chevron").is_none(),
+            "only an array steps in; a document draws no chevron"
+        );
+    }
+
+    #[gpui::test]
+    fn a_plain_cell_draws_one_text_span(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::text("value"));
+
+        assert!(visual.debug_bounds("table-cell-text").is_some());
+        assert!(visual.debug_bounds("table-cell-secondary").is_none());
+        assert!(visual.debug_bounds("table-cell-label").is_none());
+    }
+
+    #[gpui::test]
+    fn a_foreign_key_cell_draws_two_spans_and_suppresses_the_main_text(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::int(8).with_fk_label("Alice"));
+
+        assert!(
+            visual.debug_bounds("table-cell-text").is_none(),
+            "the two-tone pair replaces the cell's own display text"
+        );
+        assert!(visual.debug_bounds("table-cell-label").is_some());
+        assert!(visual.debug_bounds("table-cell-secondary").is_some());
+    }
+
     #[gpui::test]
     fn a_table_without_annotations_keeps_its_header_height(cx: &mut TestAppContext) {
         let visual = header_harness(cx, None);
@@ -3941,5 +4248,100 @@ mod tests {
             visual.debug_bounds("table-header-annotation").is_some(),
             "the annotated column draws its facts"
         );
+    }
+
+    /// Dragging a header's trailing edge resizes that column through the
+    /// shared bolt handle, clamps at the minimum width and leaves the other
+    /// columns alone.
+    #[gpui::test]
+    fn dragging_a_header_edge_resizes_only_that_column(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("resize-test-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        visual.update(|_, cx| {
+            state.update(cx, |s, cx| s.set_column_width(0, 100.0, cx));
+        });
+        visual.run_until_parked();
+
+        let widths = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| state.read(cx).column_widths().to_vec())
+        };
+        let before = widths(visual);
+        let header = visual
+            .debug_bounds("table-header")
+            .expect("header must render");
+        let edge = gpui::point(
+            header.origin.x + super::super::theme::ROW_NUMBER_WIDTH + px(before[0]) - px(3.0),
+            header.origin.y + px(5.0), // guardrail-allow: test pointer offset inside the header
+        );
+        let none = gpui::Modifiers::default();
+
+        visual.simulate_mouse_down(edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(
+            edge + gpui::point(px(40.0), px(0.0)),
+            MouseButton::Left,
+            none,
+        );
+        let grown = widths(visual);
+        assert_eq!(
+            grown[0],
+            before[0] + 40.0,
+            "the dragged column follows the pointer"
+        );
+        assert_eq!(grown[1..], before[1..], "other columns keep their widths");
+
+        visual.simulate_mouse_move(
+            gpui::point(header.origin.x + px(8.0), edge.y), // guardrail-allow: test pointer offset inside the header
+            MouseButton::Left,
+            none,
+        );
+        assert_eq!(
+            widths(visual)[0],
+            super::super::theme::MIN_COLUMN_WIDTH,
+            "the width clamps at the minimum"
+        );
+
+        visual.simulate_mouse_up(edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(edge + gpui::point(px(80.0), px(0.0)), None, none);
+        assert_eq!(
+            widths(visual)[0],
+            super::super::theme::MIN_COLUMN_WIDTH,
+            "releasing ends the drag"
+        );
+
+        let before = widths(visual);
+        let second_edge = gpui::point(
+            header.origin.x + super::super::theme::ROW_NUMBER_WIDTH + px(before[0]) + px(before[1])
+                - px(3.0),
+            edge.y,
+        );
+        visual.simulate_mouse_down(second_edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(
+            second_edge + gpui::point(px(25.0), px(0.0)),
+            MouseButton::Left,
+            none,
+        );
+        visual.simulate_mouse_up(second_edge, MouseButton::Left, none);
+        let after = widths(visual);
+        assert_eq!(
+            after[1],
+            before[1] + 25.0,
+            "the second column follows the pointer"
+        );
+        assert_eq!(after[0], before[0], "the first column keeps its width");
     }
 }

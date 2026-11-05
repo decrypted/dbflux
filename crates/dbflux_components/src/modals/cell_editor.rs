@@ -763,11 +763,11 @@ impl VimHost for CellEditorModal {
     fn vim_dialog_command(
         &mut self,
         _input: EntityId,
-        command: Command,
+        command_id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if command == Command::SaveQuery {
+        if command_id == Command::SaveQuery.action_id() {
             self.save(window, cx);
         }
     }
@@ -1111,6 +1111,7 @@ mod keyboard_tests {
     fn escape_closes_the_cell_editor(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            crate::modals::modal::install_modal_seams(cx);
             // The escape binding the app keymap gives the cell editor (see
             // the cell editor layer in `dbflux_ui_base::keymap`).
             cx.bind_keys([gpui::KeyBinding::new(
@@ -1146,6 +1147,7 @@ mod keyboard_tests {
     fn typing_right_after_opening_reaches_the_editor(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            crate::modals::modal::install_modal_seams(cx);
             cx.bind_keys([gpui::KeyBinding::new(
                 "escape",
                 crate::actions::Cancel,
@@ -1183,6 +1185,7 @@ mod keyboard_tests {
     fn the_save_shortcut_saves_from_the_focused_editor(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            crate::modals::modal::install_modal_seams(cx);
             cx.bind_keys([gpui::KeyBinding::new(
                 "ctrl-s",
                 crate::actions::SaveEdit,
@@ -1231,6 +1234,7 @@ mod keyboard_tests {
     ) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            crate::modals::modal::install_modal_seams(cx);
             crate::actions::record_last_keystroke(cx);
             crate::vim::set_vim_enabled(cx, vim);
             let context = dbflux_core::keymap_types::ContextId::CellEditorModal.as_gpui_context();

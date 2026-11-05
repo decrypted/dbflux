@@ -39,12 +39,21 @@ pub use auth::{
 pub use config::{
     AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, ExternalScriptRoot, GeneralSettings,
+<<<<<<< bb09478a
     GlobalOverrides, GovernanceSettings, LoadedAppConfig, MountedScriptRoot, PolicyRoleConfig,
     RefreshPolicy, RefreshPolicySetting, RpcServiceKind, ScriptEntry, ScriptRootAvailability,
     ScriptsDirectory, ScriptsScan, ScriptsScanRequest, ServiceConfig, ServiceRpcApiContract,
     StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, all_script_extensions,
     driver_maps_differ, filter_entries, hook_script_path, is_openable_script, migrate_app_config,
     script_content_sha256,
+=======
+    GlobalOverrides, GovernanceSettings, InterfaceSizeChange, LoadedAppConfig, MountedScriptRoot,
+    PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting, RpcServiceKind, ScriptEntry,
+    ScriptRootAvailability, ScriptsDirectory, ScriptsScan, ScriptsScanRequest, ScrollbarVisibility,
+    ServiceConfig, ServiceRpcApiContract, StartupFocus, ThemeSetting, ToolPolicyConfig,
+    TrustedClientConfig, all_script_extensions, driver_maps_differ, filter_entries,
+    hook_script_path, is_openable_script, migrate_app_config,
+>>>>>>> 08605376
 };
 
 #[allow(deprecated)]
@@ -74,10 +83,10 @@ pub use connection::{
     RefreshViewsParams, RefreshedViews, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
     ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo,
     SslMode, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams, SwitchDatabaseResult,
-    TableDetailsPrepareError, TestConnectionResult, TreeLoadResult, TreeStore, WritePrivilege,
-    compose_mutation_policy, detached_process_channel, execute_streaming_process,
-    host_matches_no_proxy, output_channel, ssl_mode_from_id, ssl_mode_id_is_cert_active,
-    ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
+    SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError, TestConnectionResult,
+    TreeLoadResult, TreeStore, WritePrivilege, compose_mutation_policy, detached_process_channel,
+    execute_streaming_process, host_matches_no_proxy, output_channel, ssl_mode_from_id,
+    ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
 };
 
 pub use connection::{
@@ -90,6 +99,10 @@ pub use connection::dashboard_import::{
 };
 
 pub use connection::dashboard_source::{DashboardRef, DashboardSource, RemoteDashboard};
+pub use connection::root_section::{
+    LocalizedText, RootItemPresentation, RootSectionAction, RootSectionDef, RootSectionItem,
+    RootSectionPage, RootSectionPresentation, RootSectionSource,
+};
 pub use connection::secret_store::{
     SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretRotation,
     SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
@@ -322,7 +335,8 @@ pub use storage::{
     HasSecretRef, HistoryEntry, KeyringSecretStore, NoopSecretStore, RecentFile, SavedQuery,
     SecretManager, SecretStore, SessionManifest, SessionStore, SessionTab, SessionTabKind, UiState,
     UiStateStore, auth_field_secret_ref, connection_secret_ref, create_secret_store,
-    proxy_secret_ref, ssh_tunnel_secret_ref,
+    keyring_password_for_connect, password_lives_in_keyring, proxy_secret_ref,
+    ssh_tunnel_secret_ref,
 };
 
 pub use observability::{

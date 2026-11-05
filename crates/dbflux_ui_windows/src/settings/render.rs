@@ -9,7 +9,12 @@ use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+<<<<<<< bb09478a
 use gpui_component::dialog::{AlertDialog, DialogButtonProps};
+=======
+use gpui_component::dialog::{Dialog, DialogButtonProps};
+use gpui_component::scroll::ScrollableElement;
+>>>>>>> 08605376
 
 use super::{
     SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
@@ -70,10 +75,8 @@ impl SettingsCoordinator {
             .child(self.render_nav_search(window, cx))
             .child(
                 div()
-                    .id("settings-nav")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
                     .children(row_elements)
@@ -87,7 +90,9 @@ impl SettingsCoordinator {
                                         .muted_foreground(),
                                 ),
                         )
-                    }),
+                    })
+                    .overflow_y_scrollbar()
+                    .id("settings-nav"),
             )
     }
 
@@ -195,7 +200,7 @@ impl SettingsCoordinator {
                     this.request_section_transition(section, window, cx);
                 }
             }))
-            .when_some(row.icon, |row, icon| {
+            .when_some(row.icon.clone(), |row, icon| {
                 row.child(
                     Icon::new(icon)
                         .size(SettingsMetrics::NAV_ICON)

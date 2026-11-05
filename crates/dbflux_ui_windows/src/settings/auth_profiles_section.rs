@@ -2338,7 +2338,7 @@ impl AuthProfilesSection {
             .flex()
             .flex_col()
             .child(toolbar)
-            .child(
+            .child(layout::scrolled_list_viewport(
                 div()
                     .id("auth-profile-list-scroll")
                     .flex_1()
@@ -2348,7 +2348,8 @@ impl AuthProfilesSection {
                     .flex()
                     .flex_col()
                     .children(rows),
-            )
+                &self.profile_list_scroll_handle,
+            ))
     }
 
     /// Renders a read-only info panel for profiles that are reflected from

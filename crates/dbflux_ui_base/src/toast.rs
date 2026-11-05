@@ -1,18 +1,19 @@
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+//! DBFlux's toast content and wiring.
+//!
+//! The toast *mechanism* — the throttle bucket, the severity model, the
+//! bounded stack with its auto-dismiss and hover-pause timers, and the
+//! presentation shell — lives in `bolt::toast` and is re-exported here at the
+//! old paths. This module keeps the product half: which clock formats a
+//! toast's timestamp, the copy action, the persisted auto-dismiss setting
+//! reaching the running stack, the pending-toast flush, and the product icon
+//! catalogue installed into Bolt's [`ToastIcons`] seam.
 
-use crate::user_error::throttle::TokenBucket;
+use gpui::{App, Context, Entity, Window};
 
-use dbflux_components::controls::Button;
-use dbflux_components::primitives::{Chamfer, Icon};
-use dbflux_components::semantic::BannerColors as SemBannerColors;
-use gpui::prelude::*;
-use gpui::{App, Context, Entity, FontWeight, Global, Hsla, SharedString, Window};
-use gpui_component::ActiveTheme;
-
-use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{ChamferCut, ChromeColors, Feedback, FontSizes, Spacing};
+pub use bolt::toast::{
+    Toast, ToastAction, ToastActionCallback, ToastAutoDismiss, ToastControlAction, ToastControls,
+    ToastGlobal, ToastHost, ToastIcons, ToastKind, VISIBLE_TOAST_LIMIT,
+};
 
 /// Wall-clock snapshot used as the default `meta_right` timestamp on toasts.
 /// Captured once at build time — no tick/loop logic.
@@ -34,42 +35,22 @@ pub fn copy_action(payload: impl Into<String>) -> ToastAction {
     )
 }
 
-/// Toast visual variant. Drives the icon, the edge stripe color, and the
-/// default auto-dismiss policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToastKind {
-    Success,
-    Info,
-    Warning,
-    Error,
-}
+/// The product's toast glyphs: the same `AppIcon` catalogue the toast drew
+/// before the shell moved to Bolt, widened to `IconSource` at the seam.
+fn product_toast_icons() -> ToastIcons {
+    use dbflux_components::icons::AppIcon;
 
-impl ToastKind {
-    /// Kind icon. A toast that reports progress shows the loader instead.
-    fn icon(self, has_progress: bool) -> AppIcon {
-        match self {
-            _ if has_progress => AppIcon::Loader,
-            Self::Success => AppIcon::CircleCheck,
-            Self::Info => AppIcon::Info,
-            Self::Warning => AppIcon::TriangleAlert,
-            Self::Error => AppIcon::CircleAlert,
-        }
-    }
-
-    /// Edge stripe and icon color. An Info toast that reports progress is
-    /// work in flight, so it carries the tint like a busy status.
-    fn accent(self, has_progress: bool, cx: &App) -> Hsla {
-        let banners = SemBannerColors::for_current(cx);
-        match self {
-            Self::Info if has_progress => ChromeColors::tint(cx.theme()),
-            Self::Success => banners.success_fg,
-            Self::Info => banners.info_fg,
-            Self::Warning => banners.warning_fg,
-            Self::Error => banners.error_fg,
-        }
+    ToastIcons {
+        success: AppIcon::CircleCheck.into(),
+        info: AppIcon::Info.into(),
+        warning: AppIcon::TriangleAlert.into(),
+        error: AppIcon::CircleAlert.into(),
+        loader: AppIcon::Loader.into(),
+        close: AppIcon::CircleX.into(),
     }
 }
 
+<<<<<<< bb09478a
 /// Callback fired when a toast action is clicked.
 pub type ToastActionCallback = Arc<dyn Fn(&mut App) + Send + Sync + 'static>;
 
@@ -968,6 +949,13 @@ impl ToastHost {
             .child(gpui::div().flex_shrink_0().child(dismiss_button))
             .into_any_element()
     }
+=======
+/// Installs the product's toast glyphs into Bolt's icon seam. Call once at
+/// startup, before the first toast renders; `publish_auto_dismiss_setting`
+/// calls it from the workspace's toast-host setup.
+pub fn install_toast_icons(cx: &mut App) {
+    cx.set_global(product_toast_icons());
+>>>>>>> 08605376
 }
 
 pub struct PendingToast {
@@ -977,12 +965,14 @@ pub struct PendingToast {
 
 /// Applies the persisted toast auto-dismiss delay now and after every
 /// app-state change, so a change in Settings > General reaches the running
-/// stack without a restart.
+/// stack without a restart. Also installs the product's toast glyphs: this is
+/// the ui_base startup path that runs before any toast can render.
 pub fn publish_auto_dismiss_setting(
     app_state: &Entity<crate::AppStateEntity>,
     host: &Entity<ToastHost>,
     cx: &mut App,
 ) {
+    install_toast_icons(cx);
     apply_auto_dismiss_setting(app_state, host, cx);
 
     let host = host.clone();
@@ -1035,218 +1025,85 @@ pub fn flush_pending_toast<T>(
 }
 
 #[cfg(test)]
-mod action_tests {
-    use super::{Toast, ToastAction, ToastHost};
-    use gpui::{AppContext as _, TestAppContext};
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+mod i18n_tests {
+    const TOAST_ACTION_KEYS: &[&str] = &[
+        "toast.action.copy",
+        "toast.action.show_details",
+        "toast.action.hide_details",
+        "toast.action.dismiss",
+        "toast.stack.hidden_more",
+    ];
 
-    #[gpui::test]
-    fn only_dismissing_actions_close_their_toast(cx: &mut TestAppContext) {
-        let runs = Arc::new(AtomicUsize::new(0));
-        let host = cx.new(|_| ToastHost::new());
+    #[test]
+    fn toast_catalog_keys_resolve() {
+        for key in TOAST_ACTION_KEYS {
+            let english = dbflux_i18n::t!(key);
+            let spanish = dbflux_i18n::t!(key, locale = "es");
 
-        let keep_runs = runs.clone();
-        let skip_runs = runs.clone();
-        let toast = Toast::error("Update available")
-            .action(ToastAction::new("keep", "Keep").on_click(move |_| {
-                keep_runs.fetch_add(1, Ordering::SeqCst);
-            }))
-            .action(
-                ToastAction::new("skip", "Skip")
-                    .dismisses()
-                    .on_click(move |_| {
-                        skip_runs.fetch_add(1, Ordering::SeqCst);
-                    }),
-            );
-        host.update(cx, |host, cx| host.push_rich(toast, cx));
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert_ne!(english, *key, "missing English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(spanish, *key, "missing Spanish translation for {key}");
+        }
+    }
 
-        cx.update(|cx| ToastHost::run_action(&host, 1, 0, cx));
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
-        assert_eq!(host.read_with(cx, |host, _| host.toast_count()), 1);
+    #[test]
+    fn toast_copy_label_differs_between_locales() {
+        let english = dbflux_i18n::t!("toast.action.copy", locale = "en");
+        let spanish = dbflux_i18n::t!("toast.action.copy", locale = "es");
 
-        cx.update(|cx| ToastHost::run_action(&host, 1, 1, cx));
-        assert_eq!(runs.load(Ordering::SeqCst), 2);
-        assert_eq!(host.read_with(cx, |host, _| host.toast_count()), 0);
+        assert_eq!(english, "Copy");
+        assert_eq!(spanish, "Copiar");
+        assert_ne!(english, spanish);
+    }
+
+    /// The hidden-stack label the shell renders through `bolt::strings`
+    /// interpolates the count exactly like the `t!` macro did: translate in
+    /// the locale, then replace `%{count}`.
+    #[test]
+    fn hidden_more_label_interpolates_the_count() {
+        let interpolate = |locale: &str| {
+            dbflux_i18n::translate_in(locale, "toast.stack.hidden_more").replace("%{count}", "3")
+        };
+        assert_eq!(interpolate("en"), "3 more");
+        assert_eq!(interpolate("es"), "3 más");
     }
 }
 
 #[cfg(test)]
-mod auto_dismiss_tests {
-    use super::{Toast, ToastAction, ToastAutoDismiss, ToastHost, VISIBLE_TOAST_LIMIT};
-    use gpui::{AppContext as _, Entity, TestAppContext};
-    use std::time::Duration;
+mod parity_tests {
+    use super::install_toast_icons;
+    use crate::toast::{ToastAutoDismiss, ToastIcons};
+    use bolt::icon::IconSource;
+    use dbflux_core::GeneralSettings;
+    use gpui::TestAppContext;
 
-    fn new_host(cx: &mut TestAppContext) -> Entity<ToastHost> {
-        cx.new(|_| ToastHost::new())
-    }
-
-    fn shown(host: &Entity<ToastHost>, cx: &TestAppContext) -> usize {
-        host.read_with(cx, |host, _| host.toast_count())
-    }
-
-    fn hidden(host: &Entity<ToastHost>, cx: &TestAppContext) -> usize {
-        host.read_with(cx, |host, _| host.hidden_count())
-    }
-
-    fn tick(cx: &TestAppContext, duration: Duration) {
-        cx.executor().advance_clock(duration);
-        cx.run_until_parked();
-    }
-
-    /// The stored delay follows the kind, the content and the policy: a
-    /// Warning outlives a Success, an action or an Error keeps the toast, and
-    /// the policy can turn auto-dismiss off entirely.
-    #[gpui::test]
-    fn delays_follow_kind_content_and_policy(cx: &mut TestAppContext) {
-        let host = new_host(cx);
-
-        host.update(cx, |host, cx| {
-            host.push_rich(Toast::success("ok"), cx);
-            host.push_rich(Toast::warning("careful"), cx);
-            host.push_rich(
-                Toast::warning("act").action(ToastAction::new("go", "Go")),
-                cx,
-            );
-            host.push_rich(Toast::error("boom"), cx);
-            host.push_rich(
-                Toast::success("done").action(ToastAction::new("undo", "Undo")),
-                cx,
-            );
-        });
-
-        host.read_with(cx, |host, _| {
-            assert_eq!(host.toasts[0].delay, Some(Duration::from_secs(8)));
-            assert_eq!(
-                host.toasts[1].delay,
-                Some(Duration::from_secs(16)),
-                "a warning gets twice the base delay"
-            );
-            assert_eq!(
-                host.toasts[2].delay, None,
-                "a warning with an action stays until it is resolved"
-            );
-            assert_eq!(host.toasts[3].delay, None, "an error stays");
-            assert_eq!(
-                host.toasts[4].delay, None,
-                "a success with an action stays until it is resolved"
-            );
-        });
-
-        host.update(cx, |host, _| host.set_auto_dismiss(ToastAutoDismiss::Never));
-        host.update(cx, |host, cx| host.push_rich(Toast::success("ok"), cx));
+    /// Bolt's `ToastAutoDismiss` carries the design-system default; the
+    /// product pins it to its own settings default, so a drift on either side
+    /// fails here instead of changing the toast behaviour silently.
+    #[test]
+    fn bolt_default_auto_dismiss_matches_the_product_settings_default() {
         assert_eq!(
-            host.read_with(cx, |host, _| host.toasts.last().unwrap().delay),
-            None,
-            "the policy can turn auto-dismiss off"
+            ToastAutoDismiss::default(),
+            ToastAutoDismiss::from_secs(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
+            "bolt's default auto-dismiss drifted from GeneralSettings' constant"
         );
     }
 
+    /// The installed glyphs are the exact SVG paths the toast drew before the
+    /// shell moved: the move changes no pixels.
     #[gpui::test]
-    fn a_success_toast_closes_after_the_configured_delay(cx: &mut TestAppContext) {
-        let host = new_host(cx);
-        host.update(cx, |host, cx| host.push_rich(Toast::success("ok"), cx));
-
-        tick(cx, Duration::from_secs(7));
-        assert_eq!(shown(&host, cx), 1, "still shown before its delay");
-
-        tick(cx, Duration::from_secs(2));
-        assert_eq!(shown(&host, cx), 0, "closed after its delay");
-    }
-
-    #[gpui::test]
-    fn a_warning_toast_closes_after_twice_the_delay(cx: &mut TestAppContext) {
-        let host = new_host(cx);
-        host.update(cx, |host, cx| host.push_rich(Toast::warning("careful"), cx));
-
-        tick(cx, Duration::from_secs(8));
-        assert_eq!(shown(&host, cx), 1, "a warning outlives a success");
-
-        tick(cx, Duration::from_secs(8));
-        assert_eq!(shown(&host, cx), 0, "closed once its longer delay passes");
-    }
-
-    #[gpui::test]
-    fn an_error_toast_stays_until_dismissed(cx: &mut TestAppContext) {
-        let host = new_host(cx);
-        host.update(cx, |host, cx| host.push_rich(Toast::error("boom"), cx));
-
-        tick(cx, Duration::from_secs(600));
-        assert_eq!(shown(&host, cx), 1);
-
-        host.update(cx, |host, cx| host.dismiss(1, cx));
-        assert_eq!(shown(&host, cx), 0);
-    }
-
-    #[gpui::test]
-    fn hovering_holds_the_timer_and_leaving_it_restarts_it(cx: &mut TestAppContext) {
-        let host = new_host(cx);
-        host.update(cx, |host, cx| host.push_rich(Toast::success("ok"), cx));
-
-        host.update(cx, |host, cx| host.pause_timer(1, cx));
-        tick(cx, Duration::from_secs(60));
-        assert_eq!(shown(&host, cx), 1, "a held toast does not close");
-
-        host.update(cx, |host, cx| host.resume_timer(1, cx));
-        tick(cx, Duration::from_secs(9));
-        assert_eq!(shown(&host, cx), 0, "leaving restarts the timer");
-    }
-
-    /// Past the visible limit the older toasts fold into one entry, which can
-    /// expand them or dismiss them together.
-    #[gpui::test]
-    fn the_stack_folds_the_toasts_past_the_visible_limit(cx: &mut TestAppContext) {
-        let host = new_host(cx);
-        for index in 0..(VISIBLE_TOAST_LIMIT + 2) {
-            host.update(cx, |host, cx| {
-                host.push_rich(Toast::success(format!("toast {index}")), cx)
-            });
-        }
-
-        assert_eq!(shown(&host, cx), VISIBLE_TOAST_LIMIT + 2);
-        assert_eq!(hidden(&host, cx), 2);
-
-        host.update(cx, |host, cx| host.expand_stack(cx));
-        assert_eq!(hidden(&host, cx), 0, "expanding shows every toast");
-
-        host.update(cx, |host, cx| {
-            host.push_rich(Toast::success("one more"), cx)
+    fn installed_icons_draw_the_same_glyphs_the_product_drew(cx: &mut TestAppContext) {
+        cx.update(install_toast_icons);
+        cx.update(|cx| {
+            let icons = ToastIcons::current(cx);
+            let svg = |path: &'static str| IconSource::Svg(path.into());
+            assert_eq!(icons.success, svg("icons/ui/circle-check.svg"));
+            assert_eq!(icons.info, svg("icons/ui/info.svg"));
+            assert_eq!(icons.warning, svg("icons/ui/triangle-alert.svg"));
+            assert_eq!(icons.error, svg("icons/ui/circle-alert.svg"));
+            assert_eq!(icons.loader, svg("icons/ui/loader.svg"));
+            assert_eq!(icons.close, svg("icons/ui/circle-x.svg"));
         });
-        assert_eq!(hidden(&host, cx), 3, "a new toast folds the stack again");
-    }
-
-    #[gpui::test]
-    fn dismissing_the_folded_toasts_keeps_the_newest(cx: &mut TestAppContext) {
-        let host = new_host(cx);
-        for index in 0..(VISIBLE_TOAST_LIMIT + 3) {
-            host.update(cx, |host, cx| {
-                host.push_rich(Toast::success(format!("toast {index}")), cx)
-            });
-        }
-
-        host.update(cx, |host, cx| host.dismiss_hidden(cx));
-
-        assert_eq!(shown(&host, cx), VISIBLE_TOAST_LIMIT);
-        assert_eq!(hidden(&host, cx), 0);
-        assert_eq!(
-            host.read_with(cx, |host, _| host.toasts.first().unwrap().title.to_string()),
-            format!("toast 3"),
-            "the oldest toasts are the ones dismissed"
-        );
-    }
-
-    /// A toast the stack is hiding still closes on its own timer.
-    #[gpui::test]
-    fn a_folded_toast_still_closes_on_its_timer(cx: &mut TestAppContext) {
-        let host = new_host(cx);
-        for index in 0..(VISIBLE_TOAST_LIMIT + 1) {
-            host.update(cx, |host, cx| {
-                host.push_rich(Toast::success(format!("toast {index}")), cx)
-            });
-        }
-        assert_eq!(hidden(&host, cx), 1);
-
-        tick(cx, Duration::from_secs(9));
-        assert_eq!(shown(&host, cx), 0, "every toast closed on its own timer");
     }
 }

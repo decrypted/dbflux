@@ -1,23 +1,27 @@
+<<<<<<< bb09478a
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
+=======
+//! Connection-environment, keymap and copy extensions over bolt's generic
+//! [`Dropdown`].
+//!
+//! The generic dropdown — its state machine, menu, triggers and the
+//! [`bolt::keymap::CommandSet`] key seam — lives in `bolt` and is
+//! re-exported at this crate's `controls` path so call sites keep compiling.
+//! What stays here is the product half: the `ConnectionEnvironment` badge
+//! and the keymap action the dropdowns answer. The translated placeholder
+//! is the text seam's job: `theme::init` installs the product's translator
+//! and the dropdown reads `bolt::strings`.
+>>>>>>> 08605376
 
-use crate::actions::RunCommand;
-use crate::controls::{ButtonVariant, button_colors};
-use crate::density;
-use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, ChamferRing, EnvTag, Icon};
-use crate::tokens::{ChamferCut, ChromeColors, ChromeEdgeRole, Fields, Heights, Spacing};
+use bolt::controls::{BadgeLabel, Dropdown};
+use bolt::keymap::{Command as BoltCommand, CommandSet, KeyCommand, attach_key_commands};
 use dbflux_core::ConnectionEnvironment;
 use dbflux_core::keymap_types::{Command, ContextId};
-use gpui::prelude::*;
-use gpui::{
-    Anchor, ClickEvent, Context, ElementId, EventEmitter, FocusHandle, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, Role, ScrollHandle, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, anchored, deferred, div, point, px,
-};
-use gpui_component::ActiveTheme;
+use gpui::{App, Context};
 
+<<<<<<< bb09478a
 #[derive(Clone, Debug)]
 pub struct DropdownSelectionChanged {
     pub index: usize,
@@ -368,36 +372,53 @@ impl Dropdown {
         self.leading_icon = Some(icon);
         self
     }
+=======
+use crate::actions::RunCommand;
+use crate::primitives::{environment_badge_tone, environment_short_label};
+>>>>>>> 08605376
 
+/// Connection-environment methods over the generic dropdown, so call sites
+/// keep naming the environment instead of badge data.
+pub trait DropdownEnvironment {
     /// Draws the environment tag between the toolbar trigger's label and its
-    /// chevron (AppByzEditor connection selector), or removes it with `None`.
-    pub fn set_label_environment(
+    /// chevron (the connection selector), or removes it with `None`.
+    fn set_label_environment(
+        &mut self,
+        environment: Option<ConnectionEnvironment>,
+        cx: &mut Context<Self>,
+    ) where
+        Self: Sized;
+}
+
+impl DropdownEnvironment for Dropdown {
+    fn set_label_environment(
         &mut self,
         environment: Option<ConnectionEnvironment>,
         cx: &mut Context<Self>,
     ) {
-        if self.label_environment != environment {
-            self.label_environment = environment;
-            cx.notify();
-        }
+        let badge = environment.map(environment_badge);
+        self.set_label_badge(badge, cx);
     }
+}
 
-    pub fn label_environment(&self) -> Option<ConnectionEnvironment> {
-        self.label_environment
+/// The dropdown tag of a connection environment: its short label (PROD,
+/// STAGING, DEV) in the environment's tone.
+fn environment_badge(environment: ConnectionEnvironment) -> BadgeLabel {
+    BadgeLabel {
+        label: environment_short_label(environment).into(),
+        tone: environment_badge_tone(environment),
     }
+}
 
-    fn trigger_variant(&self) -> DropdownTriggerVariant {
-        if self.chevron_trigger.is_some() {
-            DropdownTriggerVariant::Chevron
-        } else if self.compact_trigger {
-            DropdownTriggerVariant::Compact
-        } else if self.toolbar_style {
-            DropdownTriggerVariant::Toolbar
-        } else {
-            DropdownTriggerVariant::Standard
-        }
+/// The product's keymap action, for the bolt keymap seam: the command id it
+/// carries names the command a key binding runs.
+impl KeyCommand for RunCommand {
+    fn key_command_id(&self) -> &str {
+        &self.command
     }
+}
 
+<<<<<<< bb09478a
     pub fn toggle_open(&mut self, cx: &mut Context<Self>) {
         if self.disabled || self.items.is_empty() {
             return;
@@ -780,165 +801,41 @@ impl Dropdown {
                 .offset(point(px(0.0), Spacing::XS))
                 .snap_to_window()
                 .child(menu),
+=======
+/// Installs the seams the product's components read: the keymap's
+/// [`CommandSet`] (the `RunCommand` action and the semantic commands mapped
+/// onto the product's `Command` ids).
+///
+/// The set carries the dropdown's five menu keys, the vim leader
+/// commands the editors' hosts answer (`FocusSearch` in `vim/binding.rs`,
+/// the dialog save in the `VimHost` impls) and the palette's new-tab
+/// confirm, so one table serves every component and a running app cannot
+/// have a dropdown with one table and an editor with another.
+///
+/// Call it once at startup, before the first window; `theme::init` does. A
+/// component rendered before it runs answers no commands.
+pub fn install_keymap_seams(cx: &mut App) {
+    cx.set_global(
+        CommandSet::new(
+            ContextId::Dropdown.as_gpui_context(),
+            attach_key_commands::<RunCommand>,
+>>>>>>> 08605376
         )
-        .with_priority(1)
-        .into_any_element()
-    }
-
-    fn render_trigger(
-        &self,
-        label: SharedString,
-        disabled: bool,
-        keyboard_focused: bool,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let theme = cx.theme();
-        let variant = self.trigger_variant();
-        let render_plan = dropdown_trigger_render_plan(variant);
-
-        let mut trigger = div()
-            .id("dropdown-trigger")
-            .role(Role::Button)
-            // The trigger is named by the text it draws (the selection, or the
-            // placeholder), unless the owner names it explicitly: a chevron
-            // trigger draws nothing, and its value alone rarely says what the
-            // control does.
-            .aria_label(self.aria_label.clone().unwrap_or_else(|| label.clone()))
-            .h(Heights::BUTTON)
-            .flex()
-            .items_center()
-            .w_full()
-            .when(disabled, |el| el.cursor_not_allowed())
-            .when(!disabled, |el| el.cursor_pointer());
-
-        if !render_plan.uses_chamfer_shape && variant != DropdownTriggerVariant::Chevron {
-            trigger = trigger
-                .when(disabled, |el| {
-                    el.text_color(theme.muted_foreground).opacity(0.5)
-                })
-                .when(!disabled, |el| {
-                    el.text_color(theme.foreground)
-                        .hover(|s| s.bg(theme.accent.opacity(0.1)))
-                });
-        }
-
-        let font_sm = density::font_sm(cx);
-
-        match variant {
-            DropdownTriggerVariant::Chevron => {
-                let host_variant = self.chevron_trigger.unwrap_or(ButtonVariant::Secondary);
-                let (_, content_color) = button_colors(theme, host_variant, false);
-
-                trigger = trigger.h_full().justify_center().child(
-                    Icon::new(AppIcon::ChevronDown)
-                        .size(Fields::SEGMENT_ICON)
-                        .color(content_color),
-                );
-            }
-            DropdownTriggerVariant::Compact => {
-                trigger = trigger
-                    .h_full()
-                    .justify_center()
-                    .px(Spacing::SM)
-                    .font_family(crate::fonts::ui_family(cx))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_size(font_sm)
-                    .child(
-                        div()
-                            .text_size(font_sm)
-                            .text_color(theme.muted_foreground)
-                            .child("▾"),
-                    );
-            }
-            DropdownTriggerVariant::Toolbar => {
-                trigger = trigger
-                    .justify_between()
-                    .gap(Fields::GAP)
-                    .font_family(if self.mono_label {
-                        crate::fonts::editor_family(cx)
-                    } else {
-                        crate::fonts::ui_family(cx)
-                    })
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_size(Fields::TEXT)
-                    .child(div().flex_1().truncate().child(label))
-                    .when_some(self.label_environment, |trigger, environment| {
-                        trigger.child(EnvTag::for_environment(environment))
-                    })
-                    .child(
-                        Icon::new(AppIcon::ChevronDown)
-                            .size(Fields::CHEVRON)
-                            .color(theme.muted_foreground),
-                    );
-            }
-            DropdownTriggerVariant::Standard => {
-                let opacity = if disabled {
-                    Fields::DISABLED_OPACITY
-                } else {
-                    1.0
-                };
-
-                let mut shape = Chamfer::new(ChamferCut::CONTROL)
-                    .fill(theme.secondary.opacity(opacity))
-                    .border(theme.border.opacity(opacity));
-
-                if !disabled {
-                    shape = shape
-                        .fill_hover(theme.secondary_hover)
-                        .interactive("dropdown-trigger-shape");
-                }
-
-                if self.focus_ring_visible || keyboard_focused {
-                    shape = shape.ring(ChamferRing::focus(
-                        self.focus_ring_color
-                            .unwrap_or_else(|| ChromeColors::tint(theme)),
-                    ));
-                }
-
-                let text_color = if disabled {
-                    theme.muted_foreground
-                } else {
-                    theme.accent_foreground
-                };
-
-                trigger = trigger
-                    .relative()
-                    .h(Fields::HEIGHT)
-                    .gap(Fields::GAP)
-                    .px(Fields::PADDING_X)
-                    .font_family(crate::fonts::ui_family(cx))
-                    .text_size(Fields::TEXT)
-                    .text_color(text_color)
-                    .child(shape)
-                    .when_some(self.leading_icon, |trigger, icon| {
-                        trigger.child(
-                            Icon::new(icon)
-                                .size(Fields::LEADING_ICON)
-                                .color(theme.muted_foreground),
-                        )
-                    })
-                    .child(div().flex_1().truncate().child(label))
-                    .child(
-                        Icon::new(AppIcon::ChevronDown)
-                            .size(Fields::CHEVRON)
-                            .color(theme.muted_foreground),
-                    );
-            }
-        }
-
-        // Only the closed trigger toggles open. While open, dismissal is owned
-        // by the menu's on_mouse_down_out: a click on the trigger lands outside
-        // the (deferred, snap-positioned) menu and closes it. Keeping on_click
-        // here while open would re-toggle (down dismisses, up reopens),
-        // producing the open/close flicker that surfaced after window resize.
-        if !disabled && !self.open {
-            trigger = trigger.on_click(cx.listener(Self::handle_trigger_click));
-        }
-
-        trigger.into_any_element()
-    }
+        // The dropdown's menu keys (the keymap layer in `dbflux_ui_base`).
+        .map(BoltCommand::SelectNext, Command::SelectNext.id())
+        .map(BoltCommand::SelectPrev, Command::SelectPrev.id())
+        .map(BoltCommand::Execute, Command::Execute.id())
+        .map(BoltCommand::ExpandCollapse, Command::ExpandCollapse.id())
+        .map(BoltCommand::Cancel, Command::Cancel.id())
+        // The vim leader commands (`vim/binding.rs`).
+        .map(BoltCommand::FocusSearch, Command::FocusSearch.id())
+        .map(BoltCommand::Save, Command::SaveQuery.id())
+        // The command palette's new-tab confirm (`command_palette.rs`).
+        .map(BoltCommand::OpenInNewTab, Command::RunQueryInNewTab.id()),
+    );
 }
 
+<<<<<<< bb09478a
 impl Render for Dropdown {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_disabled = self.disabled;
@@ -987,9 +884,12 @@ impl Render for Dropdown {
 impl EventEmitter<DropdownSelectionChanged> for Dropdown {}
 impl EventEmitter<DropdownDismissed> for Dropdown {}
 
+=======
+>>>>>>> 08605376
 /// The keys the app keymap binds in the `Dropdown` context (see the dropdown
 /// layer in `dbflux_ui_base::keymap`), for component tests that run without
-/// the app keymap.
+/// the app keymap. Also installs [`install_keymap_seams`], which the app
+/// does at startup.
 #[cfg(test)]
 pub(crate) fn bind_dropdown_keys_for_tests(cx: &mut gpui::TestAppContext) {
     use gpui::KeyBinding;
@@ -998,6 +898,7 @@ pub(crate) fn bind_dropdown_keys_for_tests(cx: &mut gpui::TestAppContext) {
     let run = |command: Command| RunCommand::new(command.id());
 
     cx.update(|cx| {
+        install_keymap_seams(cx);
         cx.bind_keys([
             KeyBinding::new("j", run(Command::SelectNext), context),
             KeyBinding::new("down", run(Command::SelectNext), context),
@@ -1012,145 +913,50 @@ pub(crate) fn bind_dropdown_keys_for_tests(cx: &mut gpui::TestAppContext) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Dropdown, DropdownTriggerVariant, dropdown_dismiss_transition, dropdown_focus_ring_state,
-        dropdown_menu_chrome, dropdown_selection_transition, dropdown_trigger_render_plan,
-    };
-    use crate::tokens::{ChamferCut, ChromeEdgeRole};
+    use dbflux_core::ConnectionEnvironment;
+    use gpui::{Entity, SharedString, TestAppContext};
+
+    /// A bare window body holding the dropdown under test.
+    struct Bare {
+        dropdown: Entity<Dropdown>,
+    }
+
+    impl gpui::Render for Bare {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{ParentElement as _, Styled as _};
+
+            gpui::div().size_full().child(self.dropdown.clone())
+        }
+    }
+
+    use super::{DropdownEnvironment, environment_badge, environment_short_label};
+    use crate::controls::{Dropdown, bind_dropdown_keys_for_tests};
+    use crate::primitives::BadgeTone;
 
     #[test]
-    fn selection_transition_closes_menu_and_clears_highlight() {
-        let transition = dropdown_selection_transition(false, 3, 2);
-
+    fn environments_map_to_their_badge_tones() {
         assert_eq!(
-            transition,
-            Some(super::DropdownSelectionTransition {
-                selected_index: 2,
-                open: false,
-                highlighted_index: None,
-            })
+            environment_badge(ConnectionEnvironment::Production).tone,
+            BadgeTone::Danger
         );
-    }
-
-    #[test]
-    fn selection_transition_rejects_out_of_range_highlights() {
-        let transition = dropdown_selection_transition(false, 2, 9);
-
-        assert_eq!(transition, None);
-    }
-
-    #[test]
-    fn dismiss_transition_closes_open_menu_and_clears_highlight() {
-        let transition = dropdown_dismiss_transition(true);
-
         assert_eq!(
-            transition,
-            Some(super::DropdownDismissTransition {
-                open: false,
-                highlighted_index: None,
-            })
+            environment_badge(ConnectionEnvironment::Staging).tone,
+            BadgeTone::Warning
         );
-    }
-
-    #[test]
-    fn dismiss_transition_skips_already_closed_menu() {
-        let transition = dropdown_dismiss_transition(false);
-
-        assert_eq!(transition, None);
-    }
-
-    #[test]
-    fn toolbar_style_builder_selects_toolbar_trigger_variant() {
-        let dropdown = Dropdown::new("toolbar-trigger").toolbar_style(true);
-
-        assert_eq!(dropdown.trigger_variant(), DropdownTriggerVariant::Toolbar);
-    }
-
-    #[test]
-    fn compact_trigger_takes_precedence_over_toolbar_variant() {
-        let dropdown = Dropdown::new("compact-trigger")
-            .toolbar_style(true)
-            .compact_trigger(true);
-
-        assert_eq!(dropdown.trigger_variant(), DropdownTriggerVariant::Compact);
-    }
-
-    #[test]
-    fn focus_ring_builder_stores_custom_ring_color() {
-        let dropdown =
-            Dropdown::new("ring-trigger").focus_ring_color(Some(gpui::black().opacity(0.25)));
-
-        assert!(dropdown.focus_ring_color.is_some());
-        assert!(!dropdown.focus_ring_visible);
-    }
-
-    #[test]
-    fn focus_ring_builder_can_clear_the_ring_color() {
-        let dropdown = Dropdown::new("ring-clear")
-            .focus_ring_color(Some(gpui::black().opacity(0.25)))
-            .focus_ring_color(None);
-
-        assert!(dropdown.focus_ring_color.is_none());
-    }
-
-    #[test]
-    fn standard_trigger_draws_its_chamfered_shape() {
-        let plan = dropdown_trigger_render_plan(DropdownTriggerVariant::Standard);
-
-        assert!(plan.uses_chamfer_shape);
-    }
-
-    #[test]
-    fn toolbar_trigger_skips_the_chamfered_shape() {
-        let plan = dropdown_trigger_render_plan(DropdownTriggerVariant::Toolbar);
-
-        assert!(!plan.uses_chamfer_shape);
-    }
-
-    #[test]
-    fn compact_trigger_skips_the_chamfered_shape() {
-        let plan = dropdown_trigger_render_plan(DropdownTriggerVariant::Compact);
-
-        assert!(!plan.uses_chamfer_shape);
-    }
-
-    #[test]
-    fn chevron_trigger_takes_precedence_and_skips_the_chamfered_shape() {
-        let dropdown = Dropdown::new("chevron-trigger")
-            .toolbar_style(true)
-            .compact_trigger(true)
-            .chevron_trigger(crate::controls::ButtonVariant::Primary);
-
-        assert_eq!(dropdown.trigger_variant(), DropdownTriggerVariant::Chevron);
-        assert!(!dropdown_trigger_render_plan(DropdownTriggerVariant::Chevron).uses_chamfer_shape);
-    }
-
-    #[test]
-    fn hiding_runtime_focus_ring_keeps_last_custom_color() {
-        let custom_color = gpui::black().opacity(0.25);
-        let (focus_ring_color, focus_ring_visible) =
-            dropdown_focus_ring_state(Some(custom_color), None);
-
-        assert_eq!(focus_ring_color, Some(custom_color));
-        assert!(!focus_ring_visible);
-    }
-
-    #[test]
-    fn showing_runtime_focus_ring_updates_color_and_visibility() {
-        let custom_color = gpui::black().opacity(0.25);
-        let (focus_ring_color, focus_ring_visible) =
-            dropdown_focus_ring_state(None, Some(custom_color));
-
-        assert_eq!(focus_ring_color, Some(custom_color));
-        assert!(focus_ring_visible);
-    }
-
-    #[test]
-    fn dropdown_menu_uses_the_overlay_cut_and_the_strong_line() {
-        let chrome = dropdown_menu_chrome();
-
-        assert_eq!(chrome.edge, ChromeEdgeRole::Control);
-        assert_eq!(chrome.cut, ChamferCut::OVERLAY);
+        assert_eq!(
+            environment_badge(ConnectionEnvironment::Development).tone,
+            BadgeTone::Info
+        );
+        // The label is the environment's translated short tag; assert it
+        // against the same translation the trigger draws.
+        assert_eq!(
+            environment_badge(ConnectionEnvironment::Staging).label,
+            SharedString::from(environment_short_label(ConnectionEnvironment::Staging))
+        );
     }
 
     /// Keyboard tests against a real window: the keys the app keymap binds
@@ -1158,10 +964,9 @@ mod tests {
     /// `bind_dropdown_keys_for_tests`), and an owner view stands in for the
     /// pane hosting the dropdown and records every command that reaches it.
     mod keyboard {
-        use super::super::{
-            Dropdown, DropdownItem, DropdownSelectionChanged, bind_dropdown_keys_for_tests,
-        };
+        use super::bind_dropdown_keys_for_tests;
         use crate::actions::RunCommand;
+        use crate::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
         use dbflux_core::keymap_types::Command;
         use gpui::{
             AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
@@ -1283,12 +1088,12 @@ mod tests {
             fn highlighted(&mut self) -> Option<usize> {
                 let dropdown = self.dropdown();
                 self.window
-                    .update(|_, cx| dropdown.read(cx).highlighted_index)
+                    .update(|_, cx| dropdown.read(cx).highlighted_index())
             }
 
             fn selected(&mut self) -> Option<usize> {
                 let dropdown = self.dropdown();
-                self.window.update(|_, cx| dropdown.read(cx).selected_index)
+                self.window.update(|_, cx| dropdown.read(cx).selected())
             }
 
             fn dropdown_focused(&mut self) -> bool {
@@ -1383,6 +1188,40 @@ mod tests {
                 vec![Command::SelectNext, Command::Execute]
             );
         }
+
+        /// Without the installed seam a dropdown answers no keys at all, so a
+        /// host that never installs it keeps full control of its keys.
+        #[gpui::test]
+        fn a_dropdown_without_the_seam_answers_no_keys(cx: &mut TestAppContext) {
+            use super::Bare;
+
+            cx.update(gpui_component::init);
+            cx.update(|cx| {
+                cx.bind_keys([gpui::KeyBinding::new(
+                    "enter",
+                    RunCommand::new(Command::Execute.id()),
+                    Some("Dropdown"),
+                )]);
+            });
+
+            let (bare, window) = cx.add_window_view(|_window, cx| Bare {
+                dropdown: cx.new(|_cx| {
+                    Dropdown::new("seamless-dropdown").items(vec![DropdownItem::new("One")])
+                }),
+            });
+            window.run_until_parked();
+
+            window.update(|window, cx| {
+                let dropdown = bare.read(cx).dropdown.clone();
+                dropdown.update(cx, |dropdown, cx| dropdown.focus(window, cx));
+            });
+            window.run_until_parked();
+            window.simulate_keystrokes("enter");
+            window.run_until_parked();
+
+            let open = window.update(|_, cx| bare.read(cx).dropdown.read(cx).is_open());
+            assert!(!open, "no installed seam, no key answered");
+        }
     }
 
     #[test]
@@ -1398,6 +1237,7 @@ mod tests {
     /// A trigger that draws only a chevron has no text of its own, so it needs
     /// the name the owner sets; anything else is named by its placeholder.
     mod naming {
+        use super::super::install_keymap_seams;
         use crate::accessibility::{FrameCapture, accessible_name};
         use crate::controls::{ButtonVariant, Dropdown, DropdownItem};
         use gpui::{
@@ -1428,6 +1268,7 @@ mod tests {
             cx: &mut TestAppContext,
         ) -> Option<String> {
             cx.update(crate::theme::init);
+            cx.update(install_keymap_seams);
 
             let capture = std::sync::Arc::new(FrameCapture::default());
             let capture_for_window = capture.clone();
@@ -1592,5 +1433,44 @@ mod tests {
 
             assert_eq!(name.as_deref(), Some("30s"));
         }
+    }
+
+    /// The toolbar trigger draws the environment badge the trait sets: the
+    /// trait maps the environment to bolt's `BadgeLabel` and stores it on the
+    /// dropdown, and setting `None` clears it again.
+    #[gpui::test]
+    fn set_label_environment_stores_and_clears_the_environment_badge(cx: &mut TestAppContext) {
+        use gpui::AppContext as _;
+
+        cx.update(gpui_component::init);
+
+        let (bare, window) = cx.add_window_view(|_window, cx| Bare {
+            dropdown: cx.new(|_cx| Dropdown::new("env-dropdown").toolbar_style(true)),
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let dropdown = bare.read(cx).dropdown.clone();
+            dropdown.update(cx, |dropdown, cx| {
+                dropdown.set_label_environment(Some(ConnectionEnvironment::Staging), cx);
+            });
+        });
+
+        let badge = window
+            .update(|_, cx| bare.read(cx).dropdown.read(cx).label_badge().cloned())
+            .expect("the environment badge is stored");
+        assert_eq!(badge.tone, BadgeTone::Warning);
+        assert_eq!(
+            badge.label,
+            SharedString::from(environment_short_label(ConnectionEnvironment::Staging))
+        );
+
+        window.update(|_, cx| {
+            let dropdown = bare.read(cx).dropdown.clone();
+            dropdown.update(cx, |dropdown, cx| {
+                dropdown.set_label_environment(None, cx);
+            });
+        });
+        assert!(window.update(|_, cx| bare.read(cx).dropdown.read(cx).label_badge().is_none()));
     }
 }

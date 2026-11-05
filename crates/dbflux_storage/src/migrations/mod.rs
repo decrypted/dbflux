@@ -190,6 +190,7 @@ impl MigrationRegistry {
         registry.register(mod_045_general_settings_table_alias::MigrationImpl);
         registry.register(mod_046_connection_profile_read_only::MigrationImpl);
         registry.register(mod_047_general_settings_grid_fk_labels::MigrationImpl);
+<<<<<<< bb09478a
         registry.register(mod_048_general_settings_grid_pk_sort_desc::MigrationImpl);
         registry.register(mod_049_connection_profile_connect_on_startup::MigrationImpl);
         registry.register(mod_050_session_tab_view_state::MigrationImpl);
@@ -202,6 +203,10 @@ impl MigrationRegistry {
         registry.register(mod_062_general_settings_ssh_accept_new_host_keys::MigrationImpl);
         registry.register(mod_063_viz_saved_chart_context::MigrationImpl);
         registry.register(mod_064_general_settings_grid_copy_protect_formulas::MigrationImpl);
+=======
+        registry.register(mod_048_general_settings_scrollbar_visibility::MigrationImpl);
+        registry.register(mod_049_general_settings_inspector_width::MigrationImpl);
+>>>>>>> 08605376
         registry
     }
 
@@ -439,6 +444,7 @@ mod mod_044_ssh_tunnel_config_host;
 mod mod_045_general_settings_table_alias;
 mod mod_046_connection_profile_read_only;
 mod mod_047_general_settings_grid_fk_labels;
+<<<<<<< bb09478a
 mod mod_048_general_settings_grid_pk_sort_desc;
 mod mod_049_connection_profile_connect_on_startup;
 mod mod_050_session_tab_view_state;
@@ -451,6 +457,10 @@ mod mod_061_general_settings_max_concurrent_queries;
 mod mod_062_general_settings_ssh_accept_new_host_keys;
 mod mod_063_viz_saved_chart_context;
 mod mod_064_general_settings_grid_copy_protect_formulas;
+=======
+mod mod_048_general_settings_scrollbar_visibility;
+mod mod_049_general_settings_inspector_width;
+>>>>>>> 08605376
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1300,6 +1310,7 @@ mod tests {
             "045_general_settings_table_alias",
             "046_connection_profile_read_only",
             "047_general_settings_grid_fk_labels",
+<<<<<<< bb09478a
             "048_general_settings_grid_pk_sort_desc",
             "049_connection_profile_connect_on_startup",
             "050_session_tab_view_state",
@@ -1312,6 +1323,10 @@ mod tests {
             "062_general_settings_ssh_accept_new_host_keys",
             "063_viz_saved_chart_context",
             "064_general_settings_grid_copy_protect_formulas",
+=======
+            "048_general_settings_scrollbar_visibility",
+            "049_general_settings_inspector_width",
+>>>>>>> 08605376
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

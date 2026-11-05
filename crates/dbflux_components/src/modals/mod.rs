@@ -7,6 +7,8 @@ pub mod host_key_confirm;
 pub mod import_dashboard;
 pub mod modal;
 pub mod mutation_confirm;
+// The rendering moved to `bolt`; this path keeps the product's code preview,
+// which is the half that knows what its language's keywords are.
 pub mod parts;
 pub mod schema_drift;
 pub mod tunnel_auth;

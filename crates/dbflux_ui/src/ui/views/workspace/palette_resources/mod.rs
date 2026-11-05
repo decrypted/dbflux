@@ -19,8 +19,6 @@ use uuid::Uuid;
 
 mod sync;
 #[cfg(test)]
-mod sync_tests;
-#[cfg(test)]
 mod tests;
 
 pub(super) use sync::PaletteSync;

@@ -168,12 +168,8 @@ fn open_workspace(cx: &mut TestAppContext) -> Harness<'_> {
     }
 }
 
-/// Connects a saved profile to a lazily loaded server listing `databases`.
-fn connect(harness: &mut Harness<'_>, databases: &[&str]) -> (Uuid, Arc<LazyServer>) {
-    let server = LazyServer::new();
-    let profile = dbflux_core::ConnectionProfile::new("lazy", DbConfig::default_mysql());
-    let profile_id = profile.id;
-    let snapshot = SchemaSnapshot::relational(RelationalSchema {
+fn snapshot(databases: &[&str]) -> SchemaSnapshot {
+    SchemaSnapshot::relational(RelationalSchema {
         databases: databases
             .iter()
             .map(|name| DatabaseInfo {
@@ -182,7 +178,15 @@ fn connect(harness: &mut Harness<'_>, databases: &[&str]) -> (Uuid, Arc<LazyServ
             })
             .collect(),
         ..Default::default()
-    });
+    })
+}
+
+/// Connects a saved profile to a lazily loaded server listing `databases`.
+fn connect(harness: &mut Harness<'_>, databases: &[&str]) -> (Uuid, Arc<LazyServer>) {
+    let server = LazyServer::new();
+    let profile = dbflux_core::ConnectionProfile::new("lazy", DbConfig::default_mysql());
+    let profile_id = profile.id;
+    let snapshot = snapshot(databases);
 
     harness.app_state.update(harness.window, |state, _| {
         state.add_profile_in_folder(profile.clone(), None);
@@ -318,4 +322,67 @@ fn a_deleted_profile_loses_its_stored_objects(cx: &mut TestAppContext) {
     settle(&mut harness);
 
     assert_eq!(stored(&mut harness), 0);
+}
+
+fn stored_databases(harness: &mut Harness<'_>, profile_id: Uuid) -> usize {
+    harness.app_state.read_with(harness.window, |state, _| {
+        state
+            .palette_object_index_repo
+            .load_profile(&profile_id.to_string())
+            .expect("load")
+            .len()
+    })
+}
+
+#[gpui::test]
+fn a_profile_pointed_elsewhere_while_connected_is_forgotten_again_on_reconnect(
+    cx: &mut TestAppContext,
+) {
+    let mut harness = open_workspace(cx);
+    let (profile_id, server) = connect(&mut harness, &["alpha"]);
+    open_palette(&mut harness);
+    settle(&mut harness);
+    assert_eq!(stored_databases(&mut harness, profile_id), 1);
+
+    let edited = harness.app_state.update(harness.window, |state, cx| {
+        let mut edited = state
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .cloned()
+            .expect("profile present");
+        if let DbConfig::MySQL { host, .. } = &mut edited.config {
+            *host = "other.example".to_string();
+        }
+        state.update_profile(edited.clone());
+        cx.emit(AppStateChanged);
+        edited
+    });
+    settle(&mut harness);
+    assert_eq!(stored_databases(&mut harness, profile_id), 0);
+
+    // Until it reconnects, the open connection still lists the old server.
+    open_palette(&mut harness);
+    open_palette(&mut harness);
+    settle(&mut harness);
+    assert_eq!(stored_databases(&mut harness, profile_id), 1);
+
+    harness.app_state.update(harness.window, |state, cx| {
+        state.apply_connect_profile(
+            edited,
+            server.clone(),
+            Some(snapshot(&["alpha"])),
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+        cx.emit(AppStateChanged);
+    });
+    settle(&mut harness);
+
+    assert_eq!(
+        stored_databases(&mut harness, profile_id),
+        0,
+        "the reconnect reaches the new server, so the old lists go"
+    );
 }

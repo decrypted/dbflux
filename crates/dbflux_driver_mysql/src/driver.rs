@@ -382,17 +382,16 @@ impl SqlDialect for MysqlDialect {
         value_to_mysql_literal(value)
     }
 
-    /// Satisfies the `SqlDialect` trait contract.
+    /// Satisfies the `SqlDialect` trait contract; MySQL's own literals come
+    /// from `mysql_text_literal`, which is exact under every `sql_mode`.
     ///
-    /// MySQL string literals are produced exclusively by `value_to_literal` /
-    /// `mysql_text_literal` (mode-independent hex encoding). This method is
-    /// never reached for MySQL because `MysqlDialect::value_to_literal`
-    /// overrides the default body that would otherwise call `escape_string`.
-    /// No production caller should use this method to construct MySQL literals:
-    /// no single inner-quote escaping strategy is safe under both the default
-    /// sql_mode and `NO_BACKSLASH_ESCAPES`.
+    /// Backslashes are doubled as well as quotes because the default
+    /// `sql_mode` treats `\` as an escape: doubling quotes alone lets a value
+    /// ending in a backslash escape the closing quote. Under
+    /// `NO_BACKSLASH_ESCAPES` the result still cannot leave the literal, it
+    /// only reads the backslashes twice.
     fn escape_string(&self, s: &str) -> String {
-        s.replace('\'', "''")
+        s.replace('\\', "\\\\").replace('\'', "''")
     }
 
     fn placeholder_style(&self) -> PlaceholderStyle {
@@ -2184,7 +2183,7 @@ impl Connection for MysqlConnection {
             log::debug!("[USE] Switching to database: {}", db);
             state
                 .conn
-                .query_drop(format!("USE `{}`", db))
+                .query_drop(use_database_statement(db))
                 .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
             state.current_database = Some(db.clone());
         }
@@ -2540,7 +2539,7 @@ impl Connection for MysqlConnection {
             log::info!("[USE] Switching to database: {}", db);
             state
                 .conn
-                .query_drop(format!("USE `{}`", db))
+                .query_drop(use_database_statement(db))
                 .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
         }
 
@@ -2632,22 +2631,12 @@ impl Connection for MysqlConnection {
             ));
         };
 
-        // Build `SHOW CREATE FUNCTION \`schema\`.\`name\`` or `SHOW CREATE PROCEDURE ...`.
-        // We use a format string here because SHOW CREATE does not support ? placeholders for
-        // identifiers; backtick-escaping prevents SQL injection via identifier names.
-        let escaped_schema = schema.replace('`', "``");
-        let escaped_name = specific_name.replace('`', "``");
-
+        // SHOW CREATE takes no `?` placeholders for identifiers.
+        let routine = mysql_qualified_name(Some(schema), specific_name);
         let show_sql = if routine_type == "FUNCTION" {
-            format!(
-                "SHOW CREATE FUNCTION `{}`.`{}`",
-                escaped_schema, escaped_name
-            )
+            format!("SHOW CREATE FUNCTION {routine}")
         } else {
-            format!(
-                "SHOW CREATE PROCEDURE `{}`.`{}`",
-                escaped_schema, escaped_name
-            )
+            format!("SHOW CREATE PROCEDURE {routine}")
         };
 
         let def_rows: Vec<mysql::Row> = conn
@@ -2711,7 +2700,7 @@ impl Connection for MysqlConnection {
             log::debug!("[USE] Switching to database: {}", db);
             state
                 .conn
-                .query_drop(format!("USE `{}`", db))
+                .query_drop(use_database_statement(db))
                 .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
             state.current_database = Some(db.clone());
         }
@@ -2777,7 +2766,7 @@ impl Connection for MysqlConnection {
             log::debug!("[USE] Switching to database: {}", db);
             state
                 .conn
-                .query_drop(format!("USE `{}`", db))
+                .query_drop(use_database_statement(db))
                 .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
             state.current_database = Some(db.clone());
         }
@@ -2854,7 +2843,7 @@ impl Connection for MysqlConnection {
             log::debug!("[USE] Switching to database: {}", db);
             state
                 .conn
-                .query_drop(format!("USE `{}`", db))
+                .query_drop(use_database_statement(db))
                 .map_err(|e| DbError::query_failed(format!("USE database failed: {}", e)))?;
             state.current_database = Some(db.clone());
         }
@@ -2996,6 +2985,37 @@ mod sql_statement_tests {
         assert_eq!(
             drop_index_statement("idx_users_email", None),
             "DROP INDEX `idx_users_email` "
+        );
+    }
+
+    #[test]
+    fn use_database_statement_keeps_a_backtick_name_inside_the_identifier() {
+        assert_eq!(use_database_statement("app"), "USE `app`");
+        assert_eq!(
+            use_database_statement("x`; DROP DATABASE prod; -- "),
+            "USE `x``; DROP DATABASE prod; -- `"
+        );
+    }
+
+    #[test]
+    fn show_index_statement_quotes_database_and_table() {
+        assert_eq!(
+            show_index_statement("app", "x`;GRANT ALL ON *.* TO 'app'@'%';#"),
+            "SHOW INDEX FROM `app`.`x``;GRANT ALL ON *.* TO 'app'@'%';#`"
+        );
+        assert_eq!(
+            show_index_statement("a`b", "t"),
+            "SHOW INDEX FROM `a``b`.`t`"
+        );
+    }
+
+    #[test]
+    fn escape_string_doubles_backslashes_and_quotes() {
+        assert_eq!(MYSQL_DIALECT.escape_string("it's"), "it''s");
+        assert_eq!(MYSQL_DIALECT.escape_string("x\\"), "x\\\\");
+        assert_eq!(
+            MYSQL_DIALECT.escape_string("\\' OR 1=1 -- "),
+            "\\\\'' OR 1=1 -- "
         );
     }
 
@@ -3947,6 +3967,21 @@ fn mysql_quote_ident(ident: &str) -> String {
     format!("`{}`", ident.replace('`', "``"))
 }
 
+/// `USE` statement for a server-provided database name. The name can contain a
+/// backtick, and the connection allows several statements per query, so an
+/// unquoted name would run whatever follows it.
+fn use_database_statement(database: &str) -> String {
+    format!("USE {}", mysql_quote_ident(database))
+}
+
+/// `SHOW INDEX` takes no `?` placeholders, so both names are quoted.
+fn show_index_statement(database: &str, table: &str) -> String {
+    format!(
+        "SHOW INDEX FROM {}",
+        mysql_qualified_name(Some(database), table)
+    )
+}
+
 /// Build a qualified table name for MySQL.
 fn mysql_qualified_name(schema: Option<&str>, name: &str) -> String {
     match schema {
@@ -4084,7 +4119,7 @@ fn fetch_columns(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<Col
 }
 
 fn fetch_indexes(conn: &mut Conn, database: &str, table: &str) -> Result<Vec<IndexInfo>, DbError> {
-    let query = format!("SHOW INDEX FROM `{}`.`{}`", database, table);
+    let query = show_index_statement(database, table);
 
     let rows: Vec<mysql::Row> = conn
         .query(&query)

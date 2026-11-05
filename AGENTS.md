@@ -204,6 +204,8 @@ fn table_details(&self, name: &str) -> TableDetails // Columns, indexes
 
 **Driver error formatting**: Drivers implement the `ErrorFormatter` trait from `dbflux_core/src/core/error_formatter.rs` to extract detailed error info. PostgreSQL's `as_db_error()` provides detail, hint, column, table, and constraint fields. MongoDB extracts error codes and labels. Use structured error formatting instead of raw `format!("{:?}", e)`.
 
+**Quoting in generated SQL**: Names and values come from the dialect (`quote_identifier`, `qualified_table`, `value_to_literal`) or the driver's own quoting helper, never from quotes written around a `{}` placeholder: server-provided names can contain the quote character. `python3 scripts/lint.py unquoted-sql` flags such placeholders in the driver crates and `dbflux_core`; a provably safe site goes into `scripts/unquoted_sql_allowlist.txt` with its reason.
+
 ## GPUI Guidelines
 
 ### Context Types

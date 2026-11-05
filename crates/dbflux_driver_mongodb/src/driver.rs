@@ -1476,10 +1476,8 @@ fn mongo_filter_field_name(field: &SemanticFieldRef) -> Result<String, DbError> 
 fn mongo_collection_shell_prefix(collection: &dbflux_core::CollectionRef) -> String {
     format!(
         "db.getSiblingDB({}).getCollection({})",
-        serde_json::to_string(&collection.database)
-            .unwrap_or_else(|_| format!("\"{}\"", collection.database)),
-        serde_json::to_string(&collection.name)
-            .unwrap_or_else(|_| format!("\"{}\"", collection.name)),
+        shell_string(&collection.database),
+        shell_string(&collection.name),
     )
 }
 
@@ -3280,13 +3278,14 @@ impl SqlDialect for MongoDialect {
             Value::Bool(b) => b.to_string(),
             Value::Int(i) => i.to_string(),
             Value::Float(f) => f.to_string(),
-            Value::Text(s) => format!("\"{}\"", s.replace('\"', "\\\"")),
+            Value::Text(s) => shell_string(s),
             Value::Bytes(b) => format!("BinData(0, \"{}\")", base64_encode(b)),
             Value::Json(j) => j.clone(),
-            Value::Decimal(d) => d.clone(),
+            Value::Decimal(d) if dbflux_core::is_numeric_literal(d) => d.clone(),
+            Value::Decimal(_) => "null".to_string(),
             Value::DateTime(dt) => format!("ISODate(\"{}\")", dt.to_rfc3339()),
             Value::Date(d) => format!("ISODate(\"{}T00:00:00Z\")", d),
-            Value::Time(t) => format!("\"{}\"", t),
+            Value::Time(t) => shell_string(&t.to_string()),
             Value::Array(arr) => {
                 let items: Vec<String> = arr.iter().map(|v| self.value_to_literal(v)).collect();
                 format!("[{}]", items.join(", "))
@@ -3294,11 +3293,11 @@ impl SqlDialect for MongoDialect {
             Value::Document(doc) => {
                 let pairs: Vec<String> = doc
                     .iter()
-                    .map(|(k, v)| format!("\"{}\": {}", k, self.value_to_literal(v)))
+                    .map(|(k, v)| format!("{}: {}", shell_string(k), self.value_to_literal(v)))
                     .collect();
                 format!("{{{}}}", pairs.join(", "))
             }
-            Value::ObjectId(oid) => format!("ObjectId(\"{}\")", oid),
+            Value::ObjectId(oid) => format!("ObjectId({})", shell_string(oid)),
             Value::Unsupported(type_name) => format!("\"UNSUPPORTED<{}>\"", type_name),
         }
     }
@@ -3310,6 +3309,13 @@ impl SqlDialect for MongoDialect {
     fn placeholder_style(&self) -> PlaceholderStyle {
         PlaceholderStyle::QuestionMark
     }
+}
+
+/// A JSON string is a valid shell string literal with every quote, backslash
+/// and control character escaped; escaping the quote alone lets a trailing
+/// backslash swallow the closing quote.
+fn shell_string(s: &str) -> String {
+    serde_json::Value::String(s.to_string()).to_string()
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
@@ -6372,5 +6378,53 @@ mod row_budget_tests {
         ] {
             assert!(!script_method_returns_rows(method), "{method}");
         }
+    }
+}
+
+#[cfg(test)]
+mod shell_literal_tests {
+    use super::*;
+
+    #[test]
+    fn text_literal_escapes_backslashes_and_quotes() {
+        assert_eq!(
+            MongoDialect.value_to_literal(&Value::Text("a\"b".to_string())),
+            "\"a\\\"b\""
+        );
+        // A trailing backslash must not escape the closing quote.
+        assert_eq!(
+            MongoDialect.value_to_literal(&Value::Text("x\\".to_string())),
+            "\"x\\\\\""
+        );
+    }
+
+    #[test]
+    fn object_id_and_document_keys_are_quoted() {
+        assert_eq!(
+            MongoDialect.value_to_literal(&Value::ObjectId("a\")+evil(\"".to_string())),
+            "ObjectId(\"a\\\")+evil(\\\"\")"
+        );
+        assert_eq!(
+            MongoDialect.value_to_literal(&Value::ObjectId("x\\".to_string())),
+            "ObjectId(\"x\\\\\")"
+        );
+        let mut doc = std::collections::BTreeMap::new();
+        doc.insert("k\"\\".to_string(), Value::Int(1));
+        assert_eq!(
+            MongoDialect.value_to_literal(&Value::Document(doc)),
+            "{\"k\\\"\\\\\": 1}"
+        );
+    }
+
+    #[test]
+    fn decimal_is_inlined_only_when_numeric() {
+        assert_eq!(
+            MongoDialect.value_to_literal(&Value::Decimal("1.25".to_string())),
+            "1.25"
+        );
+        assert_eq!(
+            MongoDialect.value_to_literal(&Value::Decimal("1, $where: \"x\"".to_string())),
+            "null"
+        );
     }
 }

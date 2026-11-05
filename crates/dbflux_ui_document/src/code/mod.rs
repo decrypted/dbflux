@@ -625,6 +625,11 @@ pub struct CodeDocument {
     /// that lands also asks the workspace to close the tab.
     close_after_save: bool,
 
+    /// Set when a close-driven save was refused, until a write lands. The tab
+    /// then stops closing itself, so the next close asks whether to overwrite
+    /// the file or discard the edits instead of retrying the same refused save.
+    close_flush_refused: bool,
+
     /// Opt-in modal editing state for the editor.
     vim: dbflux_components::vim::VimBinding,
 }
@@ -1278,6 +1283,7 @@ impl CodeDocument {
             },
             pending: PendingActions::default(),
             close_after_save: false,
+            close_flush_refused: false,
             vim,
         };
 
@@ -1632,6 +1638,12 @@ impl CodeDocument {
         self.editor.path.as_ref()
     }
 
+    /// Whether closing this tab persists its pending edits by itself: only a
+    /// file-backed buffer whose last close-driven save was not refused.
+    pub fn decides_own_close(&self) -> bool {
+        self.is_file_backed() && !self.close_flush_refused
+    }
+
     pub fn is_file_backed(&self) -> bool {
         self.editor.path.is_some()
     }
@@ -1802,7 +1814,12 @@ impl CodeDocument {
     pub fn change_summary(&self, cx: &App) -> Option<String> {
         let (added, removed) = self.diff_stats(cx);
 
-        if added == 0 && removed == 0 {
+        // The unsaved-changes dialog lists only documents with a summary, and a
+        // refused close relies on it: edits that only reorder or repeat lines
+        // count no added or removed line but still need the decision.
+        let needs_decision = self.close_flush_refused && self.has_unsaved_changes(cx);
+
+        if added == 0 && removed == 0 && !needs_decision {
             None
         } else {
             Some(format!("+{}/−{} lines", added, removed))

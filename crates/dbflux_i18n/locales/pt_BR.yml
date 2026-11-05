@@ -1452,6 +1452,7 @@ document:
         close_flush_failed: "Não foi possível salvar %{path} antes de fechar, então a aba continuou aberta"
         shutdown_flush_failed: "Não foi possível salvar %{path} ao sair; as edições permanecem nesta sessão"
         refusal_suggested_action: Use Ctrl+S ou Salvar arquivo como para gravar essas edições de propósito
+        close_refusal_suggested_action: Use Ctrl+S para salvar por cima do arquivo, ou feche a aba de novo para salvar ou descartar essas edições
       native_picker_fallback: "O seletor de arquivos nativo não está disponível — o script foi salvo em %{path}. Instale xdg-desktop-portal, zenity ou kdialog para ter uma caixa de diálogo de salvar."
     title:
       untitled: Sem título

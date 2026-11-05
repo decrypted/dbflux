@@ -45,10 +45,12 @@ fn report_save_failed(entity: &Entity<CodeDocument>, cx: &AsyncApp) {
 }
 
 /// Drops the close intent a refused close flush armed, so a tab the user kept
-/// open cannot be closed by a later save.
+/// open cannot be closed by a later save, and hands the next close to the
+/// unsaved-changes confirmation.
 fn abandon_close_flush(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
     cx.update(|cx| {
         entity.update(cx, |doc, cx| {
+            doc.close_flush_refused = true;
             doc.report_save_outcome(false, cx);
         });
     });
@@ -86,9 +88,19 @@ fn refusal_error(kind: WriteKind, path: &std::path::Path, cause: String) -> User
         dbflux_i18n::t!(refusal_error_key(kind), path = path.display().to_string()),
     )
     .with_cause(cause)
-    .with_suggested_action(dbflux_i18n::t!(
-        "document.code.file_ops.error.refusal_suggested_action"
-    ))
+    .with_suggested_action(dbflux_i18n::t!(refusal_suggested_action_key(kind)))
+}
+
+/// A refused close leaves the next close to ask what to do with the edits, so
+/// its hint names that way out rather than an explicit save alone.
+fn refusal_suggested_action_key(kind: WriteKind) -> &'static str {
+    match kind {
+        WriteKind::CloseFlush => "document.code.file_ops.error.close_refusal_suggested_action",
+        WriteKind::Auto
+        | WriteKind::ShutdownFlush
+        | WriteKind::Explicit
+        | WriteKind::SaveAs { .. } => "document.code.file_ops.error.refusal_suggested_action",
+    }
 }
 
 /// Applies the result of one queued physical write: reports user-facing
@@ -120,6 +132,7 @@ async fn finish_physical_write(
             cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
                     doc.physical_writes.adopt_baseline(new_baseline);
+                    doc.close_flush_refused = false;
 
                     match kind {
                         WriteKind::Explicit => {

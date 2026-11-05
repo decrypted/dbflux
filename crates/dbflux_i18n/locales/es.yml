@@ -1452,6 +1452,7 @@ document:
         close_flush_failed: "No se pudo guardar %{path} antes de cerrar, así que la pestaña quedó abierta"
         shutdown_flush_failed: "No se pudo guardar %{path} al salir; las ediciones quedan en esta sesión"
         refusal_suggested_action: Usa Ctrl+S o Guardar como para escribir estos cambios de forma deliberada
+        close_refusal_suggested_action: Usa Ctrl+S para guardar encima del archivo, o cierra la pestaña otra vez para guardar o descartar estos cambios
       native_picker_fallback: "Selector de archivos nativo no disponible — el script se guardó en %{path}. Instala xdg-desktop-portal, zenity o kdialog para tener un selector de guardado."
     title:
       untitled: Sin título

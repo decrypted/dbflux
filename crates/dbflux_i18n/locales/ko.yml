@@ -1452,6 +1452,7 @@ document:
         close_flush_failed: 닫기 전에 %{path}을(를) 저장할 수 없어 탭이 열려 있습니다
         shutdown_flush_failed: 종료하는 동안 %{path}을(를) 저장할 수 없습니다. 편집 내용은 이 세션에 유지됩니다
         refusal_suggested_action: Ctrl+S 또는 다른 이름으로 파일 저장을 사용해 이 편집 내용을 직접 저장하세요
+        close_refusal_suggested_action: Ctrl+S로 파일을 덮어쓰거나, 탭을 다시 닫아 이 편집 내용을 저장하거나 버리세요
       native_picker_fallback: "기본 파일 선택기를 사용할 수 없습니다 — 대신 스크립트를 %{path}에 저장했습니다. 저장 대화 상자를 사용하려면 xdg-desktop-portal, zenity 또는 kdialog를 설치하세요."
     title:
       untitled: 제목 없음

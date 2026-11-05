@@ -172,13 +172,29 @@ pub struct AppState {
     /// asked: their stored palette objects no longer apply. The palette
     /// deletes them off the UI thread, after the writes it queued before.
     palette_profiles_to_forget: Vec<Uuid>,
+    /// Profiles pointed elsewhere while connected: the open connection still
+    /// reaches the old server, so what the palette stores until the
+    /// reconnect is forgotten again then.
+    palette_forget_on_connect: HashSet<Uuid>,
 }
 
 /// Whether two versions of a profile reach the same databases: the same
-/// driver and the same connection settings.
+/// driver, connection settings and values filled in at connect time, through
+/// the same tunnel, proxy, access method and auth profile.
 fn same_server(before: &ConnectionProfile, after: &ConnectionProfile) -> bool {
-    before.driver_id() == after.driver_id()
-        && serde_json::to_value(&before.config).ok() == serde_json::to_value(&after.config).ok()
+    fn reach(profile: &ConnectionProfile) -> Option<serde_json::Value> {
+        serde_json::to_value((
+            profile.driver_id(),
+            &profile.config,
+            &profile.value_refs,
+            &profile.access_kind,
+            profile.proxy_profile_id,
+            profile.auth_profile_id,
+        ))
+        .ok()
+    }
+
+    reach(before) == reach(after)
 }
 
 impl AppState {
@@ -781,6 +797,10 @@ impl AppState {
             profile.read_only_flag = saved.read_only_flag;
         }
 
+        if self.palette_forget_on_connect.remove(&profile.id) {
+            self.palette_profiles_to_forget.push(profile.id);
+        }
+
         self.facade.connections.apply_connect_profile(
             profile,
             connection,
@@ -1344,6 +1364,9 @@ impl AppState {
             .is_some_and(|known| !same_server(known, &profile))
         {
             self.palette_profiles_to_forget.push(profile.id);
+            if self.connections().contains_key(&profile.id) {
+                self.palette_forget_on_connect.insert(profile.id);
+            }
         }
         self.facade.connections.clear_connect_failure(profile.id);
         self.remembered_connection_passwords.remove(&profile.id);
@@ -4133,6 +4156,27 @@ mod tests {
             vec![moved_id, removed_id]
         );
         assert!(state.take_palette_profiles_to_forget().is_empty());
+    }
+
+    #[test]
+    fn the_palette_forgets_a_profile_reached_through_another_tunnel() {
+        let tunneled = ConnectionProfile::new("tunneled", DbConfig::default_postgres());
+        let tunneled_id = tunneled.id;
+        let mut state = test_state_with_profiles(HashMap::new(), vec![tunneled.clone()]);
+
+        let mut through_ssh = tunneled;
+        through_ssh.access_kind = Some(dbflux_core::access::AccessKind::Ssh {
+            ssh_tunnel_profile_id: Uuid::new_v4(),
+        });
+        state.update_profile(through_ssh.clone());
+        assert_eq!(state.take_palette_profiles_to_forget(), vec![tunneled_id]);
+
+        let mut through_proxy = through_ssh;
+        through_proxy.access_kind = Some(dbflux_core::access::AccessKind::Proxy {
+            proxy_profile_id: Uuid::new_v4(),
+        });
+        state.update_profile(through_proxy);
+        assert_eq!(state.take_palette_profiles_to_forget(), vec![tunneled_id]);
     }
 
     /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain

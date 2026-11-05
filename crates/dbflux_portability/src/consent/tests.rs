@@ -311,6 +311,36 @@ fn parameter_and_auth_value_sources_are_stripped_without_consent() {
     assert!(!profile.value_refs.contains_key("ssl_key"));
 }
 
+/// A secret file value source reads a local file on every connect, so the
+/// review names the file and the import drops it without consent.
+#[test]
+fn a_secret_file_value_source_is_reviewed_and_stripped_without_consent() {
+    let mut parsed = parse(CRAFTED_BUNDLE.as_bytes()).expect("parses");
+    let entry = &mut parsed.bundle.connections[0];
+    let vref = ValueRef::file("/run/secrets/db.json", Some("password".to_string()));
+    let jv = serde_json::to_value(&vref).expect("serialize");
+    entry.value_refs.insert(
+        "ssl_key".to_string(),
+        toml::Value::try_from(jv).expect("toml"),
+    );
+
+    let conn = &review(&parsed).connections[0];
+    let file_ref = conn
+        .value_refs
+        .iter()
+        .find(|r| r.field == "ssl_key")
+        .expect("the file reference is reviewed");
+    assert_eq!(file_ref.source, ValueSourceKind::File);
+    assert_eq!(file_ref.detail, "/run/secrets/db.json#password");
+    assert!(file_ref.needs_consent());
+
+    let import_plan = plan(&parsed, &empty_dest());
+    let actions = apply(&parsed, &import_plan, &ResolutionChoices::default()).expect("apply");
+    let profile = only_connection(&actions);
+
+    assert!(!profile.value_refs.contains_key("ssl_key"));
+}
+
 #[test]
 fn literal_value_sources_import_without_consent() {
     let actions = import_crafted(ImportConsent::default());

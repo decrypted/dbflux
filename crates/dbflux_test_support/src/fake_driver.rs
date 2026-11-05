@@ -97,6 +97,10 @@ struct FakeDriverState {
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
     dialect: RwLock<Option<&'static dyn SqlDialect>>,
     language_service: RwLock<Option<&'static dyn LanguageService>>,
+    region_switch_enabled: AtomicBool,
+    available_regions: RwLock<Vec<String>>,
+    region_list_error: RwLock<Option<String>>,
+    available_regions_calls: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -196,6 +200,42 @@ impl FakeDriver {
     pub fn with_dialect(self, dialect: &'static dyn SqlDialect) -> Self {
         *rwlock_write(&self.state.dialect) = Some(dialect);
         self
+    }
+
+    /// Opts a fake into the live region-switch seam: it advertises
+    /// `DriverCapabilities::REGION_SWITCH`, answers `available_regions` with
+    /// the fixed list and rewrites the region of an `AwsSecrets` config. The
+    /// current region comes from the profile each connection was built with,
+    /// so a switch that reconnects with a rewritten config reports the new
+    /// region. Without this opt-in the fake has no region hook and existing
+    /// metadata assertions stay as they are.
+    pub fn with_region_switch(mut self, regions: &[&str]) -> Self {
+        let metadata = Arc::make_mut(&mut self.metadata);
+        metadata.capabilities |= DriverCapabilities::REGION_SWITCH;
+        *rwlock_write(&self.state.available_regions) =
+            regions.iter().map(|region| region.to_string()).collect();
+        self.state
+            .region_switch_enabled
+            .store(true, Ordering::Relaxed);
+        self
+    }
+
+    /// Replaces the region-list answer: `Some` fails the next
+    /// `available_regions` calls with that message, `None` restores the
+    /// fixed list.
+    pub fn set_region_list_error(&self, message: Option<String>) {
+        *rwlock_write(&self.state.region_list_error) = message;
+    }
+
+    /// Replaces the connect outcome for later connects, the way a region
+    /// switch fails when the reconnect cannot be established.
+    pub fn set_connect_error(&self, message: Option<String>) {
+        *rwlock_write(&self.state.connect_error) = message;
+    }
+
+    /// How many times a connection answered `available_regions`.
+    pub fn available_regions_calls(&self) -> usize {
+        self.state.available_regions_calls.load(Ordering::Relaxed)
     }
 
     pub fn with_schema(self, schema: SchemaSnapshot) -> Self {
@@ -665,6 +705,29 @@ impl DbDriver for FakeDriver {
 
         Ok(())
     }
+
+    fn with_region(&self, config: &DbConfig, region: &str) -> Option<DbConfig> {
+        if !self.state.region_switch_enabled.load(Ordering::Relaxed) {
+            return None;
+        }
+
+        let DbConfig::AwsSecrets {
+            profile,
+            access_key_id,
+            endpoint,
+            ..
+        } = config
+        else {
+            return None;
+        };
+
+        Some(DbConfig::AwsSecrets {
+            region: region.to_string(),
+            profile: profile.clone(),
+            access_key_id: access_key_id.clone(),
+            endpoint: endpoint.clone(),
+        })
+    }
 }
 
 struct FakeConnection {
@@ -672,6 +735,7 @@ struct FakeConnection {
     state: Arc<FakeDriverState>,
     metadata: Arc<DriverMetadata>,
     active_database: RwLock<Option<String>>,
+    current_region: Option<String>,
     secret_stores: Vec<FakeSecretStore>,
     session_factory: FakeSessionFactory,
 }
@@ -691,6 +755,7 @@ impl ExecutionSessionFactory for FakeSessionFactory {
                 state: self.state.clone(),
                 metadata: self.metadata.clone(),
                 active_database: RwLock::new(None),
+                current_region: None,
                 secret_stores: Vec::new(),
                 session_factory: FakeSessionFactory {
                     kind: self.kind,
@@ -749,11 +814,17 @@ impl FakeConnection {
             metadata: metadata.clone(),
         };
 
+        let current_region = match &profile.config {
+            DbConfig::AwsSecrets { region, .. } => Some(region.clone()),
+            _ => None,
+        };
+
         Self {
             kind,
             state,
             metadata,
             active_database: RwLock::new(active_database_from_profile(profile)),
+            current_region,
             secret_stores,
             session_factory,
         }
@@ -892,6 +963,28 @@ impl Connection for FakeConnection {
 
     fn active_database(&self) -> Option<String> {
         rwlock_read(&self.active_database).clone()
+    }
+
+    fn current_region(&self) -> Option<String> {
+        self.current_region.clone()
+    }
+
+    fn available_regions(&self) -> Result<Vec<String>, DbError> {
+        if !self.state.region_switch_enabled.load(Ordering::Relaxed) {
+            return Err(DbError::NotSupported(
+                "region listing not supported".to_string(),
+            ));
+        }
+
+        self.state
+            .available_regions_calls
+            .fetch_add(1, Ordering::Relaxed);
+
+        if let Some(message) = rwlock_read(&self.state.region_list_error).clone() {
+            return Err(DbError::PermissionDenied(message.into()));
+        }
+
+        Ok(rwlock_read(&self.state.available_regions).clone())
     }
 
     fn kind(&self) -> DbKind {
@@ -2310,10 +2403,13 @@ impl SecretStoreSource for FakeSecretStore {
                 .map_err(|_| DbError::query_failed(format!("Invalid page token {token}")))?,
             None => 0,
         };
+        // `default_page_size` stands in for the service's own maximum, so a
+        // request for a larger page is clamped instead of honored: that is
+        // what a real store does with `max_results`.
         let page_size = request
             .page_size
             .map_or(self.default_page_size, |size| size as usize)
-            .max(1);
+            .clamp(1, self.default_page_size);
 
         let end = (start + page_size).min(entries.len());
         let page: Vec<SecretSummary> = entries

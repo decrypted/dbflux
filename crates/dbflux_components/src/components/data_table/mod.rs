@@ -6,6 +6,7 @@ mod events;
 pub mod model;
 mod record;
 pub mod selection;
+pub mod source;
 mod state;
 mod table;
 #[cfg(test)]
@@ -25,3 +26,6 @@ pub use state::{
 pub use table::{CONTEXT, DataTable, actions, context_menu_keystroke};
 pub use theme::ROW_NUMBER_WIDTH;
 pub use totals::{NumericTotals, SelectionTotals};
+// The row list and cell painter moved to `bolt::components::grid`;
+// re-exported here so the old surface keeps compiling.
+pub use bolt::components::grid::{CellPaint, GridCellCoord, GridHost, cell_paint, render_rows};

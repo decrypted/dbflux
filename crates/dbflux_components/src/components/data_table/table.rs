@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use crate::controls::{GpuiInput as Input, InputMoveDown, InputMoveUp, InputState};
 use crate::fonts;
 use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, ChamferRing, Icon};
-use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors, Spacing};
+use crate::primitives::Icon;
+use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, Spacing};
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -19,10 +19,16 @@ use gpui_component::{ActiveTheme, Sizable};
 
 use super::document::DocumentPresentation;
 use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge, SortState};
-use super::model::TableModel;
-use super::selection::{CellCoord, SelectionState};
+use super::selection::CellCoord;
+use super::source::GridRowSource;
 use super::state::DataTableState;
 use super::theme::{CELL_PADDING_X, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
+// The row list, the cell painter and the column resize drag moved to
+// `bolt::components::grid`; the table supplies its state through `GridHost`.
+use bolt::components::grid::{
+    ColumnResizeDrag, GridCellCoord, GridColors, GridHost, GridPinned,
+    column_resize_handle_with_fit, render_rows, track_column_resize,
+};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -125,28 +131,11 @@ pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Key
         .map(|keystroke| keystroke.inner().clone())
 }
 
-#[derive(Clone)]
-struct ResizeDragState {
-    col: Option<usize>,
-    start_x: gpui::Pixels,
-    original_width: f32,
-}
-
-impl Default for ResizeDragState {
-    fn default() -> Self {
-        Self {
-            col: None,
-            start_x: gpui::px(0.0),
-            original_width: 0.0,
-        }
-    }
-}
-
 pub struct DataTable {
     id: ElementId,
     state: Entity<DataTableState>,
     scroll_sync: Arc<Mutex<ScrollSyncState>>,
-    resize_drag: Arc<Mutex<ResizeDragState>>,
+    resize_drag: ColumnResizeDrag,
 }
 
 impl DataTable {
@@ -166,7 +155,7 @@ impl DataTable {
 
         Self {
             id: id.into(),
-            resize_drag: Arc::new(Mutex::new(ResizeDragState::default())),
+            resize_drag: ColumnResizeDrag::new(),
             state,
             scroll_sync: Arc::new(Mutex::new(ScrollSyncState::default())),
         }
@@ -945,7 +934,7 @@ impl DataTable {
                     })
                     .child(column_resize_handle(
                         state_entity.clone(),
-                        resize_drag_for_down,
+                        &resize_drag_for_down,
                         col_ix,
                         width,
                         ChromeColors::tint(theme),
@@ -1200,7 +1189,7 @@ impl DataTable {
                     .when_some(presence_line, |cell, line| cell.child(line))
                     .child(column_resize_handle(
                         self.state.clone(),
-                        resize_drag_for_down,
+                        &resize_drag_for_down,
                         col_ix,
                         width,
                         tint,
@@ -1255,41 +1244,213 @@ impl DataTable {
                 let row_height = fonts::grid_row_height(cx);
                 let nested_icon = fonts::grid_px(cx, CollectionMetrics::NESTED_ICON);
                 let theme = cx.theme();
+                let grid_colors = GridColors::of(theme);
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
+                let selection = state.selection();
 
-                let editing_cell = state.editing_cell();
-                let cell_input = state.cell_input().cloned();
-                let enum_dropdown = state.enum_dropdown().cloned();
-                let edit_buffer = state.edit_buffer();
-                let expression_editor = ExpressionEditorView::of(state);
-
-                render_rows(
-                    &state_entity,
-                    visible_range,
+                let source = GridRowSource::with_document(
                     &model,
-                    state.visible_columns(),
-                    PinnedColumns {
+                    state.edit_buffer(),
+                    state.document_presentation(),
+                );
+
+                // The pinned columns sit in a strip that cancels the
+                // horizontal scroll and repeats the drag tracking, since it
+                // blocks the mouse from the table root under it.
+                let pinned_h_offset = state.horizontal_offset();
+                let strip = |fill: Option<Hsla>, gutter: AnyElement, cells: Vec<AnyElement>| {
+                    pinned_strip(
+                        pinned_h_offset,
+                        theme.table,
+                        fill,
+                        gutter,
+                        cells,
+                        &drag_tracking,
+                        theme,
+                    )
+                    .into_any_element()
+                };
+
+                // The host state the Bolt row renderer reads: the grid's
+                // selection and editing facts, its interaction policy and
+                // its icons, all as plain values the renderer cannot
+                // misread. The selection test stays a borrow; the click
+                // callbacks are Arcs because gpui handlers are 'static.
+                let is_selected = |coord: GridCellCoord| {
+                    selection.is_selected(CellCoord::new(coord.row, coord.col))
+                };
+                let host = GridHost {
+                    column_widths: state.column_widths(),
+                    active: selection.active.map(|c| GridCellCoord::new(c.row, c.col)),
+                    editing: state
+                        .editing_cell()
+                        .map(|c| GridCellCoord::new(c.row, c.col)),
+                    is_selected: &is_selected,
+                    reference_row: state.has_reference_row(),
+                    on_cell_click: {
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |coord: GridCellCoord,
+                                  event: &ClickEvent,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                let coord = CellCoord::new(coord.row, coord.col);
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                });
+
+                                let modifiers = event.modifiers();
+
+                                if event.click_count() == 2 {
+                                    state.update(cx, |state, cx| {
+                                        // A Ctrl+double-click on the cell
+                                        // selected on its own took it out on
+                                        // the first press.
+                                        if !state.selection().is_selected(coord) {
+                                            state.select_cell(coord, cx);
+                                        }
+                                        state.start_editing(coord, window, cx);
+                                    });
+                                    return;
+                                }
+
+                                // A mouse press already selected the cell
+                                // (see `on_cell_press`); selecting again on
+                                // release would undo a Ctrl+click toggle and
+                                // emit the selection events twice. Keyboard
+                                // and touch activation have no press, so they
+                                // select here.
+                                if !matches!(event, ClickEvent::Mouse(_)) {
+                                    state.update(cx, |state, cx| {
+                                        state.click_cell(coord, modifiers, cx);
+                                    });
+                                }
+                            },
+                        )
+                    },
+                    on_cell_context: {
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |coord: GridCellCoord,
+                                  event: &MouseDownEvent,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                let coord = CellCoord::new(coord.row, coord.col);
+                                cx.stop_propagation();
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.select_cell(coord, cx);
+                                    cx.emit(DataTableEvent::ContextMenuRequested {
+                                        row: coord.row,
+                                        col: coord.col,
+                                        position: event.position,
+                                        is_column_header: false,
+                                    });
+                                });
+                            },
+                        )
+                    },
+                    braces_icon: AppIcon::Braces.into(),
+                    chevron_icon: AppIcon::ChevronRight.into(),
+                    reference_icon: AppIcon::Crosshair.into(),
+                    columns: Some(state.visible_columns()),
+                    pinned: Some(GridPinned {
                         count: state.pinned_shown_count(),
                         width: state.pinned_width(),
-                        h_offset: state.horizontal_offset(),
-                        drag: drag_tracking.clone(),
-                    },
-                    state.column_widths(),
-                    state.selection(),
-                    editing_cell,
-                    cell_input.as_ref(),
-                    enum_dropdown.as_ref(),
-                    expression_editor.as_ref(),
-                    edit_buffer,
-                    state.document_presentation(),
-                    state.has_reference_row(),
+                        strip: &strip,
+                    }),
+                    on_cell_press: Some({
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |coord: GridCellCoord,
+                                  event: &MouseDownEvent,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                let coord = CellCoord::new(coord.row, coord.col);
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.press_cell(coord, event.modifiers, event.click_count, cx);
+                                });
+                            },
+                        )
+                    }),
+                    on_cell_drag: Some({
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |coord: GridCellCoord,
+                                  _event: &MouseMoveEvent,
+                                  _window: &mut Window,
+                                  cx: &mut App| {
+                                let coord = CellCoord::new(coord.row, coord.col);
+                                state.update(cx, |state, cx| state.drag_select_to(coord, cx));
+                            },
+                        )
+                    }),
+                    on_cell_aux_click: Some({
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |coord: GridCellCoord,
+                                  event: &ClickEvent,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                let coord = CellCoord::new(coord.row, coord.col);
+                                request_filter_on_middle_click(&state, coord, event, window, cx);
+                            },
+                        )
+                    }),
+                    on_row_press: Some({
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |row: usize,
+                                  modifiers: gpui::Modifiers,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.click_row(row, modifiers, cx);
+                                });
+                            },
+                        )
+                    }),
+                };
+
+                // The inline editor the editing cell draws: a dropdown when
+                // the cell enumerates values, the text input otherwise, with
+                // the `fx` switch and the suggestions of a column that takes
+                // SQL expressions.
+                let expression_editor = ExpressionEditorView::of(state);
+                let editor = state
+                    .enum_dropdown()
+                    .map(|dropdown| dropdown.clone().into_any_element())
+                    .or_else(|| {
+                        state.cell_input().map(|input| {
+                            let width = state
+                                .editing_cell()
+                                .and_then(|coord| state.column_widths().get(coord.col).copied())
+                                .unwrap_or(f32::from(GridMetrics::DEFAULT_COLUMN_WIDTH));
+                            inline_text_editor(
+                                &state_entity,
+                                input,
+                                expression_editor.as_ref(),
+                                px(width),
+                                font_size,
+                                theme,
+                            )
+                        })
+                    });
+
+                render_rows(
+                    visible_range,
+                    &source,
+                    &host,
+                    editor,
                     total_width,
                     font_size,
                     row_height,
                     nested_icon,
                     null_color,
-                    theme,
+                    &grid_colors,
                 )
             },
         )
@@ -1353,6 +1514,68 @@ impl ExpressionEditorView {
     fn shows_suggestions(&self) -> bool {
         !self.suggestions.is_empty()
     }
+}
+
+/// The text editor an editing cell draws: the input, preceded by the `fx`
+/// switch and followed by the suggestions when the column takes SQL
+/// expressions. The arrow keys step through the suggestions from the input.
+fn inline_text_editor(
+    state_entity: &Entity<DataTableState>,
+    input: &Entity<InputState>,
+    expression_editor: Option<&ExpressionEditorView>,
+    cell_width: Pixels,
+    font_size: Pixels,
+    theme: &gpui_component::theme::Theme,
+) -> AnyElement {
+    div()
+        .relative()
+        .flex()
+        .items_center()
+        .size_full()
+        .when_some(expression_editor, |cell, view| {
+            cell.when(view.takes_expressions, |cell| {
+                cell.child(render_expression_toggle(
+                    state_entity,
+                    view.active,
+                    font_size,
+                    theme,
+                ))
+            })
+            .when(view.shows_suggestions(), |cell| {
+                let down = state_entity.clone();
+                let up = state_entity.clone();
+                cell.capture_action(move |_: &InputMoveDown, window, cx| {
+                    down.update(cx, |state, cx| {
+                        state.step_expression_suggestion(true, window, cx)
+                    });
+                    cx.stop_propagation();
+                })
+                .capture_action(move |_: &InputMoveUp, window, cx| {
+                    up.update(cx, |state, cx| {
+                        state.step_expression_suggestion(false, window, cx)
+                    });
+                    cx.stop_propagation();
+                })
+                .child(render_expression_suggestions(
+                    state_entity,
+                    view,
+                    cell_width,
+                    font_size,
+                    theme,
+                ))
+            })
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .when(expression_editor.is_some_and(|view| view.active), |d| {
+                    d.italic()
+                })
+                .child(Input::new(input).small()),
+        )
+        .into_any_element()
 }
 
 /// The `fx` switch at the start of the inline editor. On, the typed text is
@@ -1472,507 +1695,6 @@ fn render_expression_suggestions(
         .into_any_element()
 }
 
-/// Renders the visible rows for the uniform_list.
-#[allow(clippy::too_many_arguments)]
-fn render_rows(
-    state_entity: &Entity<DataTableState>,
-    visible_range: Range<usize>,
-    model: &TableModel,
-    columns: &[usize],
-    pinned: PinnedColumns,
-    column_widths: &[f32],
-    selection: &SelectionState,
-    editing_cell: Option<CellCoord>,
-    cell_input: Option<&Entity<InputState>>,
-    enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
-    expression_editor: Option<&ExpressionEditorView>,
-    edit_buffer: &super::model::EditBuffer,
-    document: Option<&DocumentPresentation>,
-    reference_row: bool,
-    total_width: f32,
-    font_size: Pixels,
-    row_height: Pixels,
-    nested_icon: Pixels,
-    null_color: Hsla,
-    theme: &gpui_component::theme::Theme,
-) -> Vec<AnyElement> {
-    use super::model::VisualRowSource;
-
-    // Compute visual ordering once for this render pass
-    let visual_order = edit_buffer.compute_visual_order();
-
-    visible_range
-        .map(|visual_ix| {
-            // Map visual index to actual data source
-            let source = visual_order.get(visual_ix).copied();
-
-            // Get row data and state based on source type
-            let (row_data, pending_insert_data, row_state, data_row_ix) = match source {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    let row = model.rows.get(base_idx);
-                    let state = edit_buffer.row_state(base_idx);
-                    (row, None, state.clone(), base_idx)
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    let data = edit_buffer.get_pending_insert_by_idx(insert_idx);
-                    (None, data, dbflux_core::RowState::PendingInsert, visual_ix)
-                }
-                None => {
-                    // Should not happen, but handle gracefully
-                    (None, None, dbflux_core::RowState::Clean, visual_ix)
-                }
-            };
-
-            let is_pending_insert_row = matches!(source, Some(VisualRowSource::Insert(_)));
-
-            // Use visual_ix for selection/display, but data_row_ix for edit buffer access
-            let row_ix = visual_ix;
-
-            // Row background based on state
-            // - Dirty: cell-level only (no row bg)
-            // - Saving: warning background
-            // - Error: danger background
-            // - PendingInsert: green-ish to indicate new row
-            // - PendingDelete: red-ish with visual indication of deletion
-            let row_bg = match row_state {
-                dbflux_core::RowState::Dirty => None, // Cell-level only — see dirty cell highlight below
-                dbflux_core::RowState::Saving => Some(RowColors::saving(theme)),
-                dbflux_core::RowState::Error(_) => Some(RowColors::error(theme)),
-                dbflux_core::RowState::Clean => None,
-                dbflux_core::RowState::PendingInsert => Some(RowColors::insert(theme)),
-                dbflux_core::RowState::PendingDelete => Some(RowColors::delete(theme)),
-            };
-
-            let is_pending_delete = row_state.is_pending_delete();
-            let is_active_row = selection.active.is_some_and(|active| active.row == row_ix);
-            let tint = ChromeColors::tint(theme);
-            let cell_wash = tint.opacity(GridMetrics::CELL_SELECTED_ALPHA);
-            let is_reference_row = reference_row && row_ix == 0;
-            // Under a reference row the others are numbered from 1, so the
-            // number reads as their rank.
-            let row_number = if reference_row { row_ix } else { row_ix + 1 };
-
-            let mut cells: Vec<AnyElement> = columns
-                .iter()
-                .map(|&col_ix| {
-                    // Get cell either from model or from pending insert
-                    let cell = if let Some(insert_data) = pending_insert_data {
-                        insert_data.get(col_ix)
-                    } else {
-                        row_data.and_then(|r| r.cells.get(col_ix))
-                    };
-                    let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
-                    let coord = CellCoord::new(row_ix, col_ix);
-                    let is_selected = selection.is_selected(coord);
-                    let is_active = selection.active == Some(coord);
-                    let is_editing = editing_cell == Some(coord);
-
-                    if is_editing {
-                        if let Some(dropdown) = enum_dropdown {
-                            return div()
-                                .id(("cell", row_ix * 10000 + col_ix))
-                                .flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .h_full()
-                                .w(px(width))
-                                .overflow_hidden()
-                                .border_1()
-                                .border_color(theme.ring)
-                                .bg(theme.background)
-                                .child(dropdown.clone())
-                                .into_any_element();
-                        }
-
-                        if let Some(input_state) = cell_input {
-                            return div()
-                                .id(("cell", row_ix * 10000 + col_ix))
-                                .relative()
-                                .flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .h_full()
-                                .w(px(width))
-                                .border_1()
-                                .border_color(theme.ring)
-                                .bg(theme.background)
-                                .when_some(expression_editor, |cell, view| {
-                                    cell.when(view.takes_expressions, |cell| {
-                                        cell.child(render_expression_toggle(
-                                            state_entity,
-                                            view.active,
-                                            font_size,
-                                            theme,
-                                        ))
-                                    })
-                                    .when(
-                                        view.shows_suggestions(),
-                                        |cell| {
-                                            let down = state_entity.clone();
-                                            let up = state_entity.clone();
-                                            cell.capture_action(
-                                                move |_: &InputMoveDown, window, cx| {
-                                                    down.update(cx, |state, cx| {
-                                                        state.step_expression_suggestion(
-                                                            true, window, cx,
-                                                        )
-                                                    });
-                                                    cx.stop_propagation();
-                                                },
-                                            )
-                                            .capture_action(move |_: &InputMoveUp, window, cx| {
-                                                up.update(cx, |state, cx| {
-                                                    state.step_expression_suggestion(
-                                                        false, window, cx,
-                                                    )
-                                                });
-                                                cx.stop_propagation();
-                                            })
-                                            .child(
-                                                render_expression_suggestions(
-                                                    state_entity,
-                                                    view,
-                                                    px(width),
-                                                    font_size,
-                                                    theme,
-                                                ),
-                                            )
-                                        },
-                                    )
-                                })
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .overflow_hidden()
-                                        .when(
-                                            expression_editor.is_some_and(|view| view.active),
-                                            |d| d.italic(),
-                                        )
-                                        .child(Input::new(input_state).small()),
-                                )
-                                .into_any_element();
-                        }
-                    }
-
-                    // For edit buffer access, use the data row index (model index for base rows)
-                    let is_cell_dirty = if is_pending_insert_row {
-                        false // Pending inserts don't have cell-level dirty tracking
-                    } else {
-                        edit_buffer.is_cell_dirty(data_row_ix, col_ix)
-                    };
-                    let null_value = super::model::CellValue::null();
-                    let base_value = cell.unwrap_or(&null_value);
-                    let display_value = if is_pending_insert_row {
-                        base_value // For pending inserts, just use the cell value directly
-                    } else {
-                        edit_buffer.get_cell(data_row_ix, col_ix, base_value)
-                    };
-                    let is_document = document.is_some();
-                    let shows_transition = is_document && is_cell_dirty;
-                    let display_text: Arc<str> = if shows_transition {
-                        format!(
-                            "{} \u{2192} {}",
-                            base_value.display_text(),
-                            display_value.display_text()
-                        )
-                        .into()
-                    } else {
-                        display_value.display_text()
-                    };
-                    let is_null = display_value.is_null();
-                    let is_auto_generated = display_value.is_auto_generated();
-                    let is_placeholder = display_value.is_placeholder();
-                    let is_missing = display_value.is_missing();
-                    let is_expression = display_value.is_expression();
-                    let nested_kind = match display_value.kind {
-                        super::model::CellKind::Nested { is_array, .. } => Some(is_array),
-                        _ => None,
-                    };
-                    let fk_spans = display_value.fk_spans();
-                    let has_fk_spans = fk_spans.is_some();
-                    let is_group_child =
-                        document.is_some_and(|document| document.is_group_child(col_ix));
-
-                    let state_for_click = state_entity.clone();
-                    let state_for_context = state_entity.clone();
-
-                    let text_color = if shows_transition {
-                        theme.warning
-                    } else if is_missing {
-                        theme.input
-                    } else if nested_kind.is_some() || is_expression {
-                        theme.info
-                    } else if is_pending_delete || is_auto_generated || is_placeholder {
-                        theme.muted_foreground
-                    } else if is_null {
-                        null_color
-                    } else if is_active {
-                        ChromeColors::strong(theme)
-                    } else {
-                        theme.foreground
-                    };
-
-                    div()
-                        .id(("cell", row_ix * 10000 + col_ix))
-                        .relative()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .h_full()
-                        .w(px(width))
-                        .px(CELL_PADDING_X)
-                        .overflow_hidden()
-                        .cursor_pointer()
-                        // Highlight individual dirty cells (like DBeaver).
-                        // Uses RowColors::dirty for the background and the
-                        // theme warning for the 2px left accent stroke.
-                        .when(is_group_child, |d| {
-                            d.bg(tint.opacity(CollectionMetrics::GROUP_CHILD_CELL_ALPHA))
-                        })
-                        .when(is_cell_dirty && !is_document, |d| {
-                            d.bg(RowColors::dirty(theme))
-                                .border_l_2()
-                                .border_color(theme.warning)
-                        })
-                        .when(is_selected || is_active, |d| d.bg(cell_wash))
-                        .when(shows_transition, |d| {
-                            d.bg(theme.warning.opacity(CollectionMetrics::EDITED_CELL_ALPHA))
-                                .child(
-                                    Chamfer::new(Pixels::ZERO)
-                                        .ring(ChamferRing::focus(theme.warning)),
-                                )
-                        })
-                        // Focused cell: 1.5 px tint ring inside the cell. No
-                        // cut: cells hold data.
-                        .when(is_active, |d| {
-                            d.child(Chamfer::new(Pixels::ZERO).ring(ChamferRing::focus(tint)))
-                        })
-                        .when(
-                            is_null
-                                || is_auto_generated
-                                || is_placeholder
-                                || is_missing
-                                || is_expression,
-                            |d| d.italic(),
-                        )
-                        .when(is_pending_delete, |d| d.line_through())
-                        .on_mouse_down(MouseButton::Left, {
-                            let state = state_entity.clone();
-                            move |event: &MouseDownEvent, window, cx| {
-                                state.update(cx, |state, cx| {
-                                    state.focus(window, cx);
-                                    state.press_cell(coord, event.modifiers, event.click_count, cx);
-                                });
-                            }
-                        })
-                        .on_mouse_move({
-                            let state = state_entity.clone();
-                            move |event: &MouseMoveEvent, _window, cx| {
-                                if event.pressed_button == Some(MouseButton::Left) {
-                                    state.update(cx, |state, cx| state.drag_select_to(coord, cx));
-                                }
-                            }
-                        })
-                        .on_click(move |event: &ClickEvent, window, cx| {
-                            state_for_click.update(cx, |state, cx| {
-                                state.focus(window, cx);
-                            });
-
-                            let modifiers = event.modifiers();
-
-                            if event.click_count() == 2 {
-                                state_for_click.update(cx, |state, cx| {
-                                    // A Ctrl+double-click on the cell selected
-                                    // on its own took it out on the first press.
-                                    if !state.selection().is_selected(coord) {
-                                        state.select_cell(coord, cx);
-                                    }
-                                    state.start_editing(coord, window, cx);
-                                });
-                                return;
-                            }
-
-                            // A mouse press already selected the cell (see
-                            // `begin_drag_select`); selecting again on release
-                            // would undo a Ctrl+click toggle, and emit the
-                            // selection events twice. Keyboard and touch
-                            // activation have no press, so they select here.
-                            if !matches!(event, ClickEvent::Mouse(_)) {
-                                state_for_click.update(cx, |state, cx| {
-                                    state.click_cell(coord, modifiers, cx);
-                                });
-                            }
-                        })
-                        .on_aux_click({
-                            let state = state_entity.clone();
-                            move |event: &ClickEvent, window, cx| {
-                                request_filter_on_middle_click(&state, coord, event, window, cx);
-                            }
-                        })
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            move |event: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                state_for_context.update(cx, |state, cx| {
-                                    state.focus(window, cx);
-                                    state.select_cell(coord, cx);
-                                    cx.emit(DataTableEvent::ContextMenuRequested {
-                                        row: coord.row,
-                                        col: coord.col,
-                                        position: event.position,
-                                        is_column_header: false,
-                                    });
-                                });
-                            },
-                        )
-                        .when_some(nested_kind, |d, _| {
-                            d.gap(GridMetrics::HEADER_GAP).child(
-                                Icon::new(AppIcon::Braces)
-                                    .size(nested_icon)
-                                    .color(text_color),
-                            )
-                        })
-                        // A resolved foreign key draws its label in the
-                        // cell's text color with the raw id muted after it.
-                        .when_some(fk_spans, |d, (label, id_suffix)| {
-                            d.child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(font_size)
-                                    .text_color(text_color)
-                                    .child(label.to_string()),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .whitespace_nowrap()
-                                    .text_size(font_size)
-                                    .text_color(theme.muted_foreground)
-                                    .child(id_suffix.to_string()),
-                            )
-                        })
-                        .when(!has_fk_spans, |d| {
-                            d.child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(font_size)
-                                    .text_color(text_color)
-                                    .child(display_text.to_string()),
-                            )
-                        })
-                        .when(nested_kind == Some(true), |d| {
-                            d.child(
-                                Icon::new(AppIcon::ChevronRight)
-                                    .size(nested_icon)
-                                    .color(text_color),
-                            )
-                        })
-                        .into_any_element()
-                })
-                .collect();
-
-            // Row state background (dirty=yellow, error=red); otherwise the
-            // row holding the focused cell gets the selected-row wash and
-            // clean rows alternate. The pinned strip repeats it over its
-            // own opaque base.
-            let row_fill = row_bg.or(if is_reference_row {
-                Some(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
-            } else if is_active_row {
-                Some(theme.table_active)
-            } else if row_ix % 2 == 1 {
-                Some(theme.table_even)
-            } else {
-                None
-            });
-
-            let gutter = div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_end()
-                .w(ROW_NUMBER_WIDTH)
-                .id(("row-number", row_ix))
-                .role(gpui::Role::Button)
-                .aria_label(SharedString::from(row_number.to_string()))
-                .cursor_pointer()
-                // The row is selected on press, before the release a click
-                // needs, so a drag can start from it.
-                .on_mouse_down(MouseButton::Left, {
-                    let state = state_entity.clone();
-                    move |event: &MouseDownEvent, window, cx| {
-                        state.update(cx, |state, cx| {
-                            state.focus(window, cx);
-                            state.click_row(row_ix, event.modifiers, cx);
-                        });
-                    }
-                })
-                .on_a11y_action(gpui::AccessibleAction::Click, {
-                    let state = state_entity.clone();
-                    move |_, window, cx| {
-                        state.update(cx, |state, cx| {
-                            state.focus(window, cx);
-                            state.click_row(row_ix, gpui::Modifiers::default(), cx);
-                        });
-                    }
-                })
-                .h_full()
-                .pr(CELL_PADDING_X)
-                .text_size(font_size)
-                .text_color(if is_active_row || is_reference_row {
-                    tint
-                } else {
-                    theme.input
-                })
-                .map(|gutter| {
-                    if is_reference_row {
-                        gutter.child(Icon::new(AppIcon::Crosshair).size(nested_icon).color(tint))
-                    } else {
-                        gutter.child(row_number.to_string())
-                    }
-                });
-
-            let row = div()
-                .id(("row", row_ix))
-                .relative()
-                .flex()
-                .flex_shrink_0()
-                .w(px(total_width))
-                .h(row_height)
-                .overflow_hidden()
-                .border_b_1()
-                .border_color(theme.table_row_border)
-                .when_some(row_fill, |d, fill| d.bg(fill))
-                .when(row_bg.is_none() && is_reference_row, |d| {
-                    d.border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
-                });
-
-            if pinned.count == 0 {
-                return row.child(gutter).children(cells).into_any_element();
-            }
-
-            // With pinned columns the gutter and those columns move into a
-            // strip that cancels the horizontal scroll; a spacer of the same
-            // width keeps the scrolling cells where they were.
-            let scrolled = cells.split_off(pinned.count.min(cells.len()));
-            row.child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH + px(pinned.width)))
-                .children(scrolled)
-                .child(pinned_strip(
-                    pinned.h_offset,
-                    theme.table,
-                    row_fill,
-                    gutter.into_any_element(),
-                    cells,
-                    &pinned.drag,
-                    theme,
-                ))
-                .into_any_element()
-        })
-        .collect()
-}
-
 /// Window-level pointer listeners for a running drag selection, laid over
 /// the grid body to learn its bounds.
 ///
@@ -2043,34 +1765,17 @@ fn sort_direction_of(sort_keys: &[SortState], col_ix: usize) -> Option<SortDirec
 /// mouse from everything under it, the root included.
 #[derive(Clone)]
 struct DragTracking {
-    resize: Arc<Mutex<ResizeDragState>>,
+    resize: ColumnResizeDrag,
     state: Entity<DataTableState>,
 }
 
 impl DragTracking {
     fn attach<E: InteractiveElement>(&self, element: E) -> E {
-        let (resize_for_move, state_for_move) = (self.resize.clone(), self.state.clone());
-        let (resize_for_up, state_for_up) = (self.resize.clone(), self.state.clone());
-        let (resize_for_up_out, state_for_up_out) = (self.resize.clone(), self.state.clone());
+        let state_for_resize = self.state.clone();
+        let (state_for_up, state_for_up_out) = (self.state.clone(), self.state.clone());
 
-        element
-            .on_mouse_move(move |event, _window, cx| {
-                let resized = resize_for_move.lock().ok().and_then(|drag| {
-                    let col = drag.col?;
-                    let delta: f32 = (event.position.x - drag.start_x).into();
-                    let width = drag.original_width + delta;
-                    Some((col, width.max(super::theme::MIN_COLUMN_WIDTH)))
-                });
-                if let Some((col, width)) = resized {
-                    state_for_move.update(cx, |state, cx| {
-                        state.set_column_width(col, width, cx);
-                    });
-                }
-            })
+        let element = element
             .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
-                if let Ok(mut drag) = resize_for_up.lock() {
-                    drag.col = None;
-                }
                 state_for_up.update(cx, |state, _| state.end_drag_select());
             })
             // A release outside the table (another pane, outside the window)
@@ -2078,23 +1783,17 @@ impl DragTracking {
             // still be running when the pointer comes back with the button
             // pressed for something else.
             .on_mouse_up_out(MouseButton::Left, move |_event, _window, cx| {
-                if let Ok(mut drag) = resize_for_up_out.lock() {
-                    drag.col = None;
-                }
                 state_for_up_out.update(cx, |state, _| state.end_drag_select());
-            })
-    }
-}
+            });
 
-/// What the body needs to draw the pinned columns: how many of the shown
-/// columns are pinned, their total width, the horizontal scroll the strip
-/// holding them cancels, and the drag tracking the strip repeats.
-#[derive(Clone)]
-struct PinnedColumns {
-    count: usize,
-    width: f32,
-    h_offset: Pixels,
-    drag: DragTracking,
+        // The shared Bolt tracker follows a column resize and ends it on a
+        // release, inside the table or out of it.
+        track_column_resize(element, &self.resize, move |resize, _window, cx| {
+            state_for_resize.update(cx, |state, cx| {
+                state.set_column_width(resize.column, resize.width, cx);
+            });
+        })
+    }
 }
 
 /// The strip that keeps the row-number gutter and the pinned columns at the
@@ -2206,49 +1905,26 @@ fn header_reorder(
         })
 }
 
-/// The strip at a header's right edge that resizes its column.
-///
-/// A press starts a drag; the move and release are handled on the table root
-/// so the drag survives the cursor leaving the 6px strip. A double-click fits
-/// the column to its header and its loaded values instead, as in a database
-/// IDE's grid: the second press arrives with a click count of two and starts
-/// no drag, so the first press's drag (ended by its release) cannot fight the
-/// fitted width.
+/// The strip at a header's right edge that resizes its column: Bolt's
+/// handle, whose press starts a drag the table root follows. A double-click
+/// fits the column to its header and its loaded values instead, as in a
+/// database IDE's grid.
 fn column_resize_handle(
     state: Entity<DataTableState>,
-    resize_drag: Arc<Mutex<ResizeDragState>>,
+    resize_drag: &ColumnResizeDrag,
     col_ix: usize,
     width: f32,
     tint: Hsla,
 ) -> impl IntoElement {
-    div()
-        .id(("resize-handle", col_ix))
-        .debug_selector(move || format!("resize-handle-{col_ix}"))
-        .absolute()
-        .right_0()
-        .top_0()
-        .bottom_0()
-        .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
-        .cursor_col_resize()
-        .hover(|handle| handle.bg(tint.opacity(0.3)))
-        .on_mouse_down(
-            MouseButton::Left,
-            move |event: &MouseDownEvent, _window, cx| {
-                cx.stop_propagation();
-                if event.click_count >= 2 {
-                    if let Ok(mut drag) = resize_drag.lock() {
-                        drag.col = None;
-                    }
-                    state.update(cx, |state, cx| state.fit_column_width(col_ix, cx));
-                    return;
-                }
-                if let Ok(mut drag) = resize_drag.lock() {
-                    drag.col = Some(col_ix);
-                    drag.start_x = event.position.x;
-                    drag.original_width = width;
-                }
-            },
-        )
+    column_resize_handle_with_fit(
+        col_ix,
+        width,
+        resize_drag,
+        tint.opacity(0.3),
+        move |col, _window, cx| {
+            state.update(cx, |state, cx| state.fit_column_width(col, cx));
+        },
+    )
 }
 
 /// A middle-click on a cell (the grid's or the record view's): select it and
@@ -2337,6 +2013,7 @@ fn header_sort_control(
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::TableModel;
     use super::*;
     use gpui::{AppContext as _, Render, TestAppContext, VisualTestContext, div};
     use gpui_base::ScrollbarHandle as _;
@@ -3941,5 +3618,186 @@ mod tests {
             visual.debug_bounds("table-header-annotation").is_some(),
             "the annotated column draws its facts"
         );
+    }
+
+    /// A one-column, one-row grid whose single cell holds `cell`, so the
+    /// debug selectors below name exactly one element.
+    fn single_cell_harness(
+        cx: &mut TestAppContext,
+        cell: super::super::model::CellValue,
+    ) -> &mut VisualTestContext {
+        use super::super::model::{ColumnKind, ColumnSpec, RowData};
+        use gpui::TextAlign;
+
+        cx.update(crate::theme::init);
+
+        let model = Arc::new(TableModel::new(
+            vec![ColumnSpec {
+                id: "v".into(),
+                title: "v".into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            }],
+            vec![RowData { cells: vec![cell] }],
+        ));
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(model.clone(), cx));
+            let table = cx.new(|cx| DataTable::new("cell-test-table", state, cx));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+
+        visual
+    }
+
+    #[gpui::test]
+    fn an_array_cell_draws_the_braces_and_the_chevron(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::nested(true, 4));
+
+        assert!(
+            visual.debug_bounds("table-cell-braces").is_some(),
+            "a nested summary draws the braces marker"
+        );
+        assert!(
+            visual.debug_bounds("table-cell-chevron").is_some(),
+            "an array draws the step-in chevron"
+        );
+    }
+
+    #[gpui::test]
+    fn a_document_cell_draws_the_braces_but_not_the_chevron(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::nested(false, 3));
+
+        assert!(visual.debug_bounds("table-cell-braces").is_some());
+        assert!(
+            visual.debug_bounds("table-cell-chevron").is_none(),
+            "only an array steps in; a document draws no chevron"
+        );
+    }
+
+    #[gpui::test]
+    fn a_plain_cell_draws_one_text_span(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::text("value"));
+
+        assert!(visual.debug_bounds("table-cell-text").is_some());
+        assert!(visual.debug_bounds("table-cell-secondary").is_none());
+        assert!(visual.debug_bounds("table-cell-label").is_none());
+    }
+
+    #[gpui::test]
+    fn a_foreign_key_cell_draws_two_spans_and_suppresses_the_main_text(cx: &mut TestAppContext) {
+        use super::super::model::CellValue;
+
+        let visual = single_cell_harness(cx, CellValue::int(8).with_fk_label("Alice"));
+
+        assert!(
+            visual.debug_bounds("table-cell-text").is_none(),
+            "the two-tone pair replaces the cell's own display text"
+        );
+        assert!(visual.debug_bounds("table-cell-label").is_some());
+        assert!(visual.debug_bounds("table-cell-secondary").is_some());
+    }
+
+    /// Dragging a header's trailing edge resizes that column through the
+    /// shared bolt handle, clamps at the minimum width and leaves the other
+    /// columns alone.
+    #[gpui::test]
+    fn dragging_a_header_edge_resizes_only_that_column(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("resize-test-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        visual.update(|_, cx| {
+            state.update(cx, |s, cx| s.set_column_width(0, 100.0, cx));
+        });
+        visual.run_until_parked();
+
+        let widths = |visual: &mut VisualTestContext| {
+            visual.update(|_, cx| state.read(cx).column_widths().to_vec())
+        };
+        let before = widths(visual);
+        let header = visual
+            .debug_bounds("table-header")
+            .expect("header must render");
+        let edge = gpui::point(
+            header.origin.x + super::super::theme::ROW_NUMBER_WIDTH + px(before[0]) - px(3.0),
+            header.origin.y + px(5.0), // guardrail-allow: test pointer offset inside the header
+        );
+        let none = gpui::Modifiers::default();
+
+        visual.simulate_mouse_down(edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(
+            edge + gpui::point(px(40.0), px(0.0)),
+            MouseButton::Left,
+            none,
+        );
+        let grown = widths(visual);
+        assert_eq!(
+            grown[0],
+            before[0] + 40.0,
+            "the dragged column follows the pointer"
+        );
+        assert_eq!(grown[1..], before[1..], "other columns keep their widths");
+
+        visual.simulate_mouse_move(
+            gpui::point(header.origin.x + px(8.0), edge.y), // guardrail-allow: test pointer offset inside the header
+            MouseButton::Left,
+            none,
+        );
+        assert_eq!(
+            widths(visual)[0],
+            super::super::theme::MIN_COLUMN_WIDTH,
+            "the width clamps at the minimum"
+        );
+
+        visual.simulate_mouse_up(edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(edge + gpui::point(px(80.0), px(0.0)), None, none);
+        assert_eq!(
+            widths(visual)[0],
+            super::super::theme::MIN_COLUMN_WIDTH,
+            "releasing ends the drag"
+        );
+
+        let before = widths(visual);
+        let second_edge = gpui::point(
+            header.origin.x + super::super::theme::ROW_NUMBER_WIDTH + px(before[0]) + px(before[1])
+                - px(3.0),
+            edge.y,
+        );
+        visual.simulate_mouse_down(second_edge, MouseButton::Left, none);
+        visual.simulate_mouse_move(
+            second_edge + gpui::point(px(25.0), px(0.0)),
+            MouseButton::Left,
+            none,
+        );
+        visual.simulate_mouse_up(second_edge, MouseButton::Left, none);
+        let after = widths(visual);
+        assert_eq!(
+            after[1],
+            before[1] + 25.0,
+            "the second column follows the pointer"
+        );
+        assert_eq!(after[0], before[0], "the first column keeps its width");
     }
 }

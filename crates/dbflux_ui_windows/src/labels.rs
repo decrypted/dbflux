@@ -820,6 +820,7 @@ pub(crate) fn import_review_value_ref(value_ref: &dbflux_portability::ValueRefRe
         }
         ValueSourceKind::Env => dbflux_i18n::t!("components.value_source.env"),
         ValueSourceKind::Dotenv => dbflux_i18n::t!("components.value_source.dotenv"),
+        ValueSourceKind::File => dbflux_i18n::t!("components.value_source.file"),
         ValueSourceKind::Secret => dbflux_i18n::t!("components.value_source.secret"),
         ValueSourceKind::Parameter => dbflux_i18n::t!("components.value_source.parameter"),
         ValueSourceKind::Auth => dbflux_i18n::t!("components.value_source.auth"),

@@ -55,6 +55,8 @@ pub enum ValueSourceKind {
     Literal,
     Env,
     Dotenv,
+    /// A secret file another tool owns, read on every connect.
+    File,
     Secret,
     Parameter,
     Auth,
@@ -333,6 +335,10 @@ fn review_value_ref(field: String, vref: &ValueRef) -> ValueRefReview {
         ValueRef::Literal { .. } => (ValueSourceKind::Literal, String::new()),
         ValueRef::Env { key } => (ValueSourceKind::Env, key.clone()),
         ValueRef::Dotenv { path, key } => (ValueSourceKind::Dotenv, format!("{path}#{key}")),
+        ValueRef::File { path, json_key } => (
+            ValueSourceKind::File,
+            with_json_key(path.clone(), json_key.as_ref()),
+        ),
         ValueRef::Secret {
             provider,
             locator,

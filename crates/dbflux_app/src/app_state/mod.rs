@@ -166,6 +166,35 @@ pub struct AppState {
     pub document_query_repo: Arc<DocumentQueryRepo>,
     /// Repository for `sch_schema_snapshots` and its child tables.
     pub schema_snapshot_repo: Arc<SchemaSnapshotRepo>,
+    /// Repository for `pal_object_index`.
+    pub palette_object_index_repo: Arc<dbflux_storage::PaletteObjectIndexRepo>,
+    /// Profiles deleted or pointed at another server since the palette last
+    /// asked: their stored palette objects no longer apply. The palette
+    /// deletes them off the UI thread, after the writes it queued before.
+    palette_profiles_to_forget: Vec<Uuid>,
+    /// Profiles pointed elsewhere while connected: the open connection still
+    /// reaches the old server, so what the palette stores until the
+    /// reconnect is forgotten again then.
+    palette_forget_on_connect: HashSet<Uuid>,
+}
+
+/// Whether two versions of a profile reach the same databases: the same
+/// driver, connection settings and values filled in at connect time, through
+/// the same tunnel, proxy, access method and auth profile.
+fn same_server(before: &ConnectionProfile, after: &ConnectionProfile) -> bool {
+    fn reach(profile: &ConnectionProfile) -> Option<serde_json::Value> {
+        serde_json::to_value((
+            profile.driver_id(),
+            &profile.config,
+            &profile.value_refs,
+            &profile.access_kind,
+            profile.proxy_profile_id,
+            profile.auth_profile_id,
+        ))
+        .ok()
+    }
+
+    reach(before) == reach(after)
 }
 
 impl AppState {
@@ -768,6 +797,10 @@ impl AppState {
             profile.read_only_flag = saved.read_only_flag;
         }
 
+        if self.palette_forget_on_connect.remove(&profile.id) {
+            self.palette_profiles_to_forget.push(profile.id);
+        }
+
         self.facade.connections.apply_connect_profile(
             profile,
             connection,
@@ -1316,12 +1349,25 @@ impl AppState {
             log::error!("Failed to delete profile from storage: {}", e);
         }
 
+        self.palette_profiles_to_forget.push(removed.id);
+
         Some(removed)
     }
 
     pub fn update_profile(&mut self, profile: ConnectionProfile) {
         let profile_name = profile.name.clone();
         let profile_id = profile.id.to_string();
+        if self
+            .profiles()
+            .iter()
+            .find(|known| known.id == profile.id)
+            .is_some_and(|known| !same_server(known, &profile))
+        {
+            self.palette_profiles_to_forget.push(profile.id);
+            if self.connections().contains_key(&profile.id) {
+                self.palette_forget_on_connect.insert(profile.id);
+            }
+        }
         self.facade.connections.clear_connect_failure(profile.id);
         self.remembered_connection_passwords.remove(&profile.id);
 
@@ -1353,6 +1399,12 @@ impl AppState {
         // was disabled or the call path skipped that step, the edit would
         // not survive a restart.
         self.save_profiles();
+    }
+
+    /// The profiles whose stored palette objects no longer apply, since the
+    /// last call.
+    pub fn take_palette_profiles_to_forget(&mut self) -> Vec<Uuid> {
+        std::mem::take(&mut self.palette_profiles_to_forget)
     }
 
     pub fn save_profiles(&self) {
@@ -4066,6 +4118,65 @@ mod tests {
             .expect("profile present");
         state.remove_profile(removed_index);
         assert_eq!(state.connect_failure(removed_id), None);
+    }
+
+    #[test]
+    fn the_palette_forgets_a_removed_profile_or_one_pointed_at_another_server() {
+        let renamed = ConnectionProfile::new("renamed", DbConfig::default_postgres());
+        let moved = ConnectionProfile::new("moved", DbConfig::default_mysql());
+        let removed = ConnectionProfile::new("removed", DbConfig::default_postgres());
+        let (moved_id, removed_id) = (moved.id, removed.id);
+        let mut state = test_state_with_profiles(
+            HashMap::new(),
+            vec![renamed.clone(), moved.clone(), removed.clone()],
+        );
+
+        let mut renamed_again = renamed;
+        renamed_again.name = "renamed again".to_string();
+        state.update_profile(renamed_again);
+        assert!(
+            state.take_palette_profiles_to_forget().is_empty(),
+            "the same server keeps its objects"
+        );
+
+        let mut moved_again = moved;
+        if let DbConfig::MySQL { host, .. } = &mut moved_again.config {
+            *host = "other.example".to_string();
+        }
+        state.update_profile(moved_again);
+        let removed_index = state
+            .profiles()
+            .iter()
+            .position(|profile| profile.id == removed_id)
+            .expect("profile present");
+        state.remove_profile(removed_index);
+
+        assert_eq!(
+            state.take_palette_profiles_to_forget(),
+            vec![moved_id, removed_id]
+        );
+        assert!(state.take_palette_profiles_to_forget().is_empty());
+    }
+
+    #[test]
+    fn the_palette_forgets_a_profile_reached_through_another_tunnel() {
+        let tunneled = ConnectionProfile::new("tunneled", DbConfig::default_postgres());
+        let tunneled_id = tunneled.id;
+        let mut state = test_state_with_profiles(HashMap::new(), vec![tunneled.clone()]);
+
+        let mut through_ssh = tunneled;
+        through_ssh.access_kind = Some(dbflux_core::access::AccessKind::Ssh {
+            ssh_tunnel_profile_id: Uuid::new_v4(),
+        });
+        state.update_profile(through_ssh.clone());
+        assert_eq!(state.take_palette_profiles_to_forget(), vec![tunneled_id]);
+
+        let mut through_proxy = through_ssh;
+        through_proxy.access_kind = Some(dbflux_core::access::AccessKind::Proxy {
+            proxy_profile_id: Uuid::new_v4(),
+        });
+        state.update_profile(through_proxy);
+        assert_eq!(state.take_palette_profiles_to_forget(), vec![tunneled_id]);
     }
 
     /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain

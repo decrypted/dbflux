@@ -681,7 +681,7 @@ A right-rail builder composes SELECT/UPDATE/DELETE statements without writing SQ
 - **Schema visualization**: `crates/dbflux_schema_viz/` provides `SchemaGraph` (table nodes and FK edges), layout algorithms (LeftRight, Snowflake, Compact), DBML export, and SQL DDL export. Accessed via `SchemaVizDocument` in `crates/dbflux_ui_document/src/schema_viz/mod.rs` with toolbar dropdowns (Layout, Export), toast feedback, audit events, and cancellable background task loading. Integrates with the workspace via a `PaneHandle` constructed in `schema_viz/pane.rs`.
 - Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
 - Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` full-screen JSON document preview with an inline JSON editor.
-- Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions.
+- Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions. Its tables, views and collections come from `crates/dbflux_ui/src/ui/views/workspace/palette_resources/`, which lists each open connection from the projection the sidebar draws. For drivers that load databases on demand, the lists the palette has seen are kept in `pal_object_index` (migration `065_pal_object_index`, `PaletteObjectIndexRepo`), read and written off the UI thread, so a database not expanded yet is searchable; databases not loaded this session are fetched in the background through the `ObjectTreeCoordinator`.
 
 ### Dashboards & Saved Charts
 
@@ -814,6 +814,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - `aud_*` — audit domain (audit events, entities, attributes)
 - `viz_*` — visualization domain (dashboards, dashboard panels, saved charts and their bindings/series)
 - `qry_*` — saved visual-query-builder specs (root + projected columns, sorts, joins)
+- `pal_*`: command palette domain (the objects last seen in each database of a lazily loaded connection)
 - `sys_*` — system domain (migrations, metadata, legacy imports)
 
 **Storage crate** (`dbflux_storage/`):

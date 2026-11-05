@@ -604,6 +604,8 @@ While the popover is open it keeps the keyboard: the panels behind it see none o
 
 Letters are left to the search field, so typing filters the list.
 
+Typing `>` first searches only commands, `@` only tables and collections. The palette lists the tables, views and collections of every open connection, including databases not expanded in the sidebar. On connections that load each database when it is expanded (MySQL, MariaDB, SQL Server, ClickHouse, DuckDB, MongoDB and InfluxDB), opening the palette loads up to 50 of the databases not loaded yet in the background, two at a time, and the list fills in while you type; choosing an item or closing the palette stops it. What it finds is kept across restarts, so the next session searches those databases at once. A database closed in the sidebar is not loaded again this way. On PostgreSQL and Redshift, a database not opened in the sidebar is not searched.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/keyboard/command-palette-dark.webp">
   <img src="images/keyboard/command-palette-light.webp" alt="The command palette filtered by a short query, listing matching commands with their key bindings">

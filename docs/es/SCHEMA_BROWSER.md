@@ -102,6 +102,20 @@ superficiales (nombres). Los metadatos detallados — columnas, índices y
 similares — se obtienen bajo demanda al expandir un nodo. Esto mantiene rápida
 la conexión inicial en bases de datos grandes.
 
+En las conexiones que cargan cada base de datos al expandirla (MySQL, MariaDB,
+SQL Server, ClickHouse, DuckDB, MongoDB e InfluxDB), la command palette también
+busca en las bases de datos que no has expandido. Mientras está abierta carga
+en segundo plano hasta 50 de ellas, dos a la vez, y se detiene al elegir un
+elemento o al cerrarla; una base de datos cargada así sigue contraída en el
+árbol. Lo que encuentra se guarda, así en sesiones posteriores esas bases de
+datos se pueden buscar antes de volver a cargarse. Las listas guardadas se
+actualizan a medida que las bases de datos se cargan y se descartan cuando la
+conexión se elimina o apunta a otro servidor. Una base de datos que cerraste en
+el sidebar no vuelve a cargarse desde la palette en esa sesión, pero su lista
+guardada se sigue buscando. En PostgreSQL y Redshift cada base de datos
+necesita su propia conexión, así que no se busca en una base de datos que no
+se abrió en el sidebar. Ver [Command palette](KEYBOARD.md#command-palette).
+
 ## Vista temporal del panel lateral contraído
 
 Al pasar el puntero sobre el panel lateral contraído, este aparece tras 250 ms;

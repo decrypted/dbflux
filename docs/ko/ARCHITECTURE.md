@@ -664,7 +664,7 @@ crates/
 - **스키마 시각화**: `crates/dbflux_schema_viz/`는 `SchemaGraph`(테이블 노드와 외래 키 간선), 레이아웃 알고리즘(LeftRight, Snowflake, Compact), DBML 내보내기, SQL DDL 내보내기를 제공합니다. `crates/dbflux_ui_document/src/schema_viz/mod.rs`의 `SchemaVizDocument`를 통해 사용하며, 도구 모음 드롭다운(Layout, Export), 토스트 피드백, 감사 이벤트, 취소 가능한 백그라운드 작업 로딩을 갖추고 있습니다. `schema_viz/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
 - 셀 편집기 모달: `crates/dbflux_components/src/modals/cell_editor.rs`는 JSON 검증과 포맷팅을 갖춘, JSON 열과 길거나 여러 줄인 텍스트용 모달 편집기를 제공합니다.
 - 문서 미리보기 모달: `crates/dbflux_components/src/modals/document_preview.rs` — 인라인 JSON 편집기가 있는 전체 화면 JSON 문서 미리보기입니다.
-- 명령 팔레트: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` — 모든 앱 액션을 위한 퍼지 검색 명령 팔레트입니다.
+- 명령 팔레트: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` — 모든 앱 액션을 위한 퍼지 검색 명령 팔레트입니다. 팔레트의 테이블, 뷰, 컬렉션은 `crates/dbflux_ui/src/ui/views/workspace/palette_resources/`에서 오며, 사이드바가 그리는 프로젝션으로 열린 각 연결을 나열합니다. 데이터베이스를 필요할 때 로드하는 드라이버에서는 팔레트가 본 목록을 `pal_object_index`(마이그레이션 `065_pal_object_index`, `PaletteObjectIndexRepo`)에 보관하고 UI 스레드 밖에서 읽고 쓰므로, 아직 펼치지 않은 데이터베이스도 검색할 수 있습니다. 이번 세션에서 로드되지 않은 데이터베이스는 `ObjectTreeCoordinator`를 통해 백그라운드에서 가져옵니다.
 
 ### 대시보드 및 저장된 차트
 
@@ -794,6 +794,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 - `aud_*` — 감사 도메인(감사 이벤트, 엔티티, 속성)
 - `viz_*` — 시각화 도메인(대시보드, 대시보드 패널, 저장된 차트와 그 바인딩/시리즈)
 - `qry_*` — 저장된 시각적 쿼리 빌더 스펙(루트 + 프로젝션된 열, 정렬, 조인)
+- `pal_*`: 명령 팔레트 도메인(지연 로드 연결의 각 데이터베이스에서 마지막으로 본 객체)
 - `sys_*` — 시스템 도메인(마이그레이션, 메타데이터, 레거시 가져오기)
 
 **저장소 크레이트** (`dbflux_storage/`):

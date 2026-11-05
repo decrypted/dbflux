@@ -102,6 +102,43 @@ pub enum ResourceItem {
 }
 
 impl PaletteItem {
+    /// What tells the item apart from every other one. Profile names are
+    /// not unique, so items of a profile carry its id.
+    pub fn selection_key(&self) -> String {
+        match self {
+            PaletteItem::Action { id, .. } => format!("action:{id}"),
+            PaletteItem::Connection { profile_id, .. } => format!("connection:{profile_id}"),
+            PaletteItem::Resource(ResourceItem::Table {
+                profile_id,
+                database,
+                schema,
+                name,
+                ..
+            }) => format!("table:{profile_id}:{database:?}:{schema:?}:{name}"),
+            PaletteItem::Resource(ResourceItem::View {
+                profile_id,
+                database,
+                schema,
+                name,
+                ..
+            }) => format!("view:{profile_id}:{database:?}:{schema:?}:{name}"),
+            PaletteItem::Resource(ResourceItem::Collection {
+                profile_id,
+                database,
+                name,
+                ..
+            }) => format!("collection:{profile_id}:{database}:{name}"),
+            PaletteItem::Resource(ResourceItem::KeyValueDb {
+                profile_id,
+                database,
+                ..
+            }) => format!("keyspace:{profile_id}:{database}"),
+            PaletteItem::Script { path, .. } => format!("script:{}", path.display()),
+            PaletteItem::SavedChart { id, .. } => format!("chart:{id}"),
+            PaletteItem::ImportDashboard => "import-dashboard".to_string(),
+        }
+    }
+
     /// Text searched by the palette's fuzzy matcher.
     ///
     /// Each kind arm embeds the English proxy word (so the filter always
@@ -485,6 +522,10 @@ impl PaletteEntry for PaletteItem {
         PaletteItem::search_text(self)
     }
 
+    fn selection_key(&self) -> String {
+        PaletteItem::selection_key(self)
+    }
+
     fn display_label(&self) -> (String, String) {
         PaletteItem::display_label(self)
     }
@@ -690,6 +731,26 @@ mod tests {
         PaletteCommand, PaletteEntry, PaletteItem, PaletteSection, PaletteSelection, ResourceItem,
     };
     use uuid::Uuid;
+
+    #[test]
+    fn the_same_table_on_two_profiles_named_alike_has_two_selection_keys() {
+        let table = |profile_id| {
+            PaletteItem::Resource(ResourceItem::Table {
+                profile_id,
+                profile_name: "prod".to_string(),
+                database: Some("shop".to_string()),
+                schema: Some("shop".to_string()),
+                name: "orders".to_string(),
+            })
+        };
+        let (first, second) = (table(Uuid::new_v4()), table(Uuid::new_v4()));
+
+        assert_eq!(first.search_text(), second.search_text());
+        assert_ne!(
+            PaletteEntry::selection_key(&first),
+            PaletteEntry::selection_key(&second)
+        );
+    }
 
     fn action(id: &'static str, name: &str) -> PaletteItem {
         PaletteItem::Action {

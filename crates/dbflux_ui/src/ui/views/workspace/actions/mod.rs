@@ -293,8 +293,7 @@ mod tests {
     use crate::ui::overlays::command_palette::{PaletteItem, PaletteSelection, ResourceItem};
     use crate::ui::views::workspace::{build_resource_items_from_schema, map_item_to_selection};
     use dbflux_core::{
-        CollectionInfo, DataStructure, DbSchemaInfo, DocumentSchema, KeySpaceInfo, KeyValueSchema,
-        RelationalSchema, ScriptEntry, TableInfo, ViewInfo,
+        CollectionInfo, DataStructure, DocumentSchema, KeySpaceInfo, KeyValueSchema, ScriptEntry,
     };
     use fuzzy_matcher::FuzzyMatcher;
     use fuzzy_matcher::skim::SkimMatcherV2;
@@ -516,117 +515,6 @@ mod tests {
     // --- Resource item building from schema ---
 
     #[test]
-    fn build_resources_from_relational_schema() {
-        let pid = Uuid::new_v4();
-        let mut items = Vec::new();
-
-        let structure = DataStructure::Relational(RelationalSchema {
-            current_database: Some("mydb".to_string()),
-            tables: vec![
-                TableInfo {
-                    name: "users".to_string(),
-                    schema: Some("public".to_string()),
-                    columns: None,
-                    indexes: None,
-                    foreign_keys: None,
-                    constraints: None,
-                    sample_fields: None,
-                    presentation: dbflux_core::CollectionPresentation::DataGrid,
-                    child_items: None,
-                    storage_hints: None,
-                    pseudo_columns: Box::default(),
-                },
-                TableInfo {
-                    name: "orders".to_string(),
-                    schema: Some("public".to_string()),
-                    columns: None,
-                    indexes: None,
-                    foreign_keys: None,
-                    constraints: None,
-                    sample_fields: None,
-                    presentation: dbflux_core::CollectionPresentation::DataGrid,
-                    child_items: None,
-                    storage_hints: None,
-                    pseudo_columns: Box::default(),
-                },
-            ],
-            views: vec![ViewInfo {
-                name: "active_users".to_string(),
-                schema: Some("public".to_string()),
-            }],
-            ..Default::default()
-        });
-
-        build_resource_items_from_schema(pid, "prod-pg", &structure, &mut items);
-
-        assert_eq!(items.len(), 3);
-
-        let table_names: Vec<&str> = items
-            .iter()
-            .filter_map(|item| match item {
-                PaletteItem::Resource(ResourceItem::Table { name, .. }) => Some(name.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(table_names.contains(&"users"));
-        assert!(table_names.contains(&"orders"));
-
-        let view_count = items
-            .iter()
-            .filter(|item| matches!(item, PaletteItem::Resource(ResourceItem::View { .. })))
-            .count();
-        assert_eq!(view_count, 1);
-    }
-
-    #[test]
-    fn build_resources_from_relational_schema_with_nested_schemas() {
-        let pid = Uuid::new_v4();
-        let mut items = Vec::new();
-
-        let structure = DataStructure::Relational(RelationalSchema {
-            current_database: Some("mydb".to_string()),
-            tables: vec![],
-            views: vec![],
-            schemas: vec![DbSchemaInfo {
-                name: "app_schema".to_string(),
-                tables: vec![TableInfo {
-                    name: "products".to_string(),
-                    schema: Some("app_schema".to_string()),
-                    columns: None,
-                    indexes: None,
-                    foreign_keys: None,
-                    constraints: None,
-                    sample_fields: None,
-                    presentation: dbflux_core::CollectionPresentation::DataGrid,
-                    child_items: None,
-                    storage_hints: None,
-                    pseudo_columns: Box::default(),
-                }],
-                views: vec![],
-                custom_types: None,
-            }],
-            ..Default::default()
-        });
-
-        build_resource_items_from_schema(pid, "pg-prod", &structure, &mut items);
-
-        assert_eq!(items.len(), 1);
-        match &items[0] {
-            PaletteItem::Resource(ResourceItem::Table {
-                database,
-                schema,
-                name,
-                ..
-            }) => {
-                assert_eq!(database.as_deref(), Some("mydb"));
-                assert_eq!(schema.as_deref(), Some("app_schema"));
-                assert_eq!(name, "products");
-            }
-            _ => panic!("Expected Table resource"),
-        }
-    }
-
-    #[test]
     fn build_resources_from_document_schema() {
         let pid = Uuid::new_v4();
         let mut items = Vec::new();
@@ -733,23 +621,6 @@ mod tests {
         let structure = DataStructure::ReservedGraph;
         build_resource_items_from_schema(pid, "reserved", &structure, &mut items);
 
-        assert!(items.is_empty());
-    }
-
-    #[test]
-    fn build_resources_empty_schema_produces_no_items() {
-        let pid = Uuid::new_v4();
-        let mut items = Vec::new();
-
-        let structure = DataStructure::Relational(RelationalSchema {
-            current_database: None,
-            tables: vec![],
-            views: vec![],
-            schemas: vec![],
-            ..Default::default()
-        });
-
-        build_resource_items_from_schema(pid, "empty", &structure, &mut items);
         assert!(items.is_empty());
     }
 

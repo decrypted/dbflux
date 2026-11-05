@@ -975,7 +975,14 @@ consultas de documentos guardadas usan la migración
   `crates/dbflux_components/src/modals/document_preview.rs` preview de document
   JSON a pantalla completa con un editor JSON inline.
 - Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` command
-  palette con fuzzy-search para todas las acciones de la app.
+  palette con fuzzy-search para todas las acciones de la app. Sus tablas, views y
+  collections vienen de `crates/dbflux_ui/src/ui/views/workspace/palette_resources/`,
+  que lista cada conexión abierta desde la proyección que dibuja el sidebar. En
+  drivers que cargan las bases de datos bajo demanda, las listas que la palette ya
+  vio se guardan en `pal_object_index` (migración `065_pal_object_index`,
+  `PaletteObjectIndexRepo`), leídas y escritas fuera del hilo de UI, así una base
+  de datos aún no expandida se puede buscar; las bases de datos no cargadas en esta
+  sesión se cargan en segundo plano a través del `ObjectTreeCoordinator`.
 
 ### Dashboards y Saved Charts
 
@@ -1398,6 +1405,8 @@ tres stores separados (config.db, state.db, audit.sqlite).
   y sus bindings/series)
 - `qry_*` — specs guardadas del visual-query-builder (raíz + projected columns,
   sorts, joins)
+- `pal_*`: dominio de la command palette (los objetos vistos por última vez en
+  cada base de datos de una conexión con carga lazy)
 - `sys_*` — dominio de sistema (migrations, metadata, legacy imports)
 
 **Crate de storage** (`dbflux_storage/`):

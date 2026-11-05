@@ -449,6 +449,8 @@ Alt 拖动鼠标选择一样，按顺序用换行符连接非空行片段；若�
 
 字母键会输入到搜索框中，因此输入即可筛选列表。
 
+以 `>` 开头只搜索命令，以 `@` 开头只搜索表和集合。命令面板会列出每个已打开连接的表、视图和集合，包括侧边栏中尚未展开的数据库。对于在展开时才加载各个数据库的连接（MySQL、MariaDB、SQL Server、ClickHouse、DuckDB、MongoDB 和 InfluxDB），打开命令面板会在后台加载最多 50 个尚未加载的数据库，每次两个，列表会在你输入时逐步补全；选择一项或关闭命令面板即会停止。找到的内容会在重启后保留，因此下一次会话可以立即搜索这些数据库。在侧边栏中关闭的数据库不会以这种方式重新加载。在 PostgreSQL 和 Redshift 上，侧边栏中未打开的数据库不会被搜索。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/keyboard/command-palette-dark.webp">
   <img src="../images/keyboard/command-palette-light.webp" alt="按简短关键词筛选后的命令面板，列出匹配的命令及其快捷键">

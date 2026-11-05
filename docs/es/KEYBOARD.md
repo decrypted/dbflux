@@ -633,6 +633,8 @@ Mientras el popover está abierto se queda con el teclado: los paneles de atrás
 
 Las letras quedan para el campo de búsqueda, así que escribir filtra la lista.
 
+Si empiezas con `>` solo se buscan comandos, con `@` solo tablas y colecciones. La palette lista las tablas, vistas y colecciones de cada conexión abierta, también de las bases de datos no expandidas en el sidebar. En las conexiones que cargan cada base de datos al expandirla (MySQL, MariaDB, SQL Server, ClickHouse, DuckDB, MongoDB e InfluxDB), abrir la palette carga en segundo plano hasta 50 de las bases de datos aún no cargadas, dos a la vez, y la lista se completa mientras escribes; elegir un elemento o cerrar la palette lo detiene. Lo que encuentra se guarda entre reinicios, así la siguiente sesión busca en esas bases de datos de inmediato. Una base de datos cerrada en el sidebar no se vuelve a cargar de esta forma. En PostgreSQL y Redshift no se busca en una base de datos que no se abrió en el sidebar.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/keyboard/command-palette-dark.webp">
   <img src="../images/keyboard/command-palette-light.webp" alt="La command palette filtrada por una búsqueda corta, con los comandos que coinciden y sus atajos">

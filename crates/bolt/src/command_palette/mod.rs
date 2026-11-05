@@ -824,7 +824,9 @@ mod tests {
 
     use fuzzy_matcher::skim::SkimMatcherV2;
     use gpui::{
-        AppContext as _, Entity, EventEmitter, ParentElement as _, Styled as _, TestAppContext, div,
+        AppContext as _, Entity, EventEmitter, InteractiveElement as _, Modifiers, MouseButton,
+        ParentElement as _, StatefulInteractiveElement as _, Styled as _, TestAppContext,
+        VisualTestContext, div, point, px,
     };
     use gpui_component::IconName;
 
@@ -1149,6 +1151,104 @@ mod tests {
         ) -> impl gpui::IntoElement {
             div().size_full().child(self.palette.clone())
         }
+    }
+
+    /// A host shaped like an application root: a plain, relatively
+    /// positioned box whose body fills it, with the palette after the body.
+    /// The body counts the presses and clicks that reach it.
+    struct StackedHost {
+        palette: Entity<CommandPalette<TestItem, TestHost>>,
+        body_presses: usize,
+        body_clicks: usize,
+    }
+
+    impl StackedHost {
+        fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
+            Self {
+                palette: cx.new(|cx| CommandPalette::<TestItem, TestHost>::new(window, cx)),
+                body_presses: 0,
+                body_clicks: 0,
+            }
+        }
+    }
+
+    impl gpui::Render for StackedHost {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            div()
+                .relative()
+                .size_full()
+                .child(
+                    div()
+                        .id("stacked-host-body")
+                        .size_full()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, _| this.body_presses += 1),
+                        )
+                        .on_click(cx.listener(|this, _, _, _| this.body_clicks += 1)),
+                )
+                .child(self.palette.clone())
+        }
+    }
+
+    fn open_stacked_palette(
+        cx: &mut TestAppContext,
+    ) -> (Entity<StackedHost>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        let (host, window) = cx.add_window_view(StackedHost::new);
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.palette.update(cx, |palette, cx| {
+                    palette.open_with_items(vec![TestItem::command("Only")], window, cx);
+                });
+            });
+        });
+        window.run_until_parked();
+
+        (host, window)
+    }
+
+    /// The open palette's overlay is laid out over the whole window, from its
+    /// top-left corner, when the host stacks it after a full-size body.
+    #[gpui::test]
+    fn the_open_palette_covers_the_window(cx: &mut TestAppContext) {
+        let (_host, window) = open_stacked_palette(cx);
+
+        let overlay = window
+            .debug_bounds("command-palette-overlay")
+            .expect("the open palette lays out its overlay");
+        let viewport = window.update(|window, _| window.viewport_size());
+
+        assert_eq!(overlay.origin, gpui::Point::default());
+        assert_eq!(overlay.size, viewport);
+    }
+
+    /// A press on the backdrop closes the palette and reaches nothing behind
+    /// it: the row or tab under the scrim neither sees the press nor a click.
+    #[gpui::test]
+    fn a_backdrop_click_closes_the_palette_without_clicking_through(cx: &mut TestAppContext) {
+        let (host, window) = open_stacked_palette(cx);
+
+        let overlay = window
+            .debug_bounds("command-palette-overlay")
+            .expect("the open palette lays out its overlay");
+        window.simulate_click(
+            overlay.origin + point(px(2.0), px(2.0)),
+            Modifiers::default(),
+        );
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let host = host.read(cx);
+            assert!(!host.palette.read(cx).is_visible());
+            assert_eq!((host.body_presses, host.body_clicks), (0, 0));
+        });
     }
 
     /// Confirming an item emits the selection the item's `select` yields,

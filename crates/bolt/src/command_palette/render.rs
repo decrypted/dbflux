@@ -113,7 +113,9 @@ where
         let handle = cx.entity().downgrade();
         let overlay = div()
             .id("command-palette-overlay")
+            .debug_selector(|| "command-palette-overlay".to_string())
             .absolute()
+            .inset_0()
             .flex()
             .justify_center()
             .items_start()
@@ -122,6 +124,8 @@ where
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
+                    // Nothing behind the palette may react to a click on the scrim.
+                    cx.stop_propagation();
                     this.hide(cx);
                 }),
             );

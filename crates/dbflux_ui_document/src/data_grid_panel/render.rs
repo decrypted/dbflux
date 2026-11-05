@@ -237,6 +237,7 @@ impl Render for DataGridPanel {
         self.flush_aggregate_json(window, cx);
         self.ensure_table_view_controls(window, cx);
         let st = self.derive_render_state(cx);
+        let viewport = window.viewport_size();
 
         // The Columns and Partitions views of a table replace the filter row,
         // the grid and the status bar; the header with the tabs stays.
@@ -333,7 +334,7 @@ impl Render for DataGridPanel {
                 ))
             })
             .when_some(self.context_menu.as_ref(), |d, menu| {
-                d.child(self.render_context_menu(menu, st.is_editable, cx))
+                d.child(self.render_context_menu(menu, st.is_editable, viewport, cx))
             })
             .when(self.chrome.export_menu_open, |d| {
                 d.child(self.render_export_backdrop(cx))

@@ -878,7 +878,8 @@ pub struct DataGridPanel {
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
     panel_origin: Point<Pixels>,
-    /// Panel size from the same canvas; the context menu is kept inside it.
+    /// Panel size from the same canvas; a menu opened from the keyboard is
+    /// anchored inside it.
     panel_size: Size<Pixels>,
     /// A table-details fetch for the primary key is in flight. Until it
     /// answers, the grid is read-only for want of a key it may well have, so

@@ -38,11 +38,11 @@ enum FilterBackend {
     Mongo,
 }
 
-/// Gap kept between the context menu and the panel edge.
+/// Gap kept between the context menu and the window edge.
 const CONTEXT_MENU_EDGE_GAP: Pixels = Spacing::XS;
 
 /// Width of the widest submenu (the filter list). A menu whose right edge
-/// leaves less than this to the panel edge opens its submenus to the left,
+/// leaves less than this to the window edge opens its submenus to the left,
 /// provided the left side has the room.
 const SUBMENU_MAX_WIDTH: Pixels = px(280.0);
 
@@ -92,41 +92,40 @@ pub(super) struct ContextMenuPlacement {
     pub(super) submenus_open_left: bool,
 }
 
-/// Keep the menu inside the panel.
+/// Keep the menu inside `area`, the window's bounds in panel coordinates.
 ///
 /// The click stays the anchor: the menu is shifted left when it would run
 /// past the right edge and up when it would run past the bottom, and never
-/// past the top-left gap. Submenus open to the right unless the widest one
-/// would not fit there but would fit on the left; in a panel too narrow for
-/// either they stay on the right, where at least their start is visible. A
-/// panel that has not been measured yet reports a zero size;
-/// clamping against it would pin every menu into the corner, so an unmeasured
-/// panel leaves the click alone.
+/// past the top-left gap. A menu taller than the panel still fits as long as
+/// the window has the room, since the menu is drawn at window level. Submenus
+/// open to the right unless the widest one would not fit there but would fit
+/// on the left; in a window too narrow for either they stay on the right,
+/// where at least their start is visible. A window that has not been measured
+/// yet reports a zero size; clamping against it would pin every menu into the
+/// corner, so an unmeasured window leaves the click alone.
 pub(super) fn place_context_menu(
     click: Point<Pixels>,
     menu_width: Pixels,
     menu_height: Pixels,
-    panel: Size<Pixels>,
+    area: Bounds<Pixels>,
 ) -> ContextMenuPlacement {
-    if panel.width <= menu_width || panel.height <= menu_height {
+    if area.size.width <= px(0.0) || area.size.height <= px(0.0) {
         return ContextMenuPlacement {
             origin: click,
             submenus_open_left: false,
         };
     }
 
-    let x = click
-        .x
-        .min(panel.width - menu_width - CONTEXT_MENU_EDGE_GAP)
-        .max(CONTEXT_MENU_EDGE_GAP);
-    let y = if click.y + menu_height + CONTEXT_MENU_EDGE_GAP > panel.height {
-        (panel.height - menu_height - CONTEXT_MENU_EDGE_GAP).max(CONTEXT_MENU_EDGE_GAP)
-    } else {
-        click.y
-    };
+    let left = area.left() + CONTEXT_MENU_EDGE_GAP;
+    let top = area.top() + CONTEXT_MENU_EDGE_GAP;
+    let right = area.right() - CONTEXT_MENU_EDGE_GAP;
+    let bottom = area.bottom() - CONTEXT_MENU_EDGE_GAP;
 
-    let fits_right = x + menu_width - SUBMENU_OVERLAP + SUBMENU_MAX_WIDTH <= panel.width;
-    let fits_left = x + SUBMENU_OVERLAP >= SUBMENU_MAX_WIDTH;
+    let x = click.x.min(right - menu_width).max(left);
+    let y = click.y.min(bottom - menu_height).max(top);
+
+    let fits_right = x + menu_width - SUBMENU_OVERLAP + SUBMENU_MAX_WIDTH <= area.right();
+    let fits_left = x + SUBMENU_OVERLAP - SUBMENU_MAX_WIDTH >= area.left();
 
     ContextMenuPlacement {
         origin: Point { x, y },
@@ -220,7 +219,7 @@ impl DataGridPanel {
             return;
         };
 
-        let (row, col, cell_x, horizontal_offset) = {
+        let (row, col, cell_x, horizontal_offset, vertical_offset) = {
             let ts = table_state.read(cx);
 
             let (row, col) = ts
@@ -234,19 +233,40 @@ impl DataGridPanel {
             // Calculate cell x position: sum of column widths up to col
             let cell_x: f32 = widths.iter().take(col).sum();
 
-            (row, col, cell_x, ts.horizontal_offset())
+            (
+                row,
+                col,
+                cell_x,
+                ts.horizontal_offset(),
+                ts.vertical_scroll_handle()
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y,
+            )
         };
 
         // Calculate position in window coordinates:
         // x: panel_origin.x + cell_x - horizontal_scroll + some padding
         // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
         let toolbar_height = px(36.0); // Approximate toolbar height
+        let row_y = self.panel_origin.y
+            + toolbar_height
+            + fonts::grid_header_height(cx)
+            + fonts::grid_row_height(cx) * row
+            + vertical_offset;
+        // A row scrolled out of view would otherwise put the menu away from
+        // the grid. An unmeasured panel has no bounds to keep it in.
+        let y = if self.panel_size.height > px(0.0) {
+            let panel_bottom = self.panel_origin.y + self.panel_size.height;
+            row_y.min(panel_bottom).max(self.panel_origin.y)
+        } else {
+            row_y
+        };
         let position = Point {
             x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(cell_x) - horizontal_offset + px(20.0),
-            y: self.panel_origin.y
-                + toolbar_height
-                + fonts::grid_header_height(cx)
-                + fonts::grid_row_height(cx) * row,
+            y,
         };
 
         self.context_menu = Some(TableContextMenu {
@@ -1657,10 +1677,23 @@ impl DataGridPanel {
         render_menu_header(&header, cx).into_any_element()
     }
 
+    /// The window's bounds in panel coordinates, the area a menu drawn by
+    /// this panel may occupy.
+    pub(super) fn menu_area(&self, viewport: Size<Pixels>) -> Bounds<Pixels> {
+        Bounds {
+            origin: Point {
+                x: px(0.0) - self.panel_origin.x,
+                y: px(0.0) - self.panel_origin.y,
+            },
+            size: viewport,
+        }
+    }
+
     pub(super) fn render_context_menu(
         &self,
         menu: &TableContextMenu,
         is_editable: bool,
+        viewport: Size<Pixels>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let menu_width = if menu.is_column_header {
@@ -1678,7 +1711,8 @@ impl DataGridPanel {
         // and the items need to know that before they are built; the
         // vertical position needs the item count, so it is settled after.
         let submenus_open_left =
-            place_context_menu(click, menu_width, px(0.0), self.panel_size).submenus_open_left;
+            place_context_menu(click, menu_width, px(0.0), self.menu_area(viewport))
+                .submenus_open_left;
 
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
@@ -1817,7 +1851,8 @@ impl DataGridPanel {
         let menu_height = row_height * menu_items.len() as f32
             + detail_extra * detail_rows as f32
             + MenuMetrics::PADDING_Y * 2.0;
-        let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
+        let placement =
+            place_context_menu(click, menu_width, menu_height, self.menu_area(viewport));
 
         self.render_context_menu_overlay(
             placement.origin.x,
@@ -4584,261 +4619,4 @@ async fn reference_display_columns(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::DataGridPanel;
-    use super::QueryGroupSeparators;
-    use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
-    use super::{ExportMenuEntry, step_export_selection};
-    use dbflux_export::ExportFormat;
-    use gpui::{Pixels, Point, Size, px};
-
-    /// The binary copy row cannot run, so the menu keys pass over it in both
-    /// directions and wrap at the ends.
-    #[test]
-    fn export_selection_wraps_and_skips_the_binary_copy_row() {
-        let entries = [
-            ExportMenuEntry::Save(ExportFormat::Binary),
-            ExportMenuEntry::Save(ExportFormat::Hex),
-            ExportMenuEntry::Copy(ExportFormat::Binary),
-            ExportMenuEntry::Copy(ExportFormat::Hex),
-        ];
-
-        assert_eq!(step_export_selection(&entries, 1, true), 3);
-        assert_eq!(step_export_selection(&entries, 3, false), 1);
-        assert_eq!(step_export_selection(&entries, 3, true), 0);
-        assert_eq!(step_export_selection(&entries, 0, false), 3);
-        assert_eq!(step_export_selection(&[], 0, true), 0);
-    }
-
-    fn panel() -> Size<Pixels> {
-        Size {
-            width: px(1000.0),
-            height: px(600.0),
-        }
-    }
-
-    #[test]
-    fn query_group_has_one_separator_before_its_first_member() {
-        assert_eq!(
-            QueryGroupSeparators::new(true, true, true, true),
-            QueryGroupSeparators {
-                filter: true,
-                order: false,
-                generate_sql: false,
-                copy_query: false,
-            }
-        );
-
-        assert_eq!(
-            QueryGroupSeparators::new(false, false, true, true),
-            QueryGroupSeparators {
-                filter: false,
-                order: false,
-                generate_sql: true,
-                copy_query: false,
-            }
-        );
-
-        assert_eq!(
-            QueryGroupSeparators::new(false, false, false, true),
-            QueryGroupSeparators {
-                filter: false,
-                order: false,
-                generate_sql: false,
-                copy_query: true,
-            }
-        );
-    }
-
-    #[test]
-    fn a_menu_that_fits_stays_at_the_click_and_opens_submenus_to_the_right() {
-        let click = Point {
-            x: px(100.0),
-            y: px(100.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-        assert_eq!(placed.origin, click);
-        assert!(!placed.submenus_open_left);
-    }
-
-    #[test]
-    fn a_menu_near_the_right_edge_is_shifted_in_and_opens_submenus_to_the_left() {
-        let click = Point {
-            x: px(950.0),
-            y: px(100.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-        assert_eq!(
-            placed.origin.x,
-            px(1000.0) - px(180.0) - CONTEXT_MENU_EDGE_GAP
-        );
-        assert_eq!(placed.origin.y, click.y);
-        assert!(placed.submenus_open_left);
-    }
-
-    #[test]
-    fn submenus_open_left_as_soon_as_the_widest_one_would_not_fit() {
-        let click = Point {
-            x: px(1000.0) - px(180.0) + SUBMENU_OVERLAP - SUBMENU_MAX_WIDTH + px(1.0),
-            y: px(100.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-        assert_eq!(placed.origin.x, click.x, "the menu itself still fits");
-        assert!(placed.submenus_open_left);
-    }
-
-    /// A panel too narrow for a submenu on either side keeps them on the
-    /// right: a submenu pushed off the left edge would be invisible, one
-    /// hanging past the right edge is at least partly usable.
-    #[test]
-    fn a_narrow_panel_keeps_submenus_on_the_right() {
-        let narrow = Size {
-            width: px(400.0),
-            height: px(600.0),
-        };
-        let click = Point {
-            x: px(20.0),
-            y: px(100.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), narrow);
-        assert_eq!(placed.origin, click);
-        assert!(!placed.submenus_open_left);
-    }
-
-    #[test]
-    fn a_menu_near_the_bottom_is_moved_up_to_fit() {
-        let click = Point {
-            x: px(100.0),
-            y: px(500.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-        assert_eq!(placed.origin.x, click.x);
-        assert_eq!(
-            placed.origin.y,
-            px(600.0) - px(300.0) - CONTEXT_MENU_EDGE_GAP
-        );
-    }
-
-    #[test]
-    fn an_unmeasured_panel_leaves_the_click_alone() {
-        let click = Point {
-            x: px(950.0),
-            y: px(500.0),
-        };
-        let placed = place_context_menu(click, px(180.0), px(300.0), Size::default());
-        assert_eq!(placed.origin, click);
-        assert!(!placed.submenus_open_left);
-    }
-
-    fn labels(items: &[super::ContextMenuItem]) -> Vec<String> {
-        items
-            .iter()
-            .filter(|item| !item.is_separator)
-            .map(|item| item.label.to_string())
-            .collect()
-    }
-
-    fn item_label(key: &str) -> String {
-        dbflux_i18n::t!(key)
-    }
-
-    #[test]
-    fn empty_table_menu_keeps_insert_actions_but_hides_row_actions() {
-        let items = DataGridPanel::build_context_menu_items(true, false, false, false, true);
-        let labels = labels(&items);
-
-        assert!(labels.contains(&item_label("document.data.context_menu.item.add_row")));
-        assert!(!labels.contains(&item_label("document.data.context_menu.item.edit")));
-        assert!(!labels.contains(&item_label("document.data.context_menu.item.edit_in_modal")));
-        assert!(!labels.contains(&item_label("document.data.context_menu.item.duplicate_row")));
-        assert!(!labels.contains(&item_label("document.data.context_menu.item.delete_row")));
-    }
-
-    #[test]
-    fn non_editable_table_menu_stays_unchanged_without_row_target() {
-        let items = DataGridPanel::build_context_menu_items(false, false, false, false, true);
-
-        assert_eq!(
-            labels(&items),
-            vec![item_label("document.data.context_menu.item.copy")]
-        );
-    }
-
-    /// The value panel is a reader as much as an editor, so a read-only
-    /// result still offers it — but only over an actual row.
-    #[test]
-    fn non_editable_table_menu_offers_view_value_over_a_row() {
-        let with_row = labels(&DataGridPanel::build_context_menu_items(
-            false, false, true, false, true,
-        ));
-        assert!(with_row.contains(&item_label("document.data.context_menu.item.view_value")));
-
-        let without_row = labels(&DataGridPanel::build_context_menu_items(
-            false, false, false, false, true,
-        ));
-        assert!(!without_row.contains(&item_label("document.data.context_menu.item.view_value")));
-    }
-
-    #[test]
-    fn editable_table_menu_with_row_target_keeps_row_actions() {
-        let items = DataGridPanel::build_context_menu_items(true, false, true, false, true);
-        let labels = labels(&items);
-
-        assert!(labels.contains(&item_label("document.data.context_menu.item.edit")));
-        assert!(labels.contains(&item_label("document.data.context_menu.item.edit_in_modal")));
-        assert!(labels.contains(&item_label("document.data.context_menu.item.add_row")));
-        assert!(labels.contains(&item_label("document.data.context_menu.item.duplicate_row")));
-        assert!(labels.contains(&item_label("document.data.context_menu.item.delete_row")));
-    }
-
-    #[test]
-    fn chart_this_query_absent_when_can_chart_false() {
-        // can_chart = false: item must NOT appear regardless of other flags.
-        let table_items = DataGridPanel::build_context_menu_items(false, false, false, false, true);
-        let chart_label = item_label("document.data.context_menu.item.chart_this_query");
-        assert!(!labels(&table_items).contains(&chart_label));
-
-        let editable_items =
-            DataGridPanel::build_context_menu_items(true, false, true, false, true);
-        assert!(!labels(&editable_items).contains(&chart_label));
-    }
-
-    #[test]
-    fn chart_this_query_present_only_when_can_chart_true() {
-        // can_chart = true: item must appear.
-        let items = DataGridPanel::build_context_menu_items(false, false, false, true, true);
-        assert!(labels(&items).contains(&item_label(
-            "document.data.context_menu.item.chart_this_query"
-        )));
-    }
-
-    #[test]
-    fn chart_this_query_absent_in_document_view_regardless_of_can_chart() {
-        // Document-view menu never shows Chart this query because the source is never
-        // a QueryResult when is_document_view is true.
-        let doc_items = DataGridPanel::build_context_menu_items(false, true, false, true, true);
-        assert!(!labels(&doc_items).contains(&item_label(
-            "document.data.context_menu.item.chart_this_query"
-        )));
-    }
-
-    #[test]
-    fn inspect_row_hidden_when_inspect_row_disabled() {
-        let items_with_target =
-            DataGridPanel::build_context_menu_items(true, false, true, false, false);
-        assert!(
-            !labels(&items_with_target)
-                .contains(&item_label("document.data.context_menu.item.inspect_row")),
-            "Inspect Row must not appear when inspect_row_enabled=false"
-        );
-    }
-
-    #[test]
-    fn inspect_row_present_when_enabled_and_has_target() {
-        let items = DataGridPanel::build_context_menu_items(true, false, true, false, true);
-        assert!(
-            labels(&items).contains(&item_label("document.data.context_menu.item.inspect_row")),
-            "Inspect Row must appear when inspect_row_enabled=true and has_row_target=true"
-        );
-    }
-}
+mod tests;

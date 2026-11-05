@@ -1,4 +1,4 @@
-use super::{CellPaint, GridColors, cell_paint, header_cells};
+use super::{CellPaint, GridColors, cell_paint, drawn_columns, header_cells};
 use crate::data::{
     CellAlignment, CellTone, CellView, ColumnKind, ColumnView, RowSource, RowVisualState,
     StaticRows,
@@ -244,6 +244,25 @@ fn a_group_child_cell_draws_the_wash(cx: &mut TestAppContext) {
         false,
     );
     assert!(!unwashed.group_wash);
+}
+
+/// A host that hides or reorders columns gets each drawn column's own
+/// group flag, not the flag of the source column at its drawn position.
+#[test]
+fn hidden_and_reordered_columns_keep_their_own_group_flags() {
+    let mut rows = StaticRows::new();
+    rows.push_column(ColumnView::new("a", ColumnKind::Text));
+    rows.push_column(ColumnView::new("b", ColumnKind::Text));
+    rows.push_column(ColumnView::new("c", ColumnKind::Text).with_group_child(true));
+
+    assert_eq!(
+        drawn_columns(&rows, Some(&[2, 0])),
+        vec![(2, true), (0, false)]
+    );
+    assert_eq!(
+        drawn_columns(&rows, None),
+        vec![(0, false), (1, false), (2, true)]
+    );
 }
 
 /// The italic and strike decisions: null, muted and missing cells

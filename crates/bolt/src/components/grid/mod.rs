@@ -24,7 +24,6 @@ mod resize;
 #[cfg(test)]
 mod tests;
 
-use std::borrow::Cow;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -321,21 +320,7 @@ pub fn render_rows(
     colors: &GridColors,
 ) -> Vec<AnyElement> {
     let mut editor = editor;
-    let drawn_columns: Cow<'_, [usize]> = match host.columns {
-        Some(columns) => Cow::Borrowed(columns),
-        None => Cow::Owned((0..source.column_count()).collect()),
-    };
-
-    // The column facts the cells read, once per render and only for the
-    // drawn columns: a flattened collection can hide hundreds of them.
-    let group_children: Vec<bool> = drawn_columns
-        .iter()
-        .map(|&col_ix| {
-            source
-                .column(col_ix)
-                .is_some_and(|column| column.group_child)
-        })
-        .collect();
+    let drawn_columns = drawn_columns(source, host.columns);
 
     visible_range
         .map(|visual_ix| {
@@ -371,8 +356,7 @@ pub fn render_rows(
 
             let cells: Vec<AnyElement> = drawn_columns
                 .iter()
-                .zip(&group_children)
-                .map(|(&col_ix, &group_child)| {
+                .map(|&(col_ix, group_child)| {
                     let view = source.cell(visual_ix, col_ix).unwrap_or_else(|| {
                         CellView::new(
                             SharedString::default(),
@@ -606,8 +590,27 @@ pub fn render_rows(
         .collect()
 }
 
-/// The host's optional cell callbacks. A drag only counts with the left
-/// button held: a move after the release must not extend the selection.
+/// The source columns the rows draw, in drawing order, each with its group
+/// flag. Built once per render and only for the drawn columns: a flattened
+/// collection can hide hundreds of them, and a flag kept apart from its
+/// column index could be read by the wrong one.
+fn drawn_columns(source: &dyn RowSource, columns: Option<&[usize]>) -> Vec<(usize, bool)> {
+    let group_child = |col_ix: usize| {
+        (
+            col_ix,
+            source
+                .column(col_ix)
+                .is_some_and(|column| column.group_child),
+        )
+    };
+    match columns {
+        Some(columns) => columns.iter().copied().map(group_child).collect(),
+        None => (0..source.column_count()).map(group_child).collect(),
+    }
+}
+
+/// A drag only counts with the left button held: a move after the release
+/// must not extend the selection.
 fn with_cell_callbacks(
     cell: Stateful<Div>,
     coord: GridCellCoord,
@@ -657,9 +660,9 @@ fn row_number_cell(
         .into_any_element()
 }
 
-/// Puts the gutter and the cells into the row. With pinned columns the
-/// gutter and the pinned cells move into the host's strip, and a spacer of
-/// the same width keeps the scrolling cells where they were.
+/// With pinned columns the gutter and the pinned cells move into the host's
+/// strip, and a spacer of the same width keeps the scrolling cells where they
+/// were.
 fn place_cells(
     row: Stateful<Div>,
     gutter: AnyElement,

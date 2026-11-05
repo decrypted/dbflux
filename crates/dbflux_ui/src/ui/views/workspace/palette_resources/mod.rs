@@ -7,7 +7,7 @@ use dbflux_core::{
     ConnectedProfile, DataStructure, DatabaseLayout, ObjectFolder, SchemaLoadingStrategy,
     SchemaSnapshot,
 };
-use dbflux_storage::{IndexedObject, IndexedObjectKind, PaletteObjectIndexRepo};
+use dbflux_storage::{IndexedDatabase, IndexedObject, IndexedObjectKind, PaletteObjectIndexRepo};
 use dbflux_ui_base::object_tree::{
     FolderObjects, NodeContent, ObjectTreeKey, ObjectTreeNode, ObjectTreeRequestKey,
     folder_objects, is_current_database, only_shown_database, project_database_node,
@@ -65,13 +65,38 @@ pub(super) fn write_palette_objects(
     failed
 }
 
+/// Reads the stored lists of `profile_id`; run off the UI thread, since a
+/// background write can hold the repository's connection. `None` when the
+/// read failed.
+pub(super) fn load_palette_objects(
+    repo: &PaletteObjectIndexRepo,
+    profile_id: Uuid,
+) -> Option<Vec<IndexedDatabase>> {
+    repo.load_profile(&profile_id.to_string())
+        .inspect_err(|error| log::warn!("Could not read the palette's cached objects: {error}"))
+        .ok()
+}
+
+/// The lists the palette knows for one profile.
+struct ProfileLists {
+    databases: HashMap<String, Vec<IndexedObject>>,
+    /// Set until the stored lists are read: the databases listed meanwhile.
+    /// Their lists are newer than the stored ones, so the stored copy does
+    /// not replace them, and they are written once it is known whether
+    /// they changed.
+    loading: Option<HashSet<String>>,
+}
+
 /// The objects the palette last saw in the databases of each profile, kept
 /// across restarts so a database lazily loaded in an earlier session is
-/// searchable before it is fetched again. Changes are queued as writes for
-/// the caller to apply off the UI thread.
+/// searchable before it is fetched again. Neither reads nor writes touch
+/// the store here: the stored lists of a profile are asked for through
+/// [`Self::take_loads`] and merged by [`Self::finish_load`], and changes
+/// are queued as writes, both for the caller to run off the UI thread.
 pub(super) struct PaletteObjectCache {
     repo: Arc<PaletteObjectIndexRepo>,
-    profiles: HashMap<Uuid, HashMap<String, Vec<IndexedObject>>>,
+    profiles: HashMap<Uuid, ProfileLists>,
+    loads: Vec<Uuid>,
     writes: Vec<PaletteObjectWrite>,
     /// Databases whose background fetch failed, with the connection session
     /// it failed in; they are not asked for again until a new session.
@@ -83,6 +108,7 @@ impl PaletteObjectCache {
         Self {
             repo,
             profiles: HashMap::new(),
+            loads: Vec::new(),
             writes: Vec::new(),
             failed_fetches: HashMap::new(),
         }
@@ -92,7 +118,7 @@ impl PaletteObjectCache {
         Arc::clone(&self.repo)
     }
 
-    /// Whether this session has read the cached lists of `profile_id`.
+    /// Whether this session has asked for the cached lists of `profile_id`.
     pub(super) fn has_profile(&self, profile_id: Uuid) -> bool {
         self.profiles.contains_key(&profile_id)
     }
@@ -116,8 +142,8 @@ impl PaletteObjectCache {
     /// Drops the in-memory copy of a list whose write failed, so the next
     /// list for that database is written again.
     pub(super) fn forget_unsaved(&mut self, profile_id: Uuid, database: &str) {
-        if let Some(databases) = self.profiles.get_mut(&profile_id) {
-            databases.remove(database);
+        if let Some(lists) = self.profiles.get_mut(&profile_id) {
+            lists.databases.remove(database);
         }
     }
 
@@ -126,44 +152,95 @@ impl PaletteObjectCache {
         std::mem::take(&mut self.writes)
     }
 
-    fn databases(&mut self, profile_id: Uuid) -> &mut HashMap<String, Vec<IndexedObject>> {
-        let repo = &self.repo;
+    /// The profiles whose stored lists were asked for since the last call.
+    pub(super) fn take_loads(&mut self) -> Vec<Uuid> {
+        std::mem::take(&mut self.loads)
+    }
 
+    /// Merges the stored lists of `profile_id` once read (`None` when the
+    /// read failed): a database listed meanwhile keeps its newer list and
+    /// is written if it differs from the stored one. Returns whether the
+    /// profile was waiting for them.
+    pub(super) fn finish_load(
+        &mut self,
+        profile_id: Uuid,
+        stored: Option<Vec<IndexedDatabase>>,
+    ) -> bool {
+        let Some(lists) = self.profiles.get_mut(&profile_id) else {
+            return false;
+        };
+        let Some(listed_meanwhile) = lists.loading.take() else {
+            return false;
+        };
+
+        let read = stored.is_some();
+        let mut stored: HashMap<String, Vec<IndexedObject>> = stored
+            .unwrap_or_default()
+            .into_iter()
+            .map(|indexed| (indexed.database, indexed.objects))
+            .collect();
+
+        for database in listed_meanwhile {
+            let objects = lists.databases.get(&database).cloned().unwrap_or_default();
+            let unchanged = read
+                && stored
+                    .remove(&database)
+                    .map_or(objects.is_empty(), |known| known == objects);
+            if !unchanged {
+                self.writes.push(PaletteObjectWrite {
+                    profile_id,
+                    database,
+                    objects,
+                });
+            }
+        }
+
+        lists.databases.extend(stored);
+        true
+    }
+
+    /// The lists of `profile_id`; the first call per profile asks for its
+    /// stored lists and starts out with none.
+    fn lists(&mut self, profile_id: Uuid) -> &mut ProfileLists {
         self.profiles.entry(profile_id).or_insert_with(|| {
-            match repo.load_profile(&profile_id.to_string()) {
-                Ok(databases) => databases
-                    .into_iter()
-                    .map(|indexed| (indexed.database, indexed.objects))
-                    .collect(),
-                Err(error) => {
-                    log::warn!("Could not read the palette's cached objects: {error}");
-                    HashMap::new()
-                }
+            self.loads.push(profile_id);
+            ProfileLists {
+                databases: HashMap::new(),
+                loading: Some(HashSet::new()),
             }
         })
     }
 
     fn recall(&mut self, profile_id: Uuid, database: &str) -> Vec<IndexedObject> {
-        self.databases(profile_id)
+        self.lists(profile_id)
+            .databases
             .get(database)
             .cloned()
             .unwrap_or_default()
     }
 
     fn remember(&mut self, profile_id: Uuid, database: &str, objects: Vec<IndexedObject>) {
-        let databases = self.databases(profile_id);
-        let unchanged = match databases.get(database) {
+        let lists = self.lists(profile_id);
+        let unchanged = match lists.databases.get(database) {
             Some(known) => *known == objects,
-            None => objects.is_empty(),
+            None => objects.is_empty() && lists.loading.is_none(),
         };
         if unchanged {
             return;
         }
 
         if objects.is_empty() {
-            databases.remove(database);
+            lists.databases.remove(database);
         } else {
-            databases.insert(database.to_string(), objects.clone());
+            lists
+                .databases
+                .insert(database.to_string(), objects.clone());
+        }
+
+        // Written once the stored list is known.
+        if let Some(listed_meanwhile) = &mut lists.loading {
+            listed_meanwhile.insert(database.to_string());
+            return;
         }
 
         self.writes.push(PaletteObjectWrite {
@@ -181,7 +258,8 @@ impl PaletteObjectCache {
         }
 
         let gone: Vec<String> = self
-            .databases(profile_id)
+            .lists(profile_id)
+            .databases
             .keys()
             .filter(|database| !listed.contains(database.as_str()))
             .cloned()
@@ -394,8 +472,8 @@ fn relational_listing(target: &RelationalTarget<'_>, node: &ObjectTreeNode) -> D
 
 /// Records the list of one database of a lazily loaded profile after its
 /// fetch lands, without rebuilding the rest of the profile. A profile whose
-/// cached lists this session has not read yet is left for the next palette
-/// open.
+/// cached lists this session has not asked for yet is left for the next
+/// palette open.
 pub(super) fn remember_database(
     state: &AppStateEntity,
     profile_id: Uuid,

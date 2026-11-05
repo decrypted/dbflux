@@ -1,13 +1,13 @@
 //! Keeps the workspace palette's database lists current: fetches the
-//! databases it can list, a few at a time, saves what it learns off the UI
-//! thread, and refills an open palette as results land.
+//! databases it can list, a few at a time, reads and saves the stored lists
+//! off the UI thread, and refills an open palette as results land.
 
 use super::{
-    PALETTE_FETCHES_IN_FLIGHT, PaletteFetchQueue, PaletteObjectCache, remember_database,
-    write_palette_objects,
+    PALETTE_FETCHES_IN_FLIGHT, PaletteFetchQueue, PaletteObjectCache, load_palette_objects,
+    remember_database, write_palette_objects,
 };
 use crate::ui::views::workspace::Workspace;
-use dbflux_storage::PaletteObjectIndexRepo;
+use dbflux_storage::{IndexedDatabase, PaletteObjectIndexRepo};
 use dbflux_ui_base::object_tree::{
     ObjectTreeEvent, ObjectTreeOutcome, ObjectTreeRequestKey, ObjectTreeRequestStatus,
 };
@@ -57,8 +57,9 @@ impl PaletteSync {
 }
 
 impl Workspace {
-    /// Queues the databases the workspace palette could list, saves the
-    /// lists it built, and starts fetching.
+    /// Queues the databases the workspace palette could list, reads the
+    /// stored lists it asked for, saves the lists it built, and starts
+    /// fetching.
     pub(in crate::ui::views::workspace) fn sync_palette_after_build(
         &mut self,
         to_fetch: Vec<(Uuid, String)>,
@@ -72,8 +73,48 @@ impl Workspace {
                     database,
                 }
             }));
+        self.load_stored_palette_lists(cx);
         self.flush_palette_writes(cx);
         self.pump_palette_fetches(cx);
+    }
+
+    /// Reads the stored lists of each profile the palette listed for the
+    /// first time, off the UI thread: a background index write holds the
+    /// repository's connection while it runs. The palette shows what it has
+    /// meanwhile and refills once the lists arrive.
+    fn load_stored_palette_lists(&mut self, cx: &mut Context<Self>) {
+        for profile_id in self.palette_sync.cache.take_loads() {
+            let repo = self.palette_sync.cache.repo();
+            cx.spawn(async move |this, cx| {
+                let stored = cx
+                    .background_executor()
+                    .spawn(async move { load_palette_objects(&repo, profile_id) })
+                    .await;
+
+                if let Err(error) = this.update(cx, |this, cx| {
+                    this.on_stored_palette_lists(profile_id, stored, cx);
+                }) {
+                    log::debug!("The palette's index read outlived its workspace: {error}");
+                }
+            })
+            .detach();
+        }
+    }
+
+    fn on_stored_palette_lists(
+        &mut self,
+        profile_id: Uuid,
+        stored: Option<Vec<IndexedDatabase>>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.palette_sync.cache.finish_load(profile_id, stored) {
+            return;
+        }
+
+        // The stored lists can name databases the server dropped since.
+        self.forget_unlisted_palette_databases(profile_id, cx);
+        self.flush_palette_writes(cx);
+        self.refresh_open_palette(cx);
     }
 
     pub(in crate::ui::views::workspace) fn on_palette_object_tree_event(

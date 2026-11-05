@@ -1,6 +1,6 @@
 use super::{
-    PaletteFetchQueue, PaletteObjectCache, build_resource_items_for_connection, remember_database,
-    write_palette_objects,
+    PaletteFetchQueue, PaletteObjectCache, build_resource_items_for_connection,
+    load_palette_objects, remember_database, write_palette_objects,
 };
 use crate::app::AppStateEntity;
 use crate::ui::overlays::command_palette::{PaletteItem, PaletteSelection, ResourceItem};
@@ -10,10 +10,11 @@ use dbflux_core::{
     DocumentSchema, MeasurementInfo, RelationalSchema, SchemaLoadingStrategy, SchemaSnapshot,
     TableInfo, TimeSeriesSchema, ViewInfo,
 };
-use dbflux_storage::{IndexedObject, IndexedObjectKind};
+use dbflux_storage::{IndexedObject, IndexedObjectKind, PaletteObjectIndexRepo};
 use dbflux_ui_base::object_tree::ObjectTreeRequestKey;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 use uuid::Uuid;
 
 /// A connection that only reports how its driver loads schemas.
@@ -239,15 +240,22 @@ struct PaletteOpen {
     to_fetch: Vec<String>,
 }
 
+/// Opens the palette and, when it asked for stored lists, lets them land
+/// and lists again, as the workspace refills the open palette.
 fn open_palette(
     state: &AppStateEntity,
     profile_id: Uuid,
     cache: &mut PaletteObjectCache,
 ) -> PaletteOpen {
-    let mut items = Vec::new();
     let connected = state.connections().get(&profile_id).expect("connected");
-    let to_fetch =
+    let mut items = Vec::new();
+    let mut to_fetch =
         build_resource_items_for_connection(state, profile_id, connected, cache, &mut items);
+    if land_stored_lists(cache) {
+        items.clear();
+        to_fetch =
+            build_resource_items_for_connection(state, profile_id, connected, cache, &mut items);
+    }
     write_palette_objects(&state.palette_object_index_repo, cache.take_writes());
 
     PaletteOpen {
@@ -256,8 +264,28 @@ fn open_palette(
     }
 }
 
+/// Reads the stored lists `cache` asked for and merges them, as the
+/// workspace does off the UI thread. Returns whether it asked for any.
+fn land_stored_lists(cache: &mut PaletteObjectCache) -> bool {
+    let repo = cache.repo();
+    let loads = cache.take_loads();
+    for &profile_id in &loads {
+        assert!(cache.finish_load(profile_id, load_palette_objects(&repo, profile_id)));
+    }
+
+    !loads.is_empty()
+}
+
 fn new_cache(state: &AppStateEntity) -> PaletteObjectCache {
     PaletteObjectCache::new(Arc::clone(&state.palette_object_index_repo))
+}
+
+/// A cache that has read the stored lists of `profile_id`.
+fn loaded_cache(state: &AppStateEntity, profile_id: Uuid) -> PaletteObjectCache {
+    let mut cache = new_cache(state);
+    cache.recall(profile_id, "");
+    land_stored_lists(&mut cache);
+    cache
 }
 
 /// What each palette item opens for `connected`, with an empty cache.
@@ -710,7 +738,7 @@ fn shows_only_the_configured_database_of_a_document_snapshot() {
 fn forgets_databases_the_server_no_longer_lists() {
     let state = app_state();
     let profile_id = Uuid::new_v4();
-    let mut cache = new_cache(&state);
+    let mut cache = loaded_cache(&state, profile_id);
     let users = IndexedObject {
         schema: Some("app".to_string()),
         name: "users".to_string(),
@@ -735,7 +763,7 @@ fn forgets_databases_the_server_no_longer_lists() {
 fn an_unchanged_list_queues_no_write() {
     let state = app_state();
     let profile_id = Uuid::new_v4();
-    let mut cache = new_cache(&state);
+    let mut cache = loaded_cache(&state, profile_id);
     let users = vec![IndexedObject {
         schema: Some("app".to_string()),
         name: "users".to_string(),
@@ -870,7 +898,7 @@ fn a_fetched_database_is_remembered_once_the_profile_was_read() {
 fn a_list_that_failed_to_save_is_written_again() {
     let state = app_state();
     let profile_id = Uuid::new_v4();
-    let mut cache = new_cache(&state);
+    let mut cache = loaded_cache(&state, profile_id);
     let users = vec![IndexedObject {
         schema: Some("app".to_string()),
         name: "users".to_string(),
@@ -908,7 +936,7 @@ fn closing_drops_the_queued_fetches_but_not_those_in_flight() {
 fn an_empty_database_list_forgets_nothing() {
     let state = app_state();
     let profile_id = Uuid::new_v4();
-    let mut cache = new_cache(&state);
+    let mut cache = loaded_cache(&state, profile_id);
     cache.remember(
         profile_id,
         "app",
@@ -938,7 +966,7 @@ fn a_write_that_fails_is_reported_back() {
     let repo = dbflux_storage::PaletteObjectIndexRepo::new(connection);
     let profile_id = Uuid::new_v4();
     let state = app_state();
-    let mut cache = new_cache(&state);
+    let mut cache = loaded_cache(&state, profile_id);
     cache.remember(
         profile_id,
         "app",
@@ -980,8 +1008,7 @@ fn a_fetched_document_database_is_remembered_and_a_hidden_one_is_not() {
     }
     state.connections_mut().insert(profile_id, profile);
     let connected = state.connections().get(&profile_id).expect("connected");
-    let mut cache = new_cache(&state);
-    cache.recall(profile_id, "shop");
+    let mut cache = loaded_cache(&state, profile_id);
 
     remember_database(&state, profile_id, connected, "logs", &mut cache);
     assert!(cache.take_writes().is_empty(), "the profile hides 'logs'");
@@ -996,4 +1023,137 @@ fn a_fetched_document_database_is_remembered_and_a_hidden_one_is_not() {
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].database, "shop");
     assert_eq!(stored[0].objects[0].kind, IndexedObjectKind::Collection);
+}
+
+fn app_table(name: &str) -> IndexedObject {
+    IndexedObject {
+        schema: Some("app".to_string()),
+        name: name.to_string(),
+        kind: IndexedObjectKind::Table,
+    }
+}
+
+#[test]
+fn the_first_open_does_not_wait_for_the_index_and_fills_in_once_it_is_read() {
+    let mut state = app_state();
+    let profile_id = Uuid::new_v4();
+    state
+        .connections_mut()
+        .insert(profile_id, lazy_mysql(&["f3base", "f3trade"]));
+
+    let runtime =
+        dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+    let connection = runtime.viz_connection().expect("connection");
+    let repo = Arc::new(PaletteObjectIndexRepo::new(Arc::clone(&connection)));
+    repo.replace_database(
+        &profile_id.to_string(),
+        "f3trade",
+        &[IndexedObject {
+            schema: Some("f3trade".to_string()),
+            name: "f3_sport".to_string(),
+            kind: IndexedObjectKind::Table,
+        }],
+    )
+    .expect("store a list");
+    let mut cache = PaletteObjectCache::new(Arc::clone(&repo));
+
+    // A background index write holds the repository's connection.
+    let (locked_tx, locked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let writer = std::thread::spawn({
+        let connection = Arc::clone(&connection);
+        move || {
+            let _held = connection.lock().expect("lock");
+            locked_tx.send(()).expect("report the lock");
+            release_rx.recv_timeout(Duration::from_secs(10)).is_ok()
+        }
+    });
+    locked_rx.recv().expect("the writer holds the connection");
+
+    let connected = state.connections().get(&profile_id).expect("connected");
+    let mut items = Vec::new();
+    let to_fetch =
+        build_resource_items_for_connection(&state, profile_id, connected, &mut cache, &mut items);
+    let _ = release_tx.send(());
+    assert!(
+        writer.join().expect("writer thread"),
+        "opening the palette waited for the index write"
+    );
+
+    assert!(items.is_empty(), "the stored list is not read yet");
+    assert_eq!(to_fetch, vec!["f3base", "f3trade"]);
+    assert_eq!(cache.take_loads(), vec![profile_id]);
+
+    assert!(cache.finish_load(profile_id, load_palette_objects(&repo, profile_id)));
+    let mut items = Vec::new();
+    build_resource_items_for_connection(&state, profile_id, connected, &mut cache, &mut items);
+    assert_eq!(
+        items.iter().map(target).collect::<Vec<_>>(),
+        vec!["table f3trade/f3trade/f3_sport"]
+    );
+    assert!(cache.take_loads().is_empty(), "each profile is read once");
+}
+
+#[test]
+fn lists_seen_before_the_index_is_read_win_over_the_stored_ones() {
+    let state = app_state();
+    let profile_id = Uuid::new_v4();
+    let repo = &state.palette_object_index_repo;
+    for (database, name) in [
+        ("app", "old"),
+        ("emptied", "gone"),
+        ("same", "kept"),
+        ("untouched", "stored"),
+    ] {
+        repo.replace_database(&profile_id.to_string(), database, &[app_table(name)])
+            .expect("store a list");
+    }
+    let mut cache = new_cache(&state);
+
+    cache.remember(profile_id, "app", vec![app_table("new")]);
+    cache.remember(profile_id, "emptied", Vec::new());
+    cache.remember(profile_id, "same", vec![app_table("kept")]);
+    cache.remember(profile_id, "never_stored", Vec::new());
+    assert!(
+        cache.take_writes().is_empty(),
+        "nothing is written before the stored lists are known"
+    );
+
+    assert!(cache.finish_load(profile_id, load_palette_objects(repo, profile_id)));
+    let mut written: Vec<(String, usize)> = cache
+        .take_writes()
+        .iter()
+        .map(|write| (write.database.clone(), write.objects.len()))
+        .collect();
+    written.sort();
+    assert_eq!(
+        written,
+        vec![("app".to_string(), 1), ("emptied".to_string(), 0)],
+        "only the lists that changed are written"
+    );
+    assert_eq!(cache.recall(profile_id, "app"), vec![app_table("new")]);
+    assert!(cache.recall(profile_id, "emptied").is_empty());
+    assert_eq!(cache.recall(profile_id, "same"), vec![app_table("kept")]);
+    assert_eq!(
+        cache.recall(profile_id, "untouched"),
+        vec![app_table("stored")]
+    );
+    assert!(
+        !cache.finish_load(profile_id, None),
+        "the stored lists are merged once"
+    );
+}
+
+#[test]
+fn a_failed_index_read_writes_the_lists_seen_meanwhile() {
+    let state = app_state();
+    let profile_id = Uuid::new_v4();
+    let mut cache = new_cache(&state);
+
+    cache.remember(profile_id, "app", vec![app_table("users")]);
+    cache.remember(profile_id, "emptied", Vec::new());
+    assert!(cache.finish_load(profile_id, None));
+
+    assert_eq!(cache.take_writes().len(), 2);
+    assert_eq!(cache.recall(profile_id, "app"), vec![app_table("users")]);
 }

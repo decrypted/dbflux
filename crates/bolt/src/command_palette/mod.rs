@@ -1151,6 +1151,54 @@ mod tests {
         }
     }
 
+    /// A host shaped like an application root: a plain, relatively
+    /// positioned box whose body fills it, with the palette after the body.
+    struct StackedHost {
+        palette: Entity<CommandPalette<TestItem, TestHost>>,
+    }
+
+    impl gpui::Render for StackedHost {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            div()
+                .relative()
+                .size_full()
+                .child(div().size_full())
+                .child(self.palette.clone())
+        }
+    }
+
+    /// The open palette's overlay covers the whole window wherever the host
+    /// places it, so its card is on screen and a click outside it closes it.
+    #[gpui::test]
+    fn the_open_palette_covers_the_window(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (host, window) = cx.add_window_view(|window, cx| StackedHost {
+            palette: cx.new(|cx| CommandPalette::<TestItem, TestHost>::new(window, cx)),
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.palette.update(cx, |palette, cx| {
+                    palette.open_with_items(vec![TestItem::command("Only")], window, cx);
+                });
+            });
+        });
+        window.run_until_parked();
+
+        let overlay = window
+            .debug_bounds("command-palette-overlay")
+            .expect("the open palette lays out its overlay");
+        let viewport = window.update(|window, _| window.viewport_size());
+
+        assert_eq!(overlay.origin, gpui::Point::default());
+        assert_eq!(overlay.size, viewport);
+    }
+
     /// Confirming an item emits the selection the item's `select` yields,
     /// and the new-tab placement is passed through to it.
     #[gpui::test]

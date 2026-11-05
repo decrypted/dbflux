@@ -6,7 +6,7 @@ access:
   manage: 관리
   login: 로그인
   refresh: 새로고침
-  auth_profile_hint: 직접 연결 모드에서 비밀/매개변수/인증 값 소스를 확인하는 데 사용됩니다.
+  auth_profile_hint: 비밀/매개변수/인증 값 소스를 확인하는 데 사용됩니다.
   session_valid: 인증 프로필 세션이 유효합니다.
   ssm_title: SSM 포트 포워딩
   ssm_instance_id: 인스턴스 ID

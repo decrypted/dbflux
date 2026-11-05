@@ -6,7 +6,7 @@ access:
   manage: Gerenciar
   login: Entrar
   refresh: Atualizar
-  auth_profile_hint: Usado para resolver as origens de valor Secret/Parameter/Auth no modo Direto.
+  auth_profile_hint: Usado para resolver as origens de valor Secret/Parameter/Auth.
   session_valid: A sessão do perfil de autenticação é válida
   ssm_title: Encaminhamento de portas SSM
   ssm_instance_id: ID da instância

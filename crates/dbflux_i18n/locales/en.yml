@@ -6,7 +6,7 @@ access:
   manage: Manage
   login: Login
   refresh: Refresh
-  auth_profile_hint: Used for resolving Secret/Parameter/Auth value sources in Direct mode.
+  auth_profile_hint: Used for resolving Secret/Parameter/Auth value sources.
   session_valid: Auth profile session is valid
   ssm_title: SSM Port Forwarding
   ssm_instance_id: Instance ID

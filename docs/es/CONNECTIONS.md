@@ -256,9 +256,13 @@ DBFlux abre un modal de login:
 
 ### Seleccionar un Auth Profile por conexión
 
-- **Modo Direct** — el Auth Profile es *opcional*. Se usa solo para resolver
-  fuentes de valores Secret/Parameter/Auth (siguiente sección).
+- **Modos Direct, SSH Tunnel y Proxy** — el Auth Profile es *opcional* y
+  aparece debajo de los campos propios del método. Se usa solo para resolver
+  fuentes de valores Secret/Parameter/Auth (siguiente sección); se resuelven
+  antes de abrir el túnel o el proxy, así que un túnel SSH a un bastión puede
+  tomar la contraseña de la base de datos de Secret Manager.
 - **Modo SSM** — el Auth Profile es **obligatorio**.
+- Cambiar el método de acceso conserva el Auth Profile seleccionado.
 - Si algún campo usa una fuente de valores Secret/Parameter cuyo provider es un
   auth provider, se requiere un Auth Profile correspondiente o la conexión se
   rechaza antes de conectar.

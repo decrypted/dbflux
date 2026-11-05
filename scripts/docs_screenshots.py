@@ -564,7 +564,7 @@ def place_main_window(display: str, pid: int) -> None:
     deadline = time.monotonic() + WINDOW_TIMEOUT_SECONDS
 
     while True:
-        search = xdotool(display, "search", "--all", "--onlyvisible", "--pid", str(pid), "--name", "^DBFlux$")
+        search = xdotool(display, "search", "--all", "--onlyvisible", "--pid", str(pid), "--name", "^DBFlux( ·|$)")
         window_ids = search.stdout.split()
 
         if window_ids:

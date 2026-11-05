@@ -196,6 +196,9 @@ pub struct ObjectTreeCoordinator {
     /// Pending requests nobody asked for directly; their failures are
     /// logged instead of reported.
     quiet: HashSet<ObjectTreeRequestKey>,
+    /// Databases the user closed, with the profile session they were closed
+    /// in. Background work leaves them closed for that session.
+    closed_databases: HashMap<(Uuid, String), Option<u64>>,
 }
 
 impl ObjectTreeCoordinator {
@@ -463,6 +466,25 @@ impl AppStateEntity {
     /// behind a slot install).
     pub fn object_tree_is_pending(&self, key: &ObjectTreeRequestKey) -> bool {
         self.object_tree.is_fetch_pending(key)
+    }
+
+    /// Records that the user closed `database` of `profile_id`, so work
+    /// nobody asked for leaves it closed for the rest of the session.
+    pub fn object_tree_note_database_closed(&mut self, profile_id: Uuid, database: &str) {
+        let generation = self.profile_session_generation(profile_id);
+        self.object_tree
+            .closed_databases
+            .insert((profile_id, database.to_string()), generation);
+    }
+
+    /// Whether the user closed `database` of `profile_id` in its current
+    /// session.
+    pub fn object_tree_database_closed(&self, profile_id: Uuid, database: &str) -> bool {
+        let generation = self.profile_session_generation(profile_id);
+        self.object_tree
+            .closed_databases
+            .get(&(profile_id, database.to_string()))
+            .is_some_and(|closed_in| *closed_in == generation)
     }
 
     /// Whether the request is in flight only for work nobody asked for (see

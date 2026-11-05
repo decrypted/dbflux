@@ -288,6 +288,7 @@ impl AppState {
             document_query_repo,
             schema_snapshot_repo,
             palette_object_index_repo,
+            palette_profiles_to_forget: Vec::new(),
         };
 
         Self::run_post_construction_bootstraps(&mut state);

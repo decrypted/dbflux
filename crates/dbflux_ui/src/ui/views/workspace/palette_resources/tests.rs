@@ -1074,7 +1074,7 @@ fn the_first_open_does_not_wait_for_the_index_and_fills_in_once_it_is_read() {
     let mut items = Vec::new();
     let to_fetch =
         build_resource_items_for_connection(&state, profile_id, connected, &mut cache, &mut items);
-    let _ = release_tx.send(());
+    release_tx.send(()).expect("release the index writer");
     assert!(
         writer.join().expect("writer thread"),
         "opening the palette waited for the index write"
@@ -1156,4 +1156,26 @@ fn a_failed_index_read_writes_the_lists_seen_meanwhile() {
 
     assert_eq!(cache.take_writes().len(), 2);
     assert_eq!(cache.recall(profile_id, "app"), vec![app_table("users")]);
+}
+
+#[test]
+fn a_database_closed_in_the_sidebar_keeps_its_stored_list_but_is_not_fetched() {
+    let mut state = app_state();
+    let profile_id = Uuid::new_v4();
+    let mut profile = lazy_mysql(&["f3base", "f3trade"]);
+    profile.database_schemas.insert(
+        "f3trade".to_string(),
+        group("f3trade", vec![table("f3_sport", Some("f3trade"))], vec![]),
+    );
+    state.connections_mut().insert(profile_id, profile);
+    open_palette(&state, profile_id, &mut new_cache(&state));
+
+    state
+        .connections_mut()
+        .insert(profile_id, lazy_mysql(&["f3base", "f3trade"]));
+    state.object_tree_note_database_closed(profile_id, "f3trade");
+
+    let reopened = open_palette(&state, profile_id, &mut new_cache(&state));
+    assert_eq!(reopened.targets, vec!["table f3trade/f3trade/f3_sport"]);
+    assert_eq!(reopened.to_fetch, vec!["f3base"]);
 }

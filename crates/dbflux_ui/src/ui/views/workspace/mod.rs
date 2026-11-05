@@ -415,6 +415,11 @@ impl Workspace {
         )
         .detach();
 
+        cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+            this.forget_stale_palette_profiles(cx);
+        })
+        .detach();
+
         let hook_load_errors = app_state.update(cx, |state, _| {
             drain_hook_load_diagnostics(&mut state.hook_load_diagnostics)
         });
@@ -762,77 +767,83 @@ impl Workspace {
         cx.subscribe_in(
             &command_palette,
             window,
-            |this, _, event: &PaletteSelection, window, cx| match event {
-                PaletteSelection::Command { id } => {
-                    this.pending_command = Some(id);
-                    cx.notify();
-                }
-                PaletteSelection::Connect { profile_id } => {
-                    this.sidebar.update(cx, |sidebar, cx| {
-                        sidebar.connect_to_profile(*profile_id, cx);
-                    });
-                }
-                PaletteSelection::FocusConnection { profile_id } => {
-                    // Mirror sidebar's execute_item for connected profiles:
-                    // set the connection as active in AppState, then focus the sidebar.
-                    this.app_state.update(cx, |state, cx| {
-                        state.set_active_connection(*profile_id);
-                        cx.emit(AppStateChanged);
-                    });
-                    this.pending_focus = Some(FocusTarget::Sidebar);
-                    cx.notify();
-                }
-                PaletteSelection::OpenTable {
-                    profile_id,
-                    table,
-                    database,
-                    new_tab,
-                } => {
-                    this.open_table_document(
-                        *profile_id,
-                        table.clone(),
-                        database.clone(),
-                        TabPlacement::from_new_tab(*new_tab),
-                        window,
-                        cx,
-                    );
-                }
-                PaletteSelection::OpenCollection {
-                    profile_id,
-                    collection,
-                    new_tab,
-                } => {
-                    this.open_collection_document(
-                        *profile_id,
-                        collection.clone(),
-                        TabPlacement::from_new_tab(*new_tab),
-                        window,
-                        cx,
-                    );
-                }
-                PaletteSelection::OpenKeyValue {
-                    profile_id,
-                    database,
-                    new_tab,
-                } => {
-                    this.open_key_value_document(
-                        *profile_id,
-                        database.clone(),
-                        TabPlacement::from_new_tab(*new_tab),
-                        window,
-                        cx,
-                    );
-                }
-                PaletteSelection::OpenScript { path } => {
-                    this.open_script_from_path(path.clone(), cx);
-                }
-                PaletteSelection::OpenSavedChart { chart_id } => {
-                    this.open_saved_chart(*chart_id, window, cx);
-                }
-                PaletteSelection::ImportDashboard => {
-                    this.modal_import_dashboard.update(cx, |modal, cx| {
-                        modal.open(window, cx);
-                    });
+            |this, _, event: &PaletteSelection, window, cx| {
+                // Choosing an item closes the palette without its closed
+                // event, so its fetches stop here.
+                this.palette_sync.stop_fetching();
+
+                match event {
+                    PaletteSelection::Command { id } => {
+                        this.pending_command = Some(id);
+                        cx.notify();
+                    }
+                    PaletteSelection::Connect { profile_id } => {
+                        this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.connect_to_profile(*profile_id, cx);
+                        });
+                    }
+                    PaletteSelection::FocusConnection { profile_id } => {
+                        // Mirror sidebar's execute_item for connected profiles:
+                        // set the connection as active in AppState, then focus the sidebar.
+                        this.app_state.update(cx, |state, cx| {
+                            state.set_active_connection(*profile_id);
+                            cx.emit(AppStateChanged);
+                        });
+                        this.pending_focus = Some(FocusTarget::Sidebar);
+                        cx.notify();
+                    }
+                    PaletteSelection::OpenTable {
+                        profile_id,
+                        table,
+                        database,
+                        new_tab,
+                    } => {
+                        this.open_table_document(
+                            *profile_id,
+                            table.clone(),
+                            database.clone(),
+                            TabPlacement::from_new_tab(*new_tab),
+                            window,
+                            cx,
+                        );
+                    }
+                    PaletteSelection::OpenCollection {
+                        profile_id,
+                        collection,
+                        new_tab,
+                    } => {
+                        this.open_collection_document(
+                            *profile_id,
+                            collection.clone(),
+                            TabPlacement::from_new_tab(*new_tab),
+                            window,
+                            cx,
+                        );
+                    }
+                    PaletteSelection::OpenKeyValue {
+                        profile_id,
+                        database,
+                        new_tab,
+                    } => {
+                        this.open_key_value_document(
+                            *profile_id,
+                            database.clone(),
+                            TabPlacement::from_new_tab(*new_tab),
+                            window,
+                            cx,
+                        );
+                    }
+                    PaletteSelection::OpenScript { path } => {
+                        this.open_script_from_path(path.clone(), cx);
+                    }
+                    PaletteSelection::OpenSavedChart { chart_id } => {
+                        this.open_saved_chart(*chart_id, window, cx);
+                    }
+                    PaletteSelection::ImportDashboard => {
+                        this.modal_import_dashboard.update(cx, |modal, cx| {
+                            modal.open(window, cx);
+                        });
+                    }
                 }
             },
         )
@@ -2383,6 +2394,7 @@ impl Workspace {
         let was_visible = self.command_palette.read(cx).is_visible();
 
         if !was_visible {
+            self.forget_stale_palette_profiles(cx);
             let (items, to_fetch) = self.build_palette_items(cx);
             self.palette_sync.set_lists_workspace(true);
             self.command_palette.update(cx, |palette, cx| {
@@ -2403,6 +2415,11 @@ impl Workspace {
         &mut self,
         cx: &Context<Self>,
     ) -> (Vec<PaletteItem>, Vec<(uuid::Uuid, String)>) {
+        #[cfg(test)]
+        {
+            self.palette_sync.full_listings += 1;
+        }
+
         let mut items: Vec<PaletteItem> = Self::default_commands()
             .into_iter()
             .map(|cmd| cmd.into())

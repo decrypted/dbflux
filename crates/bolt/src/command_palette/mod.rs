@@ -126,6 +126,13 @@ pub trait PaletteEntry: 'static {
     /// Text searched by the fuzzy matcher. Embed the product's kind words
     /// so an item matches on its kind as well as its name.
     fn search_text(&self) -> String;
+    /// What tells this item apart from every other one, so the highlight
+    /// stays on it when the items are replaced while the palette is open.
+    /// Two items may share their search text, such as the same table on
+    /// two connections with the same name; override this when they can.
+    fn selection_key(&self) -> String {
+        self.search_text()
+    }
     /// The row's `(category_label, display_name)`.
     fn display_label(&self) -> (String, String);
     /// Type priority for tiebreaking (lower = higher priority).
@@ -231,8 +238,21 @@ impl PaletteScope {
 
 /// The items a typed query keeps, with their fuzzy-match scores. A leading
 /// `>` or `@` narrows the search to commands or to tables and collections.
+#[cfg(test)]
 fn filter_items<T: PaletteEntry>(
     items: &[T],
+    matcher: &SkimMatcherV2,
+    query: &str,
+) -> Vec<FilteredItem> {
+    let texts: Vec<String> = items.iter().map(PaletteEntry::search_text).collect();
+    filter_with_texts(items, &texts, matcher, query)
+}
+
+/// [`filter_items`] over search texts computed once per item, `texts[i]`
+/// being the search text of `items[i]`.
+fn filter_with_texts<T: PaletteEntry>(
+    items: &[T],
+    texts: &[String],
     matcher: &SkimMatcherV2,
     query: &str,
 ) -> Vec<FilteredItem> {
@@ -240,15 +260,16 @@ fn filter_items<T: PaletteEntry>(
 
     items
         .iter()
+        .zip(texts)
         .enumerate()
-        .filter(|(_, item)| scope.includes(item.section()))
-        .filter_map(|(index, item)| {
+        .filter(|(_, (item, _))| scope.includes(item.section()))
+        .filter_map(|(index, (_, search_text))| {
             if text.is_empty() {
                 return Some(FilteredItem { index, score: 0 });
             }
 
             matcher
-                .fuzzy_match(&item.search_text(), text)
+                .fuzzy_match(search_text, text)
                 .map(|score| FilteredItem { index, score })
         })
         .collect()
@@ -264,7 +285,7 @@ fn arrange_results<T: PaletteEntry>(
 ) -> Vec<FilteredItem> {
     #[expect(
         clippy::indexing_slicing,
-        reason = "the three construction sites of `FilteredItem` (`filter_items`, \
+        reason = "the three construction sites of `FilteredItem` (`filter_with_texts`, \
                   `open_with_items` and `toggle`) each pair the index with \
                   `.enumerate()` over the same `items` slice, so `a.index` and \
                   `b.index` stay below `items.len()`"
@@ -288,7 +309,7 @@ fn arrange_results<T: PaletteEntry>(
 
         #[expect(
             clippy::indexing_slicing,
-            reason = "the three construction sites of `FilteredItem` (`filter_items`, \
+            reason = "the three construction sites of `FilteredItem` (`filter_with_texts`, \
                       `open_with_items` and `toggle`) each pair the index with \
                       `.enumerate()` over the same `items` slice, so \
                       `filtered_item.index` stays below `items.len()`"
@@ -373,6 +394,9 @@ enum PaletteRow {
 pub struct CommandPalette<T: PaletteEntry, H: PaletteHost> {
     visible: bool,
     items: Vec<T>,
+    /// The search text of each item, computed once when the items are set
+    /// rather than on every keystroke.
+    search_texts: Vec<String>,
     filtered: Vec<FilteredItem>,
     selected_index: usize,
     scroll_offset: usize,
@@ -420,6 +444,7 @@ where
         Self {
             visible: false,
             items: Vec::new(),
+            search_texts: Vec::new(),
             filtered: Vec::new(),
             selected_index: 0,
             scroll_offset: 0,
@@ -432,7 +457,7 @@ where
 
     /// Set items and reset filter state. Called on each toggle.
     pub fn open_with_items(&mut self, items: Vec<T>, window: &mut Window, cx: &mut Context<Self>) {
-        self.items = items;
+        self.set_items(items);
         self.filtered = self
             .items
             .iter()
@@ -457,25 +482,65 @@ where
     /// Replaces the items of an open palette, for results that arrive after
     /// it opened: the typed query stays and filters the new items, and the
     /// selection stays on the item it was on while that item is still
-    /// listed, matched by its search text.
+    /// listed, matched by its [`PaletteEntry::selection_key`].
     pub fn replace_items(&mut self, items: Vec<T>, cx: &mut Context<Self>) {
-        let selected_text = self
-            .filtered
+        let selected = self.selected_key();
+        self.set_items(items);
+        self.refilter_keeping(selected, cx);
+    }
+
+    /// Replaces the items `stale` picks with `fresh`, keeping the others,
+    /// the typed query and the selection as [`Self::replace_items`] does.
+    /// Cheaper than rebuilding every item when one part of the list
+    /// changed.
+    pub fn splice_items(
+        &mut self,
+        stale: impl Fn(&T) -> bool,
+        fresh: Vec<T>,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self.selected_key();
+
+        let (mut items, mut texts): (Vec<T>, Vec<String>) = std::mem::take(&mut self.items)
+            .into_iter()
+            .zip(std::mem::take(&mut self.search_texts))
+            .filter(|(item, _)| !stale(item))
+            .unzip();
+        texts.extend(fresh.iter().map(PaletteEntry::search_text));
+        items.extend(fresh);
+        self.items = items;
+        self.search_texts = texts;
+
+        self.refilter_keeping(selected, cx);
+    }
+
+    /// The items the palette lists, in the order they were given.
+    pub fn items(&self) -> &[T] {
+        &self.items
+    }
+
+    fn set_items(&mut self, items: Vec<T>) {
+        self.search_texts = items.iter().map(PaletteEntry::search_text).collect();
+        self.items = items;
+    }
+
+    fn selected_key(&self) -> Option<String> {
+        self.filtered
             .get(self.selected_index)
             .and_then(|filtered| self.items.get(filtered.index))
-            .map(PaletteEntry::search_text);
+            .map(PaletteEntry::selection_key)
+    }
 
-        self.items = items;
-
+    fn refilter_keeping(&mut self, selected: Option<String>, cx: &mut Context<Self>) {
         let query = self.input_state.read(cx).value().to_string();
-        let filtered = filter_items(&self.items, &self.matcher, &query);
+        let filtered = filter_with_texts(&self.items, &self.search_texts, &self.matcher, &query);
         self.filtered = arrange_results(&self.items, filtered, &query);
 
-        let kept = selected_text.and_then(|text| {
+        let kept = selected.and_then(|key| {
             self.filtered.iter().position(|filtered| {
                 self.items
                     .get(filtered.index)
-                    .is_some_and(|item| item.search_text() == text)
+                    .is_some_and(|item| item.selection_key() == key)
             })
         });
         self.selected_index = kept.unwrap_or_else(|| {
@@ -522,7 +587,7 @@ where
     }
 
     fn update_filter(&mut self, query: &str, cx: &mut Context<Self>) {
-        let filtered = filter_items(&self.items, &self.matcher, query);
+        let filtered = filter_with_texts(&self.items, &self.search_texts, &self.matcher, query);
         self.filtered = arrange_results(&self.items, filtered, query);
         self.match_query = PaletteScope::parse(query).1.to_string();
 
@@ -900,6 +965,8 @@ mod tests {
     struct TestItem {
         kind: TestKind,
         name: &'static str,
+        /// Tells apart items that share a name, as two connections can.
+        owner: u8,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -915,6 +982,7 @@ mod tests {
             Self {
                 kind: TestKind::Command,
                 name,
+                owner: 0,
             }
         }
 
@@ -922,6 +990,7 @@ mod tests {
             Self {
                 kind: TestKind::Connection,
                 name,
+                owner: 0,
             }
         }
 
@@ -929,6 +998,7 @@ mod tests {
             Self {
                 kind: TestKind::Resource,
                 name,
+                owner: 0,
             }
         }
 
@@ -936,7 +1006,15 @@ mod tests {
             Self {
                 kind: TestKind::Script,
                 name,
+                owner: 0,
             }
+        }
+    }
+
+    impl TestItem {
+        fn owned_by(mut self, owner: u8) -> Self {
+            self.owner = owner;
+            self
         }
     }
 
@@ -945,6 +1023,10 @@ mod tests {
 
         fn search_text(&self) -> String {
             self.name.to_string()
+        }
+
+        fn selection_key(&self) -> String {
+            format!("{}/{}", self.owner, self.name)
         }
 
         fn qualifier(&self) -> Option<String> {
@@ -1281,6 +1363,63 @@ mod tests {
             let host = host.read(cx);
             assert!(!host.palette.read(cx).is_visible());
             assert_eq!((host.body_presses, host.body_clicks), (0, 0));
+        });
+    }
+
+    /// Two items with the same text, such as one table on two connections
+    /// with the same name: replacing or splicing the items keeps the
+    /// highlight on the item it was on, not on its twin.
+    #[gpui::test]
+    fn the_highlight_stays_on_its_own_item_among_twins(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (palette, window) = cx.add_window_view(CommandPalette::<TestItem, TestHost>::new);
+        window.run_until_parked();
+
+        let twins = || {
+            vec![
+                TestItem::resource("orders").owned_by(1),
+                TestItem::resource("orders").owned_by(2),
+            ]
+        };
+        window.update(|window, cx| {
+            palette.update(cx, |palette, cx| {
+                palette.open_with_items(twins(), window, cx);
+                palette.input_state.update(cx, |state, cx| {
+                    state.set_value("orders", window, cx);
+                });
+                palette.update_filter("orders", cx);
+                palette.select_next(cx);
+            });
+        });
+        window.run_until_parked();
+
+        let owner = |palette: &CommandPalette<TestItem, TestHost>| {
+            palette.items[palette.filtered[palette.selected_index].index].owner
+        };
+        window.update(|_, cx| {
+            assert_eq!(owner(palette.read(cx)), 2);
+
+            palette.update(cx, |palette, cx| palette.replace_items(twins(), cx));
+            assert_eq!(owner(palette.read(cx)), 2, "replaced, the twin above it");
+
+            palette.update(cx, |palette, cx| {
+                palette.splice_items(
+                    |item| item.owner == 1,
+                    vec![
+                        TestItem::resource("orders").owned_by(1),
+                        TestItem::resource("invoices").owned_by(1),
+                    ],
+                    cx,
+                );
+            });
+            let palette = palette.read(cx);
+            assert_eq!(owner(palette), 2, "spliced");
+            assert_eq!(palette.items().len(), 3);
+            assert_eq!(
+                palette.filtered.len(),
+                2,
+                "the typed query filters the new items"
+            );
         });
     }
 

@@ -354,6 +354,8 @@ IME 확정을 포함한 네이티브 텍스트 편집 시 마크는 텍스트를
 
 문자 키는 검색 입력창에 입력되므로, 입력하면 목록이 필터링됩니다.
 
+`>`로 시작하면 명령만, `@`로 시작하면 테이블과 컬렉션만 검색합니다. 팔레트는 열린 모든 연결의 테이블, 뷰, 컬렉션을 나열하며, 사이드바에서 펼치지 않은 데이터베이스도 포함합니다. 데이터베이스를 펼칠 때 로드하는 연결(MySQL, MariaDB, SQL Server, ClickHouse, DuckDB, MongoDB, InfluxDB)에서는 팔레트를 열면 아직 로드되지 않은 데이터베이스를 최대 50개까지 한 번에 두 개씩 백그라운드에서 로드하고, 입력하는 동안 목록이 채워집니다. 항목을 선택하거나 팔레트를 닫으면 멈춥니다. 찾은 내용은 재시작 후에도 유지되므로 다음 세션에서 해당 데이터베이스를 바로 검색합니다. 사이드바에서 닫은 데이터베이스는 이 방식으로 다시 로드되지 않습니다. PostgreSQL과 Redshift에서는 사이드바에서 열지 않은 데이터베이스는 검색되지 않습니다.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/keyboard/command-palette-dark.webp">
   <img src="../images/keyboard/command-palette-light.webp" alt="짧은 검색어로 필터링해 일치하는 명령과 키 바인딩을 보여 주는 명령 팔레트">

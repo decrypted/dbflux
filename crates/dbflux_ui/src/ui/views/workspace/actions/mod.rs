@@ -625,6 +625,8 @@ mod tests {
         assert!(items.is_empty());
     }
 
+    // --- Script flattening tests ---
+
     #[test]
     fn flatten_script_entries_includes_openable_files() {
         let entries = vec![

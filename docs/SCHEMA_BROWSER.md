@@ -95,6 +95,19 @@ Schema is loaded lazily. On connect, DBFlux fetches shallow metadata (names).
 Detailed metadata — columns, indexes, and similar — is fetched on demand when you
 expand a node. This keeps the initial connection fast on large databases.
 
+On connections that load each database when it is expanded (MySQL, MariaDB,
+SQL Server, ClickHouse, DuckDB, MongoDB and InfluxDB), the command palette also
+searches the databases you have not expanded. While it is open, it loads up to
+50 of them in the background, two at a time, and stops when you choose an item
+or close it; a database loaded this way stays collapsed in the tree. What it
+finds is stored, so in later sessions those databases are searchable before
+they are loaded again. The stored lists are refreshed as the databases load,
+and dropped when the connection is deleted or pointed at another server. A
+database you closed in the sidebar is not loaded again by the palette in that
+session, but its stored list is still searched. On PostgreSQL and Redshift each
+database needs a connection of its own, so a database not opened in the
+sidebar is not searched. See [Command palette](KEYBOARD.md#command-palette).
+
 ## Collapsed sidebar preview
 
 When the sidebar is collapsed, hovering over it reveals it after 250 ms; entering

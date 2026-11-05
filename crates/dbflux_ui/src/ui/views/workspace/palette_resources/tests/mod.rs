@@ -1,3 +1,5 @@
+mod sync;
+
 use super::{
     PaletteFetchQueue, PaletteObjectCache, build_resource_items_for_connection,
     load_palette_objects, remember_database, write_palette_objects,

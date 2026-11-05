@@ -9,12 +9,8 @@ use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-<<<<<<< bb09478a
 use gpui_component::dialog::{AlertDialog, DialogButtonProps};
-=======
-use gpui_component::dialog::{Dialog, DialogButtonProps};
 use gpui_component::scroll::ScrollableElement;
->>>>>>> 08605376
 
 use super::{
     SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,

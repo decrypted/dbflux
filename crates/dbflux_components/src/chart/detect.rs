@@ -4,11 +4,7 @@
 //! column contract; this wrapper converts the result's metadata and forwards,
 //! so call sites keep passing a `&QueryResult`.
 
-<<<<<<< bb09478a
 use dbflux_core::{ColumnKind, QueryResult, Value};
-=======
-use dbflux_core::QueryResult;
->>>>>>> 08605376
 
 pub use bolt::chart::detect::ChartDetection;
 
@@ -29,7 +25,6 @@ pub fn detect_chart_columns(result: &QueryResult) -> ChartDetection {
     )
 }
 
-<<<<<<< bb09478a
 /// The columns a chart draws until the user picks, out of the detected
 /// `numeric_cols`.
 ///
@@ -124,12 +119,6 @@ fn is_integer_sequence(result: &QueryResult, column: usize) -> bool {
     true
 }
 
-// ---------------------------------------------------------------------------
-// Unit tests (strict TDD: tests were written before the implementation above)
-// ---------------------------------------------------------------------------
-
-=======
->>>>>>> 08605376
 #[cfg(test)]
 mod tests {
     use super::*;

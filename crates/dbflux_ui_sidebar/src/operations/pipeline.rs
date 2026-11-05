@@ -11,7 +11,6 @@ use dbflux_ui_base::toast::PendingToast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 use std::sync::Arc;
 
-<<<<<<< bb09478a
 /// Whether a connect captures a schema snapshot. A relational connection
 /// without a current database (a MySQL profile with no default database,
 /// for example) has nothing to capture, so it is skipped instead of reported
@@ -33,7 +32,8 @@ fn connect_capture_database(
     schema
         .and_then(|schema| schema.current_database().map(str::to_string))
         .or_else(|| connection.active_database())
-=======
+}
+
 /// Why a pipeline connect stopped before it started.
 enum PrepareStop {
     /// A benign concurrency skip, logged only.
@@ -42,7 +42,6 @@ enum PrepareStop {
     Failed(String),
     /// A failure already reported through `report_error`.
     Reported,
->>>>>>> 08605376
 }
 
 fn discover_capture_tables(

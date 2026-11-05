@@ -231,6 +231,9 @@ pub struct Dropdown {
     mono_label: bool,
     leading_icon: Option<IconSource>,
     label_badge: Option<BadgeLabel>,
+    /// When set, the trigger takes its label's width within this range, not the
+    /// parent's width.
+    trigger_width_range: Option<(Pixels, Pixels)>,
     menu_scroll_handle: ScrollHandle,
     /// The trigger's laid-out width, recorded while it paints. The menu is
     /// anchored and sizes to its content, so it cannot resolve a percentage
@@ -273,6 +276,7 @@ impl Dropdown {
             mono_label: false,
             leading_icon: None,
             label_badge: None,
+            trigger_width_range: None,
             menu_scroll_handle: ScrollHandle::new(),
             trigger_width: Rc::new(Cell::new(px(0.0))),
             on_select: None,
@@ -284,6 +288,13 @@ impl Dropdown {
 
     pub fn items(mut self, items: Vec<DropdownItem>) -> Self {
         self.items = items;
+        self
+    }
+
+    /// Sizes the trigger to its label within `min` and `max`, for a dropdown in a row
+    /// with room to spare, which it would otherwise take all of.
+    pub fn trigger_width_range(mut self, min: Pixels, max: Pixels) -> Self {
+        self.trigger_width_range = Some((min, max));
         self
     }
 
@@ -361,6 +372,15 @@ impl Dropdown {
             self.selected_index = None;
             cx.notify();
         }
+    }
+
+    /// How many items the list holds.
+    pub fn item_count(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn item_values(&self) -> impl Iterator<Item = String> + '_ {
+        self.items.iter().map(|item| item.value.to_string())
     }
 
     pub fn set_items(&mut self, items: Vec<DropdownItem>, cx: &mut Context<Self>) {
@@ -1004,6 +1024,7 @@ impl Render for Dropdown {
         let variant = self.trigger_variant();
         let keyboard_focused = self.is_focused(window);
         let trigger = self.render_trigger(label, disabled, keyboard_focused, cx);
+        let width_range = self.trigger_width_range;
 
         let mut element = div()
             .id(self.id.clone())
@@ -1011,7 +1032,10 @@ impl Render for Dropdown {
             .when_some(self.focus_handle.as_ref(), |element, handle| {
                 element.track_focus(handle)
             })
-            .w_full()
+            .map(|root| match width_range {
+                Some((min, max)) => root.min_w(min).max_w(max),
+                None => root.w_full(),
+            })
             .when(
                 matches!(
                     variant,

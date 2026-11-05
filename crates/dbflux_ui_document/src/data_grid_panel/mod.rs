@@ -1264,22 +1264,18 @@ impl DataGridPanel {
                 } => {
                     this.submit_filter_input(window, cx);
                 }
-<<<<<<< bb09478a
                 // Opening the history moves the keyboard into its search
                 // field; the popup and the edit mode stay.
-                InputEvent::Blur if this.filter_history_search_focused(window, cx) => {}
-                InputEvent::Blur => {
-                    this.close_filter_history(cx);
-=======
-                InputEvent::Focus => {
-                    this.query_input_focused(QueryInput::Filter, cx);
+                InputEvent::Blur if this.filter_history_search_focused(window, cx) => {
+                    this.query_input_blurred(QueryInput::Filter, cx);
                 }
                 InputEvent::Blur => {
                     this.query_input_blurred(QueryInput::Filter, cx);
->>>>>>> 08605376
+                    this.close_filter_history(cx);
                     this.exit_edit_mode(window, cx);
                 }
                 InputEvent::Focus => {
+                    this.query_input_focused(QueryInput::Filter, cx);
                     // A filter put in while the field was not being typed
                     // in (history, Filter by value) is the base the next
                     // keystroke is told apart from.

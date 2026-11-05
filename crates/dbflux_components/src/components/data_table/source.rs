@@ -93,6 +93,8 @@ fn cell_view(
         CellTone::Missing
     } else if cell.is_nested() {
         CellTone::Nested
+    } else if cell.is_expression() {
+        CellTone::Expression
     } else if cell.is_null() {
         CellTone::Null
     } else if cell.is_auto_generated() || cell.is_placeholder() {
@@ -488,6 +490,24 @@ mod tests {
 
         assert_eq!(source.cell(0, 0).expect("cell").tone, CellTone::Muted);
         assert_eq!(source.cell(0, 1).expect("cell").tone, CellTone::Muted);
+    }
+
+    #[test]
+    fn an_expression_reads_in_its_own_tone() {
+        let model = model_with(
+            vec![text_spec("created_at")],
+            vec![vec![CellValue::expression("now()")]],
+        );
+        let edits = EditBuffer::new();
+        let source = GridRowSource::new(&model, &edits);
+
+        let cell = source.cell(0, 0).expect("cell");
+        assert_eq!(cell.tone, CellTone::Expression);
+        assert_eq!(
+            drawn_text(&cell),
+            &*CellValue::expression("now()").display_text(),
+            "the model's own display text"
+        );
     }
 
     #[test]

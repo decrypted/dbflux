@@ -48,14 +48,11 @@ pub struct MenuItem {
     /// A second, muted line under the label: what the item acts on, or why
     /// it is disabled.
     pub detail: Option<SharedString>,
-<<<<<<< bb09478a:crates/dbflux_components/src/composites/menu_item.rs
     /// Byte ranges of the label drawn in the accent, bold: the parts a
     /// search matched. Sorted and not overlapping.
     pub label_highlights: Vec<std::ops::Range<usize>>,
-=======
     /// `Some` for a checkable row: `true` draws the trailing check mark.
     pub checked: Option<bool>,
->>>>>>> 08605376:crates/bolt/src/composites/menu_item.rs
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,11 +173,8 @@ impl MenuItem {
             disabled: false,
             shortcut: None,
             detail: None,
-<<<<<<< bb09478a:crates/dbflux_components/src/composites/menu_item.rs
             label_highlights: Vec::new(),
-=======
             checked: None,
->>>>>>> 08605376:crates/bolt/src/composites/menu_item.rs
         }
     }
 

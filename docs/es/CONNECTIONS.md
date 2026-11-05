@@ -419,22 +419,16 @@ Notas:
 
 - Las fuentes Secret/Parameter pueden apuntar a una **clave JSON** dentro de un
   secreto JSON, de forma que un único documento JSON almacenado puede alimentar
-<<<<<<< bb09478a
   varios campos. Escribe la clave después del nombre o ARN del secreto como
   `<locator>#<clave>`, por ejemplo `rds!db-1a2b#password` para la contraseña de
   un secreto que gestiona RDS. La indicación bajo el campo dice si se usa el valor
   completo o una sola clave. Un secreto de Secrets Manager que contiene un objeto
   JSON pero se referencia sin clave se rechaza al conectar, y el error lista las
   claves del secreto (nunca sus valores).
-- Los valores resueltos se cachean durante **5 minutos** para evitar volver a
-  obtenerlos en cada reconexión.
-=======
-  varios campos.
 - Los valores resueltos desde referencias de Secret Manager y Parameter Store se
   cachean durante **5 minutos** para evitar volver a obtenerlos en cada
   reconexión. Los valores de variables de entorno, archivos dotenv y archivos de
   secretos se leen en cada uso.
->>>>>>> 08605376
 - Las fuentes Secret/Parameter respaldadas por un auth provider **requieren un
   Auth Profile** en la conexión (se valida antes de conectar).
 - Para llegar a LocalStack o a un endpoint de VPC, define **Endpoint URL** en el

@@ -1308,8 +1308,8 @@ mod tests {
                 .with_actions(actions),
         )
         .expect("start server");
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect"));
         let connection = connection_declaring(
             client,
             DriverCapabilities::ROOT_SECTIONS,
@@ -1452,15 +1452,15 @@ mod tests {
 
     #[test]
     fn v1_9_driver_without_the_capability_has_no_root_sections() {
-        let socket_id = format!("root-sections-undeclared-{}", Uuid::new_v4());
+        let socket_id = format!("roots-undeclared-{}", Uuid::new_v4());
         let server = FakeDriverRpcServer::start(
             FakeDriverRpcConfig::new(&socket_id)
                 .with_protocol_version(ProtocolVersion::new(1, 9))
                 .with_actions(vec![FakeDriverAction::Pong]),
         )
         .expect("start server");
-        let socket_name = driver_socket_name(&socket_id).expect("socket name");
-        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let socket = driver_socket(&socket_id).expect("socket");
+        let client = Arc::new(RpcClient::connect(&socket).expect("connect"));
         let connection = connection_declaring(
             client,
             DriverCapabilities::empty(),

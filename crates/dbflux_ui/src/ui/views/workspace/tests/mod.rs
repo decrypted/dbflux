@@ -17,12 +17,9 @@ use std::rc::Rc;
 
 mod chart_escape;
 mod close_flush;
-<<<<<<< bb09478a
 mod dashboard_layout;
 mod dashboard_rescale;
-=======
 mod document_focus;
->>>>>>> 08605376
 
 fn new_workspace(
     cx: &mut TestAppContext,

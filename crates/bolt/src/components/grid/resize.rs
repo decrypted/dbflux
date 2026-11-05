@@ -109,10 +109,37 @@ pub fn column_resize_handle(
     drag: &ColumnResizeDrag,
     hover_color: Hsla,
 ) -> impl IntoElement {
+    resize_handle(column, width, drag, hover_color, None)
+}
+
+/// [`column_resize_handle`] that fits its column on a double-click instead,
+/// as a database IDE's grid does: the second press arrives with a click
+/// count of two, ends any drag and calls `on_fit` with the column, so the
+/// first press's drag cannot fight the fitted width.
+pub fn column_resize_handle_with_fit(
+    column: usize,
+    width: f32,
+    drag: &ColumnResizeDrag,
+    hover_color: Hsla,
+    on_fit: impl Fn(usize, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    resize_handle(column, width, drag, hover_color, Some(Box::new(on_fit)))
+}
+
+type FitHandler = Box<dyn Fn(usize, &mut Window, &mut App) + 'static>;
+
+fn resize_handle(
+    column: usize,
+    width: f32,
+    drag: &ColumnResizeDrag,
+    hover_color: Hsla,
+    on_fit: Option<FitHandler>,
+) -> impl IntoElement {
     let drag = drag.clone();
 
     div()
         .id(ElementId::from(("resize-handle", column)))
+        .debug_selector(move || format!("resize-handle-{column}"))
         .absolute()
         .right_0()
         .top_0()
@@ -122,8 +149,15 @@ pub fn column_resize_handle(
         .hover(|style| style.bg(hover_color))
         .on_mouse_down(
             MouseButton::Left,
-            move |event: &MouseDownEvent, _window, cx| {
+            move |event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
+                if let Some(on_fit) = on_fit.as_ref()
+                    && event.click_count >= 2
+                {
+                    drag.end();
+                    on_fit(column, window, cx);
+                    return;
+                }
                 drag.begin(column, event.position.x, width);
             },
         )

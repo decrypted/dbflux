@@ -29,9 +29,9 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseDownEvent, ParentElement, Pixels, Role, SharedString, StatefulInteractiveElement, Styled,
-    Window, div, px,
+    AccessibleAction, AnyElement, App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement,
+    IntoElement, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels,
+    Role, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::Theme;
 
@@ -44,7 +44,7 @@ use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors};
 
 pub use resize::{
     ColumnResize, ColumnResizeDrag, MIN_COLUMN_WIDTH, RESIZE_HANDLE_WIDTH, apply_column_resize,
-    clamp_column_width, column_resize_handle, track_column_resize,
+    clamp_column_width, column_resize_handle, column_resize_handle_with_fit, track_column_resize,
 };
 
 /// Coordinate of one cell in the grid, as the renderer addresses it.
@@ -176,6 +176,50 @@ pub struct GridHost<'a> {
     pub chevron_icon: IconSource,
     /// Icon drawn in the gutter of the reference row.
     pub reference_icon: IconSource,
+    /// The source columns the rows draw, in the order they draw them, for a
+    /// host that hides or reorders columns. `None` draws every column in the
+    /// source's order. Cell coordinates and widths stay source column
+    /// indices either way.
+    pub columns: Option<&'a [usize]>,
+    /// The leading drawn columns the host keeps at the grid's left edge, and
+    /// the strip it holds them in. `None` scrolls every column.
+    pub pinned: Option<GridPinned<'a>>,
+    /// A left press on a cell, before the release that completes a click,
+    /// so the host can start a drag selection on it.
+    pub on_cell_press: Option<GridCellMouseDown>,
+    /// The pointer moved over a cell with the left button held.
+    pub on_cell_drag: Option<GridCellMouseMove>,
+    /// A click with another button than the primary one (the middle one)
+    /// on a cell.
+    pub on_cell_aux_click: Option<GridCellClick>,
+    /// A left press on a row's number, or its accessible click (with no
+    /// modifiers). With it set the gutter cell is a button named by the
+    /// row's number.
+    pub on_row_press: Option<GridRowPress>,
+}
+
+/// A cell callback taking the press that reached it.
+pub type GridCellMouseDown = Arc<dyn Fn(GridCellCoord, &MouseDownEvent, &mut Window, &mut App)>;
+
+/// A cell callback taking the pointer move that reached it.
+pub type GridCellMouseMove = Arc<dyn Fn(GridCellCoord, &MouseMoveEvent, &mut Window, &mut App)>;
+
+/// A cell callback taking the click that reached it.
+pub type GridCellClick = Arc<dyn Fn(GridCellCoord, &ClickEvent, &mut Window, &mut App)>;
+
+/// A row-number callback taking the row and the modifiers held.
+pub type GridRowPress = Arc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
+
+/// Pinned leading columns, as [`GridHost::pinned`] describes them.
+pub struct GridPinned<'a> {
+    /// How many of the drawn columns are pinned.
+    pub count: usize,
+    /// Their total width, which a spacer keeps free in the scrolling part
+    /// so the other cells stay where they are.
+    pub width: f32,
+    /// Builds the strip drawn over the row's left edge: it takes the row's
+    /// fill (`None` for a plain row), the gutter cell and the pinned cells.
+    pub strip: &'a dyn Fn(Option<Hsla>, AnyElement, Vec<AnyElement>) -> AnyElement,
 }
 
 /// The paint decisions one cell derives from the [`CellView`] contract plus
@@ -212,12 +256,17 @@ pub fn cell_paint(
     let text_color = if transition {
         // The transition takes the color precedence over the tone.
         colors.warning
-    } else if row_pending_delete && !matches!(view.tone, CellTone::Missing | CellTone::Nested) {
+    } else if row_pending_delete
+        && !matches!(
+            view.tone,
+            CellTone::Missing | CellTone::Nested | CellTone::Expression
+        )
+    {
         colors.muted_foreground
     } else {
         match view.tone {
             CellTone::Missing => colors.input,
-            CellTone::Nested => colors.info,
+            CellTone::Nested | CellTone::Expression => colors.info,
             CellTone::PendingDelete | CellTone::Muted => colors.muted_foreground,
             CellTone::Null => null_color,
             CellTone::Success => colors.success,
@@ -237,7 +286,7 @@ pub fn cell_paint(
         text_color,
         italic: matches!(
             view.tone,
-            CellTone::Null | CellTone::Muted | CellTone::Missing
+            CellTone::Null | CellTone::Muted | CellTone::Missing | CellTone::Expression
         ),
         line_through: row_pending_delete,
         // The mark follows the edit-state fact, not the tone: a staged null
@@ -270,6 +319,10 @@ pub fn render_rows(
     colors: &GridColors,
 ) -> Vec<AnyElement> {
     let mut editor = editor;
+    let drawn_columns: Vec<usize> = match host.columns {
+        Some(columns) => columns.to_vec(),
+        None => (0..source.column_count()).collect(),
+    };
 
     visible_range
         .map(|visual_ix| {
@@ -312,8 +365,9 @@ pub fn render_rows(
                 })
                 .collect();
 
-            let cells: Vec<AnyElement> = (0..source.column_count())
-                .map(|col_ix| {
+            let mut cells: Vec<AnyElement> = drawn_columns
+                .iter()
+                .map(|&col_ix| {
                     let view = source.cell(visual_ix, col_ix).unwrap_or_else(|| {
                         CellView::new(
                             SharedString::default(),
@@ -400,6 +454,23 @@ pub fn render_rows(
                         })
                         .when(paint.italic, |d| d.italic())
                         .when(paint.line_through, |d| d.line_through())
+                        .when_some(host.on_cell_press.clone(), |d, on_press| {
+                            d.on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                                on_press(coord, event, window, cx)
+                            })
+                        })
+                        .when_some(host.on_cell_drag.clone(), |d, on_drag| {
+                            d.on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+                                if event.pressed_button == Some(MouseButton::Left) {
+                                    on_drag(coord, event, window, cx)
+                                }
+                            })
+                        })
+                        .when_some(host.on_cell_aux_click.clone(), |d, on_aux| {
+                            d.on_aux_click(move |event: &ClickEvent, window, cx| {
+                                on_aux(coord, event, window, cx)
+                            })
+                        })
                         .on_click({
                             let on_cell_click = Arc::clone(&host.on_cell_click);
                             move |event: &ClickEvent, window, cx| {
@@ -444,7 +515,7 @@ pub fn render_rows(
                                     .text_size(font_size)
                                     .text_color(match span.tone {
                                         CellTone::Missing => colors.input,
-                                        CellTone::Nested => colors.info,
+                                        CellTone::Nested | CellTone::Expression => colors.info,
                                         CellTone::PendingDelete | CellTone::Muted => {
                                             colors.muted_foreground
                                         }
@@ -485,8 +556,69 @@ pub fn render_rows(
                 })
                 .collect();
 
-            div()
+            // Row state background (dirty=yellow, error=red); otherwise the
+            // reference row, the row holding the focused cell and every
+            // second clean row take their washes. A pinned strip repeats the
+            // fill over its own base.
+            let row_fill = row_bg.or(if is_reference_row {
+                Some(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
+            } else if is_active_row {
+                Some(colors.table_active)
+            } else if visual_ix % 2 == 1 {
+                Some(colors.table_even)
+            } else {
+                None
+            });
+
+            let gutter = div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_end()
+                .w(GridMetrics::ROW_NUMBER_WIDTH)
+                .h_full()
+                .pr(GridMetrics::CELL_PADDING_X)
+                .text_size(font_size)
+                .text_color(if is_active_row || is_reference_row {
+                    tint
+                } else {
+                    colors.input
+                })
+                .map(|gutter| {
+                    if is_reference_row {
+                        gutter.child(
+                            Icon::new(host.reference_icon.clone())
+                                .size(nested_icon)
+                                .color(tint),
+                        )
+                    } else {
+                        gutter.child(row_number.to_string())
+                    }
+                });
+            let gutter = match host.on_row_press.clone() {
+                Some(on_press) => {
+                    let on_accessible_press = Arc::clone(&on_press);
+                    gutter
+                        .id(("row-number", visual_ix))
+                        .role(Role::Button)
+                        .aria_label(SharedString::from(row_number.to_string()))
+                        .cursor_pointer()
+                        // The row is selected on press, before the release a
+                        // click needs, so a drag can start from it.
+                        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                            on_press(visual_ix, event.modifiers, window, cx)
+                        })
+                        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+                            on_accessible_press(visual_ix, Modifiers::default(), window, cx)
+                        })
+                        .into_any_element()
+                }
+                None => gutter.into_any_element(),
+            };
+
+            let row = div()
                 .id(("row", visual_ix))
+                .relative()
                 .flex()
                 .flex_shrink_0()
                 .w(px(total_width))
@@ -494,51 +626,27 @@ pub fn render_rows(
                 .overflow_hidden()
                 .border_b_1()
                 .border_color(colors.table_row_border)
-                // Row state background (dirty=yellow, error=red)
-                .when_some(row_bg, |d, bg| d.bg(bg))
-                // The row holding the focused cell gets the selected-row
-                // wash; clean rows otherwise alternate.
+                .when_some(row_fill, |d, fill| d.bg(fill))
                 .when(row_bg.is_none() && is_reference_row, |d| {
-                    d.bg(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
-                        .border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
-                })
-                .when(
-                    row_bg.is_none() && !is_reference_row && is_active_row,
-                    |d| d.bg(colors.table_active),
-                )
-                .when(
-                    row_bg.is_none() && !is_reference_row && !is_active_row && visual_ix % 2 == 1,
-                    |d| d.bg(colors.table_even),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .justify_end()
-                        .w(GridMetrics::ROW_NUMBER_WIDTH)
-                        .h_full()
-                        .pr(GridMetrics::CELL_PADDING_X)
-                        .text_size(font_size)
-                        .text_color(if is_active_row || is_reference_row {
-                            tint
-                        } else {
-                            colors.input
-                        })
-                        .map(|gutter| {
-                            if is_reference_row {
-                                gutter.child(
-                                    Icon::new(host.reference_icon.clone())
-                                        .size(nested_icon)
-                                        .color(tint),
-                                )
-                            } else {
-                                gutter.child(row_number.to_string())
-                            }
-                        }),
-                )
-                .children(cells)
-                .into_any_element()
+                    d.border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
+                });
+
+            let Some(pinned) = host.pinned.as_ref().filter(|pinned| pinned.count > 0) else {
+                return row.child(gutter).children(cells).into_any_element();
+            };
+
+            // The gutter and the pinned cells move into the host's strip; a
+            // spacer of the same width keeps the scrolling cells where they
+            // were.
+            let scrolled = cells.split_off(pinned.count.min(cells.len()));
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .w(GridMetrics::ROW_NUMBER_WIDTH + px(pinned.width)),
+            )
+            .children(scrolled)
+            .child((pinned.strip)(row_fill, gutter, cells))
+            .into_any_element()
         })
         .collect()
 }

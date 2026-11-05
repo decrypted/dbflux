@@ -97,7 +97,9 @@ a database or a design board: a source-scanning guardrail in
 - **Its rows.** Anything that draws data takes a `RowSource`; the host facts a
   painter cannot know arrive separately — `GridHost` for the grid, a row host
   for the document tree — so the model and the value types stay where the data
-  lives.
+  lives. `GridHost` also carries the host's column order, its pinned leading
+  columns with the strip that holds them, and the optional press, drag,
+  middle-click and row-number callbacks a host with drag selection needs.
 - **Its palette items.** `PaletteEntry` describes one palette row and
   `PaletteHost` supplies the key context, the footer key labels, the attach hook
   and the closed event.

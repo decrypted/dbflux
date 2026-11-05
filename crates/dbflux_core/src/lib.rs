@@ -39,21 +39,12 @@ pub use auth::{
 pub use config::{
     AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, ExternalScriptRoot, GeneralSettings,
-<<<<<<< bb09478a
-    GlobalOverrides, GovernanceSettings, LoadedAppConfig, MountedScriptRoot, PolicyRoleConfig,
-    RefreshPolicy, RefreshPolicySetting, RpcServiceKind, ScriptEntry, ScriptRootAvailability,
-    ScriptsDirectory, ScriptsScan, ScriptsScanRequest, ServiceConfig, ServiceRpcApiContract,
-    StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, all_script_extensions,
-    driver_maps_differ, filter_entries, hook_script_path, is_openable_script, migrate_app_config,
-    script_content_sha256,
-=======
     GlobalOverrides, GovernanceSettings, InterfaceSizeChange, LoadedAppConfig, MountedScriptRoot,
     PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting, RpcServiceKind, ScriptEntry,
     ScriptRootAvailability, ScriptsDirectory, ScriptsScan, ScriptsScanRequest, ScrollbarVisibility,
     ServiceConfig, ServiceRpcApiContract, StartupFocus, ThemeSetting, ToolPolicyConfig,
     TrustedClientConfig, all_script_extensions, driver_maps_differ, filter_entries,
-    hook_script_path, is_openable_script, migrate_app_config,
->>>>>>> 08605376
+    hook_script_path, is_openable_script, migrate_app_config, script_content_sha256,
 };
 
 #[allow(deprecated)]

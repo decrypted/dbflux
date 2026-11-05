@@ -137,7 +137,6 @@ fn save_general_settings_to(
         grid_font_size: f64::from(settings.grid_font_size),
         toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
         grid_fk_labels: if settings.grid_fk_labels { 1 } else { 0 },
-<<<<<<< bb09478a
         grid_pk_sort_desc: if settings.grid_pk_sort_desc { 1 } else { 0 },
         grid_review_before_save: i32::from(settings.grid_review_before_save),
         grid_copy_column_names: i32::from(settings.grid_copy_column_names),
@@ -147,11 +146,9 @@ fn save_general_settings_to(
         max_concurrent_queries: settings.max_concurrent_queries as i64,
         max_queued_queries: settings.max_queued_queries as i64,
         grid_filter_autoquote: i32::from(settings.grid_filter_autoquote),
-=======
         scrollbar_visibility: scrollbar_visibility_to_storage(settings.scrollbar_visibility)
             .to_string(),
         workspace_inspector_width_px: settings.workspace_inspector_width_px.map(f64::from),
->>>>>>> 08605376
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1200,7 +1197,6 @@ fn load_general_settings(
         toast_auto_dismiss_secs: u32::try_from(dto.toast_auto_dismiss_secs)
             .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
         grid_fk_labels: dto.grid_fk_labels != 0,
-<<<<<<< bb09478a
         grid_pk_sort_desc: dto.grid_pk_sort_desc != 0,
         grid_review_before_save: dto.grid_review_before_save != 0,
         grid_copy_column_names: dto.grid_copy_column_names != 0,
@@ -1210,9 +1206,7 @@ fn load_general_settings(
         max_concurrent_queries: positive_count(dto.max_concurrent_queries, 8),
         max_queued_queries: positive_count(dto.max_queued_queries, 50),
         grid_filter_autoquote: dto.grid_filter_autoquote != 0,
-=======
         scrollbar_visibility: scrollbar_visibility_from_storage(&dto.scrollbar_visibility),
->>>>>>> 08605376
     }
 }
 
@@ -2866,7 +2860,6 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
-<<<<<<< bb09478a
             grid_pk_sort_desc: 0,
             grid_review_before_save: 0,
             grid_copy_column_names: 0,
@@ -2876,10 +2869,8 @@ mod tests {
             max_concurrent_queries: 3,
             max_queued_queries: 12,
             grid_filter_autoquote: 0,
-=======
             scrollbar_visibility: "while_scrolling".to_string(),
             workspace_inspector_width_px: None,
->>>>>>> 08605376
             updated_at: String::new(),
         };
 
@@ -2980,7 +2971,6 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
-<<<<<<< bb09478a
             grid_pk_sort_desc: 0,
             grid_review_before_save: 0,
             grid_copy_column_names: 0,
@@ -2990,10 +2980,8 @@ mod tests {
             max_concurrent_queries: 8,
             max_queued_queries: 50,
             grid_filter_autoquote: 0,
-=======
             scrollbar_visibility: "while_scrolling".to_string(),
             workspace_inspector_width_px: None,
->>>>>>> 08605376
             updated_at: String::new(),
         };
         runtime
@@ -3423,7 +3411,6 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
-<<<<<<< bb09478a
             grid_pk_sort_desc: 0,
             grid_review_before_save: 0,
             grid_copy_column_names: 0,
@@ -3433,10 +3420,8 @@ mod tests {
             max_concurrent_queries: 8,
             max_queued_queries: 50,
             grid_filter_autoquote: 0,
-=======
             scrollbar_visibility: "while_scrolling".to_string(),
             workspace_inspector_width_px: None,
->>>>>>> 08605376
             updated_at: String::new(),
         };
         runtime

@@ -53,18 +53,6 @@ fn default_decimation_threshold() -> usize {
     10_000
 }
 
-<<<<<<< bb09478a
-/// A manual column selection entered by the user via the picker UI.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManualChartSelection {
-    pub x_col: usize,
-    pub y_cols: Vec<usize>,
-    /// Column whose distinct values split every Y column into one series each.
-    pub group_by: Option<usize>,
-}
-
-=======
->>>>>>> 08605376
 /// Key a row's group-by cell is matched on.
 pub fn group_key(value: &Value) -> String {
     value.as_display_string()

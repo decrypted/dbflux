@@ -635,7 +635,6 @@ impl Default for GeneralSettings {
             table_alias_use_as: false,
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
-<<<<<<< bb09478a
             grid_pk_sort_desc: false,
             grid_review_before_save: false,
             grid_copy_column_names: false,
@@ -643,9 +642,7 @@ impl Default for GeneralSettings {
             grid_copy_protect_formulas: false,
             ssh_accept_new_host_keys: false,
             grid_filter_autoquote: false,
-=======
             scrollbar_visibility: ScrollbarVisibility::WhileScrolling,
->>>>>>> 08605376
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -673,7 +670,6 @@ mod font_settings_tests {
 
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
         assert!(!legacy.grid_fk_labels);
-<<<<<<< bb09478a
         assert!(!legacy.grid_review_before_save);
         assert!(!legacy.grid_copy_column_names);
         assert!(!legacy.grid_header_click_sorts);
@@ -682,12 +678,10 @@ mod font_settings_tests {
         assert!(!legacy.grid_filter_autoquote);
         assert_eq!(legacy.max_concurrent_queries, 8);
         assert_eq!(legacy.max_queued_queries, 50);
-=======
         assert_eq!(
             legacy.scrollbar_visibility,
             super::ScrollbarVisibility::WhileScrolling
         );
->>>>>>> 08605376
         assert_eq!(legacy, settings);
     }
 

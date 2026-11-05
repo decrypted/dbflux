@@ -95,15 +95,12 @@ struct FakeDriverState {
     unattended_apart: AtomicBool,
     delete_row_errors: RwLock<Vec<(dbflux_core::Value, String)>>,
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
-<<<<<<< bb09478a
     dialect: RwLock<Option<&'static dyn SqlDialect>>,
     language_service: RwLock<Option<&'static dyn LanguageService>>,
-=======
     region_switch_enabled: AtomicBool,
     available_regions: RwLock<Vec<String>>,
     region_list_error: RwLock<Option<String>>,
     available_regions_calls: AtomicUsize,
->>>>>>> 08605376
 }
 
 #[derive(Clone)]
@@ -197,7 +194,6 @@ impl FakeDriver {
         transactions.supports_read_only = supported;
     }
 
-<<<<<<< bb09478a
     /// Connections answer `dialect()` with `dialect` instead of the default
     /// ANSI one, for callers that read SQL syntax or dialect capabilities
     /// from the connection.
@@ -206,7 +202,6 @@ impl FakeDriver {
         self
     }
 
-=======
     /// Opts a fake into the live region-switch seam: it advertises
     /// `DriverCapabilities::REGION_SWITCH`, answers `available_regions` with
     /// the fixed list and rewrites the region of an `AwsSecrets` config. The
@@ -243,7 +238,6 @@ impl FakeDriver {
         self.state.available_regions_calls.load(Ordering::Relaxed)
     }
 
->>>>>>> 08605376
     pub fn with_schema(self, schema: SchemaSnapshot) -> Self {
         *rwlock_write(&self.state.schema) = schema;
         self
@@ -761,6 +755,7 @@ impl ExecutionSessionFactory for FakeSessionFactory {
                 state: self.state.clone(),
                 metadata: self.metadata.clone(),
                 active_database: RwLock::new(None),
+                current_region: None,
                 secret_stores: Vec::new(),
                 session_factory: FakeSessionFactory {
                     kind: self.kind,
@@ -813,16 +808,15 @@ impl FakeConnection {
             _ => Vec::new(),
         };
 
-<<<<<<< bb09478a
         let session_factory = FakeSessionFactory {
             kind,
             state: state.clone(),
             metadata: metadata.clone(),
-=======
+        };
+
         let current_region = match &profile.config {
             DbConfig::AwsSecrets { region, .. } => Some(region.clone()),
             _ => None,
->>>>>>> 08605376
         };
 
         Self {

@@ -3510,10 +3510,6 @@ dependencies = [
  "indexmap 2.14.2",
  "log",
  "serde_json",
-<<<<<<< bb09478a
-=======
- "sha2 0.11.1",
->>>>>>> 08605376
  "tiberius",
  "tokio",
  "tokio-util",
@@ -3841,12 +3837,8 @@ dependencies = [
  "dirs 6.0.0",
  "hmac 0.13.0",
  "log",
-<<<<<<< bb09478a
  "sha1 0.11.0",
- "sha2 0.11.0",
-=======
  "sha2 0.11.1",
->>>>>>> 08605376
  "ssh2",
  "tempfile",
  "uuid",
@@ -3985,14 +3977,9 @@ name = "dbflux_ui_document"
 version = "0.10.0-dev.0"
 dependencies = [
  "anyhow",
-<<<<<<< bb09478a
- "arrow-array 59.3.0",
- "arrow-schema 59.3.0",
- "base64 0.22.1",
-=======
  "arrow-array 59.3.2",
  "arrow-schema 59.3.2",
->>>>>>> 08605376
+ "base64 0.22.1",
  "chrono",
  "dbflux_app",
  "dbflux_audit",

@@ -609,3 +609,104 @@ mod menu_width {
         );
     }
 }
+
+mod trigger_width_range {
+    use super::super::{Dropdown, DropdownItem};
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, Window, div, px,
+    };
+
+    struct Row {
+        dropdown: Entity<Dropdown>,
+    }
+
+    impl Render for Row {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .w(px(900.0))
+                .child(self.dropdown.clone())
+                .child(div().flex_1())
+        }
+    }
+
+    /// The drawn width of the trigger, and of its menu once opened.
+    fn widths(build: impl FnOnce() -> Dropdown + 'static, cx: &mut TestAppContext) -> (f32, f32) {
+        cx.update(gpui_component::init);
+
+        let (row, window) = cx.add_window_view(move |_window, cx| Row {
+            dropdown: cx.new(|_cx| build()),
+        });
+        window.run_until_parked();
+        let width = |window: &mut VisualTestContext, id: &'static str| {
+            f32::from(window.debug_bounds(id).expect(id).size.width)
+        };
+        let trigger = width(window, "sizing");
+
+        window.update(|_, cx| {
+            row.read(cx).dropdown.clone().update(cx, |dropdown, cx| {
+                dropdown.open(cx);
+            });
+        });
+        // The trigger reports its width while it paints, which asks for one
+        // more frame before the menu takes it.
+        window.update(|_, _| {});
+        window.run_until_parked();
+
+        (trigger, width(window, "sizing-menu"))
+    }
+
+    fn sized(label: &str) -> impl FnOnce() -> Dropdown + 'static {
+        let label = label.to_string();
+        move || {
+            Dropdown::new("sizing")
+                .items(vec![DropdownItem::new("a"), DropdownItem::new(label)])
+                .selected_index(Some(1))
+                .trigger_width_range(px(160.0), px(320.0))
+        }
+    }
+
+    #[gpui::test]
+    fn a_sized_trigger_holds_a_short_name_at_its_least(cx: &mut TestAppContext) {
+        let (trigger, _) = widths(sized("shop"), cx);
+
+        assert_eq!(trigger, 160.0);
+    }
+
+    #[gpui::test]
+    fn a_sized_trigger_grows_with_its_name(cx: &mut TestAppContext) {
+        let (trigger, _) = widths(sized("gone_db (not on this)"), cx);
+
+        assert!(trigger > 160.0 && trigger < 320.0, "{trigger}");
+    }
+
+    #[gpui::test]
+    fn a_sized_trigger_stops_at_its_most(cx: &mut TestAppContext) {
+        let (trigger, menu) = widths(sized(&"a_very_long_database_name_".repeat(4)), cx);
+
+        assert_eq!(trigger, 320.0);
+        assert!(menu > trigger, "the menu shows the whole name: {menu}");
+    }
+
+    #[gpui::test]
+    fn a_sized_menu_is_at_least_as_wide_as_its_trigger(cx: &mut TestAppContext) {
+        let (trigger, menu) = widths(sized("shop"), cx);
+
+        assert!(menu >= trigger, "{menu} {trigger}");
+    }
+
+    #[test]
+    fn item_count_and_values_follow_the_items() {
+        let dropdown = Dropdown::new("values").items(vec![
+            DropdownItem::new("shop"),
+            DropdownItem::with_value("Archive", "archive"),
+        ]);
+
+        assert_eq!(dropdown.item_count(), 2);
+        assert_eq!(
+            dropdown.item_values().collect::<Vec<_>>(),
+            vec!["shop".to_string(), "archive".to_string()]
+        );
+    }
+}

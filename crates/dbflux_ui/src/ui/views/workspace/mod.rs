@@ -471,11 +471,8 @@ impl Workspace {
         });
         dbflux_ui_base::app_state_entity::publish_vim_setting(&app_state, cx);
         dbflux_ui_base::app_state_entity::publish_font_settings(&app_state, cx);
-<<<<<<< bb09478a
         dbflux_ui_base::app_state_entity::publish_grid_settings(&app_state, cx);
-=======
         dbflux_ui_base::app_state_entity::publish_scrollbar_setting(&app_state, cx);
->>>>>>> 08605376
         dbflux_ui_base::toast::publish_auto_dismiss_setting(&app_state, &toast_host, cx);
 
         // Subscribed before the startup diagnostics below are reported, so

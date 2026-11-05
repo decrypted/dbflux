@@ -302,14 +302,9 @@ impl ValueSourceSelector {
         source_placeholder(self.selected_source(cx))
     }
 
-<<<<<<< bb09478a
-    /// One line telling the user where an environment or dotenv value is read
-    /// from and when, or which part of a Secrets Manager or Parameter Store
-    /// value is used, built from the reference typed in the field's input.
-=======
     /// One line telling the user where an environment, dotenv or file value is
-    /// read from and when, built from the reference typed in the field's input.
->>>>>>> 08605376
+    /// read from and when, or which part of a Secrets Manager or Parameter
+    /// Store value is used, built from the reference typed in the field's input.
     /// `None` for any other source or an empty reference.
     pub fn source_hint(&self, primary_value: &str, cx: &App) -> Option<String> {
         source_hint(self.selected_source(cx), primary_value)
@@ -432,7 +427,17 @@ fn source_hint(kind: ValueSourceKind, primary_value: &str) -> Option<String> {
                 path = path
             ))
         }
-<<<<<<< bb09478a
+        ValueSourceKind::File => match parse_secret_inline_reference(primary_value) {
+            (path, Some(key)) => Some(dbflux_i18n::t!(
+                "components.value_source.hint.file_with_key",
+                key = key,
+                path = path
+            )),
+            (path, None) => Some(dbflux_i18n::t!(
+                "components.value_source.hint.file",
+                path = path
+            )),
+        },
         // A JSON secret without a key would be used whole, so an RDS-managed
         // secret sends `{"username":…,"password":…}` as the password.
         ValueSourceKind::Secret | ValueSourceKind::Parameter => {
@@ -449,24 +454,6 @@ fn source_hint(kind: ValueSourceKind, primary_value: &str) -> Option<String> {
         ValueSourceKind::Literal | ValueSourceKind::SecretProvider(_) | ValueSourceKind::Auth => {
             None
         }
-=======
-        ValueSourceKind::File => match parse_secret_inline_reference(primary_value) {
-            (path, Some(key)) => Some(dbflux_i18n::t!(
-                "components.value_source.hint.file_with_key",
-                key = key,
-                path = path
-            )),
-            (path, None) => Some(dbflux_i18n::t!(
-                "components.value_source.hint.file",
-                path = path
-            )),
-        },
-        ValueSourceKind::Literal
-        | ValueSourceKind::Secret
-        | ValueSourceKind::SecretProvider(_)
-        | ValueSourceKind::Parameter
-        | ValueSourceKind::Auth => None,
->>>>>>> 08605376
     }
 }
 

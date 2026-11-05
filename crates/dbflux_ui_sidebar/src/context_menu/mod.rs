@@ -2165,7 +2165,6 @@ impl Sidebar {
             ContextMenuAction::CompareSchema => {
                 self.open_schema_diff_from_context(&item_id, cx);
             }
-<<<<<<< bb09478a
             ContextMenuAction::ToggleConnectOnStartup(enabled) => {
                 if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
                     self.app_state.update(cx, |state, cx| {
@@ -2174,10 +2173,9 @@ impl Sidebar {
                         }
                     });
                 }
-=======
+            }
             ContextMenuAction::RootSectionAction(action_id) => {
                 self.request_root_section_action(&item_id, &action_id, cx);
->>>>>>> 08605376
             }
         }
 

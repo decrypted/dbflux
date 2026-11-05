@@ -16,11 +16,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use super::mcp_bindings;
-<<<<<<< bb09478a
-use super::{ConnectionManagerWindow, DismissEvent, HostKeyRetry, TestStatus};
-=======
-use super::{ConnectionManagerWindow, DismissEvent, StoredPassword, TestStatus};
->>>>>>> 08605376
+use super::{ConnectionManagerWindow, DismissEvent, HostKeyRetry, StoredPassword, TestStatus};
 
 const PRIMARY_PASSWORD_SAVE_ERROR: &str =
     "Unable to save the connection password to the system keyring. Unlock it and try again.";

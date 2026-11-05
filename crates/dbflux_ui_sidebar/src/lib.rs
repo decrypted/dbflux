@@ -685,15 +685,12 @@ pub enum ContextMenuAction {
     /// menu was opened on. Gated on `DatabaseCategory::Relational` — never a
     /// driver id; non-relational nodes surface an explicit "unsupported" toast.
     CompareSchema,
-<<<<<<< bb09478a
     /// Flip whether the profile connects when DBFlux starts. Carries the
     /// state the menu showed, so the click sets the opposite of what the user
     /// saw.
     ToggleConnectOnStartup(bool),
-=======
     /// Run the driver-declared root section item action with this id.
     RootSectionAction(String),
->>>>>>> 08605376
 }
 
 #[derive(Clone)]
@@ -834,11 +831,8 @@ impl ContextMenuAction {
             Self::ImportTables => Some(AppIcon::Download),
             Self::MigrateTables => Some(AppIcon::ArrowUpDown),
             Self::CompareSchema => Some(AppIcon::Columns),
-<<<<<<< bb09478a
             Self::ToggleConnectOnStartup(enabled) => enabled.then_some(AppIcon::Check),
-=======
             Self::RootSectionAction(_) => None,
->>>>>>> 08605376
         }
     }
 }

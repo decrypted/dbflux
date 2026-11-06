@@ -1468,6 +1468,43 @@ fn the_command_palette_opens_again_after_choosing_an_item(cx: &mut TestAppContex
     );
 }
 
+/// A dialog opened from the palette remembers where focus goes back when it
+/// is cancelled. That must be a drawn element, not the closed palette's
+/// search input, so the shortcut works after Escape closes the dialog.
+#[gpui::test]
+fn the_command_palette_opens_again_after_cancelling_a_dialog_it_opened(cx: &mut TestAppContext) {
+    let (workspace, palette, window) = workspace_with_palette_profile(cx, "Qwvkj");
+    let modal = window.update(|_, cx| workspace.read(cx).modal_import_dashboard.clone());
+
+    window.simulate_keystrokes(TOGGLE_PALETTE);
+    assert!(window.update(|_, cx| palette.read(cx).is_visible()));
+
+    // The palette lists this item only for a connection that imports
+    // dashboards, so the test chooses it the way `execute_selected` does:
+    // hidden without the closed event, then the selection.
+    window.update(|window, cx| {
+        palette.update(cx, |palette, cx| {
+            palette.toggle(window, cx);
+            cx.emit(PaletteSelection::ImportDashboard);
+        });
+    });
+    window.run_until_parked();
+    assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    assert!(
+        !window.update(|_, cx| modal.read(cx).is_visible()),
+        "Escape cancels the dialog"
+    );
+
+    window.simulate_keystrokes(TOGGLE_PALETTE);
+    assert!(
+        window.update(|_, cx| palette.read(cx).is_visible()),
+        "the shortcut opens the palette after the dialog was cancelled"
+    );
+}
+
 /// Each Enter or click chooses one item once. A second selection would
 /// open a second tab of an item that opens something new each time.
 #[gpui::test]

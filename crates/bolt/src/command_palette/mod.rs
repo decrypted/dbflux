@@ -416,11 +416,10 @@ where
             InputState::new(window, cx).placeholder(strings::text(cx, "palette.search.placeholder"))
         });
 
-        // Enter and the primary-modifier Enter choose through the palette's
-        // keymap (`Execute`, `OpenInNewTab`), not through the input's
-        // `PressEnter`: a single-line input propagates its Enter, so the
-        // keymap answers the same key press and the item would be chosen
-        // twice.
+        // Enter chooses through the palette's keymap (`Execute`), not
+        // through the input's `PressEnter`: a single-line input propagates
+        // its Enter, so the keymap answers the same key press and the item
+        // would be chosen twice.
         cx.subscribe_in(
             &input_state,
             window,

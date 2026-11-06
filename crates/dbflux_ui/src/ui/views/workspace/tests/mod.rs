@@ -1396,6 +1396,63 @@ fn the_command_palette_opens_and_closes_from_the_keyboard(cx: &mut TestAppContex
     assert!(!window.update(|_, cx| palette.read(cx).is_visible()));
 }
 
+/// Choosing an item that does not move focus itself (here a connection to
+/// connect) closes the palette without its closed event. The shortcut must
+/// open it again right away, without a click to put focus back.
+#[gpui::test]
+fn the_command_palette_opens_again_after_choosing_an_item(cx: &mut TestAppContext) {
+    use dbflux_core::{ConnectionProfile, DbConfig, DbKind};
+    use dbflux_test_support::FakeDriver;
+    use std::sync::Arc;
+
+    let profile = ConnectionProfile::new("Qwvkj", DbConfig::default_postgres());
+    let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+        cx.new(|_| {
+            let runtime =
+                dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+            let mut state =
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup");
+            state.inner.facade.connections.drivers.insert(
+                "postgres".into(),
+                Arc::new(FakeDriver::new(DbKind::Postgres)),
+            );
+            state.profiles_mut().push(profile);
+            state
+        })
+    });
+    let (workspace, _, window) = new_workspace_with(cx, app_state);
+    let palette = window.update(|_, cx| workspace.read(cx).command_palette.clone());
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.set_focus(FocusTarget::Sidebar, window, cx)
+        })
+    });
+    window.run_until_parked();
+
+    #[cfg(target_os = "macos")]
+    let toggle = "cmd-shift-p";
+    #[cfg(not(target_os = "macos"))]
+    let toggle = "ctrl-shift-p";
+
+    window.simulate_keystrokes(toggle);
+    assert!(window.update(|_, cx| palette.read(cx).is_visible()));
+
+    window.simulate_input("Qwvkj");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    assert!(
+        !window.update(|_, cx| palette.read(cx).is_visible()),
+        "choosing the connection closes the palette"
+    );
+
+    window.simulate_keystrokes(toggle);
+    assert!(
+        window.update(|_, cx| palette.read(cx).is_visible()),
+        "the shortcut opens the palette again after an item was chosen"
+    );
+}
+
 fn toast_count(window: &mut VisualTestContext) -> usize {
     window.update(|_, cx| {
         cx.global::<dbflux_ui_base::toast::ToastGlobal>()

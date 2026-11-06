@@ -769,8 +769,15 @@ impl Workspace {
             window,
             |this, _, event: &PaletteSelection, window, cx| {
                 // Choosing an item closes the palette without its closed
-                // event, so its fetches stop here.
+                // event, so its fetches stop here and focus leaves its
+                // hidden input here: left there, no key binding resolves
+                // until a click moves focus. `set_focus` moves the keyboard
+                // only to the sidebar or a document, so the root takes it
+                // first. A selection that focuses something (a dialog, a
+                // new tab) does so after this.
                 this.palette_sync.stop_fetching();
+                this.focus_handle.focus(window, cx);
+                this.set_focus(this.focus_target, window, cx);
 
                 match event {
                     PaletteSelection::Command { id } => {

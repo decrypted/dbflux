@@ -1,6 +1,6 @@
 // Explicit imports, not `use super::*`: the parent glob together with
 // `#[gpui::test]` sends the macro expansion into unbounded recursion.
-use crate::ui::overlays::command_palette::{PaletteItem, ResourceItem};
+use crate::ui::overlays::command_palette::{PaletteItem, PaletteSelection, ResourceItem};
 use crate::ui::views::workspace::Workspace;
 use dbflux_core::{
     DatabaseInfo, DbConfig, DbError, DbSchemaInfo, RelationalSchema, SchemaLoadingStrategy,
@@ -384,5 +384,57 @@ fn a_profile_pointed_elsewhere_while_connected_is_forgotten_again_on_reconnect(
         stored_databases(&mut harness, profile_id),
         0,
         "the reconnect reaches the new server, so the old lists go"
+    );
+}
+
+/// A table chosen while a query tab holds the keyboard is chosen once,
+/// opens in front of that tab and takes the keyboard from it, so the
+/// palette shortcut works again right away instead of landing on the
+/// hidden query tab.
+#[gpui::test]
+fn the_palette_opens_again_after_choosing_a_table_over_a_query_tab(cx: &mut TestAppContext) {
+    let mut harness = open_workspace(cx);
+    connect(&mut harness, &["alpha"]);
+    harness
+        .workspace
+        .update_in(harness.window, |workspace, window, cx| {
+            workspace.new_query_tab(window, cx);
+        });
+    settle(&mut harness);
+
+    #[cfg(target_os = "macos")]
+    let toggle = "cmd-shift-p";
+    #[cfg(not(target_os = "macos"))]
+    let toggle = "ctrl-shift-p";
+
+    let palette = harness.workspace.read_with(harness.window, |workspace, _| {
+        workspace.command_palette.clone()
+    });
+    let chosen = Rc::new(std::cell::Cell::new(0));
+    let counter = chosen.clone();
+    harness.window.update(|_, cx| {
+        cx.subscribe(&palette, move |_, _: &PaletteSelection, _| {
+            counter.set(counter.get() + 1);
+        })
+        .detach();
+    });
+
+    harness.window.simulate_keystrokes(toggle);
+    settle(&mut harness);
+    assert_eq!(listed_tables(&mut harness), vec!["alpha_table"]);
+    harness.window.simulate_input("@alpha_table");
+    harness.window.simulate_keystrokes("enter");
+    settle(&mut harness);
+    assert_eq!(chosen.get(), 1, "one Enter on an `@` table chooses it once");
+
+    assert!(
+        !palette.read_with(harness.window, |palette, _| palette.is_visible()),
+        "choosing the table closes the palette"
+    );
+
+    harness.window.simulate_keystrokes(toggle);
+    assert!(
+        palette.read_with(harness.window, |palette, _| palette.is_visible()),
+        "the shortcut opens the palette again over the table"
     );
 }

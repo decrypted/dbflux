@@ -769,15 +769,9 @@ impl Workspace {
             window,
             |this, _, event: &PaletteSelection, window, cx| {
                 // Choosing an item closes the palette without its closed
-                // event, so its fetches stop here and focus leaves its
-                // hidden input here: left there, no key binding resolves
-                // until a click moves focus. `set_focus` moves the keyboard
-                // only to the sidebar or a document, so the root takes it
-                // first. A selection that focuses something (a dialog, a
-                // new tab) does so after this.
+                // event, so its fetches stop here.
                 this.palette_sync.stop_fetching();
-                this.focus_handle.focus(window, cx);
-                this.set_focus(this.focus_target, window, cx);
+                let palette_input_focus = window.focused(cx);
 
                 match event {
                     PaletteSelection::Command { id } => {
@@ -851,6 +845,18 @@ impl Workspace {
                             modal.open(window, cx);
                         });
                     }
+                }
+
+                // Focus left on the hidden search input resolves no key
+                // binding until a click moves it, so it goes back the way
+                // Escape sends it, unless the item focused something itself
+                // (a dialog). This runs after the item, so a document it
+                // opened is the one that takes focus, not the tab it hid.
+                // `set_focus` moves the keyboard only to the sidebar or a
+                // document, so the root takes it first.
+                if window.focused(cx) == palette_input_focus {
+                    this.focus_handle.focus(window, cx);
+                    this.set_focus(this.focus_target, window, cx);
                 }
             },
         )

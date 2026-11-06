@@ -1396,16 +1396,21 @@ fn the_command_palette_opens_and_closes_from_the_keyboard(cx: &mut TestAppContex
     assert!(!window.update(|_, cx| palette.read(cx).is_visible()));
 }
 
-/// Choosing an item that does not move focus itself (here a connection to
-/// connect) closes the palette without its closed event. The shortcut must
-/// open it again right away, without a click to put focus back.
-#[gpui::test]
-fn the_command_palette_opens_again_after_choosing_an_item(cx: &mut TestAppContext) {
+/// A workspace over one unconnected profile named `name`, with the sidebar
+/// focused, and its palette.
+fn workspace_with_palette_profile<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+) -> (
+    Entity<Workspace>,
+    Entity<crate::ui::overlays::command_palette::CommandPalette>,
+    &'a mut VisualTestContext,
+) {
     use dbflux_core::{ConnectionProfile, DbConfig, DbKind};
     use dbflux_test_support::FakeDriver;
     use std::sync::Arc;
 
-    let profile = ConnectionProfile::new("Qwvkj", DbConfig::default_postgres());
+    let profile = ConnectionProfile::new(name, DbConfig::default_postgres());
     let app_state: Entity<AppStateEntity> = cx.update(|cx| {
         cx.new(|_| {
             let runtime =
@@ -1430,12 +1435,22 @@ fn the_command_palette_opens_again_after_choosing_an_item(cx: &mut TestAppContex
     });
     window.run_until_parked();
 
-    #[cfg(target_os = "macos")]
-    let toggle = "cmd-shift-p";
-    #[cfg(not(target_os = "macos"))]
-    let toggle = "ctrl-shift-p";
+    (workspace, palette, window)
+}
 
-    window.simulate_keystrokes(toggle);
+#[cfg(target_os = "macos")]
+const TOGGLE_PALETTE: &str = "cmd-shift-p";
+#[cfg(not(target_os = "macos"))]
+const TOGGLE_PALETTE: &str = "ctrl-shift-p";
+
+/// Choosing an item that does not move focus itself (here a connection to
+/// connect) closes the palette without its closed event. The shortcut must
+/// open it again right away, without a click to put focus back.
+#[gpui::test]
+fn the_command_palette_opens_again_after_choosing_an_item(cx: &mut TestAppContext) {
+    let (_workspace, palette, window) = workspace_with_palette_profile(cx, "Qwvkj");
+
+    window.simulate_keystrokes(TOGGLE_PALETTE);
     assert!(window.update(|_, cx| palette.read(cx).is_visible()));
 
     window.simulate_input("Qwvkj");
@@ -1446,11 +1461,53 @@ fn the_command_palette_opens_again_after_choosing_an_item(cx: &mut TestAppContex
         "choosing the connection closes the palette"
     );
 
-    window.simulate_keystrokes(toggle);
+    window.simulate_keystrokes(TOGGLE_PALETTE);
     assert!(
         window.update(|_, cx| palette.read(cx).is_visible()),
         "the shortcut opens the palette again after an item was chosen"
     );
+}
+
+/// Each Enter or click chooses one item once. A second selection would
+/// open a second tab of an item that opens something new each time.
+#[gpui::test]
+fn each_confirmation_in_the_command_palette_chooses_the_item_once(cx: &mut TestAppContext) {
+    let (_workspace, palette, window) = workspace_with_palette_profile(cx, "Qwvkj");
+    let chosen = Rc::new(Cell::new(0));
+    let counter = chosen.clone();
+    window.update(|_, cx| {
+        cx.subscribe(&palette, move |_, _: &PaletteSelection, _| {
+            counter.set(counter.get() + 1);
+        })
+        .detach();
+    });
+
+    window.simulate_keystrokes(TOGGLE_PALETTE);
+    window.simulate_input("Qwvkj");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    assert_eq!(chosen.get(), 1, "one Enter chooses the item once");
+
+    window.simulate_keystrokes(TOGGLE_PALETTE);
+    window.simulate_input(">New query tab");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    assert_eq!(
+        chosen.get(),
+        2,
+        "one Enter on a `>` command chooses it once"
+    );
+
+    window.simulate_keystrokes(TOGGLE_PALETTE);
+    window.simulate_input("Qwvkj");
+    window.run_until_parked();
+    let item = window
+        .debug_bounds("command-palette-item-0")
+        .expect("the first palette row is drawn");
+    window.simulate_click(item.center(), gpui::Modifiers::none());
+    window.run_until_parked();
+    assert_eq!(chosen.get(), 3, "one click chooses the item once");
+    assert!(!window.update(|_, cx| palette.read(cx).is_visible()));
 }
 
 fn toast_count(window: &mut VisualTestContext) -> usize {

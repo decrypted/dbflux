@@ -91,6 +91,7 @@ where
                                   `palette_idx` stays below `self.items.len()`"
                     )]
                     self.render_palette_item(display_idx, &self.items[palette_idx], is_selected, cx)
+                        .debug_selector(move || format!("command-palette-item-{display_idx}"))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
                         })

@@ -416,27 +416,19 @@ where
             InputState::new(window, cx).placeholder(strings::text(cx, "palette.search.placeholder"))
         });
 
+        // Enter and the primary-modifier Enter choose through the palette's
+        // keymap (`Execute`, `OpenInNewTab`), not through the input's
+        // `PressEnter`: a single-line input propagates its Enter, so the
+        // keymap answers the same key press and the item would be chosen
+        // twice.
         cx.subscribe_in(
             &input_state,
             window,
-            |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::Change => {
+            |this, _, event: &InputEvent, _window, cx| {
+                if let InputEvent::Change = event {
                     let query = this.input_state.read(cx).value().to_string();
                     this.update_filter(&query, cx);
                 }
-                // The search input owns Enter and the primary-modifier Enter
-                // while it has focus, so the new-tab chord arrives here as a
-                // secondary Enter rather than through the palette keymap.
-                InputEvent::PressEnter { secondary, .. } => {
-                    let placement = if *secondary {
-                        OpenPlacement::NewTab
-                    } else {
-                        OpenPlacement::ReuseTab
-                    };
-
-                    this.execute_selected(placement, window, cx);
-                }
-                _ => {}
             },
         )
         .detach();

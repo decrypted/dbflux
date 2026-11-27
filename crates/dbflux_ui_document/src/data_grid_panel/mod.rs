@@ -22,6 +22,7 @@ mod refresh;
 mod render;
 mod result_search;
 pub(crate) mod row_inspector;
+mod selection_totals;
 pub(crate) mod side_island;
 mod table_documents;
 mod table_views;

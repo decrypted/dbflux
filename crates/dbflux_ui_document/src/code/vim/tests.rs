@@ -3367,6 +3367,41 @@ fn escape_leaves_insert_mode_and_keeps_focus(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui::test]
+fn escape_cancels_a_pending_normal_mode_key_and_keeps_focus(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc def", true);
+
+    for pending in ["d", "2", "g", "d i", "f", "m", "2 d"] {
+        editor.keys(pending);
+        editor.keys("escape");
+
+        assert_eq!(editor.mode(), Some(VimMode::Normal));
+        assert!(
+            editor.editor_focused(),
+            "Esc after `{pending}` must keep focus on the editor"
+        );
+        assert!(
+            !editor.commands().contains(&Command::Cancel),
+            "Esc that drops `{pending}` must not reach the workspace keymap"
+        );
+
+        editor.keys("l");
+        assert_eq!(
+            editor.text(),
+            "abc def",
+            "`{pending}` was dropped, not applied"
+        );
+        editor.keys("0");
+    }
+
+    editor.keys("escape");
+    assert_eq!(
+        editor.commands(),
+        vec![Command::Cancel],
+        "Esc with nothing pending keeps its existing meaning"
+    );
+}
+
 #[derive(Default)]
 struct MenuWidths(std::sync::Mutex<Option<gpui::Pixels>>);
 
@@ -3436,6 +3471,97 @@ fn completion_menu_fits_long_labels_and_caps_its_width(cx: &mut TestAppContext) 
         "very long labels respect the cap"
     );
     assert_eq!(widths[3], widths[0], "the menu shrinks for short results");
+}
+
+fn menu_width_for(
+    editor: &mut Fixture<'_>,
+    menu_width: &MenuWidths,
+    items: Vec<lsp_types::CompletionItem>,
+) -> gpui::Pixels {
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| {
+            state.present_completion_items(14, "", items, cx);
+        });
+    });
+    editor.window.run_until_parked();
+    menu_width
+        .0
+        .lock()
+        .expect("menu width lock")
+        .expect("completion menu is rendered")
+}
+
+#[gpui::test]
+fn completion_menu_width_counts_the_kind_word(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "select * from ", false);
+    let menu_width = std::sync::Arc::new(MenuWidths::default());
+    editor
+        .window
+        .update(|window, _| window.observe_frames(&menu_width));
+
+    // More rows than the menu measures: only the shortlist by text length is
+    // laid out, so the kind word has to count toward that length.
+    let fillers = || {
+        (0..40).map(|index| lsp_types::CompletionItem {
+            label: format!("column_{index:02}"),
+            ..Default::default()
+        })
+    };
+    let kind_word_row = lsp_types::CompletionItem {
+        label: "id".to_string(),
+        label_details: Some(lsp_types::CompletionItemLabelDetails {
+            detail: None,
+            description: Some("kind word ".repeat(8)),
+        }),
+        ..Default::default()
+    };
+
+    let plain = menu_width_for(&mut editor, &menu_width, fillers().collect());
+    let described = menu_width_for(
+        &mut editor,
+        &menu_width,
+        fillers().chain([kind_word_row]).collect(),
+    );
+
+    assert!(
+        described > plain + gpui::px(50.),
+        "the kind word widens the menu: {plain:?} -> {described:?}"
+    );
+}
+
+#[gpui::test]
+fn an_open_editors_completion_menu_cap_follows_the_ui_font_size(cx: &mut TestAppContext) {
+    let editor = open_editor(cx, "select * from ", false);
+    let document = editor.document.clone();
+    let cap = |cx: &gpui::App| {
+        document
+            .read(cx)
+            .editor
+            .input_state
+            .read(cx)
+            .lsp()
+            .completion_menu
+            .max_width
+    };
+
+    let default_cap = editor.window.update(|_, cx| cap(cx));
+    assert_eq!(default_cap, gpui::px(640.), "the base width is kept");
+
+    editor.window.update(|_, cx| {
+        let mut fonts = dbflux_components::fonts::current(cx);
+        fonts.ui_size = 16.;
+        dbflux_components::fonts::set(cx, fonts);
+    });
+    editor.window.run_until_parked();
+
+    let scaled_cap = editor.window.update(|_, cx| cap(cx));
+    let expected = default_cap * (16. / 13.);
+    assert!(
+        (scaled_cap - expected).abs() < gpui::px(0.5),
+        "the cap scales with the UI font size: {scaled_cap:?} vs {expected:?}"
+    );
 }
 
 #[gpui::test]

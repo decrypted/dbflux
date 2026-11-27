@@ -32,7 +32,7 @@ use dbflux_byte_source::SourceError;
 use dbflux_components::components::column_profile_view::ColumnProfileView;
 use dbflux_components::components::column_projection::{ColumnProjectionPicker, ProjectionChanged};
 use dbflux_components::components::data_table::{
-    DataTable, DataTableEvent, DataTableState, HeaderAnnotation, ModelSwap,
+    DataTable, DataTableState, HeaderAnnotation, ModelSwap,
 };
 use dbflux_components::components::read_estimate_bar::ReadEstimateBar;
 use dbflux_components::modals::ModalFocus;
@@ -1128,11 +1128,14 @@ impl ParquetDocument {
 
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(model, cx);
+            state.set_sortable(false);
             state.set_header_annotations(annotations, cx);
             state
         });
 
-        self._subscriptions = vec![Self::subscribe_to_table(&table_state, cx)];
+        // The table does not sort (`set_sortable(false)`), so nothing of it
+        // needs following.
+        self._subscriptions.clear();
 
         let table = cx.new(|cx| DataTable::new("parquet-table", table_state.clone(), cx));
 
@@ -1159,27 +1162,6 @@ impl ParquetDocument {
 
         loaded.refresh_estimate();
         loaded
-    }
-
-    /// The rows are the file's rows in file order and only some of them are
-    /// loaded, so sorting them would misrepresent the file. A header click
-    /// sets the sort indicator before it reports the change, and the
-    /// indicator is cleared again here.
-    fn subscribe_to_table(
-        table_state: &Entity<DataTableState>,
-        cx: &mut Context<Self>,
-    ) -> Subscription {
-        cx.subscribe(
-            table_state,
-            |_this, table_state, event: &DataTableEvent, cx| {
-                if matches!(event, DataTableEvent::SortChanged(Some(_))) {
-                    table_state.update(cx, |state, cx| {
-                        state.clear_sort_without_emit();
-                        cx.notify();
-                    });
-                }
-            },
-        )
     }
 
     // -- Further windows -----------------------------------------------------

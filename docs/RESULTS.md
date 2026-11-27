@@ -72,9 +72,8 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 
 Right-click a column header for a menu scoped to that column: copy the column
 name, order ascending or descending, clear the ordering, and every filter
-operator, in one flat list. A left click on the header still cycles the sort.
-The table menu (`m`) also offers **Copy column name** for the active cell's
-column, so the keyboard reaches it too.
+operator, in one flat list. The table menu (`m`) also offers **Copy column name**
+for the active cell's column, so the keyboard reaches it too. A left click on the header selects the whole column (`Shift`+click selects every column up to it, `Ctrl`+click, `Cmd`+click on macOS, adds or removes it); the arrow at the header's right edge cycles the sort, and shows a faint up/down arrow while the column is not sorted. With **Clicking a column header sorts the column** on (Settings > General > Data grid), a plain click on the header sorts it instead, as the arrow does.
 
 ## Value panel
 

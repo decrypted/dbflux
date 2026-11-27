@@ -1103,6 +1103,7 @@ impl SpreadsheetDocument {
         let table_model = model.table_model();
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(table_model, cx);
+            state.set_sortable(false);
             state.set_positional_editing(editable);
             state.set_insertable(editable);
             state
@@ -1125,9 +1126,8 @@ impl SpreadsheetDocument {
     }
 
     /// The rows are the sheet's rows in sheet order, which is what their
-    /// addresses mean, so sorting them is refused: a header click sets the
-    /// sort indicator before it reports the change, and the indicator is
-    /// cleared again here. A selection change redraws the formula readout,
+    /// addresses mean, so the table does not sort (`set_sortable(false)`).
+    /// A selection change redraws the formula readout,
     /// and the row operations and saves the table asks for are the
     /// document's.
     fn subscribe_to_table(
@@ -1136,14 +1136,7 @@ impl SpreadsheetDocument {
     ) -> Subscription {
         cx.subscribe(
             table_state,
-            |this, table_state, event: &DataTableEvent, cx| match event {
-                DataTableEvent::SortChanged(Some(_)) => {
-                    table_state.update(cx, |state, cx| {
-                        state.clear_sort_without_emit();
-                        cx.notify();
-                    });
-                }
-
+            |this, _table_state, event: &DataTableEvent, cx| match event {
                 DataTableEvent::SelectionChanged(_) => cx.notify(),
 
                 event => this.handle_table_event(event, cx),

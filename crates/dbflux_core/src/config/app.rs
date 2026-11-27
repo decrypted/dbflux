@@ -436,6 +436,11 @@ pub struct GeneralSettings {
     /// When scrollbars are shown in every window. While scrolling by default.
     #[serde(default)]
     pub scrollbar_visibility: ScrollbarVisibility,
+    /// A primary click on a column header sorts the column, as before column
+    /// selection. Off by default: the click selects the column and the
+    /// header's arrow sorts.
+    #[serde(default)]
+    pub grid_header_click_sorts: bool,
 
     // -- Fonts --
     /// Interface font family. `None` uses the bundled interface font.
@@ -605,6 +610,7 @@ impl Default for GeneralSettings {
             accent_light: None,
             mcp_approval_notifications: true,
             scrollbar_visibility: ScrollbarVisibility::WhileScrolling,
+            grid_header_click_sorts: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -636,6 +642,7 @@ mod font_settings_tests {
             legacy.scrollbar_visibility,
             super::ScrollbarVisibility::WhileScrolling
         );
+        assert!(!legacy.grid_header_click_sorts);
         assert_eq!(legacy, settings);
     }
 

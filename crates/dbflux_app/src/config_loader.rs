@@ -143,6 +143,7 @@ fn save_general_settings_to(
         accent_dark: settings.accent_dark.map(dbflux_core::AccentColor::to_hex),
         accent_light: settings.accent_light.map(dbflux_core::AccentColor::to_hex),
         mcp_approval_notifications: i32::from(settings.mcp_approval_notifications),
+        grid_header_click_sorts: i32::from(settings.grid_header_click_sorts),
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1182,6 +1183,7 @@ fn load_general_settings(
         accent_dark: accent_from_storage(dto.accent_dark.as_deref()),
         accent_light: accent_from_storage(dto.accent_light.as_deref()),
         mcp_approval_notifications: dto.mcp_approval_notifications != 0,
+        grid_header_click_sorts: dto.grid_header_click_sorts != 0,
     }
 }
 
@@ -2817,6 +2819,7 @@ mod tests {
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: 1,
+            grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
 
@@ -2920,6 +2923,7 @@ mod tests {
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: 1,
+            grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
         runtime
@@ -3423,6 +3427,7 @@ mod tests {
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: 1,
+            grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
         runtime

@@ -125,23 +125,7 @@ impl SelectionState {
     /// Returns whether the cell was added, so a press that deselected does
     /// not start a drag from it.
     pub fn toggle_cell(&mut self, coord: CellCoord) -> bool {
-        let single = CellRange::single(coord);
-        if let Some(index) = self.extra.iter().position(|range| *range == single) {
-            self.extra.remove(index);
-            return false;
-        }
-        if self.selected_range() == Some(single) {
-            if self.extra.is_empty() {
-                self.clear();
-            } else {
-                self.restore_last_extra();
-            }
-            return false;
-        }
-        self.push_current_range();
-        self.active = Some(coord);
-        self.anchor = Some(coord);
-        true
+        self.toggle_range(CellRange::single(coord))
     }
 
     /// Ctrl+click on a row number: keep what is selected and add the row, or
@@ -150,23 +134,45 @@ impl SelectionState {
         if col_count == 0 {
             return;
         }
-        let whole_row = CellRange::new(CellCoord::new(row, 0), CellCoord::new(row, col_count - 1));
-        if let Some(index) = self.extra.iter().position(|range| *range == whole_row) {
-            self.extra.remove(index);
+        self.toggle_range(CellRange::new(
+            CellCoord::new(row, 0),
+            CellCoord::new(row, col_count - 1),
+        ));
+    }
+
+    /// Ctrl+click on a column header: keep what is selected and add the
+    /// column, or deselect it when it is selected on its own already.
+    pub fn toggle_column(&mut self, col: usize, row_count: usize) {
+        if row_count == 0 {
             return;
         }
-        if self.selected_range() == Some(whole_row) {
+        self.toggle_range(CellRange::new(
+            CellCoord::new(0, col),
+            CellCoord::new(row_count - 1, col),
+        ));
+    }
+
+    /// Adds `range` as the current range, or takes it out when it is
+    /// selected on its own already. Returns whether it was added.
+    fn toggle_range(&mut self, range: CellRange) -> bool {
+        if let Some(index) = self.extra.iter().position(|extra| *extra == range) {
+            self.extra.remove(index);
+            return false;
+        }
+        if self.selected_range() == Some(range) {
             if self.extra.is_empty() {
                 self.clear();
             } else {
                 self.restore_last_extra();
             }
-            return;
+            return false;
         }
         self.push_current_range();
-        // As select_row: the cursor in the first column, the anchor spanning.
-        self.anchor = Some(whole_row.end);
-        self.active = Some(whole_row.start);
+        // The cursor at the range's top-left, as select_row and
+        // select_column put it, the anchor spanning.
+        self.anchor = Some(range.end);
+        self.active = Some(range.start);
+        true
     }
 
     fn push_current_range(&mut self) {
@@ -257,6 +263,42 @@ impl SelectionState {
         let anchor_row = self.anchor.map_or(row, |anchor| anchor.row);
         self.anchor = Some(CellCoord::new(anchor_row, col_count - 1));
         self.active = Some(CellCoord::new(row, 0));
+    }
+
+    /// Select an entire column.
+    ///
+    /// The active cell is the column's first row, so the value panel and the
+    /// row inspector stay at the top; the anchor takes the last row to span
+    /// the column.
+    pub fn select_column(&mut self, col: usize, row_count: usize) {
+        if row_count == 0 {
+            return;
+        }
+        self.anchor = Some(CellCoord::new(row_count - 1, col));
+        self.active = Some(CellCoord::new(0, col));
+        self.extra.clear();
+    }
+
+    /// Extend the selection to whole columns, from the anchor's column to
+    /// `col`, as a Shift+click on a column header does. Ctrl+click ranges
+    /// stay, as they do for a Shift+click on a row number.
+    pub fn extend_to_column(&mut self, col: usize, row_count: usize) {
+        if row_count == 0 {
+            return;
+        }
+        let anchor_col = self.anchor.map_or(col, |anchor| anchor.col);
+        self.anchor = Some(CellCoord::new(row_count - 1, anchor_col));
+        self.active = Some(CellCoord::new(0, col));
+    }
+
+    /// Check if an entire column is selected (all rows).
+    pub fn is_full_column_selected(&self, col: usize, row_count: usize) -> bool {
+        self.ranges().iter().any(|r| {
+            r.start.col <= col
+                && col <= r.end.col
+                && r.start.row == 0
+                && r.end.row == row_count.saturating_sub(1)
+        })
     }
 
     /// Select all cells in the table.
@@ -436,5 +478,72 @@ mod tests {
             assert!(sel.is_full_row_selected(row, 2), "row {row}");
         }
         assert!(!sel.is_full_row_selected(2, 2));
+    }
+
+    #[test]
+    fn select_column_keeps_the_active_cell_in_the_first_row() {
+        let mut sel = SelectionState::new();
+        sel.select_column(1, 4);
+
+        assert_eq!(sel.active, Some(CellCoord::new(0, 1)));
+        assert!(sel.is_full_column_selected(1, 4));
+        assert!(!sel.is_full_column_selected(0, 4));
+        assert!(!sel.is_full_row_selected(0, 3));
+    }
+
+    #[test]
+    fn extend_to_column_after_a_cell_selects_whole_columns() {
+        let mut sel = SelectionState::new();
+        sel.select_cell(CellCoord::new(2, 3));
+        sel.extend_to_column(1, 5);
+
+        assert_eq!(sel.active, Some(CellCoord::new(0, 1)));
+        for col in 1..=3 {
+            assert!(sel.is_full_column_selected(col, 5), "column {col}");
+        }
+        assert!(!sel.is_full_column_selected(0, 5));
+        assert!(!sel.is_full_column_selected(4, 5));
+    }
+
+    #[test]
+    fn extend_to_column_keeps_the_ctrl_click_ranges() {
+        let mut sel = SelectionState::new();
+        sel.select_cell(CellCoord::new(4, 0));
+        sel.toggle_column(2, 5);
+        sel.extend_to_column(3, 5);
+
+        assert!(
+            sel.is_selected(CellCoord::new(4, 0)),
+            "the earlier cell stays"
+        );
+        assert!(sel.is_full_column_selected(2, 5));
+        assert!(sel.is_full_column_selected(3, 5));
+        assert!(!sel.is_full_column_selected(1, 5));
+    }
+
+    #[test]
+    fn toggle_column_adds_and_takes_out_a_column() {
+        let mut sel = SelectionState::new();
+        sel.select_column(0, 3);
+        sel.toggle_column(2, 3);
+        assert!(sel.is_full_column_selected(0, 3));
+        assert!(sel.is_full_column_selected(2, 3));
+        assert!(!sel.is_full_column_selected(1, 3));
+        assert_eq!(sel.active, Some(CellCoord::new(0, 2)));
+
+        sel.toggle_column(2, 3);
+        assert!(!sel.is_full_column_selected(2, 3));
+        assert!(sel.is_full_column_selected(0, 3));
+    }
+
+    #[test]
+    fn column_selection_without_rows_changes_nothing() {
+        let mut sel = SelectionState::new();
+        sel.select_column(1, 0);
+        sel.extend_to_column(2, 0);
+        sel.toggle_column(0, 0);
+
+        assert!(sel.is_empty());
+        assert!(!sel.is_full_column_selected(0, 0));
     }
 }

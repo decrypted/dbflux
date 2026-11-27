@@ -77,10 +77,10 @@ modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 
 Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
 esa columna: copiar el nombre de la columna, ordenar ascendente o descendente,
-quitar el orden y todos los operadores de filtro, en una sola lista plana. El clic izquierdo en la
-cabecera sigue alternando el orden.
-El menú de la tabla (`m`) también ofrece **Copiar nombre de columna** para la
-columna de la celda activa, así que el teclado también llega a él.
+quitar el orden y todos los operadores de filtro, en una sola lista plana. El
+menú de la tabla (`m`) también ofrece **Copiar nombre de columna** para la
+columna de la celda activa, así que el teclado también llega a él. El clic
+izquierdo en la cabecera selecciona la columna entera (`Shift`+clic selecciona todas las columnas hasta ella, `Ctrl`+clic, `Cmd`+clic en macOS, la añade o la quita); la flecha en el borde derecho de la cabecera alterna el orden, y muestra una flecha arriba/abajo tenue mientras la columna no está ordenada. Con **Hacer clic en la cabecera de una columna la ordena** activado (Settings > General > Data grid), un clic normal en la cabecera la ordena, como la flecha.
 
 ## Panel de valor
 

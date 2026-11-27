@@ -5,7 +5,9 @@ use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{ChromeColors, Feedback, IslandMetrics, ShellMetrics, TabMetrics};
+use dbflux_components::tokens::{
+    ChromeColors, Feedback, IslandMetrics, MenuMetrics, ShellMetrics, TabMetrics,
+};
 use dbflux_ui_document::DocumentSidePanel;
 use gpui_component::resizable::ResizablePanel;
 
@@ -38,6 +40,14 @@ fn palette_command_focuses_a_popover(command_id: &str) -> bool {
     command_id == "toggle_notifications"
 }
 
+/// Palette commands that open a picker over the focused document and move
+/// focus into its search input. The workspace still takes focus before the
+/// command, leaving the closed palette's input, but must not take it again
+/// afterwards: that refocus would pull the keys away from the picker.
+fn palette_command_opens_a_picker(command_id: &str) -> bool {
+    command_id == "insert_snippet"
+}
+
 impl Workspace {
     /// Renders the active document from TabManager (v0.3).
     ///
@@ -59,6 +69,61 @@ impl Workspace {
 /// island, `IslandMetrics::GAP` of desk on its left. A click inside makes the
 /// document the focused area again, but leaves keyboard focus where the
 /// panel put it (a search field, the panel itself).
+/// Title, message, confirm label and variant of the sidebar's inline
+/// confirmation: a declared root section action brings its own copy, every
+/// other case is a delete or drop.
+fn inline_confirm_copy(
+    modal_state: &dbflux_ui_sidebar::DeleteModalState<'_>,
+) -> (String, String, String, ModalVariant) {
+    if let Some(action) = &modal_state.root_action {
+        return (
+            action.title.clone(),
+            action.message.clone(),
+            action.confirm_label.clone(),
+            ModalVariant::Danger,
+        );
+    }
+
+    let title = if modal_state.multi_count.is_some() {
+        dbflux_i18n::t!("workspace.action.delete")
+    } else if modal_state.is_ddl {
+        dbflux_i18n::t!("workspace.action.drop")
+    } else if modal_state.is_folder {
+        dbflux_i18n::t!("workspace.action.delete_folder")
+    } else {
+        dbflux_i18n::t!("workspace.action.delete_connection")
+    };
+
+    let message = if let Some(count) = modal_state.multi_count {
+        crate::ui::labels::workspace_delete_selected_message(count)
+    } else if modal_state.is_ddl {
+        crate::ui::labels::workspace_drop_object_message(
+            modal_state.object_type,
+            modal_state.item_name,
+        )
+    } else if modal_state.is_folder {
+        crate::ui::labels::workspace_delete_folder_message(modal_state.item_name)
+    } else {
+        crate::ui::labels::workspace_delete_connection_message(modal_state.item_name)
+    };
+
+    if modal_state.is_ddl {
+        (
+            title,
+            message,
+            dbflux_i18n::t!("workspace.action.drop"),
+            ModalVariant::Danger,
+        )
+    } else {
+        (
+            title,
+            message,
+            dbflux_i18n::t!("workspace.action.delete"),
+            ModalVariant::Default,
+        )
+    }
+}
+
 fn document_side_island(
     panel: DocumentSidePanel,
     cx: &mut Context<Workspace>,
@@ -143,6 +208,7 @@ impl Render for Workspace {
             // returns, or not at all if the window closes first.
             let refocus_parent = !palette_command_opens_native_window(command_id)
                 && !palette_command_focuses_a_popover(command_id);
+            let refocus_after = refocus_parent && !palette_command_opens_a_picker(command_id);
             defer_to_end_of_effect_cycle(window, cx, move |this, window, cx| {
                 // Focus leaves the closed palette's input first, so a menu
                 // the command opens returns focus to the workspace, not to
@@ -151,7 +217,7 @@ impl Render for Workspace {
                     this.focus_handle.focus(window, cx);
                 }
                 this.handle_command(command_id, window, cx);
-                if refocus_parent {
+                if refocus_after {
                     this.focus_handle.focus(window, cx);
                 }
             });
@@ -342,19 +408,27 @@ impl Render for Workspace {
                             .flex()
                             .flex_col()
                             .size_full()
+                            // Record that the document area owns the input
+                            // without moving the keyboard: the click's own
+                            // target already took it. `set_focus` here would
+                            // steal it back from the field the click just
+                            // focused — the query bar of a document collection
+                            // on the first click after the sidebar held the
+                            // keyboard — and leave the grid's single-key
+                            // shortcuts claiming every typed letter (#1234).
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
+                                cx.listener(|this, _, _, cx| {
                                     if this.focus_target != FocusTarget::Document {
-                                        this.set_focus(FocusTarget::Document, window, cx);
+                                        this.mark_focus_target(FocusTarget::Document, cx);
                                     }
                                 }),
                             )
                             .on_mouse_down(
                                 MouseButton::Right,
-                                cx.listener(|this, _, window, cx| {
+                                cx.listener(|this, _, _, cx| {
                                     if this.focus_target != FocusTarget::Document {
-                                        this.set_focus(FocusTarget::Document, window, cx);
+                                        this.mark_focus_target(FocusTarget::Document, cx);
                                     }
                                 }),
                             )
@@ -778,51 +852,12 @@ impl Render for Workspace {
             // Context menu rendered at workspace level for proper positioning
             .when_some(sidebar_context_menu, |this, menu| {
                 use crate::ui::components::context_menu as ctx;
+                use dbflux_components::composites::{
+                    MenuTreeEvent, MenuTreeLayout, render_menu_tree,
+                };
                 use dbflux_ui_sidebar::ContextMenuItem;
 
                 let sidebar_entity = self.sidebar.clone();
-
-                let menu_x = menu.position.x;
-                let menu_y = menu.position.y;
-                let menu_width = px(160.0);
-                let menu_gap = Spacing::XS;
-                let menu_item_height = Heights::ROW_COMPACT.to_pixels(window.rem_size());
-                let separator_height = px(1.0) + Spacing::XS * 2.0;
-                // A row with a detail line is taller than a plain one.
-                let detail_row_extra = {
-                    use dbflux_components::tokens::MenuMetrics;
-                    MenuMetrics::DETAIL_ROW_HEIGHT.to_pixels(window.rem_size())
-                        - MenuMetrics::ROW_HEIGHT.to_pixels(window.rem_size())
-                };
-                let menu_container_padding = px(4.0);
-
-                let parent_entry = menu.parent_stack.last();
-
-                // Anchor the submenu to its owning row by summing the actual
-                // rendered height of every preceding row. Separators are ~9px,
-                // not a full ROW_COMPACT, so a flat `height * index` over-counts
-                // and pushes the submenu too far down.
-                let submenu_y_offset = if let Some((parent_items, parent_selected)) = parent_entry {
-                    let rows_above =
-                        parent_items
-                            .iter()
-                            .take(*parent_selected)
-                            .fold(px(0.0), |acc, item| {
-                                acc + if item.is_separator {
-                                    separator_height
-                                } else if item.detail.is_some() {
-                                    menu_item_height + detail_row_extra
-                                } else {
-                                    menu_item_height
-                                }
-                            });
-
-                    menu_container_padding + rows_above
-                } else {
-                    px(0.0)
-                };
-
-                let in_submenu = parent_entry.is_some();
 
                 // Overlay to dismiss on outside click
                 let sidebar_dismiss = sidebar_entity.clone();
@@ -830,74 +865,44 @@ impl Render for Workspace {
                     sidebar_dismiss.update(cx, |s, cx| s.close_context_menu(cx));
                 });
 
-                this.child(overlay)
-                    // Parent menu (shown when in submenu, at original position)
-                    .when_some(parent_entry, |d, (parent_items, parent_selected)| {
-                        let shared_items = ContextMenuItem::to_menu_items(parent_items);
-                        let sidebar_click = sidebar_entity.clone();
-                        let sidebar_hover = sidebar_entity.clone();
+                // Every open level of the cascade is one sibling panel placed
+                // by Bolt's flyout placement, so the horizontal flip, the
+                // vertical clamp and the internal scroll all come from the
+                // component rather than from this render.
+                let nodes = ContextMenuItem::to_menu_nodes(&menu.items);
+                let layout = MenuTreeLayout {
+                    origin: menu.position,
+                    width: MenuMetrics::SUBMENU_WIDTH,
+                    viewport: window.bounds().size,
+                    // The old flat menu drew a highlight with no focus ring;
+                    // the ring is reserved for surfaces that know the keyboard
+                    // opened the menu.
+                    keyboard_focus: false,
+                };
 
-                        d.child(
-                            deferred(
-                                anchored()
-                                    .position(point(menu_x, menu_y))
-                                    .snap_to_window()
-                                    .child(ctx::render_menu_container(
-                                        "parent-menu",
-                                        &shared_items,
-                                        Some(*parent_selected),
-                                        move |idx, cx| {
-                                            sidebar_click.update(cx, |s, cx| {
-                                                s.context_menu_parent_execute_at(idx, cx);
-                                            });
-                                        },
-                                        move |idx, cx| {
-                                            sidebar_hover.update(cx, |s, cx| {
-                                                s.context_menu_parent_hover_at(idx, cx);
-                                            });
-                                        },
-                                        cx,
-                                    )),
-                            )
-                            .with_priority(1),
-                        )
-                    })
-                    // Current menu (submenu to the right of parent, or main menu at click position)
-                    .child({
-                        let shared_items = ContextMenuItem::to_menu_items(&menu.items);
-                        let sidebar_click = sidebar_entity.clone();
-                        let sidebar_hover = sidebar_entity.clone();
-
-                        let menu_left = if in_submenu {
-                            menu_x + menu_width + menu_gap
-                        } else {
-                            menu_x
-                        };
-                        let menu_top = menu_y + submenu_y_offset;
-
-                        deferred(
-                            anchored()
-                                .position(point(menu_left, menu_top))
-                                .snap_to_window()
-                                .child(ctx::render_menu_container(
-                                    "context-menu",
-                                    &shared_items,
-                                    Some(menu.selected_index),
-                                    move |idx, cx| {
-                                        sidebar_click.update(cx, |s, cx| {
-                                            s.context_menu_execute_at(idx, cx);
-                                        });
-                                    },
-                                    move |idx, cx| {
-                                        sidebar_hover.update(cx, |s, cx| {
-                                            s.context_menu_hover_at(idx, cx);
-                                        });
-                                    },
-                                    cx,
-                                )),
-                        )
-                        .with_priority(1)
-                    })
+                this.child(overlay).child(
+                    deferred(render_menu_tree(
+                        "context-menu",
+                        &nodes,
+                        &menu.nav,
+                        layout,
+                        move |event, cx| {
+                            sidebar_entity.update(cx, |s, cx| match event {
+                                MenuTreeEvent::Activated { path, .. } => {
+                                    s.context_menu_activated(&path, cx);
+                                }
+                                MenuTreeEvent::Opened { level, index } => {
+                                    s.context_menu_open_flyout(level, index, cx);
+                                }
+                                MenuTreeEvent::Hovered { level, index } => {
+                                    s.context_menu_row_hovered(level, index, cx);
+                                }
+                            });
+                        },
+                        cx,
+                    ))
+                    .with_priority(1),
+                )
             })
             // The toast menu opens where the toasts stack, under the title
             // bar at the right edge.
@@ -982,42 +987,8 @@ impl Render for Workspace {
                     let sidebar_close = self.sidebar.clone();
                     let sidebar_enter = self.sidebar.clone();
 
-                    let title = if modal_state.multi_count.is_some() {
-                        dbflux_i18n::t!("workspace.action.delete")
-                    } else if modal_state.is_ddl {
-                        dbflux_i18n::t!("workspace.action.drop")
-                    } else if modal_state.is_folder {
-                        dbflux_i18n::t!("workspace.action.delete_folder")
-                    } else {
-                        dbflux_i18n::t!("workspace.action.delete_connection")
-                    };
-
-                    let message = if let Some(count) = modal_state.multi_count {
-                        crate::ui::labels::workspace_delete_selected_message(count)
-                    } else if modal_state.is_ddl {
-                        crate::ui::labels::workspace_drop_object_message(
-                            modal_state.object_type,
-                            modal_state.item_name,
-                        )
-                    } else if modal_state.is_folder {
-                        crate::ui::labels::workspace_delete_folder_message(modal_state.item_name)
-                    } else {
-                        crate::ui::labels::workspace_delete_connection_message(
-                            modal_state.item_name,
-                        )
-                    };
-
-                    let confirm_label = if modal_state.is_ddl {
-                        dbflux_i18n::t!("workspace.action.drop")
-                    } else {
-                        dbflux_i18n::t!("workspace.action.delete")
-                    };
-                    let variant = if modal_state.is_ddl {
-                        ModalVariant::Danger
-                    } else {
-                        ModalVariant::Default
-                    };
-
+                    let (title, message, confirm_label, variant) =
+                        inline_confirm_copy(&modal_state);
                     let body = Text::body(message).into_any_element();
 
                     let footer = div()
@@ -1025,7 +996,11 @@ impl Render for Workspace {
                         .gap(Spacing::SM)
                         .child(
                             Button::new(
-                                "delete-cancel",
+                                if modal_state.root_action.is_some() {
+                                    "root-section-action-cancel"
+                                } else {
+                                    "delete-cancel"
+                                },
                                 dbflux_i18n::t!("workspace.action.cancel"),
                             )
                             .on_click(move |_, _, cx| {
@@ -1035,13 +1010,20 @@ impl Render for Workspace {
                             }),
                         )
                         .child(
-                            Button::new("delete-confirm", confirm_label)
-                                .when(modal_state.is_ddl, |b| b.danger())
-                                .on_click(move |_, _, cx| {
-                                    sidebar_confirm.update(cx, |this, cx| {
-                                        this.confirm_modal_delete(cx);
-                                    });
-                                }),
+                            Button::new(
+                                if modal_state.root_action.is_some() {
+                                    "root-section-action-confirm"
+                                } else {
+                                    "delete-confirm"
+                                },
+                                confirm_label,
+                            )
+                            .when(variant == ModalVariant::Danger, |b| b.danger())
+                            .on_click(move |_, _, cx| {
+                                sidebar_confirm.update(cx, |this, cx| {
+                                    this.confirm_modal_delete(cx);
+                                });
+                            }),
                         )
                         .into_any_element();
 
@@ -1079,7 +1061,7 @@ mod tests {
 
     use super::{
         defer_to_end_of_effect_cycle, palette_command_focuses_a_popover,
-        palette_command_opens_native_window,
+        palette_command_opens_a_picker, palette_command_opens_native_window,
     };
 
     #[test]
@@ -1138,6 +1120,13 @@ mod tests {
     fn popover_palette_commands_skip_the_parent_refocus() {
         assert!(palette_command_focuses_a_popover("toggle_notifications"));
         assert!(!palette_command_focuses_a_popover("open_audit_viewer"));
+    }
+
+    #[test]
+    fn picker_palette_commands_skip_the_refocus_after_the_command() {
+        assert!(palette_command_opens_a_picker("insert_snippet"));
+        assert!(!palette_command_opens_a_picker("format_query"));
+        assert!(!palette_command_opens_a_picker("open_audit_viewer"));
     }
 
     #[test]

@@ -24,6 +24,7 @@ dbflux_storage.workspace = true
 dbflux_app.workspace = true
 dbflux_ipc.workspace = true
 dbflux_ssh.workspace = true
+dbflux_mcp = { workspace = true, optional = true }
 uuid.workspace = true
 chrono.workspace = true
 log.workspace = true
@@ -37,13 +38,14 @@ open = "5"
 libc = "0.2"
 
 [features]
+telemetry = ["dbflux_ipc/telemetry", "dbflux_app/telemetry", "dbflux_ui_base/telemetry", "dbflux_ui_document/telemetry", "dbflux_ui_windows/telemetry"]
 # dbflux_ui is driver-agnostic: it has no per-driver features and no driver
 # dependencies. The cross-cutting features only forward to the workspace/app and
 # the sibling UI crates so a single feature set is unified across the build.
 default = ["lua", "aws", "mcp"]
 lua = ["dbflux_app/lua", "dbflux_ui_base/lua", "dbflux_ui_document/lua", "dbflux_ui_windows/lua", "dbflux_ui_sidebar/lua"]
 aws = ["dbflux_app/aws", "dbflux_ui_base/aws", "dbflux_ui_document/aws", "dbflux_ui_windows/aws", "dbflux_ui_sidebar/aws"]
-mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp", "dbflux_ui_document/mcp", "dbflux_ui_windows/mcp", "dbflux_ui_sidebar/mcp"]
+mcp = ["dep:dbflux_mcp", "dbflux_app/mcp", "dbflux_ui_base/mcp", "dbflux_ui_document/mcp", "dbflux_ui_windows/mcp", "dbflux_ui_sidebar/mcp"]
 # Off by default. Only dbflux_ui_base holds the gated bridge code; every other
 # crate calls its always-present install function.
 ui-automation = ["dbflux_ui_base/ui-automation"]
@@ -54,6 +56,8 @@ gpui = { workspace = true, features = ["test-support"] }
 dbflux_ui_base = { workspace = true, features = ["test-support"] }
 dbflux_ui_document = { workspace = true, features = ["test-support"] }
 dbflux_test_support.workspace = true
+dbflux_audit.workspace = true
+dbflux_telemetry.workspace = true
 parquet.workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true

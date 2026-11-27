@@ -14,6 +14,7 @@ mod render;
 mod render_footer;
 mod render_overlays;
 mod render_tree;
+mod root_sections;
 mod secret_store;
 mod selection;
 mod style_guardrails;
@@ -22,6 +23,7 @@ mod tree_builder;
 
 use dbflux_app::AppState;
 use dbflux_components::components::tree_nav::{self, GutterInfo};
+use dbflux_components::composites::{HoverIntent, MenuNav, MenuNode};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::ModalFocus;
@@ -47,6 +49,8 @@ use gpui_component::list::ListItem;
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+pub use root_sections::{RootSectionActionConfirm, RootSectionActionRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarTab {
@@ -95,17 +99,28 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         database: String,
     },
-    /// Connection root activated (double-click/Enter) for an object-storage
-    /// driver — opens the searchable buckets table for the connection.
-    OpenObjectStoreBuckets {
+    /// A driver-declared root section was activated: its folder, or the
+    /// connection row when the section opens on profile activation. The
+    /// workspace opens the section's declared presentation.
+    OpenRootSection {
         profile_id: Uuid,
+        section_id: String,
+        presentation: dbflux_core::RootSectionPresentation,
     },
-    /// A bucket row was activated (double-click/Enter) under an object-storage
-    /// connection. The workspace focuses the connection's buckets table on that
-    /// bucket until the object browser document exists.
-    OpenObjectStoreBucket {
+    /// An item of a driver-declared root section was activated. The
+    /// workspace opens the section's declared item presentation.
+    OpenRootSectionItem {
         profile_id: Uuid,
-        bucket: String,
+        section_id: String,
+        item_id: String,
+        presentation: dbflux_core::RootItemPresentation,
+    },
+    /// An action changed the items of a driver-declared root section. The
+    /// workspace reloads the open document that shows `presentation`.
+    RootSectionChanged {
+        profile_id: Uuid,
+        section_id: String,
+        presentation: Option<dbflux_core::RootSectionPresentation>,
     },
     /// A store of a secret-store connection, or one of its paths, was
     /// activated. The workspace opens the store's document, at `path` when
@@ -500,53 +515,55 @@ impl ContextMenuItem {
         self.is_entry() && !self.is_disabled
     }
 
-    pub fn to_menu_items(
-        items: &[ContextMenuItem],
-    ) -> Vec<dbflux_components::composites::MenuItem> {
-        items
-            .iter()
-            .map(|item| {
-                if item.is_separator {
-                    return dbflux_components::composites::MenuItem::separator();
-                }
+    /// The cascade row this menu row renders as: the same label, icon,
+    /// shortcut hint, separator, header and danger flags the menu has always
+    /// drawn, plus the rows of the submenu it opens, if it opens one.
+    pub fn to_menu_node(&self) -> MenuNode {
+        if self.is_separator {
+            return MenuNode::separator();
+        }
 
-                if item.is_header {
-                    return dbflux_components::composites::MenuItem::header(item.label.clone());
-                }
+        if self.is_header {
+            return MenuNode::header(self.label.clone());
+        }
 
-                let mut mi = dbflux_components::composites::MenuItem::new(item.label.clone());
+        let mut node = MenuNode::row(self.label.clone());
 
-                if let Some(shortcut) = item
-                    .action
-                    .shortcut_command()
-                    .and_then(sidebar_shortcut_label)
-                {
-                    mi = mi.shortcut(shortcut);
-                }
+        if let Some(shortcut) = self
+            .action
+            .shortcut_command()
+            .and_then(sidebar_shortcut_label)
+        {
+            node = node.shortcut(shortcut);
+        }
 
-                if let Some(icon) = item.icon.or_else(|| item.action.icon()) {
-                    mi = mi.icon(icon);
-                }
+        if let Some(icon) = self.icon.or_else(|| self.action.icon()) {
+            node = node.icon(icon);
+        }
 
-                if matches!(item.action, ContextMenuAction::Submenu(_)) {
-                    mi = mi.submenu();
-                }
+        if let ContextMenuAction::Submenu(children) = &self.action {
+            node = node.children(children.iter().map(ContextMenuItem::to_menu_node).collect());
+        }
 
-                if item.is_danger {
-                    mi = mi.danger();
-                }
+        if self.is_danger {
+            node = node.danger();
+        }
 
-                if item.is_disabled {
-                    mi = mi.disabled();
-                }
+        if self.is_disabled {
+            node = node.disabled();
+        }
 
-                if let Some(detail) = &item.detail {
-                    mi = mi.detail(detail.clone());
-                }
+        if let Some(detail) = &self.detail {
+            node = node.detail(detail.clone());
+        }
 
-                mi
-            })
-            .collect()
+        node
+    }
+
+    /// The rows of this menu as a Bolt cascade tree: one node per row, with
+    /// the rows of its submenu as its children.
+    pub fn to_menu_nodes(items: &[ContextMenuItem]) -> Vec<MenuNode> {
+        items.iter().map(ContextMenuItem::to_menu_node).collect()
     }
 }
 
@@ -626,6 +643,9 @@ pub enum ContextMenuAction {
     RefreshInstanceCatalog,
     /// Copy the string ID of the selected node to the clipboard.
     CopyItemId,
+    /// Copy the bare name of the selected column, collection field, table,
+    /// view or collection to the clipboard, without its schema or database.
+    CopyName,
     /// Open the Export wizard for the selected table(s) (or the right-
     /// clicked table, when it is not part of a larger selection). Distinct
     /// from `Export` (connection-profile export) — gated on
@@ -649,6 +669,8 @@ pub enum ContextMenuAction {
     /// state the menu showed, so the click sets the opposite of what the user
     /// saw.
     ToggleConnectOnStartup(bool),
+    /// Run the driver-declared root section item action with this id.
+    RootSectionAction(String),
 }
 
 #[derive(Clone)]
@@ -784,11 +806,13 @@ impl ContextMenuAction {
             // Instance catalog actions
             Self::RefreshInstanceCatalog => Some(AppIcon::RefreshCcw),
             Self::CopyItemId => Some(AppIcon::Copy),
+            Self::CopyName => Some(AppIcon::Copy),
             Self::ExportTables => Some(AppIcon::ArrowUp),
             Self::ImportTables => Some(AppIcon::Download),
             Self::MigrateTables => Some(AppIcon::ArrowUpDown),
             Self::CompareSchema => Some(AppIcon::Columns),
             Self::ToggleConnectOnStartup(enabled) => enabled.then_some(AppIcon::Check),
+            Self::RootSectionAction(_) => None,
         }
     }
 }
@@ -882,10 +906,13 @@ impl Render for DragPreview {
 #[derive(Clone)]
 pub struct ContextMenuState {
     pub item_id: String,
-    pub selected_index: usize,
     pub items: Vec<ContextMenuItem>,
-    /// Stack of parent menus for submenu navigation
-    pub parent_stack: Vec<(Vec<ContextMenuItem>, usize)>,
+    /// The cursor of the cascade: one highlighted row per open level, so the
+    /// depth of the path is the depth of the open menu.
+    pub nav: MenuNav,
+    /// The open-on-hover decision: the row the pointer rests on, and the row
+    /// whose flyout is open.
+    pub hover: HoverIntent,
     /// Position where the menu should appear (captured from click or calculated)
     pub position: Point<Pixels>,
 }
@@ -1194,12 +1221,16 @@ pub struct Sidebar {
     /// A single fetch populates both `instance_metrics_cache` and
     /// `instance_inspectors_cache` because the catalog returns both in one round-trip.
     pending_instance_catalog_fetches: HashMap<Uuid, Task<()>>,
-    /// Session-scoped cache of the buckets listed for an object-storage
-    /// connection, keyed by profile_id. Populated on first expansion of the
-    /// connection node; buckets are listed flat, with no prefix recursion.
-    bucket_cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
-    /// In-flight `list_buckets` fetches, keyed by profile_id.
-    pending_bucket_fetches: HashMap<Uuid, Task<()>>,
+    /// Session-scoped cache of the driver-declared root sections of each
+    /// connected profile and the items listed for them. Populated on first
+    /// expansion of the connection node.
+    root_section_cache: root_sections::RootSectionCache,
+    /// In-flight root section declaration and page fetches.
+    pending_root_section_fetches: root_sections::PendingRootSectionFetches,
+    /// Connected profiles whose row was activated before their root section
+    /// declarations arrived; the section that opens on activation opens once
+    /// they land.
+    pending_root_section_activations: HashSet<Uuid>,
     /// Session-scoped cache of the listed path levels of hierarchical secret
     /// stores. Populated on first expansion of a store or path node.
     secret_path_cache: secret_store::SecretPathCache,
@@ -1231,6 +1262,9 @@ struct DeleteConfirmState {
     /// what to delete when that overlay emits `Confirmed`, but the generic
     /// inline confirm popup must NOT render alongside it.
     delegated_to_modal: bool,
+    /// When set, confirm runs this driver-declared root section action
+    /// instead of a delete.
+    root_action: Option<root_sections::PendingRootSectionAction>,
 }
 
 /// Borrowed snapshot of the delete confirmation modal state, used by the
@@ -1243,6 +1277,9 @@ pub struct DeleteModalState<'a> {
     /// When `Some(n)`, the modal confirms a batch delete of `n` selected
     /// sidebar items. The renderer uses this to switch the message wording.
     pub multi_count: Option<usize>,
+    /// When set, the modal confirms a driver-declared root section action
+    /// and shows this copy instead of the delete wording.
+    pub root_action: Option<RootSectionActionConfirm>,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -1512,8 +1549,9 @@ impl Sidebar {
             instance_metrics_cache: HashMap::new(),
             instance_inspectors_cache: HashMap::new(),
             pending_instance_catalog_fetches: HashMap::new(),
-            bucket_cache: HashMap::new(),
-            pending_bucket_fetches: HashMap::new(),
+            root_section_cache: root_sections::RootSectionCache::default(),
+            pending_root_section_fetches: HashMap::new(),
+            pending_root_section_activations: HashSet::new(),
             secret_path_cache: HashMap::new(),
             pending_secret_path_fetches: HashMap::new(),
             connection_latencies: HashMap::new(),
@@ -1700,6 +1738,10 @@ impl Sidebar {
     }
 
     fn execute_item(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if self.retry_root_section_row(item_id, cx) {
+            return;
+        }
+
         // Retry sentinels for failed metric fetches have a non-parseable ID of the
         // form "metrics-retry|<profile_id>|<database_name>".  Handle them before
         // attempting to parse as a SchemaNodeId.
@@ -1817,23 +1859,29 @@ impl Sidebar {
                         cx.notify();
                     });
 
-                    if self.profile_category(profile_id, cx)
-                        == Some(DatabaseCategory::ObjectStorage)
-                    {
-                        cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
-                    }
+                    self.activate_profile_root_section(profile_id, cx);
                 } else {
                     self.connect_to_profile(profile_id, cx);
                 }
             }
-            SchemaNodeId::BucketsFolder { profile_id } => {
-                cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
+            SchemaNodeId::RootSection {
+                profile_id,
+                section_id,
+            } => {
+                self.activate_root_section(profile_id, &section_id, cx);
             }
-            SchemaNodeId::Bucket { profile_id, name } => {
-                cx.emit(SidebarEvent::OpenObjectStoreBucket {
-                    profile_id,
-                    bucket: name,
-                });
+            SchemaNodeId::RootSectionItem {
+                profile_id,
+                section_id,
+                item_id,
+            } => {
+                self.activate_root_section_item(profile_id, &section_id, &item_id, cx);
+            }
+            SchemaNodeId::RootSectionLoadMore {
+                profile_id,
+                section_id,
+            } => {
+                self.load_more_root_section_items(profile_id, &section_id, cx);
             }
             SchemaNodeId::SecretStore {
                 profile_id,
@@ -2015,9 +2063,23 @@ impl Sidebar {
 
         self.set_selection_anchor(item_id);
 
+        // Retry rows parse as placeholders, which have no click behavior of
+        // their own; the second click of a double click must not fetch again.
+        if Self::is_root_section_retry_row(item_id) {
+            if click_count == 1 {
+                self.execute_item(item_id, cx);
+            }
+            cx.notify();
+            return;
+        }
+
         let node_kind = parse_node_kind(item_id);
 
-        if node_kind == SchemaNodeKind::CollectionChildrenMore && click_count == 1 {
+        if matches!(
+            node_kind,
+            SchemaNodeKind::CollectionChildrenMore | SchemaNodeKind::RootSectionLoadMore
+        ) && click_count == 1
+        {
             self.execute_item(item_id, cx);
             cx.notify();
             return;
@@ -2032,9 +2094,10 @@ impl Sidebar {
 
             let is_object_storage_root = match parse_node_id(item_id) {
                 Some(SchemaNodeId::Profile { profile_id }) => {
-                    self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+                    self.profile_activation_section(profile_id).is_some()
+                        || self.root_section_declarations_pending(profile_id, cx)
                 }
-                Some(SchemaNodeId::BucketsFolder { .. })
+                Some(SchemaNodeId::RootSection { .. })
                 | Some(SchemaNodeId::SecretStore { .. })
                 | Some(SchemaNodeId::SecretPath { .. }) => true,
                 _ => false,
@@ -2189,7 +2252,7 @@ impl Sidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContextMenuAction, ContextMenuItem, ItemIdParts, NODE_KIND_NONE, parse_node_kind};
+    use super::{ContextMenuAction, ItemIdParts, NODE_KIND_NONE, parse_node_kind};
     use super::{Sidebar, SidebarTab};
     use crate::operations::{connect_prepare_error_toast, format_connect_prepare_error};
     use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
@@ -2411,7 +2474,7 @@ mod tests {
     }
 
     #[test]
-    fn to_menu_items_maps_labels_and_icons() {
+    fn to_menu_nodes_maps_labels_and_icons() {
         use super::{ContextMenuAction, ContextMenuItem};
 
         let items = vec![
@@ -2419,18 +2482,18 @@ mod tests {
             ContextMenuItem::danger("Delete", ContextMenuAction::Delete),
         ];
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert_eq!(menu_items.len(), 2);
-        assert_eq!(menu_items[0].label.as_ref(), "Open");
-        assert!(menu_items[0].icon.is_some());
-        assert!(!menu_items[0].has_submenu);
-        assert_eq!(menu_items[1].label.as_ref(), "Delete");
-        assert!(menu_items[1].icon.is_some());
-        assert!(menu_items[1].is_danger);
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].item.label.as_ref(), "Open");
+        assert!(nodes[0].item.icon.is_some());
+        assert!(nodes[0].children.is_empty());
+        assert_eq!(nodes[1].item.label.as_ref(), "Delete");
+        assert!(nodes[1].item.icon.is_some());
+        assert!(nodes[1].item.is_danger);
     }
 
     #[test]
-    fn to_menu_items_marks_submenu_items() {
+    fn to_menu_nodes_builds_the_submenu_children() {
         use super::{ContextMenuAction, ContextMenuItem};
 
         let items = vec![ContextMenuItem::item(
@@ -2441,14 +2504,17 @@ mod tests {
             )]),
         )];
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert_eq!(menu_items.len(), 1);
-        assert!(menu_items[0].has_submenu);
-        assert!(menu_items[0].icon.is_none());
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].item.has_submenu);
+        assert!(nodes[0].item.icon.is_none());
+        // The submenu rows become the rows of the row's flyout.
+        assert_eq!(nodes[0].children.len(), 1);
+        assert_eq!(nodes[0].children[0].item.label.as_ref(), "Folder A");
     }
 
     #[test]
-    fn to_menu_items_uses_explicit_icon_override() {
+    fn to_menu_nodes_uses_explicit_icon_override() {
         use super::{ContextMenuAction, ContextMenuItem};
         use dbflux_components::icon::IconSource;
         use dbflux_components::icons::AppIcon;
@@ -2457,10 +2523,10 @@ mod tests {
             ContextMenuItem::item("Refresh", ContextMenuAction::Refresh).with_icon(AppIcon::Code),
         ];
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert_eq!(menu_items.len(), 1);
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert_eq!(nodes.len(), 1);
         assert!(matches!(
-            menu_items[0].icon.as_ref(),
+            nodes[0].item.icon.as_ref(),
             Some(IconSource::Svg(path)) if path.as_ref() == AppIcon::Code.path()
         ));
     }
@@ -2476,10 +2542,12 @@ mod tests {
 
         assert!(!items[0].is_selectable());
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert!(menu_items[0].is_header);
-        assert_eq!(menu_items[0].label.as_ref(), "public.orders");
-        assert!(!menu_items[1].is_header);
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert!(nodes[0].item.is_header);
+        assert_eq!(nodes[0].item.label.as_ref(), "public.orders");
+        assert!(!nodes[0].is_selectable());
+        assert!(!nodes[1].item.is_header);
+        assert!(nodes[1].is_selectable());
     }
 
     #[test]
@@ -2533,9 +2601,14 @@ mod tests {
             ContextMenuItem::item("View schema", ContextMenuAction::ViewSchema),
         ];
 
-        let shortcuts: Vec<Option<String>> = ContextMenuItem::to_menu_items(&items)
+        let shortcuts: Vec<Option<String>> = ContextMenuItem::to_menu_nodes(&items)
             .iter()
-            .map(|item| item.shortcut.as_ref().map(|shortcut| shortcut.to_string()))
+            .map(|node| {
+                node.item
+                    .shortcut
+                    .as_ref()
+                    .map(|shortcut| shortcut.to_string())
+            })
             .collect();
 
         assert_eq!(
@@ -2550,23 +2623,25 @@ mod tests {
     }
 
     #[test]
-    fn to_menu_items_empty_input_returns_empty() {
+    fn to_menu_nodes_empty_input_returns_empty() {
         use super::ContextMenuItem;
 
-        let menu_items = ContextMenuItem::to_menu_items(&[]);
-        assert!(menu_items.is_empty());
+        let nodes = ContextMenuItem::to_menu_nodes(&[]);
+        assert!(nodes.is_empty());
     }
 
     #[test]
-    fn to_menu_items_maps_separators() {
+    fn to_menu_nodes_maps_separators() {
+        use super::{ContextMenuAction, ContextMenuItem};
+
         let items = vec![
             ContextMenuItem::item("Open", ContextMenuAction::Open),
             ContextMenuItem::separator(),
         ];
 
-        let menu_items = ContextMenuItem::to_menu_items(&items);
-        assert_eq!(menu_items.len(), 2);
-        assert!(menu_items[1].is_separator);
+        let nodes = ContextMenuItem::to_menu_nodes(&items);
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes[1].item.is_separator);
     }
 
     #[test]

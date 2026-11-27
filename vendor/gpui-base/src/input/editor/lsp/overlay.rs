@@ -4,6 +4,9 @@ use std::ops::Range;
 
 use lsp_types::{CompletionItem, Hover};
 
+/// Undo group id of a Tab completion cycle. Host groups use small counters.
+const COMPLETION_PREVIEW_GROUP: u64 = u64::MAX;
+
 #[derive(Clone, Debug, Default)]
 pub struct CompletionMenuState {
     pub open: bool,
@@ -51,10 +54,82 @@ pub struct HoverPopoverState {
     pub hover: Hover,
 }
 
+pub(crate) type OverlayActionHandler = Rc<
+    dyn Fn(
+        InputOverlayKind,
+        Box<dyn gpui::Action>,
+        &mut Window,
+        &mut Context<InputBaseState<EditorMode>>,
+    ) -> bool,
+>;
+
+/// A key the editor offers to its owner before acting on it. See
+/// [`InputBaseState::set_key_interceptor`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorKey {
+    Tab,
+    ShiftTab,
+    Escape,
+}
+
+impl EditorKey {
+    pub(crate) fn from_action(action: &dyn gpui::Action) -> Option<Self> {
+        if action.partial_eq(&crate::input::IndentInline) {
+            Some(Self::Tab)
+        } else if action.partial_eq(&crate::input::OutdentInline) {
+            Some(Self::ShiftTab)
+        } else if action.partial_eq(&crate::input::Escape) {
+            Some(Self::Escape)
+        } else {
+            None
+        }
+    }
+}
+
+pub(crate) type KeyInterceptor = Rc<
+    dyn Fn(
+        EditorKey,
+        &mut InputBaseState<EditorMode>,
+        &mut Window,
+        &mut Context<InputBaseState<EditorMode>>,
+    ) -> bool,
+>;
+
+/// Told when the user commits a completion item. See
+/// [`InputBaseState::set_completion_commit_handler`].
+pub(crate) type CompletionCommitHandler = Rc<
+    dyn Fn(
+        &CompletionItem,
+        Range<usize>,
+        &mut InputBaseState<EditorMode>,
+        &mut Window,
+        &mut Context<InputBaseState<EditorMode>>,
+    ),
+>;
+
+/// Reads the item the completion menu currently highlights.
+pub(crate) type CompletionSelectionReader = Rc<dyn Fn(&App) -> Option<CompletionItem>>;
+
+/// An item written into the editor while Tab cycles the completion menu.
+#[derive(Clone, Debug)]
+pub(crate) struct CompletionPreview {
+    /// The item written into the document.
+    pub(crate) item: CompletionItem,
+    /// The inserted span, in current document offsets.
+    pub(crate) range: Range<usize>,
+    /// The text the inserted span replaced.
+    pub(crate) original_text: String,
+    /// The word being completed before the first preview.
+    pub(crate) fallback_range: Range<usize>,
+    /// Whether the cycle opened the undo group it records into.
+    pub(crate) owns_group: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ContextMenuContent {
     pub(crate) completion: CompletionMenuState,
     pub(crate) code_action: CodeActionMenuState,
+    pub(crate) completion_preview: Option<CompletionPreview>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,11 +220,125 @@ impl InputBaseState<EditorMode> {
         self.overlay_action_handler = Some(Rc::new(handler));
     }
 
+    /// Lets the editor read the highlighted completion item synchronously,
+    /// which Tab cycling writes into the document.
+    pub fn set_completion_selection_reader(
+        &mut self,
+        reader: impl Fn(&App) -> Option<CompletionItem> + 'static,
+    ) {
+        self.extras.completion_selection_reader = Some(Rc::new(reader));
+    }
+
+    /// Offers Tab, Shift+Tab and Escape to `interceptor` before the editor
+    /// indents, outdents or escapes. Returning `true` consumes the key,
+    /// Escape included, so return `false` for Escape to keep it closing
+    /// overlays. The interceptor is not asked
+    /// while a completion or code-action menu is open, so Tab keeps cycling
+    /// its items. Without an interceptor the keys behave as usual.
+    pub fn set_key_interceptor(
+        &mut self,
+        interceptor: impl Fn(
+            EditorKey,
+            &mut InputBaseState<EditorMode>,
+            &mut Window,
+            &mut Context<InputBaseState<EditorMode>>,
+        ) -> bool
+        + 'static,
+    ) {
+        self.extras.key_interceptor = Some(Rc::new(interceptor));
+    }
+
+    /// Calls `handler` with the item and the document range it now occupies
+    /// when the user commits a completion item: Enter or a click on a menu
+    /// row, or Enter on an item previewed with Tab. It is not called while
+    /// Tab previews an item, when Escape cancels a preview, or when typing
+    /// keeps a previewed item. Without a handler nothing changes.
+    pub fn set_completion_commit_handler(
+        &mut self,
+        handler: impl Fn(
+            &CompletionItem,
+            Range<usize>,
+            &mut InputBaseState<EditorMode>,
+            &mut Window,
+            &mut Context<InputBaseState<EditorMode>>,
+        ) + 'static,
+    ) {
+        self.extras.completion_commit_handler = Some(Rc::new(handler));
+    }
+
+    fn notify_completion_committed(
+        &mut self,
+        item: &CompletionItem,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(handler) = self.extras.completion_commit_handler.clone() {
+            handler(item, range, self, window, cx);
+        }
+    }
+
+    /// Asks the completion provider again, as if `typed` had just been
+    /// entered and ended at the caret. For owners that rewrite the document
+    /// right after a keystroke with [`Self::replace_ranges`], which drops the
+    /// request that keystroke started. Does nothing without a provider or
+    /// when the provider does not trigger on `typed`.
+    pub fn retrigger_completion(
+        &mut self,
+        typed: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let caret = self.cursor();
+        let range = caret.saturating_sub(typed.len())..caret;
+        self.handle_completion_trigger(&range, typed, window, cx);
+    }
+
+    /// Keeps the previewed item as the user's choice (Enter on a Tab preview).
+    pub(crate) fn accept_completion_preview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let accepted = self.extras.context_menu_content.completion_preview.clone();
+        self.commit_completion_preview();
+        if let Some(preview) = accepted {
+            self.notify_completion_committed(&preview.item, preview.range, window, cx);
+        }
+    }
+
+    /// Applies disjoint `(byte range in the current text, replacement)` edits
+    /// as one undo step. Unlike typing, this triggers no completion request
+    /// and closes any open completion menu; the cursor ends after the last
+    /// replacement, so callers place it afterwards.
+    pub fn replace_ranges(
+        &mut self,
+        edits: &[(Range<usize>, String)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text_len = self.text.len();
+        let mut sorted: Vec<&Range<usize>> = edits.iter().map(|(range, _)| range).collect();
+        sorted.sort_by_key(|range| range.start);
+        let in_bounds = sorted
+            .iter()
+            .all(|range| range.start <= range.end && range.end <= text_len);
+        let disjoint = sorted.windows(2).all(|pair| pair[0].end <= pair[1].start);
+        if !in_bounds || !disjoint {
+            tracing::warn!("replace_ranges ignored edits that overlap or fall outside the text");
+            return;
+        }
+        self.replace_text_in_ranges(edits, window, cx);
+    }
+
     pub fn has_overlay_action_handler(&self) -> bool {
         self.overlay_action_handler.is_some()
     }
 
     pub fn dismiss_completion_overlay(&mut self, cx: &mut Context<Self>) {
+        if !self.completion_inserting {
+            self.commit_completion_preview();
+        }
         if self.extras.context_menu_content.completion.open {
             self.extras.context_menu_content.completion.open = false;
             cx.notify();
@@ -170,30 +359,153 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut range = fallback_range;
-        let mut new_text = item.label.clone();
-        if let Some(edit) = item.text_edit.as_ref() {
-            match edit {
-                lsp_types::CompletionTextEdit::Edit(edit) => {
-                    new_text.clone_from(&edit.new_text);
-                    range = self.text.position_to_offset(&edit.range.start)
-                        ..self.text.position_to_offset(&edit.range.end);
-                }
-                lsp_types::CompletionTextEdit::InsertAndReplace(edit) => {
-                    new_text.clone_from(&edit.new_text);
-                    range = self.text.position_to_offset(&edit.replace.start)
-                        ..self.text.position_to_offset(&edit.replace.end);
-                }
-            }
-        } else if let Some(insert_text) = item.insert_text.as_ref() {
-            new_text.clone_from(insert_text);
-            range = range.end..range.end;
-        }
         self.completion_inserting = true;
+        // The item's ranges describe the document the menu was opened for.
+        self.restore_completion_preview_text(window, cx);
+        let (range, new_text) = self.resolve_completion_edit(item, fallback_range);
+        let start = range.start;
         let range = self.range_to_utf16(&range);
         self.replace_text_in_range_silent(Some(range), &new_text, window, cx);
         self.completion_inserting = false;
+        self.commit_completion_preview();
         self.focus(window, cx);
+        let end = self.cursor().max(start);
+        self.notify_completion_committed(item, start..end, window, cx);
+    }
+
+    /// The document range an item replaces and the text it writes there.
+    fn resolve_completion_edit(
+        &self,
+        item: &CompletionItem,
+        fallback_range: Range<usize>,
+    ) -> (Range<usize>, String) {
+        if let Some(edit) = item.text_edit.as_ref() {
+            match edit {
+                lsp_types::CompletionTextEdit::Edit(edit) => (
+                    self.text.position_to_offset(&edit.range.start)
+                        ..self.text.position_to_offset(&edit.range.end),
+                    edit.new_text.clone(),
+                ),
+                lsp_types::CompletionTextEdit::InsertAndReplace(edit) => (
+                    self.text.position_to_offset(&edit.replace.start)
+                        ..self.text.position_to_offset(&edit.replace.end),
+                    edit.new_text.clone(),
+                ),
+            }
+        } else if let Some(insert_text) = item.insert_text.as_ref() {
+            (fallback_range.end..fallback_range.end, insert_text.clone())
+        } else {
+            (fallback_range, item.label.clone())
+        }
+    }
+
+    pub(crate) fn has_completion_preview(&self) -> bool {
+        self.extras
+            .context_menu_content
+            .completion_preview
+            .is_some()
+    }
+
+    /// Write the highlighted menu item into the document in place of the
+    /// word being completed, replacing the previously previewed item.
+    ///
+    /// Returns false when no menu reports a highlighted item.
+    pub(crate) fn preview_highlighted_completion(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(item) = self
+            .extras
+            .completion_selection_reader
+            .clone()
+            .and_then(|reader| reader(cx))
+        else {
+            return false;
+        };
+
+        self.completion_inserting = true;
+        let previous = self.restore_completion_preview_text(window, cx);
+        let (fallback_range, owns_group) = match previous {
+            Some(preview) => (preview.fallback_range, preview.owns_group),
+            None => {
+                let cursor = self.cursor();
+                let start = self
+                    .extras
+                    .context_menu_content
+                    .completion
+                    .trigger_start_offset
+                    .filter(|&start| start <= cursor)
+                    .unwrap_or(cursor);
+                // When another group is active, the cycle joins it instead.
+                (
+                    start..cursor,
+                    self.begin_edit_group(COMPLETION_PREVIEW_GROUP),
+                )
+            }
+        };
+
+        let (range, new_text) = self.resolve_completion_edit(&item, fallback_range.clone());
+        let original_text = self.text.slice(range.clone()).to_string();
+        let range_utf16 = self.range_to_utf16(&range);
+        self.replace_text_in_range_silent(Some(range_utf16), &new_text, window, cx);
+        self.completion_inserting = false;
+
+        // Normalization can change the inserted length, so the caret, not
+        // the item text, marks where the inserted span ends.
+        let end = self.cursor().max(range.start);
+        self.extras.context_menu_content.completion_preview = Some(CompletionPreview {
+            item,
+            range: range.start..end,
+            original_text,
+            fallback_range,
+            owns_group,
+        });
+        // The edit hid the menu. Reopening without a revision bump keeps the
+        // rendered menu and its highlight as they are.
+        self.extras.context_menu_content.completion.open = true;
+        cx.notify();
+        true
+    }
+
+    /// Put back the text the active preview replaced and return the preview.
+    ///
+    /// The caller sets `completion_inserting`, so the edit does not end the cycle.
+    fn restore_completion_preview_text(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<CompletionPreview> {
+        let preview = self.extras.context_menu_content.completion_preview.take()?;
+        let range_utf16 = self.range_to_utf16(&preview.range);
+        self.replace_text_in_range_silent(Some(range_utf16), &preview.original_text, window, cx);
+        Some(preview)
+    }
+
+    /// Undo the whole Tab cycle, leaving no history entry behind.
+    pub(crate) fn revert_completion_preview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.completion_inserting = true;
+        let preview = self.restore_completion_preview_text(window, cx);
+        self.completion_inserting = false;
+        if preview.is_some_and(|preview| preview.owns_group)
+            && !self.discard_edit_group(COMPLETION_PREVIEW_GROUP)
+        {
+            self.request_end_edit_group(COMPLETION_PREVIEW_GROUP);
+        }
+    }
+
+    /// Keep the previewed item and end the Tab cycle's undo group.
+    pub(crate) fn commit_completion_preview(&mut self) {
+        let Some(preview) = self.extras.context_menu_content.completion_preview.take() else {
+            return;
+        };
+        if preview.owns_group {
+            self.request_end_edit_group(COMPLETION_PREVIEW_GROUP);
+        }
     }
 
     #[doc(hidden)]

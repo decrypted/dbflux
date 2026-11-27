@@ -1,4 +1,6 @@
 mod actions;
+#[cfg(feature = "mcp")]
+mod approval_alerts;
 mod dispatch;
 pub mod inspector;
 #[cfg(test)]
@@ -51,7 +53,7 @@ use crate::ui::views::status_bar::OpenApprovalsRequested;
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::{CollapseTasksPanel, TasksPanel};
 use dbflux_components::icons::DriverIconTone;
-use dbflux_components::tokens::{Heights, Spacing};
+use dbflux_components::tokens::Spacing;
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
 use dbflux_core::{ExecutionContext, QueryLanguage};
@@ -317,6 +319,13 @@ pub(super) struct PendingOpenRoutine {
     pub body: String,
 }
 
+#[cfg(feature = "telemetry")]
+#[derive(Default)]
+struct TelemetryWake {
+    pending: std::cell::Cell<bool>,
+    waker: std::cell::RefCell<Option<std::task::Waker>>,
+}
+
 pub struct Workspace {
     app_state: Entity<AppStateEntity>,
     sidebar: Entity<Sidebar>,
@@ -406,6 +415,16 @@ pub struct Workspace {
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
     _background_purge_task: Option<Task<()>>,
+    /// Requests already announced by the MCP approval alerts.
+    #[cfg(feature = "mcp")]
+    approval_alerts: approval_alerts::ApprovalAlertTracker,
+    /// Poll of the approval queue that raises those alerts.
+    #[cfg(feature = "mcp")]
+    _approval_alert_task: Option<Task<()>>,
+    #[cfg(feature = "telemetry")]
+    _telemetry_task: Option<Task<()>>,
+    #[cfg(feature = "telemetry")]
+    telemetry_wake: std::rc::Rc<TelemetryWake>,
 
     /// Pending login modal open request from a settings window auth-profile
     /// login flow. Consumed in render() to call `login_modal.open_manual`.
@@ -467,6 +486,8 @@ impl Workspace {
         });
         dbflux_ui_base::app_state_entity::publish_vim_setting(&app_state, cx);
         dbflux_ui_base::app_state_entity::publish_font_settings(&app_state, cx);
+        dbflux_ui_base::app_state_entity::publish_scrollbar_setting(&app_state, cx);
+        dbflux_ui_base::app_state_entity::publish_accent_setting(&app_state, cx);
         dbflux_ui_base::toast::publish_auto_dismiss_setting(&app_state, &toast_host, cx);
 
         // Subscribed before the startup diagnostics below are reported, so
@@ -513,6 +534,27 @@ impl Workspace {
             cx.new(|cx| crate::ui::overlays::updates::WhatsNewDialog::new(app_state.clone(), cx));
         let welcome_dialog =
             cx.new(|cx| crate::ui::overlays::updates::WelcomeDialog::new(app_state.clone(), cx));
+
+        #[cfg(feature = "telemetry")]
+        cx.subscribe(
+            &welcome_dialog,
+            |this,
+             _,
+             _: &crate::ui::overlays::updates::welcome::TelemetryDisclosureDismissed,
+             cx| {
+                this.dismiss_telemetry_disclosure(cx);
+            },
+        )
+        .detach();
+
+        // Saved Settings preferences (or any app-state change) wake the
+        // retained telemetry worker so a due delivery is prepared at once;
+        // no new worker or emitter is created.
+        #[cfg(feature = "telemetry")]
+        cx.subscribe(&app_state, |this, _, _: &AppStateChanged, _| {
+            this.telemetry_wake.wake();
+        })
+        .detach();
 
         let modal_delete_connection =
             cx.new(crate::ui::overlays::modals::ModalDeleteConnection::new);
@@ -1116,11 +1158,33 @@ impl Workspace {
                 } => {
                     this.open_console_document(*profile_id, Some(database.clone()), window, cx);
                 }
-                SidebarEvent::OpenObjectStoreBuckets { profile_id } => {
-                    this.open_object_store_buckets_document(*profile_id, window, cx);
+                SidebarEvent::OpenRootSection {
+                    profile_id,
+                    section_id,
+                    presentation,
+                } => {
+                    this.open_root_section(*profile_id, section_id, *presentation, window, cx);
                 }
-                SidebarEvent::OpenObjectStoreBucket { profile_id, bucket } => {
-                    this.open_object_browser(*profile_id, bucket.clone(), window, cx);
+                SidebarEvent::OpenRootSectionItem {
+                    profile_id,
+                    item_id,
+                    presentation,
+                    ..
+                } => {
+                    this.open_root_section_item(
+                        *profile_id,
+                        item_id.clone(),
+                        *presentation,
+                        window,
+                        cx,
+                    );
+                }
+                SidebarEvent::RootSectionChanged {
+                    profile_id,
+                    presentation,
+                    ..
+                } => {
+                    this.refresh_root_section_document(*profile_id, *presentation, window, cx);
                 }
                 SidebarEvent::OpenSecretStore {
                     profile_id,
@@ -1284,10 +1348,27 @@ impl Workspace {
                     );
                 }
                 SidebarEvent::OpenDashboard { dashboard_id } => {
-                    this.open_dashboard(*dashboard_id, window, cx);
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = this.capture_dashboard_usage_ticket(cx);
+                    this.open_dashboard(
+                        *dashboard_id,
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenRemoteDashboard { profile_id, name } => {
-                    this.open_remote_dashboard(*profile_id, name.clone(), window, cx);
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = this.capture_dashboard_usage_ticket(cx);
+                    this.open_remote_dashboard(
+                        *profile_id,
+                        name.clone(),
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenSavedChart { chart_id } => {
                     this.open_saved_chart(*chart_id, window, cx);
@@ -1528,6 +1609,10 @@ impl Workspace {
                 match event {
                     TabManagerEvent::DocumentRequestedFocus => {
                         this.set_focus(FocusTarget::Document, window, cx);
+                        // The raiser may have queued a secret to open in a tab
+                        // of its own: that is done now, not on a later render,
+                        // so a tab switch in between cannot strand it.
+                        this.open_pending_secret(window, cx);
                     }
                     TabManagerEvent::RequestSqlPreview {
                         context,
@@ -1740,6 +1825,14 @@ impl Workspace {
             pane_actions_menu: None,
             last_user_error: None,
             _background_purge_task: None,
+            #[cfg(feature = "mcp")]
+            approval_alerts: approval_alerts::ApprovalAlertTracker::default(),
+            #[cfg(feature = "mcp")]
+            _approval_alert_task: None,
+            #[cfg(feature = "telemetry")]
+            _telemetry_task: None,
+            #[cfg(feature = "telemetry")]
+            telemetry_wake: std::rc::Rc::new(TelemetryWake::default()),
             pending_login_modal_open: None,
         };
 
@@ -1765,6 +1858,11 @@ impl Workspace {
                     }
                 }
             }
+        }
+
+        #[cfg(feature = "mcp")]
+        {
+            workspace._approval_alert_task = Some(Self::spawn_approval_alerts(window, cx));
         }
 
         // Spawn periodic audit purge task if configured.
@@ -1918,6 +2016,21 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.editor"),
             ),
             PaletteCommand::new(
+                "format_query",
+                dbflux_i18n::t!("palette.command.format_query.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
+                "insert_snippet",
+                dbflux_i18n::t!("palette.command.insert_snippet.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
+                "go_to_query_error",
+                dbflux_i18n::t!("palette.command.go_to_query_error.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
                 "open_history",
                 dbflux_i18n::t!("palette.command.open_history.name"),
                 dbflux_i18n::t!("palette.category.editor"),
@@ -1958,6 +2071,11 @@ impl Workspace {
             PaletteCommand::new(
                 "export_results",
                 dbflux_i18n::t!("palette.command.export_results.name"),
+                dbflux_i18n::t!("palette.category.results"),
+            ),
+            PaletteCommand::new(
+                "results_copy_as_markdown",
+                dbflux_i18n::t!("palette.command.results_copy_as_markdown.name"),
                 dbflux_i18n::t!("palette.category.results"),
             ),
             // Connections
@@ -2011,6 +2129,21 @@ impl Workspace {
             PaletteCommand::new(
                 "toggle_full_screen",
                 dbflux_i18n::t!("palette.command.toggle_full_screen.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "increase_interface_size",
+                dbflux_i18n::t!("palette.command.increase_interface_size.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "decrease_interface_size",
+                dbflux_i18n::t!("palette.command.decrease_interface_size.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "reset_interface_size",
+                dbflux_i18n::t!("palette.command.reset_interface_size.name"),
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
@@ -2573,17 +2706,19 @@ impl Workspace {
 
     /// Persist the inspector width to `GeneralSettings` and save to disk.
     fn persist_inspector_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        let runtime = self.app_state.read(cx).storage_runtime();
         let mut settings = self.app_state.read(cx).general_settings().clone();
         settings.workspace_inspector_width_px = Some(f32::from(width));
 
-        if let Err(e) = dbflux_app::config_loader::save_general_settings(runtime, &settings) {
-            log::warn!("Failed to persist inspector width: {}", e);
-        }
-
         self.app_state.update(cx, |state, _cx| {
-            state.update_general_settings(settings);
+            state.update_general_settings(settings.clone());
         });
+
+        dbflux_ui_base::settings_writer::persist_general_settings(
+            &self.app_state,
+            settings,
+            |_saved, _cx| {},
+            cx,
+        );
     }
 
     /// The next area in the Tab cycle, skipping the background tasks while

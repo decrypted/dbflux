@@ -296,7 +296,7 @@ impl CodeDocument {
 
         handle.pane_actions = Some({
             let e = entity.clone();
-            Box::new(move |cx| e.read(cx).pane_actions(&e))
+            Box::new(move |cx| e.read(cx).pane_actions(&e, cx))
         });
 
         handle
@@ -362,7 +362,7 @@ mod tests {
 
     fn actions(document: &Entity<CodeDocument>, window: &mut VisualTestContext) -> Vec<PaneAction> {
         let document = document.clone();
-        window.update(|_, cx| document.read(cx).pane_actions(&document))
+        window.update(|_, cx| document.read(cx).pane_actions(&document, cx))
     }
 
     fn command_of(action: &PaneAction) -> Option<Command> {
@@ -516,6 +516,7 @@ mod tests {
                 "run-in-new-tab",
                 "save",
                 "format",
+                "go-to-query-error",
                 "history",
                 "explain",
                 "chart",
@@ -529,6 +530,7 @@ mod tests {
                 .and_then(command_of)
         };
         assert_eq!(command("run"), Some(Command::RunQuery));
+        assert_eq!(command("go-to-query-error"), Some(Command::GoToQueryError));
         assert_eq!(command("run-in-new-tab"), Some(Command::RunQueryInNewTab));
         assert_eq!(command("save"), Some(Command::SaveQuery));
         assert_eq!(command("history"), Some(Command::ToggleHistoryDropdown));
@@ -536,7 +538,7 @@ mod tests {
         let format = actions.iter().find(|action| action.id == "format");
         assert!(
             format.is_some_and(|action| !action.enabled),
-            "the formatter is unavailable, as on the toolbar"
+            "a document without a connection cannot format, as on the toolbar"
         );
 
         let run = actions.iter().find(|action| action.id == "run");
@@ -616,6 +618,7 @@ mod tests {
                 document.focus(window, cx);
                 document.ask_dangerous_query_confirm(
                     PendingDangerousQuery {
+                        origin: crate::code::ExecutionOrigin::User,
                         query: "DELETE FROM orders".to_string(),
                         kind: DangerousQueryKind::DeleteNoWhere,
                         in_new_tab: false,

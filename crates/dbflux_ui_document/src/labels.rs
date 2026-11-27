@@ -90,6 +90,15 @@ pub(crate) fn pk_details_fetch_failed_error(error: &str) -> String {
     )
 }
 
+/// Error text when the check of a table's primary key, run before a save or
+/// delete, fails for a reason other than the table being gone.
+pub(crate) fn edit_guard_check_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.error.edit_guard_check_failed",
+        error = error
+    )
+}
+
 /// Error/toast text for a failed query run against the data grid.
 pub(crate) fn query_failed_error(error: &str) -> String {
     dbflux_i18n::t!("document.data.grid.error.query_failed", error = error)
@@ -128,6 +137,7 @@ pub(crate) fn export_format_label(format: dbflux_export::ExportFormat) -> String
         ExportFormat::JsonCompact => {
             dbflux_i18n::t!("document.data.grid.export.format.json_compact")
         }
+        ExportFormat::Markdown => dbflux_i18n::t!("document.data.grid.export.format.markdown"),
         ExportFormat::Text => dbflux_i18n::t!("document.data.grid.export.format.text"),
         ExportFormat::Binary => dbflux_i18n::t!("document.data.grid.export.format.binary"),
         ExportFormat::Hex => dbflux_i18n::t!("document.data.grid.export.format.hex"),
@@ -202,6 +212,10 @@ pub(crate) fn count_rows_label() -> String {
 
 pub(crate) fn load_all_rows_label() -> String {
     dbflux_i18n::t!("document.data.grid.status.limited_rows.load_all")
+}
+
+pub(crate) fn loading_next_rows_label() -> String {
+    dbflux_i18n::t!("document.data.grid.status.limited_rows.loading_next")
 }
 
 /// Label for the status bar's pending-change pill, with the count
@@ -568,11 +582,6 @@ pub(crate) fn mutation_delete_document_task_label() -> String {
     dbflux_i18n::t!("document.data.mutation.task.delete_document")
 }
 
-/// Task-panel description for deleting a single row.
-pub(crate) fn mutation_delete_row_task_label() -> String {
-    dbflux_i18n::t!("document.data.mutation.task.delete_row")
-}
-
 /// Label for the context menu's "Copy as ..." submenu trigger, keyed by the
 /// active connection's query language.
 ///
@@ -619,13 +628,9 @@ pub(crate) fn delete_confirm_copy(count: usize) -> (String, String) {
     }
 }
 
-/// Summary of the last run at the end of the editor toolbar
-/// ("last run 0.32 s").
-pub(crate) fn code_toolbar_last_run_label(seconds: f64) -> String {
-    dbflux_i18n::t!(
-        "document.code.toolbar.last_run",
-        seconds = format!("{seconds:.2}")
-    )
+/// Error shown when the dragged editor/results split cannot be saved.
+pub(crate) fn results_split_save_failed_error(error: &str) -> String {
+    dbflux_i18n::t!("document.code.layout.split_save_failed", error = error)
 }
 
 /// Task-panel description for a running script, with the query language's
@@ -772,6 +777,9 @@ pub(crate) fn dangerous_query_title(kind: dbflux_core::DangerousQueryKind) -> St
         DangerousQueryKind::Script => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.script.title")
         }
+        DangerousQueryKind::AdminScript => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.admin_script.title")
+        }
         DangerousQueryKind::MongoDeleteMany => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_delete_many.title")
         }
@@ -832,6 +840,9 @@ pub(crate) fn dangerous_query_body(kind: dbflux_core::DangerousQueryKind) -> Str
         }
         DangerousQueryKind::Script => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.script.body")
+        }
+        DangerousQueryKind::AdminScript => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.admin_script.body")
         }
         DangerousQueryKind::MongoDeleteMany => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_delete_many.body")
@@ -1772,7 +1783,7 @@ pub(crate) fn import_mapping_mode_label(mode: dbflux_transfer::TableMappingMode)
     }
 }
 
-/// The import wizard's four rail entries (Pick Folder / Configure / Confirm
+/// The import wizard's four rail entries (Pick Source / Configure / Confirm
 /// / Run), in `WizardStep` render order, resolved once through the
 /// translation catalog rather than a `&'static str` array.
 pub(crate) fn import_rail_labels() -> [String; 4] {
@@ -1857,6 +1868,15 @@ pub(crate) fn import_table_status_line(table: &dbflux_transfer::import::Imported
             table = table.source_table
         ),
     }
+}
+
+/// The result row of a table the import never reached because an earlier one
+/// failed, saying why it was skipped.
+pub(crate) fn import_not_attempted_after_failure_line(table: &str) -> String {
+    dbflux_i18n::t!(
+        "document.import_wizard.status_line.not_attempted_after_failure",
+        table = table
+    )
 }
 
 /// Task-panel description for a running export, with the table count and
@@ -1958,6 +1978,15 @@ pub(crate) fn export_table_status_line(
             table = label
         ),
     }
+}
+
+/// The result row of a table the export never reached because an earlier one
+/// failed, saying why it was skipped.
+pub(crate) fn export_not_attempted_after_failure_line(label: &str) -> String {
+    dbflux_i18n::t!(
+        "document.export_wizard.status_line.not_attempted_after_failure",
+        table = label
+    )
 }
 
 /// The export wizard's running phase "Table N of M" position line, or the
@@ -2461,7 +2490,21 @@ pub(crate) fn export_all_format_label(format: dbflux_transfer::FileFormat) -> St
             dbflux_i18n::t!("document.data.grid.export.format.csv")
         }
         dbflux_transfer::FileFormat::Json => {
+            dbflux_i18n::t!("document.data.grid.export.format.json")
+        }
+        dbflux_transfer::FileFormat::JsonLines => {
             dbflux_i18n::t!("document.data.grid.export.format.json_lines")
+        }
+        dbflux_transfer::FileFormat::Html => {
+            dbflux_i18n::t!("document.data.grid.export.format.html")
+        }
+        dbflux_transfer::FileFormat::Markdown => {
+            dbflux_i18n::t!("document.data.grid.export.format.markdown")
+        }
+        dbflux_transfer::FileFormat::Xml => dbflux_i18n::t!("document.data.grid.export.format.xml"),
+        dbflux_transfer::FileFormat::Sql => dbflux_i18n::t!("document.data.grid.export.format.sql"),
+        dbflux_transfer::FileFormat::Spreadsheet => {
+            dbflux_i18n::t!("document.data.grid.export.format.spreadsheet")
         }
     }
 }
@@ -3885,6 +3928,9 @@ pub(crate) fn restored_tab_waiting_database_message(database: &str, object: &str
 }
 
 #[cfg(test)]
+mod script_catalog_tests;
+
+#[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]
     use super::mutation_approval_queue_failed_error;
@@ -3900,8 +3946,8 @@ mod tests {
         bucket_encryption_choice_label, buckets_table_summary_line, builder_mode_label,
         bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
         chart_rail_why_text, chart_save_failed_error, chart_save_no_profile_binding_error,
-        chart_saved_toast, chart_toolbar_points_label, code_toolbar_last_run_label,
-        comparator_label, configure_chart_kind_label, context_menu_clipboard_copied_toast,
+        chart_saved_toast, chart_toolbar_points_label, comparator_label,
+        configure_chart_kind_label, context_menu_clipboard_copied_toast,
         context_menu_clipboard_copy_failed_error, context_menu_clipboard_non_utf8_error,
         context_menu_document_insert_failed_error, context_menu_document_update_failed_error,
         context_menu_export_dialog_fallback_failed_error, context_menu_export_dialog_title,
@@ -3926,11 +3972,10 @@ mod tests {
         migrate_wizard_target_schema_read_failed_error, migrate_wizard_task_label,
         mutation_chunk_size_adjusted_toast, mutation_chunk_size_reduced_toast,
         mutation_chunked_execution_failed_error, mutation_delete_document_task_label,
-        mutation_delete_row_task_label, mutation_delete_task_label,
-        mutation_execution_cancelled_toast, mutation_execution_completed_toast,
-        mutation_execution_failed_error, mutation_insert_document_task_label,
-        mutation_insert_row_task_label, mutation_read_only_error,
-        mutation_save_document_task_label, mutation_save_row_task_label,
+        mutation_delete_task_label, mutation_execution_cancelled_toast,
+        mutation_execution_completed_toast, mutation_execution_failed_error,
+        mutation_insert_document_task_label, mutation_insert_row_task_label,
+        mutation_read_only_error, mutation_save_document_task_label, mutation_save_row_task_label,
         mutation_update_document_field_task_label, object_browser_copied_uri_toast,
         object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
         pending_change_count_label, pending_edits_summary, pk_details_fetch_failed_error,
@@ -3963,6 +4008,7 @@ mod tests {
         DangerousQueryKind::Drop,
         DangerousQueryKind::Alter,
         DangerousQueryKind::Script,
+        DangerousQueryKind::AdminScript,
         DangerousQueryKind::MongoDeleteMany,
         DangerousQueryKind::MongoUpdateMany,
         DangerousQueryKind::MongoDropCollection,
@@ -4379,11 +4425,23 @@ mod tests {
             "document.data.context_menu.item.edit_in_modal",
             "document.data.context_menu.item.set_default",
             "document.data.context_menu.item.set_null",
+            "document.data.context_menu.item.set_value",
+            "document.data.context_menu.item.set_expression",
+            "document.data.context_menu.item.set_value_column_default",
+            "document.data.context_menu.item.set_value_type_values",
+            "document.data.context_menu.item.set_value_expression",
+            "document.data.context_menu.item.set_value_null",
+            "document.data.context_menu.item.set_value_no_default",
+            "document.data.context_menu.expression_confirm.list",
+            "document.data.context_menu.expression_confirm.cancel",
+            "document.data.context_menu.expression_confirm.confirm",
+            "document.data.grid.expression.placeholder",
             "document.data.context_menu.item.add_row",
             "document.data.context_menu.item.inspect_row",
             "document.data.context_menu.item.duplicate_row",
             "document.data.context_menu.item.delete_row",
             "document.data.context_menu.item.chart_this_query",
+            "document.data.context_menu.item.explain_this_query",
             "document.data.context_menu.submenu.copy_query.sql",
             "document.data.context_menu.submenu.copy_query.query",
             "document.data.context_menu.submenu.copy_query.command",
@@ -4396,7 +4454,7 @@ mod tests {
         ];
 
         for key in keys {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "ko", "pt_BR", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");
@@ -4429,9 +4487,7 @@ mod tests {
         let keys = [
             "document.code.toolbar.refresh",
             "document.code.toolbar.cancel",
-            "document.code.toolbar.checking",
             "document.code.toolbar.run",
-            "document.code.toolbar.last_run",
             "document.code.toolbar.run_in_new_tab",
             "document.code.toolbar.read_only",
             "document.code.toolbar.saved",
@@ -4513,11 +4569,6 @@ mod tests {
 
         assert_eq!(en, "Run entire script");
         assert_ne!(en, es);
-    }
-
-    #[test]
-    fn code_toolbar_last_run_label_formats_two_decimals() {
-        assert_eq!(code_toolbar_last_run_label(0.3214), "last run 0.32 s");
     }
 
     #[test]
@@ -4702,6 +4753,9 @@ mod tests {
             DangerousQueryKind::Drop => "document.code.dangerous_query.kind.drop.title",
             DangerousQueryKind::Alter => "document.code.dangerous_query.kind.alter.title",
             DangerousQueryKind::Script => "document.code.dangerous_query.kind.script.title",
+            DangerousQueryKind::AdminScript => {
+                "document.code.dangerous_query.kind.admin_script.title"
+            }
             DangerousQueryKind::MongoDeleteMany => {
                 "document.code.dangerous_query.kind.mongo_delete_many.title"
             }
@@ -4747,6 +4801,9 @@ mod tests {
             DangerousQueryKind::Drop => "document.code.dangerous_query.kind.drop.body",
             DangerousQueryKind::Alter => "document.code.dangerous_query.kind.alter.body",
             DangerousQueryKind::Script => "document.code.dangerous_query.kind.script.body",
+            DangerousQueryKind::AdminScript => {
+                "document.code.dangerous_query.kind.admin_script.body"
+            }
             DangerousQueryKind::MongoDeleteMany => {
                 "document.code.dangerous_query.kind.mongo_delete_many.body"
             }
@@ -6586,6 +6643,22 @@ mod tests {
         "document.import_wizard.status_line.skipped",
         "document.import_wizard.status_line.failed",
         "document.import_wizard.status_line.not_attempted",
+        "document.import_wizard.pick_folder.error.no_connection_next",
+        "document.import_wizard.pick_folder.error.no_dialog_next",
+        "document.import_wizard.pick_folder.error.invalid_bundle_next",
+        "document.import_wizard.pick_folder.reading_hint",
+        "document.import_wizard.pick_file.reading_hint",
+        "document.import_wizard.pick_file.error.unsupported_next",
+        "document.import_wizard.pick_file.error.lookup_failed",
+        "document.import_wizard.pick_file.error.next_csv",
+        "document.import_wizard.pick_file.error.next_json",
+        "document.import_wizard.pick_file.error.next_lookup",
+        "document.import_wizard.file.json_no_options",
+        "document.import_wizard.configure.truncate_unavailable",
+        "document.import_wizard.footer.cancel",
+        "document.import_wizard.footer.reason.file_read",
+        "document.import_wizard.status_line.not_attempted_after_failure",
+        "document.import_wizard.done.closing_failed",
     ];
 
     /// PR 26a: every `document.import_wizard.*` key resolves to a
@@ -6741,6 +6814,9 @@ mod tests {
         "document.export_wizard.format_options.segment_size_label",
         "document.export_wizard.format_options.segment_size_placeholder",
         "document.export_wizard.format_options.segment_size_invalid",
+        "document.export_wizard.format_options.sql_batch_size_label",
+        "document.export_wizard.format_options.sql_batch_size_hint",
+        "document.export_wizard.format_options.sql_batch_size_invalid",
         "document.export_wizard.format_options.error.no_dialog_fallback_failed",
         "document.export_wizard.confirm.title",
         "document.export_wizard.confirm.summary",
@@ -6767,6 +6843,15 @@ mod tests {
         "document.export_wizard.footer.back",
         "document.export_wizard.footer.continue",
         "document.export_wizard.footer.close",
+        "document.export_wizard.format_options.sql_unavailable",
+        "document.export_wizard.format_options.folder_required",
+        "document.export_wizard.tables.required",
+        "document.export_wizard.footer.reason.tables",
+        "document.export_wizard.footer.reason.folder",
+        "document.export_wizard.footer.reason.batch_size",
+        "document.export_wizard.footer.reason.segment_size",
+        "document.export_wizard.status_line.not_attempted_after_failure",
+        "document.export_wizard.done.closing_failed",
     ];
 
     /// PR 26b: every `document.export_wizard.*` key resolves to a
@@ -8044,10 +8129,6 @@ mod tests {
                 "document.data.mutation.task.delete_document",
             ),
             (
-                mutation_delete_row_task_label,
-                "document.data.mutation.task.delete_row",
-            ),
-            (
                 audit_export_unsupported_source_toast,
                 "document.audit.export.unsupported_source",
             ),
@@ -8670,9 +8751,20 @@ mod tests {
         use dbflux_transfer::FileFormat;
 
         assert_eq!(super::export_all_format_label(FileFormat::Csv), "CSV");
+        assert_eq!(super::export_all_format_label(FileFormat::Json), "JSON");
         assert_eq!(
-            super::export_all_format_label(FileFormat::Json),
-            "JSON (one object per line)"
+            super::export_all_format_label(FileFormat::JsonLines),
+            "JSON Lines (one object per line)"
+        );
+        assert_eq!(super::export_all_format_label(FileFormat::Html), "HTML");
+        assert_eq!(
+            super::export_all_format_label(FileFormat::Markdown),
+            "Markdown"
+        );
+        assert_eq!(super::export_all_format_label(FileFormat::Xml), "XML");
+        assert_eq!(
+            super::export_all_format_label(FileFormat::Spreadsheet),
+            "Spreadsheet"
         );
     }
 }

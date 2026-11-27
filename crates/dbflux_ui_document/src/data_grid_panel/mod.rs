@@ -4,7 +4,9 @@ mod chrome;
 pub(crate) mod context_menu;
 mod document_view;
 mod documents;
+mod edit_guard;
 mod export_all;
+mod expression_gate;
 mod facets;
 pub(crate) mod filter_bar;
 mod fk_display;
@@ -47,6 +49,7 @@ use dbflux_components::components::data_table::{
 use dbflux_components::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState,
 };
+use dbflux_components::composites::{HoverIntent, MenuNav};
 use dbflux_components::controls::CompletionProvider;
 use dbflux_components::controls::{
     ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
@@ -290,6 +293,12 @@ pub enum DataGridEvent {
     /// Open the row a foreign-key value points at (see
     /// [`ReferencedRowTarget`]).
     OpenReferencedRow { target: ReferencedRowTarget },
+
+    /// Fetch the next rows of a result the row limit cut short, because its
+    /// last row came into view. Only emitted when the host offered it; the
+    /// host answers with [`DataGridPanel::append_next_rows`] or
+    /// [`DataGridPanel::next_rows_failed`].
+    NextRowsRequested,
 }
 
 /// What the footer offers for a query result the editor row limit cut short.
@@ -299,6 +308,8 @@ pub(crate) struct LimitedRowActions {
     pub(crate) count: bool,
     /// The host can run the query again without the row limit.
     pub(crate) load_all: bool,
+    /// The host can fetch the next rows when the last one comes into view.
+    pub(crate) next_rows: bool,
 }
 
 /// The total row count of a limited result, as far as it is known.
@@ -316,6 +327,8 @@ pub(crate) enum LimitedRowTotal {
 pub(crate) struct LimitedRows {
     pub(crate) actions: LimitedRowActions,
     pub(crate) total: LimitedRowTotal,
+    /// The host is fetching the next rows.
+    pub(crate) loading_next: bool,
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render
@@ -374,6 +387,15 @@ enum EditState {
     Editing,
 }
 
+/// A text field of the query bar above the grid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum QueryInput {
+    Filter,
+    Limit,
+    Projection,
+    Sort,
+}
+
 /// Sort state for in-memory sorting (QueryResult source only).
 #[derive(Clone, Copy)]
 struct LocalSortState {
@@ -416,6 +438,9 @@ struct PendingDeleteConfirm {
 struct PendingBatchRemaining {
     pending_inserts: Vec<usize>,
     dirty_rows: Vec<usize>,
+    /// The key of each of `dirty_rows`, read when the batch was requested, in
+    /// the same order; empty when the rows are addressed by position alone.
+    dirty_keys: Vec<Option<Vec<Value>>>,
 }
 
 struct PendingDocumentPreview {
@@ -431,20 +456,11 @@ struct TableContextMenu {
     col: usize,
     /// Screen position where the menu should appear.
     position: Point<Pixels>,
-    /// Whether the SQL generation submenu is open.
-    sql_submenu_open: bool,
-    /// Whether the "Copy as Query" submenu is open.
-    copy_query_submenu_open: bool,
-    /// Whether the "Filter" submenu is open.
-    filter_submenu_open: bool,
-    /// Whether the "Order" submenu is open.
-    order_submenu_open: bool,
-    /// Whether the "Toolbar" submenu (the results toolbar buttons) is open.
-    toolbar_submenu_open: bool,
-    /// Currently selected menu item index (for keyboard navigation).
-    selected_index: usize,
-    /// Selected index within the active submenu.
-    submenu_selected_index: usize,
+    /// The cascade's cursor: the highlighted row of every open level, whose
+    /// depth is how many levels the cascade draws.
+    nav: MenuNav,
+    /// The pointer's open-on-hover intent for the cascade.
+    hover: HoverIntent,
     /// Whether this is a document view context menu (different items shown).
     is_document_view: bool,
     /// Whether this menu was opened by right-clicking a column header, which
@@ -458,23 +474,39 @@ struct TableContextMenu {
     row_actions: Vec<dbflux_core::InspectorRowAction>,
 }
 
-impl TableContextMenu {
-    fn any_submenu_open(&self) -> bool {
-        self.sql_submenu_open
-            || self.copy_query_submenu_open
-            || self.filter_submenu_open
-            || self.order_submenu_open
-            || self.toolbar_submenu_open
-    }
+/// What a context menu was opened on: the cell (or the document field),
+/// where the menu appears, and the driver row actions it lists.
+struct ContextMenuTarget {
+    row: usize,
+    col: usize,
+    position: Point<Pixels>,
+    is_document_view: bool,
+    is_column_header: bool,
+    doc_field_path: Option<Vec<String>>,
+    doc_field_value: Option<dbflux_components::components::document_tree::NodeValue>,
+    row_actions: Vec<dbflux_core::InspectorRowAction>,
+}
 
-    /// Hovering a plain item closes whatever submenu was open, as native
-    /// menus do.
-    fn close_submenus(&mut self) {
-        self.sql_submenu_open = false;
-        self.copy_query_submenu_open = false;
-        self.filter_submenu_open = false;
-        self.order_submenu_open = false;
-        self.toolbar_submenu_open = false;
+impl DataGridPanel {
+    /// A context menu opened on `target`, with its nav reset against the
+    /// freshly built tree, so the first frame draws the root panel: Bolt
+    /// draws nothing at cursor depth 0.
+    fn new_context_menu(&self, target: ContextMenuTarget, cx: &Context<Self>) -> TableContextMenu {
+        let mut menu = TableContextMenu {
+            row: target.row,
+            col: target.col,
+            position: target.position,
+            nav: MenuNav::new(),
+            hover: HoverIntent::new(),
+            is_document_view: target.is_document_view,
+            is_column_header: target.is_column_header,
+            doc_field_path: target.doc_field_path,
+            doc_field_value: target.doc_field_value,
+            row_actions: target.row_actions,
+        };
+        menu.nav
+            .reset(&context_menu::build_menu_tree(self, &menu, cx));
+        menu
     }
 }
 
@@ -717,6 +749,10 @@ struct FocusState {
     focus_mode: GridFocusMode,
     toolbar_focus: ToolbarFocus,
     edit_state: EditState,
+    /// The query bar field holding the keyboard, tracked from its focus
+    /// events so every way into the field (click, Tab, a command) turns the
+    /// grid's single-key shortcuts off while the user types.
+    focused_query_input: Option<QueryInput>,
     switching_input: bool,
     context_menu_focus: FocusHandle,
     /// Holds the keyboard while the export menu is open, so the menu keys
@@ -813,7 +849,49 @@ struct InspectorState {
 ///
 /// All nine fields are `pub(crate)` — external crates in the same workspace
 /// read or update them (e.g. the builder panel subscription in `mod.rs`).
+#[cfg(feature = "telemetry")]
+#[derive(Clone)]
+pub(super) struct BuilderUsage {
+    ticket: dbflux_core::observability::usage::UsageTicket,
+    generation: u64,
+    profile_id: Uuid,
+    database: Option<String>,
+    table: TableRef,
+    pagination: Pagination,
+    order_by: Vec<OrderByColumn>,
+    mutation: Option<BuilderMutationUsage>,
+}
+
+#[cfg(feature = "telemetry")]
+#[derive(Clone)]
+struct BuilderMutationUsage {
+    spec: dbflux_core::VisualMutationSpec,
+    draft: Option<VisualQuerySpec>,
+    owner: WeakEntity<QueryBuilderPanel>,
+}
+
+#[cfg(feature = "telemetry")]
+impl std::fmt::Debug for BuilderUsage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BuilderUsage")
+    }
+}
+
+#[cfg(feature = "telemetry")]
+struct QueuedBuilderUsage {
+    usage: BuilderUsage,
+    spec: VisualQuerySpec,
+    select: SelectQuery,
+    cancel: Option<dbflux_core::CancelToken>,
+}
+
 pub(crate) struct BuilderState {
+    #[cfg(feature = "telemetry")]
+    usage_generation: u64,
+    #[cfg(feature = "telemetry")]
+    queued_usage: Option<QueuedBuilderUsage>,
+    #[cfg(feature = "telemetry")]
+    usage_owner_is_alive: Option<Box<dyn Fn() -> bool>>,
     /// FK metadata for the current (connection, database, schema).
     pub(crate) fk_cache: FkLoadState,
     /// Current state of the relational filter bar chip and inline error area.
@@ -898,8 +976,18 @@ pub struct DataGridPanel {
     /// rail) to the workspace through `side_panels`, so the grid does not
     /// dock them inside itself.
     side_panels_hosted: bool,
+    /// What "Explain this query" in the cell menu hands the result's query
+    /// to; set by a document that can show a plan.
+    explain_host: Option<context_menu::ExplainHost>,
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
+    /// A save that writes SQL expressions, held until the user confirms it.
+    pending_expression_confirm: Option<expression_gate::PendingExpressionConfirm>,
+    /// The drift modal a save, delete or mutation opens when the table's
+    /// primary key changed since the grid loaded it.
+    edit_guard: edit_guard::EditGuard,
+    /// Set while a confirmed save re-enters the gate, so it runs once.
+    expression_confirmed: bool,
     pending_batch_remaining: Option<PendingBatchRemaining>,
     /// A close is waiting on the staged edits being applied.
     ///
@@ -926,6 +1014,8 @@ pub struct DataGridPanel {
 /// Pending mutation execution — holds the spec and options while the
 /// confirmation modal is open so the confirm handler can dispatch the executor.
 pub(crate) struct PendingMutationExec {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
     pub(crate) spec: dbflux_core::VisualMutationSpec,
     pub(crate) opts: crate::data_grid_panel::mutation_executor::MutationExecOptions,
     pub(crate) profile_id: uuid::Uuid,
@@ -953,6 +1043,8 @@ pub(crate) enum MutationIntent {
 /// instead of one arm per execution mode.
 #[derive(Clone, Debug)]
 pub(crate) struct MutationRun {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
     pub(crate) task_id: TaskId,
     pub(crate) mode: crate::labels::VisualMutationTaskMode,
     pub(crate) table_name: String,
@@ -1211,7 +1303,11 @@ impl DataGridPanel {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
+                InputEvent::Focus => {
+                    this.query_input_focused(QueryInput::Filter, cx);
+                }
                 InputEvent::Blur => {
+                    this.query_input_blurred(QueryInput::Filter, cx);
                     this.exit_edit_mode(window, cx);
                 }
                 InputEvent::Change => {
@@ -1246,7 +1342,11 @@ impl DataGridPanel {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
+                InputEvent::Focus => {
+                    this.query_input_focused(QueryInput::Limit, cx);
+                }
                 InputEvent::Blur => {
+                    this.query_input_blurred(QueryInput::Limit, cx);
                     this.exit_edit_mode(window, cx);
                 }
                 _ => {}
@@ -1462,6 +1562,7 @@ impl DataGridPanel {
                 focus_mode: GridFocusMode::default(),
                 toolbar_focus: ToolbarFocus::default(),
                 edit_state: EditState::default(),
+                focused_query_input: None,
                 switching_input: false,
                 context_menu_focus,
                 export_menu_focus: cx.focus_handle(),
@@ -1496,6 +1597,12 @@ impl DataGridPanel {
                 _value_panel_subscription: None,
             },
             builder: BuilderState {
+                #[cfg(feature = "telemetry")]
+                usage_generation: 0,
+                #[cfg(feature = "telemetry")]
+                queued_usage: None,
+                #[cfg(feature = "telemetry")]
+                usage_owner_is_alive: None,
                 fk_cache: FkLoadState::Loading,
                 relational_filter_state: filter_bar::RelationalFilterState::Inactive,
                 builder_draft_spec: None,
@@ -1524,8 +1631,12 @@ impl DataGridPanel {
             context_menu: None,
             is_active_tab: true,
             side_panels_hosted: false,
+            explain_host: None,
             pending: PendingActions::default(),
             pending_delete_confirm: None,
+            pending_expression_confirm: None,
+            edit_guard: edit_guard::EditGuard::new(window, cx),
+            expression_confirmed: false,
             pending_batch_remaining: None,
             close_after_apply: false,
             batch_op_in_flight: false,

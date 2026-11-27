@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dbflux_core::OffRuntimeDrop;
 use dbflux_core::ServerNotice;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
@@ -33,6 +34,10 @@ use dbflux_core::{
     generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
     strip_leading_comments, validate_ddl_fragment, when_checked, when_unchecked, with_default,
     with_help,
+};
+use dbflux_core::{
+    StatementLocator, char_position_to_byte_offset, decode_uri_component, split_uri_host_port,
+    uri_host,
 };
 use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use half::f16;
@@ -131,6 +136,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_window_functions: true,
         supports_ctes: true,
         supports_explain: true,
+        supports_explain_analyze: true,
         max_query_parameters: 32767,
         max_order_by_columns: 0,
         max_group_by_columns: 0,
@@ -230,6 +236,21 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
 pub struct PostgresDialect;
 
 impl SqlDialect for PostgresDialect {
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["now()", "CURRENT_TIMESTAMP"],
+            Some(TypeFamily::Date) => vec!["CURRENT_DATE"],
+            Some(TypeFamily::Time) => vec!["CURRENT_TIME"],
+            Some(TypeFamily::Boolean) => vec!["TRUE", "FALSE"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Uuid) => vec!["gen_random_uuid()"],
+            None => Vec::new(),
+        }
+    }
+
     fn quote_identifier(&self, name: &str) -> String {
         pg_quote_ident(name)
     }
@@ -302,7 +323,7 @@ impl SqlDialect for PostgresDialect {
             .join(", ");
         let values = assignments
             .iter()
-            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
+            .map(|a| self.assignment_to_sql(a))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -324,7 +345,7 @@ impl SqlDialect for PostgresDialect {
                 format!(
                     "{} = {}",
                     self.quote_identifier(&a.name),
-                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
+                    self.assignment_to_sql(a)
                 )
             })
             .collect::<Vec<_>>()
@@ -885,7 +906,10 @@ impl DbDriver for PostgresDriver {
 
         Some(format!(
             "postgresql://{}{}:{}/{}",
-            credentials, host, port, database
+            credentials,
+            uri_host(host),
+            port,
+            urlencoding::encode(database)
         ))
     }
 
@@ -940,6 +964,10 @@ impl DbDriver for PostgresDriver {
                     .unwrap_or_default()
                     .into_owned();
                 values.insert("user".to_string(), user);
+                let password = decode_uri_component(&credentials[colon + 1..]);
+                if !password.is_empty() {
+                    values.insert("password".to_string(), password);
+                }
             } else {
                 let user = urlencoding::decode(credentials)
                     .unwrap_or_default()
@@ -955,15 +983,11 @@ impl DbDriver for PostgresDriver {
         };
 
         let database = database.split('?').next().unwrap_or(database);
-        values.insert("database".to_string(), database.to_string());
+        values.insert("database".to_string(), decode_uri_component(database));
 
-        if let Some(colon) = host_port.rfind(':') {
-            values.insert("host".to_string(), host_port[..colon].to_string());
-            values.insert("port".to_string(), host_port[colon + 1..].to_string());
-        } else {
-            values.insert("host".to_string(), host_port.to_string());
-            values.insert("port".to_string(), "5432".to_string());
-        }
+        let (host, port) = split_uri_host_port(host_port);
+        values.insert("host".to_string(), host.to_string());
+        values.insert("port".to_string(), port.unwrap_or("5432").to_string());
 
         Some(values)
     }
@@ -1248,7 +1272,7 @@ impl PostgresDriver {
             log::info!("[CONNECT] PostgreSQL connection established via URI");
 
             return Ok(Box::new(PostgresConnection {
-                client: Arc::new(Mutex::new(client)),
+                client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
                 notices,
                 ssh_tunnel: None,
                 cancel_token,
@@ -1276,7 +1300,7 @@ impl PostgresDriver {
         log::info!("[CONNECT] PostgreSQL connection established via URI");
 
         Ok(Box::new(PostgresConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             notices,
             ssh_tunnel: None,
             cancel_token,
@@ -1304,7 +1328,7 @@ impl PostgresDriver {
         log::info!("Successfully connected to {}:{}", params.host, params.port);
 
         Ok(Box::new(PostgresConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             notices,
             ssh_tunnel: None,
             cancel_token,
@@ -1365,7 +1389,7 @@ impl PostgresDriver {
         );
 
         Ok(Box::new(PostgresConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             notices,
             ssh_tunnel: Some(tunnel),
             cancel_token,
@@ -1473,7 +1497,7 @@ fn parse_pg_uri_sslmode(uri: &str) -> PgSslMode {
 }
 
 pub struct PostgresConnection {
-    client: Arc<Mutex<Client>>,
+    client: Arc<Mutex<OffRuntimeDrop<Client>>>,
     /// Notices the server sent on `client`. Only read under the `client`
     /// lock, so a drain sees exactly the notices of the calls made while it
     /// was held.
@@ -1688,6 +1712,70 @@ impl Drop for ActiveQueryGuard<'_> {
             }
         }
     }
+}
+
+/// The `GENERATED ALWAYS AS IDENTITY` columns of a table, in column order.
+/// `BY DEFAULT` identity and serial columns accept explicit values, so a
+/// script needs no special handling for them.
+fn postgres_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
+    postgres_column_lookup_sql(schema, table, "a.attidentity = 'a'")
+}
+
+/// The columns a sequence feeds, in column order: identity columns of either
+/// kind and serial columns. Explicit values do not advance the sequence, so a
+/// script resyncs these after replaying. `pg_get_serial_sequence` is the one
+/// signal that covers all three, since it answers for any sequence the column
+/// owns.
+fn postgres_sequence_columns_sql(schema: Option<&str>, table: &str) -> String {
+    postgres_column_lookup_sql(
+        schema,
+        table,
+        "pg_get_serial_sequence(a.attrelid::regclass::text, a.attname) IS NOT NULL",
+    )
+}
+
+/// The generated columns of a table (`GENERATED ALWAYS AS (...) STORED`, and
+/// PostgreSQL 18's virtual ones), in column order. They accept only `DEFAULT`.
+fn postgres_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
+    postgres_column_lookup_sql(schema, table, "a.attgenerated IN ('s', 'v')")
+}
+
+/// The names of the table's columns matching `predicate`. With a schema the
+/// table is found by name inside it; without one the relation is resolved the
+/// way the server resolves an unqualified name, through `search_path`, rather
+/// than assuming `current_schema()`.
+fn postgres_column_lookup_sql(schema: Option<&str>, table: &str, predicate: &str) -> String {
+    let relation = match schema {
+        Some(schema) => format!(
+            "JOIN pg_class c ON c.oid = a.attrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = {} AND c.relname = {}",
+            pg_quote_string(schema),
+            pg_quote_string(table)
+        ),
+        None => format!(
+            "WHERE a.attrelid = to_regclass({})",
+            pg_quote_string(&pg_quote_ident(table))
+        ),
+    };
+
+    format!(
+        "SELECT a.attname::text FROM pg_attribute a {relation} \
+         AND {predicate} AND a.attnum > 0 AND NOT a.attisdropped \
+         ORDER BY a.attnum"
+    )
+}
+
+/// The text values of a result's first column.
+fn first_column_text(result: QueryResult) -> Vec<String> {
+    result
+        .rows
+        .into_iter()
+        .filter_map(|row| match row.into_iter().next() {
+            Some(dbflux_core::Value::Text(name)) => Some(name),
+            _ => None,
+        })
+        .collect()
 }
 
 fn plan_postgres_describe(request: &DescribeRequest) -> SemanticPlan {
@@ -1947,7 +2035,7 @@ impl Connection for PostgresConnection {
                     log::info!("[QUERY] Query {} was cancelled during prepare", query_id);
                     DbError::Cancelled
                 } else {
-                    format_pg_statement_error(&e)
+                    format_pg_statement_error(&e, SentStatement::whole(&req.sql))
                 }
             })?;
 
@@ -1970,7 +2058,7 @@ impl Connection for PostgresConnection {
                     log::info!("[QUERY] Query {} was cancelled", query_id);
                     DbError::Cancelled
                 } else {
-                    format_pg_statement_error(&e)
+                    format_pg_statement_error(&e, SentStatement::whole(&req.sql))
                 }
             })?;
 
@@ -2680,6 +2768,29 @@ impl Connection for PostgresConnection {
         self.execute(&QueryRequest::new(sql))
     }
 
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        let query_request = match request.mode {
+            dbflux_core::QueryPlanMode::Estimate => {
+                QueryRequest::new(crate::plan::explain_statement(&request.query)?)
+            }
+            dbflux_core::QueryPlanMode::Analyze => {
+                // The statement runs, so the server must refuse writes even
+                // when the classifier missed one (a volatile function):
+                // `execute` runs a `read_only` request inside `BEGIN READ
+                // ONLY` and always rolls it back.
+                let mut query_request =
+                    QueryRequest::new(crate::plan::analyze_explain_statement(&request.query)?);
+                query_request.read_only = dbflux_core::ReadOnlyEnforcement::Required;
+                query_request
+            }
+        };
+        let result = self.execute(&query_request)?;
+        crate::plan::parse_explain_json(&crate::plan::raw_plan_from_result(&result)?)
+    }
+
     fn describe_table(&self, request: &DescribeRequest) -> Result<QueryResult, DbError> {
         let schema = request.table.schema.as_deref().unwrap_or("public");
         let escaped_schema = schema.replace('\'', "''");
@@ -2721,6 +2832,27 @@ impl Connection for PostgresConnection {
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
         Some(&crate::vector::POSTGRES_QUERY_GENERATOR)
+    }
+
+    fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(postgres_identity_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
+    }
+
+    fn sequence_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(postgres_sequence_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
+    }
+
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(postgres_generated_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
     }
 
     fn plan_semantic_request(&self, request: &SemanticRequest) -> Result<SemanticPlan, DbError> {
@@ -5129,8 +5261,61 @@ fn format_pg_error(e: &postgres::Error, host: &str, port: u16) -> DbError {
     formatted.into_connection_error()
 }
 
+/// A statement the driver sent and where it starts in the request.
+///
+/// The server reports an error position as a 1-based character index into the
+/// statement it parsed, and `FormattedError::position` is a byte offset into
+/// the request. The formatter only sees the error, so the call site that knows
+/// the sent text converts the character index (`char_position_to_byte_offset`)
+/// and adds the statement start.
+#[derive(Clone, Copy)]
+struct SentStatement<'a> {
+    text: &'a str,
+    start: usize,
+}
+
+impl<'a> SentStatement<'a> {
+    /// The whole request, parsed as one text.
+    fn whole(text: &'a str) -> Option<Self> {
+        Some(Self { text, start: 0 })
+    }
+
+    /// One statement of `request`, `None` when it cannot be located there.
+    fn within(locator: &mut StatementLocator<'_>, text: &'a str) -> Option<Self> {
+        Some(Self {
+            text,
+            start: locator.locate(text)?,
+        })
+    }
+}
+
+/// The byte offset of the failing token in the request. Only
+/// `ErrorPosition::Original` points into the sent text; an `Internal`
+/// position points into a query the server generated, such as a PL/pgSQL
+/// body, and is ignored.
+fn pg_error_position(e: &postgres::Error, sent: Option<SentStatement<'_>>) -> Option<usize> {
+    sent_byte_position(sent?, e.as_db_error()?.position()?)
+}
+
+fn sent_byte_position(
+    sent: SentStatement<'_>,
+    position: &postgres::error::ErrorPosition,
+) -> Option<usize> {
+    let postgres::error::ErrorPosition::Original(characters) = position else {
+        return None;
+    };
+    let offset = char_position_to_byte_offset(sent.text, usize::try_from(*characters).ok()?)?;
+
+    Some(sent.start + offset)
+}
+
 pub(crate) fn format_pg_query_error(e: &postgres::Error) -> DbError {
-    let formatted = PostgresErrorFormatter::format_postgres_error(e);
+    format_pg_query_error_at(e, None)
+}
+
+fn format_pg_query_error_at(e: &postgres::Error, sent: Option<SentStatement<'_>>) -> DbError {
+    let mut formatted = PostgresErrorFormatter::format_postgres_error(e);
+    formatted.position = pg_error_position(e, sent);
     let message = formatted.to_display_string();
     log::error!("PostgreSQL query failed: {}", message);
     formatted.into_query_error()
@@ -5142,8 +5327,8 @@ pub(crate) fn format_pg_query_error(e: &postgres::Error) -> DbError {
 /// earlier execution opened and the server already aborted, so the error tells
 /// the user the session needs a ROLLBACK. The driver does not roll it back: the
 /// user may still want `ROLLBACK TO SAVEPOINT`.
-fn format_pg_statement_error(e: &postgres::Error) -> DbError {
-    let error = format_pg_query_error(e);
+fn format_pg_statement_error(e: &postgres::Error, sent: Option<SentStatement<'_>>) -> DbError {
+    let error = format_pg_query_error_at(e, sent);
 
     if is_in_failed_transaction(e) {
         error.with_transaction_note(TransactionStateNote::Aborted)
@@ -5168,8 +5353,13 @@ fn is_in_failed_transaction(e: &postgres::Error) -> bool {
 /// Only a transaction the script opened is rolled back. A batch whose own
 /// error is 25P02 ran inside a transaction that was already aborted, so that
 /// transaction predates the script and is left for the user to end.
-fn recover_from_failed_batch(client: &mut Client, sql: &str, e: &postgres::Error) -> DbError {
-    let error = format_pg_query_error(e);
+fn recover_from_failed_batch(
+    client: &mut Client,
+    sql: &str,
+    failed: Option<SentStatement<'_>>,
+    e: &postgres::Error,
+) -> DbError {
+    let error = format_pg_query_error_at(e, failed);
 
     if !session_in_aborted_transaction(client) {
         return error;
@@ -5420,7 +5610,14 @@ fn execute_statement_batch(
             log::info!("[QUERY] Batch query {} was cancelled", query_id);
             return Err(DbError::Cancelled);
         }
-        Err(e) => return Err(recover_from_failed_batch(client, sql, &e)),
+        Err(e) => {
+            return Err(recover_from_failed_batch(
+                client,
+                sql,
+                SentStatement::whole(sql),
+                &e,
+            ));
+        }
     };
 
     let total_time = start.elapsed();
@@ -5510,7 +5707,7 @@ fn execute_bounded_request(
 
     let (initial_block, prepared) = if statements.len() > 1 {
         prepare_batch_candidate(client, sql)
-            .map_err(|error| bounded_statement_error(&error, query_id))?
+            .map_err(|error| bounded_statement_error(&error, query_id, None))?
     } else {
         (BatchBlock::None, client.prepare(sql))
     };
@@ -5532,7 +5729,13 @@ fn execute_bounded_request(
                 cancelled,
             );
         }
-        Err(error) => return Err(bounded_statement_error(&error, query_id)),
+        Err(error) => {
+            return Err(bounded_statement_error(
+                &error,
+                query_id,
+                SentStatement::whole(sql),
+            ));
+        }
     };
 
     // A procedure that commits or rolls back fails inside the transaction
@@ -5541,14 +5744,14 @@ fn execute_bounded_request(
         && !statement.columns().is_empty()
         && !split_leading_keyword(sql).0.eq_ignore_ascii_case("CALL")
         && let Some(result) = fetch_first_page(client, &statement, limit, start)
-            .map_err(|error| bounded_statement_error(&error, query_id))?
+            .map_err(|error| bounded_statement_error(&error, query_id, SentStatement::whole(sql)))?
     {
         return Ok(result);
     }
 
     let mut remaining_rows = limit as usize;
     stream_bounded_statement(client, &statement, &mut remaining_rows, start)
-        .map_err(|error| bounded_statement_error(&error, query_id))
+        .map_err(|error| bounded_statement_error(&error, query_id, SentStatement::whole(sql)))
 }
 
 /// Fetches at most `limit` rows of a row-returning statement through a
@@ -5663,12 +5866,16 @@ fn prepare_batch_candidate(
     Ok((BatchBlock::Explicit, prepared))
 }
 
-fn bounded_statement_error(error: &postgres::Error, query_id: Uuid) -> DbError {
+fn bounded_statement_error(
+    error: &postgres::Error,
+    query_id: Uuid,
+    sent: Option<SentStatement<'_>>,
+) -> DbError {
     if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
         log::info!("[QUERY] Query {} was cancelled", query_id);
         DbError::Cancelled
     } else {
-        format_pg_statement_error(error)
+        format_pg_statement_error(error, sent)
     }
 }
 
@@ -5871,6 +6078,7 @@ fn execute_bounded_batch(
     let mut block = initial_block;
     let mut remaining_rows = limit as usize;
     let mut results = Vec::with_capacity(statements.len());
+    let mut locator = StatementLocator::new(sql);
 
     for ((statement, control), opens) in statements.iter().zip(&controls).zip(opens_implicit_block)
     {
@@ -5903,10 +6111,11 @@ fn execute_bounded_batch(
         if opens {
             client
                 .batch_execute("BEGIN")
-                .map_err(|error| recover_from_failed_batch(client, sql, &error))?;
+                .map_err(|error| recover_from_failed_batch(client, sql, None, &error))?;
             block = BatchBlock::Implicit;
         }
 
+        let sent = SentStatement::within(&mut locator, statement);
         let outcome = client.prepare(statement).and_then(|prepared| {
             stream_bounded_statement(client, &prepared, &mut remaining_rows, start)
         });
@@ -5921,7 +6130,7 @@ fn execute_bounded_batch(
                     log::info!("[QUERY] Batch query {} was cancelled", query_id);
                     return Err(DbError::Cancelled);
                 }
-                return Err(recover_from_failed_batch(client, sql, &error));
+                return Err(recover_from_failed_batch(client, sql, sent, &error));
             }
         }
 
@@ -5931,7 +6140,7 @@ fn execute_bounded_batch(
     if block == BatchBlock::Implicit {
         client
             .batch_execute("COMMIT")
-            .map_err(|error| recover_from_failed_batch(client, sql, &error))?;
+            .map_err(|error| recover_from_failed_batch(client, sql, None, &error))?;
     }
 
     let mut result_sets = results.into_iter();
@@ -6540,6 +6749,92 @@ fn get_schema_routines(
 
 #[cfg(test)]
 mod tests {
+    use super::{SentStatement, sent_byte_position};
+    use postgres::error::ErrorPosition;
+
+    #[test]
+    fn an_original_position_becomes_a_byte_offset_in_the_sent_text() {
+        // `é` takes two bytes, so character 13 (1-based) starts at byte 13.
+        let sql = "SELECT 'é', FROM t";
+        let sent = SentStatement::whole(sql).expect("whole request");
+
+        let position = sent_byte_position(sent, &ErrorPosition::Original(13));
+
+        assert_eq!(position, Some(13));
+        assert_eq!(sql.chars().nth(12), Some('F'));
+        assert_eq!(
+            position.map(|offset| &sql[offset..offset + 4]),
+            Some("FROM")
+        );
+    }
+
+    #[test]
+    fn a_statement_position_is_shifted_by_the_statement_start() {
+        let sent = SentStatement {
+            text: "SELECT FROM",
+            start: 20,
+        };
+
+        assert_eq!(
+            sent_byte_position(sent, &ErrorPosition::Original(8)),
+            Some(27)
+        );
+    }
+
+    #[test]
+    fn an_internal_position_is_ignored() {
+        let sent = SentStatement::whole("SELECT f()").expect("whole request");
+        let internal = ErrorPosition::Internal {
+            position: 3,
+            query: "SELECT 1 +".to_string(),
+        };
+
+        assert_eq!(sent_byte_position(sent, &internal), None);
+    }
+
+    #[test]
+    fn a_position_past_the_sent_text_is_dropped() {
+        let sent = SentStatement::whole("SELECT").expect("whole request");
+
+        assert_eq!(sent_byte_position(sent, &ErrorPosition::Original(40)), None);
+    }
+
+    #[test]
+    fn postgres_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::POSTGRES_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("timestamptz"),
+            vec!["now()", "CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("timestamp(3) with time zone"),
+            vec!["now()", "CURRENT_TIMESTAMP"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("uuid"),
+            vec!["gen_random_uuid()"]
+        );
+        assert_eq!(dialect.type_value_expressions("date"), vec!["CURRENT_DATE"]);
+        assert_eq!(dialect.type_value_expressions("int4"), vec!["0"]);
+        assert_eq!(
+            dialect.type_value_expressions("bool"),
+            vec!["TRUE", "FALSE"]
+        );
+        assert_eq!(dialect.type_value_expressions("varchar(255)"), vec!["''"]);
+        assert_eq!(dialect.type_value_expressions("numeric(12,2)"), vec!["0"]);
+        assert_eq!(dialect.type_value_expressions("_text"), Vec::<&str>::new());
+        assert_eq!(
+            dialect.type_value_expressions("interval"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            dialect.type_value_expressions("geometry"),
+            Vec::<&str>::new()
+        );
+    }
+
     use super::{
         NUMERIC_SIGN_NAN, NUMERIC_SIGN_NEGATIVE, NUMERIC_SIGN_NEGATIVE_INFINITY,
         NUMERIC_SIGN_POSITIVE, NUMERIC_SIGN_POSITIVE_INFINITY, POSTGRES_DIALECT, PgAnyValue,
@@ -7329,6 +7624,34 @@ mod tests {
             uri,
             "postgresql://test%20user:p%40ss%3Aword@localhost:5432/dbflux"
         );
+    }
+
+    #[test]
+    fn parse_uri_handles_ipv6_hosts_encoded_databases_and_passwords() {
+        let driver = PostgresDriver::new();
+
+        let parsed = driver
+            .parse_uri("postgresql://alice:p%40ss@[::1]:5432/my%20db")
+            .expect("IPv6 URI should parse");
+        assert_eq!(parsed.get("host").map(String::as_str), Some("::1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("5432"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("my db"));
+        assert_eq!(parsed.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(parsed.get("password").map(String::as_str), Some("p@ss"));
+
+        let without_port = driver
+            .parse_uri("postgresql://[2001:db8::7]/app")
+            .expect("IPv6 URI without port should parse");
+        assert_eq!(
+            without_port.get("host").map(String::as_str),
+            Some("2001:db8::7")
+        );
+        assert_eq!(without_port.get("port").map(String::as_str), Some("5432"));
+
+        let mut values = parsed.clone();
+        values.remove("password");
+        let built = driver.build_uri(&values, "p@ss").expect("URI should build");
+        assert_eq!(built, "postgresql://alice:p%40ss@[::1]:5432/my%20db");
     }
 
     #[test]
@@ -8361,6 +8684,232 @@ mod tests {
         );
     }
 
+    #[test]
+    fn postgres_identity_columns_query_names_the_table_and_defaults_the_schema() {
+        let sql = super::postgres_identity_columns_sql(Some("app"), "it's");
+        assert!(
+            sql.contains("n.nspname = 'app' AND c.relname = 'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("a.attidentity = 'a'"));
+    }
+
+    #[test]
+    fn postgres_column_lookups_resolve_an_unqualified_table_through_the_search_path() {
+        for sql in [
+            super::postgres_identity_columns_sql(None, "users"),
+            super::postgres_generated_columns_sql(None, "users"),
+        ] {
+            assert!(
+                sql.contains("a.attrelid = to_regclass('\"users\"')"),
+                "{sql}"
+            );
+            assert!(!sql.contains("current_schema"), "{sql}");
+            assert!(!sql.contains("pg_namespace"), "{sql}");
+        }
+    }
+
+    #[test]
+    fn postgres_column_lookups_quote_hostile_names() {
+        let hostile = "a\"b'c; DROP TABLE x --";
+        let sql = super::postgres_generated_columns_sql(None, hostile);
+        assert!(
+            sql.contains("to_regclass('\"a\"\"b''c; DROP TABLE x --\"')"),
+            "{sql}"
+        );
+
+        let qualified = super::postgres_generated_columns_sql(Some("s'x"), hostile);
+        assert!(
+            qualified.contains("n.nspname = 's''x' AND c.relname = 'a\"b''c; DROP TABLE x --'"),
+            "{qualified}"
+        );
+    }
+
+    #[test]
+    fn postgres_generated_columns_query_selects_stored_and_virtual_generated_columns() {
+        let sql = super::postgres_generated_columns_sql(Some("app"), "users");
+        assert!(sql.contains("a.attgenerated IN ('s', 'v')"), "{sql}");
+        assert!(!sql.contains("attidentity"), "{sql}");
+        assert!(
+            sql.contains("n.nspname = 'app' AND c.relname = 'users'"),
+            "{sql}"
+        );
+        assert!(sql.ends_with("ORDER BY a.attnum"), "{sql}");
+    }
+
+    #[test]
+    fn postgres_sequence_columns_query_selects_every_column_a_sequence_feeds() {
+        let sql = super::postgres_sequence_columns_sql(Some("app"), "it's");
+        assert!(
+            sql.contains(
+                "pg_get_serial_sequence(a.attrelid::regclass::text, a.attname) IS NOT NULL"
+            ),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("n.nspname = 'app' AND c.relname = 'it''s'"),
+            "{sql}"
+        );
+        assert!(!sql.contains("attidentity"), "{sql}");
+        assert!(sql.ends_with("ORDER BY a.attnum"), "{sql}");
+
+        let unqualified = super::postgres_sequence_columns_sql(None, "users");
+        assert!(
+            unqualified.contains("a.attrelid = to_regclass('\"users\"')"),
+            "{unqualified}"
+        );
+    }
+
+    fn resync(schema: Option<&str>, table: &str, columns: &[&str]) -> Option<String> {
+        use dbflux_core::QueryGenerator;
+
+        let columns: Vec<String> = columns.iter().map(|name| name.to_string()).collect();
+        crate::vector::POSTGRES_QUERY_GENERATOR
+            .script_table_sequence_resync(schema, table, &columns)
+    }
+
+    #[test]
+    fn postgres_sequence_resync_sets_the_sequence_to_the_exported_maximum() {
+        assert_eq!(
+            resync(Some("app"), "users", &["id"]).as_deref(),
+            Some(
+                "SELECT setval(seq.seqrelid, (CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax) END)::bigint, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") >= seq.seqmin ELSE MIN(src.\"id\") <= seq.seqmax END) FROM \"app\".\"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"app\".\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;"
+            )
+        );
+        assert_eq!(
+            resync(None, "users", &["id"]).as_deref(),
+            Some(
+                "SELECT setval(seq.seqrelid, (CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax) END)::bigint, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"id\") >= seq.seqmin ELSE MIN(src.\"id\") <= seq.seqmax END) FROM \"users\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"users\"', 'id')::regclass GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;"
+            )
+        );
+    }
+
+    #[test]
+    fn postgres_sequence_resync_writes_one_statement_per_column() {
+        let text = resync(Some("app"), "users", &["id", "ticket"]).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(
+            lines[0].contains("'id'") && lines[0].contains("MAX(src.\"id\")"),
+            "{text}"
+        );
+        assert!(
+            lines[1].contains("'ticket'") && lines[1].contains("MAX(src.\"ticket\")"),
+            "{text}"
+        );
+        assert!(lines.iter().all(|line| line.ends_with(';')), "{text}");
+    }
+
+    #[test]
+    fn postgres_sequence_resync_quotes_hostile_names() {
+        let text = resync(Some("s\"x'y"), "t\"a'b", &["c\"d'e"]).unwrap();
+
+        assert_eq!(
+            text,
+            "SELECT setval(seq.seqrelid, (CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"c\"\"d'e\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"c\"\"d'e\"), seq.seqmin), seq.seqmax) END)::bigint, CASE WHEN seq.seqincrement > 0 THEN MAX(src.\"c\"\"d'e\") >= seq.seqmin ELSE MIN(src.\"c\"\"d'e\") <= seq.seqmax END) FROM \"s\"\"x'y\".\"t\"\"a'b\" AS src CROSS JOIN pg_catalog.pg_sequence AS seq WHERE seq.seqrelid = pg_get_serial_sequence('\"s\"\"x''y\".\"t\"\"a''b\"', 'c\"d''e')::regclass GROUP BY seq.seqrelid, seq.seqincrement, seq.seqmin, seq.seqmax;"
+        );
+    }
+
+    /// The clamped value is cast to `bigint`, because a sequence owned by a
+    /// `numeric` column would otherwise hand `setval` a `numeric`.
+    #[test]
+    fn postgres_sequence_resync_casts_the_value_to_bigint() {
+        let text = resync(Some("app"), "users", &["id"]).unwrap();
+
+        assert!(text.contains("END)::bigint, CASE"), "{text}");
+    }
+
+    /// A restored value outside the sequence's bounds is clamped to them, and
+    /// `is_called` is false when every value lies outside the near bound, so
+    /// `setval` never rejects the script and the next value is valid.
+    #[test]
+    fn postgres_sequence_resync_keeps_the_value_within_the_sequence_bounds() {
+        let text = resync(Some("app"), "users", &["id"]).unwrap();
+
+        assert!(
+            text.contains("LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax)"),
+            "{text}"
+        );
+        assert!(text.contains("MAX(src.\"id\") >= seq.seqmin"), "{text}");
+        assert!(
+            text.contains("LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax)"),
+            "{text}"
+        );
+        assert!(text.contains("MIN(src.\"id\") <= seq.seqmax"), "{text}");
+    }
+
+    /// A descending sequence continues below the smallest restored value, so
+    /// the resync takes `MIN` when the increment is negative.
+    #[test]
+    fn postgres_sequence_resync_follows_the_increment_direction() {
+        let text = resync(Some("app"), "users", &["id"]).unwrap();
+
+        assert!(
+            text.contains(
+                "CASE WHEN seq.seqincrement > 0 THEN LEAST(GREATEST(MAX(src.\"id\"), seq.seqmin), seq.seqmax) ELSE LEAST(GREATEST(MIN(src.\"id\"), seq.seqmin), seq.seqmax) END"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("CROSS JOIN pg_catalog.pg_sequence AS seq"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn postgres_sequence_resync_is_absent_without_sequence_columns() {
+        assert_eq!(resync(Some("app"), "users", &[]), None);
+    }
+
+    #[test]
+    fn postgres_script_insert_overrides_system_values_only_for_identity_columns() {
+        use dbflux_core::QueryGenerator;
+
+        let generator = &crate::vector::POSTGRES_QUERY_GENERATOR;
+        let columns = vec!["id".to_string(), "name".to_string()];
+        let owned_rows = [
+            vec![
+                dbflux_core::Value::Int(1),
+                dbflux_core::Value::Text("a".into()),
+            ],
+            vec![
+                dbflux_core::Value::Int(2),
+                dbflux_core::Value::Text("b".into()),
+            ],
+        ];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+        let identity = vec!["id".to_string()];
+
+        let script = generator
+            .generate_bulk_insert_for_script(Some("app"), "users", &columns, &[], &identity, &rows)
+            .unwrap()
+            .expect("postgres renders script inserts");
+        assert_eq!(
+            script.text,
+            "INSERT INTO \"app\".\"users\" (\"id\", \"name\") OVERRIDING SYSTEM VALUE VALUES (1, 'a'), (2, 'b')"
+        );
+
+        let without_identity = generator
+            .generate_bulk_insert_for_script(Some("app"), "users", &columns, &[], &[], &rows)
+            .unwrap()
+            .expect("postgres renders script inserts");
+        assert_eq!(
+            without_identity.text,
+            "INSERT INTO \"app\".\"users\" (\"id\", \"name\") VALUES (1, 'a'), (2, 'b')"
+        );
+
+        let import_insert = generator
+            .generate_bulk_insert(Some("app"), "users", &columns, &[], &rows)
+            .unwrap()
+            .expect("postgres renders bulk inserts");
+        assert_eq!(import_insert.text, without_identity.text);
+        assert_eq!(
+            generator.script_table_prologue(Some("app"), "users", &identity),
+            None
+        );
+    }
+
     /// JD-C2 regression (bulk route): a `text[]` column's `Value::Array` must
     /// emit `ARRAY[...]::text[]` when the generator is given the column's
     /// type, not the untyped `'...'::jsonb` fallback.
@@ -8409,6 +8958,7 @@ mod tests {
                     Value::Text("b".to_string()),
                 ]),
                 type_name: Some("text[]".to_string()),
+                expression: None,
             }],
         );
 
@@ -8420,6 +8970,27 @@ mod tests {
             "INSERT INTO \"t\" (\"tags\") VALUES (ARRAY['a', 'b']::text[])"
         );
         assert!(!sql.contains("::jsonb"));
+    }
+
+    #[test]
+    fn postgres_build_insert_writes_a_uuid_expression_unquoted() {
+        let insert = RowInsert::with_typed_assignments(
+            "t".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("id", "gen_random_uuid()").with_type_opt(None),
+                ColumnAssignment::typed("name", Value::Text("x".to_string()), "text"),
+            ],
+        );
+
+        let sql = SqlQueryBuilder::new(&POSTGRES_DIALECT)
+            .build_insert(&insert, true)
+            .unwrap();
+
+        assert_eq!(
+            sql,
+            "INSERT INTO \"t\" (\"id\", \"name\") VALUES (gen_random_uuid(), 'x') RETURNING *"
+        );
     }
 
     #[test]
@@ -8436,12 +9007,14 @@ mod tests {
                     type_name: Some("integer".to_string()),
                     nullable: false,
                     is_primary_key: true,
+                    kind: dbflux_core::ColumnKind::Unknown,
                 },
                 dbflux_core::TransferColumn {
                     name: "name".to_string(),
                     type_name: Some("text".to_string()),
                     nullable: true,
                     is_primary_key: false,
+                    kind: dbflux_core::ColumnKind::Unknown,
                 },
             ],
             if_not_exists: false,

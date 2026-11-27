@@ -488,6 +488,108 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens one secret in its own tab, or focuses the tab that already shows
+    /// it. The key carries the region the listing was loaded under, so the
+    /// same name in two regions gets two tabs.
+    /// Opens the secret the active tab asked to have opened in a tab of its
+    /// own, if it asked. The secret store listing raises the request from its
+    /// expand button and its row menu.
+    pub(in crate::ui::views::workspace) fn open_pending_secret(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active_id = self.tab_manager.read(cx).active_id();
+        let pending = active_id.and_then(|id| {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.document(id).and_then(|tab| {
+                    tab.take_pending_open_secret(cx)
+                        .map(|request| (tab.connection_id(cx), request))
+                })
+            })
+        });
+
+        if let Some((Some(profile_id), request)) = pending {
+            self.open_secret_document(profile_id, request, window, cx);
+        }
+    }
+
+    pub(in crate::ui::views::workspace) fn open_secret_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        request: crate::ui::document::SecretOpenRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = crate::ui::document::DocumentKey::Secret {
+            profile_id,
+            store_id: request.store_id.clone(),
+            name: request.name.clone(),
+            version: request.version.clone(),
+            region: request.region.clone(),
+        };
+
+        if let Some(id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| mgr.activate(id, cx));
+            self.set_focus(FocusTarget::Document, window, cx);
+
+            // The tab that exists takes the editor the way a key press would.
+            if request.edit {
+                let tab_manager = self.tab_manager.clone();
+                tab_manager.update(cx, |mgr, cx| {
+                    if let Some(tab) = mgr.document(id) {
+                        tab.dispatch_command(crate::keymap::Command::EditValue, window, cx);
+                    }
+                });
+            }
+            return;
+        }
+
+        // The tab reads its store's capabilities from the live connection when
+        // it is created, and keeps them: without one it would stay empty after
+        // a reconnect, with no writes and no history.
+        let connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        if !connected {
+            let message =
+                documents_no_active_connection_message(NoActiveConnectionKind::SecretStore);
+            Toast::error(message.clone())
+                .meta_right(now_hms())
+                .action(copy_action(message))
+                .push(cx);
+            return;
+        }
+
+        let edit = request.edit;
+        let doc = cx.new(|cx| {
+            crate::ui::document::SecretDocument::new(
+                profile_id,
+                request.store_id,
+                request.name,
+                request.version,
+                request.region,
+                self.app_state.clone(),
+                cx,
+            )
+        });
+
+        if edit {
+            doc.update(cx, |doc, cx| doc.begin_edit(cx));
+        }
+
+        let pane = crate::ui::document::SecretDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Opens the document of one secret store, or focuses the store's
     /// existing tab. A `path` of a hierarchical store opens at that path, and
     /// navigates an existing tab to it.
@@ -560,10 +662,75 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Opens what a driver-declared root section folder presents.
+    pub(in crate::ui::views::workspace) fn open_root_section(
+        &mut self,
+        profile_id: uuid::Uuid,
+        section_id: &str,
+        presentation: dbflux_core::RootSectionPresentation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match presentation {
+            dbflux_core::RootSectionPresentation::ObjectContainerTable => {
+                self.open_object_store_buckets_document(profile_id, window, cx);
+            }
+            other => {
+                log::warn!("Root section {section_id} declares unsupported presentation {other:?}")
+            }
+        }
+    }
+
+    /// Reloads the open document that shows a root section presentation of
+    /// `profile_id`, after an action changed the section's items.
+    pub(in crate::ui::views::workspace) fn refresh_root_section_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        presentation: Option<dbflux_core::RootSectionPresentation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = match presentation {
+            Some(dbflux_core::RootSectionPresentation::ObjectContainerTable) => {
+                crate::ui::document::DocumentKey::ObjectStoreBucketsRoot { profile_id }
+            }
+            _ => return,
+        };
+
+        let tab_manager = self.tab_manager.clone();
+        tab_manager.update(cx, |manager, cx| {
+            let Some(id) = manager.find_by_key(&key, cx) else {
+                return;
+            };
+            if let Some(tab) = manager.document(id) {
+                tab.dispatch_command(crate::keymap::Command::RefreshSchema, window, cx);
+            }
+        });
+    }
+
+    /// Opens what an item of a driver-declared root section presents.
+    pub(in crate::ui::views::workspace) fn open_root_section_item(
+        &mut self,
+        profile_id: uuid::Uuid,
+        item_id: String,
+        presentation: dbflux_core::RootItemPresentation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match presentation {
+            dbflux_core::RootItemPresentation::ObjectBrowser => {
+                self.open_object_browser(profile_id, item_id, window, cx);
+            }
+            other => log::warn!(
+                "Root section item {item_id} declares unsupported presentation {other:?}"
+            ),
+        }
+    }
+
     /// Opens the prefix/object tree browser for a single bucket, or focuses
     /// the existing one for that `(profile_id, bucket)` pair. Reached from
-    /// the buckets table's Enter-on-row action and the sidebar's
-    /// `OpenObjectStoreBucket` event.
+    /// the buckets table's Enter-on-row action and from activating an item
+    /// of a root section that presents an object browser.
     pub(in crate::ui::views::workspace) fn open_object_browser(
         &mut self,
         profile_id: uuid::Uuid,
@@ -1054,6 +1221,17 @@ impl Workspace {
             table: table.clone(),
             schema: schema.clone(),
         };
+        #[cfg(feature = "telemetry")]
+        let usage_ticket = self.app_state.update(cx, |state, _| {
+            let source = state.telemetry_usage_source(chrono::Utc::now())?;
+            match source.ticket() {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    log::warn!("Usage ticket capture failed: {error:?}");
+                    None
+                }
+            }
+        });
 
         let doc = cx.new(|cx| {
             SchemaVizDocument::new(
@@ -1061,6 +1239,8 @@ impl Workspace {
                 database.clone(),
                 mode,
                 self.app_state.clone(),
+                #[cfg(feature = "telemetry")]
+                usage_ticket,
                 window,
                 cx,
             )
@@ -1114,6 +1294,17 @@ impl Workspace {
                 Some(database.clone()),
                 SchemaVizMode::Global,
                 self.app_state.clone(),
+                #[cfg(feature = "telemetry")]
+                self.app_state.update(cx, |state, _| {
+                    let source = state.telemetry_usage_source(chrono::Utc::now())?;
+                    match source.ticket() {
+                        Ok(ticket) => ticket,
+                        Err(error) => {
+                            log::warn!("Usage ticket capture failed: {error:?}");
+                            None
+                        }
+                    }
+                }),
                 window,
                 cx,
             )
@@ -1223,6 +1414,655 @@ mod tests {
             .clone()
             .expect("workspace should be created");
         (workspace, app_state, window)
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[derive(Default)]
+    struct SchemaWorkerGate {
+        entered: std::sync::atomic::AtomicBool,
+        released: std::sync::Mutex<bool>,
+        wake: std::sync::Condvar,
+    }
+
+    #[cfg(feature = "telemetry")]
+    impl SchemaWorkerGate {
+        fn wait(&self) {
+            self.entered
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let mut released = self.released.lock().expect("schema gate");
+            while !*released {
+                released = self.wake.wait(released).expect("schema gate");
+            }
+        }
+
+        fn release(&self) {
+            *self.released.lock().expect("schema gate") = true;
+            self.wake.notify_all();
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    struct SchemaWorkerRelease(std::sync::Arc<SchemaWorkerGate>);
+
+    #[cfg(feature = "telemetry")]
+    impl Drop for SchemaWorkerRelease {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    struct SchemaConnection {
+        metadata: dbflux_core::DriverMetadata,
+        count: usize,
+        failure: &'static str,
+        completed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        gate: Option<std::sync::Arc<SchemaWorkerGate>>,
+        detail_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[cfg(feature = "telemetry")]
+    impl SchemaConnection {
+        fn table(name: &str) -> dbflux_core::TableInfo {
+            dbflux_core::TableInfo {
+                name: name.into(),
+                schema: None,
+                columns: Some(vec![]),
+                indexes: Some(dbflux_core::IndexData::Relational(vec![])),
+                foreign_keys: Some(vec![]),
+                constraints: None,
+                sample_fields: None,
+                presentation: Default::default(),
+                child_items: None,
+                storage_hints: None,
+                pseudo_columns: Box::default(),
+            }
+        }
+        fn error() -> dbflux_core::DbError {
+            dbflux_core::DbError::NotSupported("fixture failure".into())
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    impl dbflux_core::Connection for SchemaConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::SQLite
+        }
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+        fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+        fn execute(
+            &self,
+            _: &dbflux_core::QueryRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            Err(Self::error())
+        }
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Err(Self::error())
+        }
+        fn schema_for_database(
+            &self,
+            database: &str,
+        ) -> Result<dbflux_core::DbSchemaInfo, dbflux_core::DbError> {
+            if self.failure == "enumeration" {
+                return Err(Self::error());
+            }
+            Ok(dbflux_core::DbSchemaInfo {
+                name: database.into(),
+                tables: (0..self.count)
+                    .map(|i| Self::table(&format!("table_{i}")))
+                    .collect(),
+                views: vec![],
+                custom_types: None,
+            })
+        }
+        fn table_details(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            name: &str,
+        ) -> Result<dbflux_core::TableInfo, dbflux_core::DbError> {
+            let attempt = {
+                let mut calls = self
+                    .detail_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                calls.push(name.to_string());
+                calls
+                    .iter()
+                    .filter(|called| called.as_str() == name)
+                    .count()
+            };
+            if self.failure == "details"
+                || (self.failure == "neighbor" && name == "neighbor")
+                || (self.failure == "neighbor_recovered" && name == "neighbor" && attempt == 1)
+            {
+                return Err(Self::error());
+            }
+            if let Some(gate) = &self.gate {
+                gate.wait();
+            }
+            let mut table = Self::table(name);
+            if matches!(self.failure, "neighbor" | "neighbor_recovered") && name == "table_0" {
+                table.foreign_keys = Some(vec![dbflux_core::ForeignKeyInfo {
+                    name: "fk".into(),
+                    columns: vec![],
+                    referenced_table: "neighbor".into(),
+                    referenced_schema: None,
+                    referenced_columns: vec![],
+                    on_delete: None,
+                    on_update: None,
+                }]);
+            }
+            match self.failure {
+                "missing_columns" => table.columns = None,
+                "missing_indexes" | "bulk_proves_indexes" => table.indexes = None,
+                "missing_foreign_keys" | "bulk_proves_foreign_keys" => table.foreign_keys = None,
+                _ => {}
+            }
+            self.completed
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(table)
+        }
+        fn schema_columns(
+            &self,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<Vec<dbflux_core::SchemaColumnInfo>, dbflux_core::DbError> {
+            if matches!(self.failure, "indexes" | "foreign_keys" | "bulk_loaded") {
+                Ok(vec![dbflux_core::SchemaColumnInfo {
+                    table_name: "table_0".into(),
+                    column: dbflux_core::ColumnInfo {
+                        name: "id".into(),
+                        type_name: "integer".into(),
+                        nullable: false,
+                        is_primary_key: true,
+                        default_value: None,
+                        enum_values: None,
+                    },
+                }])
+            } else if self.failure == "bulk_proves_indexes" {
+                // Successful all-schema bulk maps prove empty indexes/FKs,
+                // but an absent relation still takes the existing detail path.
+                Ok(vec![])
+            } else {
+                Err(Self::error())
+            }
+        }
+        fn schema_indexes(
+            &self,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<Vec<dbflux_core::SchemaIndexInfo>, dbflux_core::DbError> {
+            if self.failure == "indexes" {
+                Err(Self::error())
+            } else {
+                Ok(vec![])
+            }
+        }
+        fn schema_foreign_keys(
+            &self,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<Vec<dbflux_core::SchemaForeignKeyInfo>, dbflux_core::DbError> {
+            if self.failure == "foreign_keys" {
+                Err(Self::error())
+            } else {
+                Ok(vec![])
+            }
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn schema_usage_counts(app: &mut AppStateEntity) -> serde_json::Value {
+        let scheduler = app.telemetry_mut().expect("scheduler");
+        let _preparation = scheduler
+            .prepare(chrono::Utc::now(), "en")
+            .expect("prepare");
+        serde_json::to_value(scheduler.state()).expect("state")["counters"].clone()
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[gpui::test]
+    fn schema_inspect_real_workspace_loads(cx: &mut TestAppContext) {
+        use crate::ui::document::schema_viz::LoadStatus;
+        use crate::ui::document::{SchemaVizDocument, SchemaVizMode};
+
+        for (focused, count, failure, expected) in [
+            (true, 1, "neighbor_recovered", 1),
+            (false, 1, "missing_columns", 0),
+            (false, 1, "missing_indexes", 0),
+            (false, 1, "missing_foreign_keys", 0),
+            (false, 1, "bulk_proves_indexes", 0),
+            (false, 1, "bulk_loaded", 1),
+            (true, 1, "bulk_proves_foreign_keys", 0),
+            (true, 1, "", 1),
+            (false, 1, "", 1),
+            (false, 0, "", 1),
+            (false, 101, "", 1),
+            (false, 1, "details", 0),
+            (true, 1, "neighbor", 0),
+            (true, 1, "indexes", 0),
+            (true, 1, "foreign_keys", 0),
+            (false, 1, "enumeration", 0),
+            (true, 1, "details", 0),
+            (false, 1, "off", 0),
+            (false, 1, "late_basic", 0),
+            (false, 1, "reset", 0),
+            (false, 1, "undisclosed", 0),
+            (false, 1, "closed", 0),
+            (false, 1, "cancel", 0),
+            (false, 1, "late_cancel", 0),
+            (false, 1, "inflight_closed", 0),
+        ] {
+            let executor = cx.executor();
+            let (workspace, app_state, window) = new_workspace(cx);
+            let gate = (failure == "inflight_closed")
+                .then(|| std::sync::Arc::new(SchemaWorkerGate::default()));
+            let _release = gate.clone().map(SchemaWorkerRelease);
+            let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let detail_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let profile_id = window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    let profile = dbflux_core::ConnectionProfile::new(
+                        "fixture",
+                        dbflux_core::DbConfig::SQLite {
+                            path: ":memory:".into(),
+                            connection_id: None,
+                        },
+                    );
+                    let id = profile.id;
+                    app.apply_connect_profile(
+                        profile,
+                        std::sync::Arc::new(SchemaConnection {
+                            metadata: dbflux_core::DriverMetadataBuilder::new(
+                                "fixture",
+                                "Fixture",
+                                dbflux_core::DatabaseCategory::Relational,
+                                QueryLanguage::Sql,
+                            )
+                            .capabilities(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
+                            .build(),
+                            count,
+                            failure,
+                            completed: completed.clone(),
+                            gate: gate.clone(),
+                            detail_calls: detail_calls.clone(),
+                        }),
+                        None,
+                        None,
+                        false,
+                        dbflux_core::WritePrivilege::Unknown,
+                    );
+                    app.initialize_telemetry(
+                        dbflux_app::telemetry::TelemetryConfig::from_values(None, None, false)
+                            .expect("config"),
+                        chrono::Utc::now(),
+                    )
+                    .expect("scheduler");
+                    let scheduler = app.telemetry_mut().expect("scheduler");
+                    // Basic is the default level; "late_basic" starts below it and
+                    // only moves to Basic after the load was initiated.
+                    if failure == "late_basic" {
+                        scheduler
+                            .set_level(
+                                dbflux_app::telemetry::TelemetryLevel::Minimal,
+                                chrono::Utc::now(),
+                            )
+                            .expect("Minimal");
+                    }
+                    if failure != "undisclosed" {
+                        scheduler
+                            .disclosure_dismissed(chrono::Utc::now())
+                            .expect("disclosure");
+                    }
+                    id
+                })
+            });
+            let document = Rc::new(RefCell::new(None));
+            let captured = document.clone();
+            let _observer = window.update(|_, cx| {
+                cx.observe_new::<SchemaVizDocument>(move |_, _, cx| {
+                    captured.replace(Some(cx.entity().downgrade()));
+                })
+            });
+            let open = |workspace: &mut Workspace,
+                        window: &mut gpui::Window,
+                        cx: &mut gpui::Context<Workspace>| {
+                if focused {
+                    workspace.open_schema_viz_document(
+                        profile_id,
+                        Some("fixture".into()),
+                        None,
+                        "table_0".into(),
+                        window,
+                        cx,
+                    );
+                } else {
+                    workspace.open_global_schema_viz_document(
+                        profile_id,
+                        "fixture".into(),
+                        window,
+                        cx,
+                    );
+                }
+            };
+            // Drain pre-existing root work before starting the isolated load.
+            window.run_until_parked();
+            window.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| open(workspace, window, cx))
+            });
+            if failure == "late_cancel" {
+                let dispatcher = executor.dispatcher().as_test().expect("test dispatcher");
+                while completed.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                    assert!(dispatcher.tick(true), "worker must be runnable");
+                }
+                // tick(true) returned after the entire synchronous load worker
+                // completed. Foreground tasks have never been polled, so the
+                // real result is still waiting for adoption, not fabricated.
+                window.update(|_, cx| {
+                    let entity = document
+                        .borrow()
+                        .as_ref()
+                        .expect("constructor")
+                        .upgrade()
+                        .expect("tab owner");
+                    assert!(entity.read(cx).load_status == LoadStatus::Loading);
+                    app_state.update(cx, |app, _| {
+                        let running = app.tasks().running_tasks();
+                        assert_eq!(running.len(), 1);
+                        assert!(app.tasks_mut().cancel(running[0].id));
+                        assert_eq!(
+                            app.tasks().get(running[0].id).expect("task").status,
+                            dbflux_core::TaskStatus::Cancelled
+                        );
+                    });
+                });
+            }
+            if let Some(gate) = &gate {
+                // Only background runnables may cross this thread boundary.
+                // The foreground completion future is not polled until join,
+                // so no GPUI local waker is registered on the worker thread.
+                let worker_completed = completed.clone();
+                let worker = std::thread::spawn(move || {
+                    let dispatcher = executor.dispatcher().as_test().expect("test dispatcher");
+                    loop {
+                        assert!(dispatcher.tick(true), "worker must be runnable");
+                        if worker_completed.load(std::sync::atomic::Ordering::SeqCst) == 1 {
+                            break;
+                        }
+                    }
+                });
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while !gate.entered.load(std::sync::atomic::Ordering::SeqCst) {
+                    assert!(!worker.is_finished(), "worker exited before barrier");
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "worker barrier timed out"
+                    );
+                    std::thread::yield_now();
+                }
+                let (id, task_id) = window.update(|_, cx| {
+                    let id = document
+                        .borrow()
+                        .as_ref()
+                        .expect("constructor")
+                        .upgrade()
+                        .expect("tab owner")
+                        .read(cx)
+                        .id();
+                    let running = app_state.read(cx).tasks().running_tasks();
+                    assert_eq!(running.len(), 1);
+                    (id, running[0].id)
+                });
+                window.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| workspace.close_tab(id, window, cx))
+                });
+                assert!(
+                    document
+                        .borrow()
+                        .as_ref()
+                        .expect("constructor")
+                        .upgrade()
+                        .is_none()
+                );
+                assert_eq!(completed.load(std::sync::atomic::Ordering::SeqCst), 0);
+                assert!(
+                    !worker.is_finished(),
+                    "worker remains blocked after owner removal"
+                );
+                gate.release();
+                worker.join().expect("background-only worker");
+                assert_eq!(completed.load(std::sync::atomic::Ordering::SeqCst), 1);
+                // Completion and any local wakes are relayed on the foreground
+                // only after the worker has finished the real Ok load.
+                window.run_until_parked();
+                window.update(|_, cx| {
+                    app_state.update(cx, |app, _| {
+                        assert_eq!(
+                            schema_usage_counts(app)["schema_inspect"]
+                                .as_u64()
+                                .unwrap_or(0),
+                            0
+                        );
+                        // Existing lifecycle: a released owner has no callback
+                        // target and leaves the tracked task running. Telemetry
+                        // must not turn that into a new terminal disposition.
+                        assert_eq!(
+                            app.tasks().get(task_id).expect("task").status,
+                            dbflux_core::TaskStatus::Running
+                        );
+                        assert!(app.tasks_mut().cancel(task_id));
+                        assert_eq!(
+                            app.tasks().get(task_id).expect("task").status,
+                            dbflux_core::TaskStatus::Cancelled
+                        );
+                    });
+                });
+                continue;
+            }
+            if failure == "cancel" {
+                window.update(|_, cx| {
+                    document
+                        .borrow()
+                        .as_ref()
+                        .expect("constructor")
+                        .upgrade()
+                        .expect("tab owner")
+                        .update(cx, |document, cx| document.cancel_loading(cx));
+                });
+            }
+            // Change consent after initiation but before the executor accepts
+            // the worker result; no fabricated Ready state is involved.
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    let scheduler = app.telemetry_mut().expect("scheduler");
+                    match failure {
+                        "off" => scheduler.set_basic(false, chrono::Utc::now()).expect("Off"),
+                        "late_basic" => scheduler
+                            .set_basic(true, chrono::Utc::now())
+                            .expect("Basic"),
+                        "reset" => scheduler.reset(chrono::Utc::now()).expect("reset"),
+                        _ => {}
+                    }
+                });
+            });
+            if failure == "closed" {
+                let id = window.update(|_, cx| {
+                    document
+                        .borrow()
+                        .as_ref()
+                        .expect("constructor")
+                        .upgrade()
+                        .expect("tab owner")
+                        .read(cx)
+                        .id()
+                });
+                window.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| workspace.close_tab(id, window, cx))
+                });
+                assert!(
+                    document
+                        .borrow()
+                        .as_ref()
+                        .expect("constructor")
+                        .upgrade()
+                        .is_none()
+                );
+            }
+            window.run_until_parked();
+            window.update(|_, cx| {
+                if failure != "closed" {
+                    let entity = document
+                        .borrow()
+                        .as_ref()
+                        .expect("real constructor")
+                        .upgrade()
+                        .expect("tab owner");
+                    let doc = entity.read(cx);
+                    if failure == "late_cancel" {
+                        let recent = app_state.read(cx).tasks().recent_tasks(1);
+                        assert_eq!(recent[0].status, dbflux_core::TaskStatus::Cancelled);
+                    }
+                    if failure == "enumeration"
+                        || failure == "cancel"
+                        || (focused && failure == "details")
+                    {
+                        assert!(matches!(doc.load_status, LoadStatus::Error(_)));
+                    } else {
+                        assert!(
+                            doc.load_status == LoadStatus::Ready,
+                            "{focused}/{count}/{failure}"
+                        );
+                        assert_eq!(
+                            doc.tables.len(),
+                            if failure == "details" {
+                                0
+                            } else if failure == "neighbor_recovered" {
+                                2
+                            } else {
+                                count.min(100)
+                            }
+                        );
+                    }
+                }
+                if failure == "bulk_loaded" {
+                    assert!(detail_calls.lock().expect("detail calls").is_empty());
+                }
+                if failure == "neighbor_recovered" || failure == "neighbor" {
+                    assert_eq!(
+                        *detail_calls.lock().expect("detail calls"),
+                        ["table_0", "neighbor", "neighbor"],
+                        "existing second pass must perform the recovery attempt"
+                    );
+                }
+                app_state.update(cx, |app, _| {
+                    assert_eq!(
+                        schema_usage_counts(app)["schema_inspect"]
+                            .as_u64()
+                            .unwrap_or(0),
+                        expected,
+                        "{focused}/{count}/{failure}"
+                    );
+                });
+            });
+            if failure == "closed" {
+                assert_eq!(
+                    completed.load(std::sync::atomic::Ordering::SeqCst),
+                    1,
+                    "real worker completed after owner release"
+                );
+                continue;
+            }
+            window.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| open(workspace, window, cx))
+            });
+            window.run_until_parked();
+            window.update(|_, cx| {
+                app_state.update(cx, |app, _| {
+                    assert_eq!(
+                        schema_usage_counts(app)["schema_inspect"]
+                            .as_u64()
+                            .unwrap_or(0),
+                        expected,
+                        "dedup"
+                    );
+                });
+            });
+            if failure.is_empty() {
+                let id = window.update(|_, cx| {
+                    document
+                        .borrow()
+                        .as_ref()
+                        .expect("constructor")
+                        .upgrade()
+                        .expect("tab owner")
+                        .read(cx)
+                        .id()
+                });
+                close_tab(window, &workspace, id);
+                assert!(
+                    document
+                        .borrow()
+                        .as_ref()
+                        .expect("constructor")
+                        .upgrade()
+                        .is_none()
+                );
+                window.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| open(workspace, window, cx))
+                });
+                window.run_until_parked();
+                window.update(|_, cx| {
+                    app_state.update(cx, |app, _| {
+                        assert_eq!(
+                            schema_usage_counts(app)["schema_inspect"],
+                            2,
+                            "fresh user document"
+                        );
+                    });
+                });
+                let automatic = window.update(|window, cx| {
+                    cx.new(|cx| {
+                        SchemaVizDocument::new(
+                            profile_id,
+                            Some("fixture".into()),
+                            SchemaVizMode::Global,
+                            app_state.clone(),
+                            None,
+                            window,
+                            cx,
+                        )
+                    })
+                });
+                window.run_until_parked();
+                window.update(|_, cx| {
+                    assert!(automatic.read(cx).load_status == LoadStatus::Ready);
+                    app_state.update(cx, |app, _| {
+                        assert_eq!(
+                            schema_usage_counts(app)["schema_inspect"],
+                            2,
+                            "automatic constructor"
+                        );
+                    });
+                });
+            }
+        }
     }
 
     /// The scripts root the workspace cleanup deletes from.
@@ -1980,6 +2820,116 @@ mod tests {
             1,
             "only the fresh tab browsed under the equality"
         );
+    }
+
+    /// Opens the section's containers table the way activating its sidebar
+    /// folder does, for a profile connected to `store`.
+    fn open_connected_section(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        store: std::sync::Arc<
+            crate::ui::views::workspace::actions::delimited::tests::ObjectStoreFake,
+        >,
+    ) -> uuid::Uuid {
+        let profile_id =
+            crate::ui::views::workspace::actions::delimited::tests::connect_object_store(
+                window, workspace, store,
+            );
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+
+        window.update(|_, cx| {
+            sidebar.update(cx, |_, cx| {
+                cx.emit(dbflux_ui_sidebar::SidebarEvent::OpenRootSection {
+                    profile_id,
+                    section_id: "buckets".to_string(),
+                    presentation: dbflux_core::RootSectionPresentation::ObjectContainerTable,
+                });
+            });
+        });
+        window.run_until_parked();
+
+        profile_id
+    }
+
+    /// For a connected profile the section event opens the containers table
+    /// and the item event opens the object browser of that item.
+    #[gpui::test]
+    fn root_section_events_open_the_declared_documents(cx: &mut TestAppContext) {
+        use crate::ui::views::workspace::actions::delimited::tests::{BUCKET, ObjectStoreFake};
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        let profile_id =
+            open_connected_section(window, &workspace, ObjectStoreFake::with_objects(&[]));
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+
+        window.update(|_, cx| {
+            sidebar.update(cx, |_, cx| {
+                cx.emit(dbflux_ui_sidebar::SidebarEvent::OpenRootSectionItem {
+                    profile_id,
+                    section_id: "buckets".to_string(),
+                    item_id: BUCKET.to_string(),
+                    presentation: dbflux_core::RootItemPresentation::ObjectBrowser,
+                });
+            });
+        });
+        window.run_until_parked();
+
+        let opened = window.update(|_, cx| {
+            let tabs = workspace.read(cx).tab_manager.read(cx);
+            (
+                tabs.find_by_key(&DocumentKey::ObjectStoreBucketsRoot { profile_id }, cx)
+                    .is_some(),
+                tabs.find_by_key(
+                    &DocumentKey::ObjectBrowser {
+                        profile_id,
+                        bucket: BUCKET.to_string(),
+                    },
+                    cx,
+                )
+                .is_some(),
+            )
+        });
+        assert_eq!(opened, (true, true));
+    }
+
+    /// A successful sidebar action on a section reloads the open document
+    /// that presents that section, so it does not keep showing stale items.
+    #[gpui::test]
+    fn a_successful_root_section_action_reloads_the_open_section_document(cx: &mut TestAppContext) {
+        use crate::ui::views::workspace::actions::delimited::tests::{BUCKET, ObjectStoreFake};
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        let store = ObjectStoreFake::with_objects(&[]);
+        let profile_id = open_connected_section(window, &workspace, store.clone());
+        let listings_before = store.bucket_listings();
+        assert!(listings_before >= 1, "opening the table lists the buckets");
+
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+        window.update(|_, cx| {
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.dispatch_root_section_action(
+                    dbflux_ui_sidebar::RootSectionActionRequest {
+                        profile_id,
+                        section_id: "buckets".to_string(),
+                        section_presentation: Some(
+                            dbflux_core::RootSectionPresentation::ObjectContainerTable,
+                        ),
+                        item_id: BUCKET.to_string(),
+                        item_label: BUCKET.to_string(),
+                        action: dbflux_core::RootSectionAction {
+                            id: "inspect".to_string(),
+                            label: dbflux_core::LocalizedText::plain("Inspect"),
+                            description: None,
+                            classification: dbflux_core::ExecutionClassification::Read,
+                        },
+                    },
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(store.bucket_listings(), listings_before + 1);
     }
 }
 

@@ -13,6 +13,8 @@ use dbflux_core::observability::EventSeverity;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::{App, Entity, EventEmitter, Global, WindowHandle};
 use gpui_component::Root;
+use gpui_component::scroll::ScrollbarMode;
+use gpui_component::theme::Theme;
 use uuid::Uuid;
 
 use crate::dashboard_manager::DashboardManager;
@@ -22,6 +24,7 @@ use crate::saved_chart_manager::SavedChartManager;
 use crate::saved_document_query_manager::SavedDocumentQueryManager;
 use crate::saved_query_manager::SavedQueryManager;
 use crate::schema_snapshot_manager::SchemaSnapshotManager;
+use crate::snippet_manager::SnippetManager;
 use crate::user_error::{ErrorKind, UserFacingError};
 
 /// Publishes the Vim settings now and after every app-state change, so every
@@ -78,21 +81,78 @@ pub fn publish_font_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::
     .detach();
 }
 
+/// Publishes the scrollbar visibility now and after every app-state change.
+/// The theme carries the mode, so it applies to every window.
+pub fn publish_scrollbar_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    apply_scrollbar_setting(app_state, cx);
+
+    cx.subscribe(app_state, |app_state, _: &AppStateChanged, cx| {
+        apply_scrollbar_setting(&app_state, cx);
+    })
+    .detach();
+}
+
+/// Publishes the accent colors now and after every app-state change. When
+/// they change, the theme is applied again so every open window takes the new
+/// accent. The settings window applies the saved theme itself first, which
+/// leaves nothing to redo here.
+pub fn publish_accent_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    apply_accent_setting(app_state, cx);
+
+    cx.subscribe(app_state, |app_state, _: &AppStateChanged, cx| {
+        apply_accent_setting(&app_state, cx);
+    })
+    .detach();
+}
+
+fn apply_accent_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    let settings = app_state.read(cx).general_settings();
+    let (theme, style) = (settings.theme, settings.style);
+    let overrides =
+        dbflux_components::theme::AccentOverrides::new(settings.accent_dark, settings.accent_light);
+
+    if dbflux_components::theme::set_accent_overrides(cx, overrides) {
+        dbflux_components::theme::apply_theme(theme, style, None, cx);
+        cx.refresh_windows();
+    }
+}
+
+fn apply_scrollbar_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    let mode = scrollbar_mode_for(app_state.read(cx).general_settings().scrollbar_visibility);
+
+    // `set_scrollbar_mode` refreshes every window, so skip it when nothing
+    // changed: this runs on every app-state change.
+    if Theme::global(cx).scrollbar_mode != mode {
+        Theme::set_scrollbar_mode(mode, cx);
+    }
+}
+
+/// The theme scrollbar mode that shows scrollbars as `visibility` asks.
+pub fn scrollbar_mode_for(visibility: dbflux_core::ScrollbarVisibility) -> ScrollbarMode {
+    match visibility {
+        dbflux_core::ScrollbarVisibility::WhileScrolling => ScrollbarMode::Scrolling,
+        dbflux_core::ScrollbarVisibility::OnHover => ScrollbarMode::Hover,
+        dbflux_core::ScrollbarVisibility::Always => ScrollbarMode::Always,
+    }
+}
+
 /// Resolves persisted font settings against the fonts installed on this
 /// machine.
 pub fn resolve_font_settings(
     settings: &dbflux_core::GeneralSettings,
     cx: &gpui::App,
 ) -> dbflux_components::fonts::FontSettings {
-    let installed = dbflux_components::fonts::installed_font_names(cx);
-
-    dbflux_components::fonts::FontSettings::from_general(settings, &installed)
+    dbflux_components::font_settings::resolve(settings, cx)
 }
 
+/// Resolves the saved choices and publishes them. Bolt keeps the choices, so
+/// the resolution runs again once the platform installs the system fonts it
+/// loaded after the first frame; until then a family chosen from those fonts is
+/// missing and the bundled face stands in for it.
 fn apply_font_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
-    let fonts = resolve_font_settings(app_state.read(cx).general_settings(), cx);
+    let choices = dbflux_components::font_settings::choices(app_state.read(cx).general_settings());
 
-    if dbflux_components::fonts::set(cx, fonts) {
+    if dbflux_components::fonts::apply_choices(cx, choices) {
         dbflux_components::theme::apply_fonts(cx);
         cx.refresh_windows();
     }
@@ -255,6 +315,9 @@ pub struct AppStateEntity {
     /// Queries saved from the document query builder, listed per collection.
     pub saved_document_queries: SavedDocumentQueryManager,
 
+    /// Code snippets of every language, loaded lazily from SQLite.
+    pub snippets: SnippetManager,
+
     /// Persisted schema-snapshot manager — mutated via `capture`/`capture_deep`
     /// (on-connect auto-capture and the explicit deep-capture path).
     pub schema_snapshots: SchemaSnapshotManager,
@@ -323,6 +386,7 @@ impl AppStateEntity {
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
         let saved_document_queries =
             SavedDocumentQueryManager::new(Arc::clone(&inner.document_query_repo));
+        let snippets = SnippetManager::new(Arc::clone(&inner.snippet_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
         let hook_load_diagnostics = inner.take_hook_load_diagnostics();
         let scripts_directory_diagnostics = inner.take_scripts_directory_diagnostics();
@@ -334,6 +398,7 @@ impl AppStateEntity {
             dashboards,
             saved_queries,
             saved_document_queries,
+            snippets,
             schema_snapshots,
             object_tree: ObjectTreeCoordinator::default(),
             pending_edit_reconnect_prompt: None,
@@ -367,6 +432,7 @@ impl AppStateEntity {
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
         let saved_document_queries =
             SavedDocumentQueryManager::new(Arc::clone(&inner.document_query_repo));
+        let snippets = SnippetManager::new(Arc::clone(&inner.snippet_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
         let hook_load_diagnostics = inner.take_hook_load_diagnostics();
         let scripts_directory_diagnostics = inner.take_scripts_directory_diagnostics();
@@ -378,6 +444,7 @@ impl AppStateEntity {
             dashboards,
             saved_queries,
             saved_document_queries,
+            snippets,
             schema_snapshots,
             object_tree: ObjectTreeCoordinator::default(),
             pending_edit_reconnect_prompt: None,
@@ -856,5 +923,223 @@ mod font_setting_tests {
             assert_eq!(theme.dark_theme.font_size, Some(16.0 * 15.6 / 13.0));
             assert_eq!(theme.light_theme.mono_font_size, Some(18.0));
         });
+    }
+
+    /// The saved choices are kept, so the pass that runs once the platform
+    /// installs its system fonts resolves them again. Without them the
+    /// resolution could not tell a chosen family that was missing apart from
+    /// the bundled face it fell back to, and a system family the user picked
+    /// would stay dropped for the session.
+    #[gpui::test]
+    fn the_saved_font_choices_are_kept_for_the_late_resolution(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| publish_font_settings(&app_state, cx));
+        let saved = cx.update(|cx| {
+            app_state.update(cx, |state, cx| {
+                let mut settings = state.general_settings().clone();
+                settings.ui_font_family = Some("Missing Sans".to_string());
+                state.update_general_settings(settings.clone());
+                cx.emit(AppStateChanged);
+                settings
+            })
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            assert_eq!(
+                fonts::current(cx).ui_family,
+                SharedString::from(AppFonts::INTERFACE),
+                "a family the text system does not have falls back for now"
+            );
+            assert_eq!(
+                cx.global::<fonts::FontSettingsGlobal>().choices(),
+                Some(&dbflux_components::font_settings::choices(&saved))
+            );
+        });
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_setting_tests {
+    use super::{AppStateChanged, AppStateEntity, publish_scrollbar_setting, scrollbar_mode_for};
+    use dbflux_core::{AppStyle, ScrollbarVisibility, ThemeSetting};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext as _, TestAppContext};
+    use gpui_component::scroll::ScrollbarMode;
+    use gpui_component::theme::Theme;
+
+    #[test]
+    fn every_visibility_maps_to_its_scrollbar_mode() {
+        assert_eq!(
+            scrollbar_mode_for(ScrollbarVisibility::WhileScrolling),
+            ScrollbarMode::Scrolling
+        );
+        assert_eq!(
+            scrollbar_mode_for(ScrollbarVisibility::OnHover),
+            ScrollbarMode::Hover
+        );
+        assert_eq!(
+            scrollbar_mode_for(ScrollbarVisibility::Always),
+            ScrollbarMode::Always
+        );
+    }
+
+    /// The theme takes the saved visibility at startup, follows every later
+    /// save, and keeps it when the theme is applied again.
+    #[gpui::test]
+    fn scrollbar_setting_is_published_and_survives_a_theme_change(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| publish_scrollbar_setting(&app_state, cx));
+        assert_eq!(
+            cx.update(|cx| Theme::global(cx).scrollbar_mode),
+            ScrollbarMode::Scrolling
+        );
+
+        cx.update(|cx| {
+            app_state.update(cx, |state, cx| {
+                let mut settings = state.general_settings().clone();
+                settings.scrollbar_visibility = ScrollbarVisibility::Always;
+                state.update_general_settings(settings);
+                cx.emit(AppStateChanged);
+            });
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|cx| Theme::global(cx).scrollbar_mode),
+            ScrollbarMode::Always
+        );
+
+        cx.update(|cx| {
+            dbflux_components::theme::apply_theme(ThemeSetting::Light, AppStyle::Default, None, cx)
+        });
+        assert_eq!(
+            cx.update(|cx| Theme::global(cx).scrollbar_mode),
+            ScrollbarMode::Always
+        );
+    }
+}
+
+#[cfg(test)]
+mod accent_setting_tests {
+    use super::{AppStateChanged, AppStateEntity, publish_accent_setting};
+    use dbflux_core::AccentColor;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext as _, TestAppContext};
+    use gpui_component::theme::Theme;
+
+    /// The saved accent applies at startup, follows each save and returns to
+    /// the palette accent when the override is cleared.
+    #[gpui::test]
+    fn the_accent_is_published_and_cleared_with_the_settings(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+        let primary =
+            |cx: &mut TestAppContext| cx.update(|cx| Theme::global(cx).tokens.primary.color);
+        let palette_accent = primary(cx);
+
+        cx.update(|cx| publish_accent_setting(&app_state, cx));
+        assert_eq!(primary(cx), palette_accent, "no override keeps the palette");
+
+        let save = |cx: &mut TestAppContext, accent: Option<AccentColor>| {
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    let mut settings = state.general_settings().clone();
+                    settings.accent_dark = accent;
+                    state.update_general_settings(settings);
+                    cx.emit(AppStateChanged);
+                });
+            });
+            cx.run_until_parked();
+        };
+
+        save(cx, Some(AccentColor::from_rgb(0x2F7D6D))); // guardrail-allow: test accent value, not a UI color
+        assert_ne!(primary(cx), palette_accent, "the saved accent applies");
+
+        save(cx, None);
+        assert_eq!(
+            primary(cx),
+            palette_accent,
+            "Reset returns the palette accent"
+        );
+    }
+
+    /// A stored accent equal to the palette's own hex is no override: the
+    /// palette brand stays installed byte for byte.
+    #[gpui::test]
+    fn a_stored_palette_accent_installs_the_palette_brand(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let palette_fill = cx.update(|cx| Theme::global(cx).tokens.primary.color);
+        let palette_ring = cx.update(|cx| Theme::global(cx).ring);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let mut state = AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup");
+                let mut settings = state.general_settings().clone();
+                settings.accent_dark = Some(dbflux_components::theme::palette_accent());
+                state.update_general_settings(settings);
+                state
+            })
+        });
+
+        cx.update(|cx| publish_accent_setting(&app_state, cx));
+
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+            assert_eq!(theme.tokens.primary.color, palette_fill);
+            assert_eq!(theme.ring, palette_ring);
+        });
+    }
+
+    /// An accent saved before startup applies as soon as it is published.
+    #[gpui::test]
+    fn a_saved_accent_applies_when_published(cx: &mut TestAppContext) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let mut state = AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup");
+                let mut settings = state.general_settings().clone();
+                settings.accent_dark = Some(AccentColor::from_rgb(0x2F7D6D)); // guardrail-allow: test accent value, not a UI color
+                state.update_general_settings(settings);
+                state
+            })
+        });
+        let palette_accent = cx.update(|cx| Theme::global(cx).tokens.primary.color);
+
+        cx.update(|cx| publish_accent_setting(&app_state, cx));
+
+        assert_ne!(
+            cx.update(|cx| Theme::global(cx).tokens.primary.color),
+            palette_accent
+        );
     }
 }

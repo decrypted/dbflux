@@ -23,6 +23,7 @@ pub(crate) mod document_builder;
 pub mod dump_analysis;
 pub mod parquet;
 pub mod query_builder;
+mod query_plan;
 pub mod schema_diff;
 pub mod spreadsheet;
 mod style_guardrails;
@@ -57,7 +58,9 @@ pub mod refresh;
 mod result_view;
 mod result_warnings;
 pub mod schema_viz;
+pub mod secret_document;
 pub mod secret_store;
+pub(crate) mod snippet_picker;
 pub mod tab_bar;
 pub mod tab_manager;
 mod task_runner;
@@ -77,7 +80,8 @@ pub use data_view::{DataViewConfig, DataViewMode};
 pub use data_view_trait::DataView;
 pub use document_builder::inspector_min_width;
 pub use dump_analysis::DumpAnalysisDocument;
-pub use secret_store::SecretStoreDocument;
+pub use secret_document::SecretDocument;
+pub use secret_store::{SecretOpenRequest, SecretStoreDocument};
 
 #[cfg(feature = "mcp")]
 pub use governance::McpApprovalsView;

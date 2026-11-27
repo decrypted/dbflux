@@ -5,7 +5,7 @@
 use super::hooks_section::{HookFocus, HookFormField};
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSelection};
 use super::{ActiveSettingsSection, SettingsCoordinator, SettingsFocus, SettingsSectionId};
-use dbflux_app::keymap::Command;
+use dbflux_app::keymap::{Command, ContextId};
 use dbflux_core::{HookExecutionMode, ThemeSetting};
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::AppStateEntity;
@@ -66,14 +66,18 @@ fn general_theme(
     window: &mut VisualTestContext,
 ) -> ThemeSetting {
     window.update(|_, cx| match &settings.read(cx).active_section_entity {
-        ActiveSettingsSection::General(section) => section.read(cx).gen_settings.theme,
+        ActiveSettingsSection::General(section) | ActiveSettingsSection::Appearance(section) => {
+            section.read(cx).gen_settings.theme
+        }
         _ => unreachable!("the general section is open"),
     })
 }
 
 fn general_cursor(settings: &Entity<SettingsCoordinator>, window: &mut VisualTestContext) -> usize {
     window.update(|_, cx| match &settings.read(cx).active_section_entity {
-        ActiveSettingsSection::General(section) => section.read(cx).gen_form_cursor,
+        ActiveSettingsSection::General(section) | ActiveSettingsSection::Appearance(section) => {
+            section.read(cx).gen_form_cursor
+        }
         _ => unreachable!("the general section is open"),
     })
 }
@@ -99,8 +103,8 @@ fn ctrl_h_and_ctrl_l_move_between_navigation_and_section(cx: &mut TestAppContext
 /// The theme row is a segmented field: Left and Right pick the choice next
 /// to the current one and stop at either end.
 #[gpui::test]
-fn arrows_move_the_choice_of_a_segmented_general_row(cx: &mut TestAppContext) {
-    let (settings, window) = open_settings(cx, SettingsSectionId::General);
+fn arrows_move_the_choice_of_a_segmented_appearance_row(cx: &mut TestAppContext) {
+    let (settings, window) = open_settings(cx, SettingsSectionId::Appearance);
     focus_content(&settings, window);
     assert_eq!(
         general_cursor(&settings, window),
@@ -110,8 +114,8 @@ fn arrows_move_the_choice_of_a_segmented_general_row(cx: &mut TestAppContext) {
 
     window.update(|_, cx| {
         let section = match &settings.read(cx).active_section_entity {
-            ActiveSettingsSection::General(section) => section.clone(),
-            _ => unreachable!("the general section is open"),
+            ActiveSettingsSection::Appearance(section) => section.clone(),
+            _ => unreachable!("the appearance section is open"),
         };
         section.update(cx, |section, _| {
             section.gen_settings.theme = ThemeSetting::Dark
@@ -285,6 +289,48 @@ fn the_keybindings_editor_records_sequences_and_edits_predicates(cx: &mut TestAp
     assert!(keymap_overrides().is_empty(), "the defaults are back");
 }
 
+/// The unbound Copy as Markdown row takes a recorded shortcut like any other
+/// row: the override is stored and bound in the Results context, and the
+/// row's reset unbinds it again.
+#[gpui::test]
+fn recording_keys_for_an_unbound_row_binds_them_and_reset_unbinds(cx: &mut TestAppContext) {
+    let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
+    use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, Modifiers};
+    use dbflux_ui_base::keymap::{effective_keymap, keymap_overrides};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    focus_content(&settings, window);
+
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    let slot = BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown);
+    let chord = KeyChord::new("f19", Modifiers::ctrl_shift());
+
+    window.update(|_, cx| {
+        keybindings.update(cx, |section, cx| {
+            section.start_recording(slot.clone(), ContextId::Results, cx)
+        })
+    });
+    window.simulate_keystrokes("ctrl-shift-f19");
+    window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    window.run_until_parked();
+
+    assert!(keymap_overrides().is_overridden(&slot));
+    assert_eq!(
+        effective_keymap().resolve(ContextId::Results, &chord),
+        Some(Command::ResultsCopyAsMarkdown)
+    );
+
+    window.update(|_, cx| keybindings.update(cx, |section, cx| section.reset_binding(&slot, cx)));
+    assert!(!keymap_overrides().is_overridden(&slot));
+    assert_eq!(effective_keymap().resolve(ContextId::Results, &chord), None);
+}
+
 fn proxies_focus(
     settings: &Entity<SettingsCoordinator>,
     window: &mut VisualTestContext,
@@ -359,6 +405,86 @@ fn section_keys_run_through_the_keymap_and_follow_a_rebind(cx: &mut TestAppConte
         proxies_focus(&settings, window),
         ProxyFocus::Form,
         "the new key adds one"
+    );
+}
+
+/// Tab and Shift+Tab wrap around the proxy form, as they do in every other
+/// settings form.
+#[gpui::test]
+fn tab_wraps_around_the_proxy_form(cx: &mut TestAppContext) {
+    use super::proxies_section::{ProxyFocus, ProxyFormField};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Proxies);
+    focus_content(&settings, window);
+    window.simulate_keystrokes("n");
+    assert_eq!(proxies_focus(&settings, window), ProxyFocus::Form);
+
+    let proxies = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Proxies(section) => section.clone(),
+        _ => unreachable!("the proxies section is open"),
+    });
+    let field =
+        |window: &mut VisualTestContext| window.update(|_, cx| proxies.read(cx).proxy_form_field);
+
+    window.update(|_, cx| {
+        proxies.update(cx, |section, _| {
+            section.proxy_form_field = ProxyFormField::SaveButton;
+        })
+    });
+    window.simulate_keystrokes("tab");
+    assert_eq!(
+        field(window),
+        ProxyFormField::Name,
+        "Tab wraps to the first field"
+    );
+
+    window.simulate_keystrokes("shift-tab");
+    assert_eq!(
+        field(window),
+        ProxyFormField::SaveButton,
+        "Shift+Tab wraps to the last field"
+    );
+}
+
+/// Tab and Shift+Tab wrap around the service form too.
+#[gpui::test]
+fn tab_wraps_around_the_service_form(cx: &mut TestAppContext) {
+    use super::services_section::ServiceFocus;
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Services);
+    focus_content(&settings, window);
+
+    let services = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Services(section) => section.clone(),
+        _ => unreachable!("the services section is open"),
+    });
+    let (last_row, last_col) = window.update(|_, cx| {
+        services.update(cx, |section, _| {
+            section.svc_focus = ServiceFocus::Form;
+            section.svc_move_last();
+            let last_row = section.svc_form_cursor;
+            let last_col = section
+                .current_form_row()
+                .map_or(0, super::rpc_services::service_row_max_col);
+            section.svc_env_col = last_col;
+            (last_row, last_col)
+        })
+    });
+    let cursor = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            let section = services.read(cx);
+            (section.svc_form_cursor, section.svc_env_col)
+        })
+    };
+
+    window.simulate_keystrokes("tab");
+    assert_eq!(cursor(window), (0, 0), "Tab wraps to the first field");
+
+    window.simulate_keystrokes("shift-tab");
+    assert_eq!(
+        cursor(window),
+        (last_row, last_col),
+        "Shift+Tab wraps to the last field"
     );
 }
 
@@ -631,6 +757,33 @@ fn recording_a_leader_binding_keeps_it_relative_to_the_leader(cx: &mut TestAppCo
     });
 }
 
+/// The Snippets section's own clickable elements: a row is picked with J and
+/// K, Delete (D) asks to delete the open snippet, Cancel (Escape) leaves a new
+/// snippet's form and the language dropdown opens with Enter.
+const SNIPPETS_SURFACE: dbflux_ui_base::keyboard_coverage::SurfaceRegistry =
+    dbflux_ui_base::keyboard_coverage::SurfaceRegistry {
+        name: "settings snippets",
+        contexts: &[ContextId::Settings, ContextId::FormNavigation],
+        entries: &[
+            (
+                "snippet-row-*",
+                dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::SelectNext),
+            ),
+            (
+                "delete-snippet",
+                dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Delete),
+            ),
+            (
+                "cancel-snippet",
+                dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Cancel),
+            ),
+            (
+                "snippet-language.*",
+                dbflux_ui_base::keyboard_coverage::KeyboardPath::Command(Command::Execute),
+            ),
+        ],
+    };
+
 /// Every section of the settings window. The tests above prove the
 /// navigation, section keys and form rings.
 #[gpui::test]
@@ -643,8 +796,10 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
 
     let sections = [
         SettingsSectionId::General,
+        SettingsSectionId::Appearance,
         SettingsSectionId::Audit,
         SettingsSectionId::Keybindings,
+        SettingsSectionId::Snippets,
         SettingsSectionId::Updates,
         SettingsSectionId::Proxies,
         SettingsSectionId::SshTunnels,
@@ -669,10 +824,147 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
         });
         window.run_until_parked();
 
-        let checked = Coverage::new(SETTINGS).assert_covered(&capture.frame(window));
+        let checked = Coverage::new(SETTINGS)
+            .with_surface(SNIPPETS_SURFACE)
+            .assert_covered(&capture.frame(window));
         assert!(
             checked.iter().any(|id| id.starts_with("settings-nav-")),
             "{section:?}: {checked:?}"
         );
     }
+}
+
+/// A new snippet's form adds the Cancel button, and each key it answers is
+/// bound.
+#[gpui::test]
+fn the_new_snippet_form_is_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SETTINGS;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Snippets);
+    let capture = FrameCapture::observe(window);
+    window.update(|window, cx| {
+        settings.update(cx, |settings, cx| match &settings.active_section_entity {
+            ActiveSettingsSection::Snippets(section) => {
+                section.update(cx, |section, cx| section.begin_new_snippet(window, cx))
+            }
+            _ => unreachable!("the snippets section is open"),
+        })
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let covered = Coverage::new(SETTINGS)
+        .with_surface(SNIPPETS_SURFACE)
+        .assert_covered(&capture.frame(window));
+    assert!(
+        covered.iter().any(|id| id == "cancel-snippet"),
+        "{covered:?}"
+    );
+}
+
+/// The shared confirmation a section opens adds its buttons and the dialog
+/// close button to the settings window, and each answers a key.
+#[gpui::test]
+fn the_settings_confirmation_controls_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::{SETTINGS, SETTINGS_CONFIRM};
+    use dbflux_components::modals::{ConfirmRequest, ModalVariant};
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, MODAL_CHROME};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::General);
+    let capture = FrameCapture::observe(window);
+    window.update(|_, cx| {
+        settings.update(cx, |settings, cx| {
+            settings.section_confirm.update(cx, |confirm, cx| {
+                confirm.open(
+                    ConfirmRequest {
+                        title: "Discard changes".to_string(),
+                        body: "Discard the unsaved changes?".to_string(),
+                        variant: ModalVariant::Default,
+                        confirm_label: "Discard".to_string(),
+                    },
+                    cx,
+                )
+            })
+        })
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let covered = Coverage::new(SETTINGS)
+        .with_surface(SETTINGS_CONFIRM)
+        .with_surface(MODAL_CHROME)
+        .assert_covered(&capture.frame(window));
+    assert!(
+        covered.iter().any(|id| id == "confirm-confirm"),
+        "{covered:?}"
+    );
+}
+
+/// `R` on an accent field of the Appearance page puts the palette accent
+/// back, through the keymap's own binding.
+#[gpui::test]
+fn r_resets_the_focused_accent_field(cx: &mut TestAppContext) {
+    let (settings, window) = open_settings(cx, SettingsSectionId::Appearance);
+    focus_content(&settings, window);
+
+    let section = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Appearance(section) => section.clone(),
+        _ => unreachable!("the appearance section is open"),
+    });
+    window.update(|window, cx| {
+        section.update(cx, |section, cx| {
+            section
+                .input_accent_dark
+                .update(cx, |input, cx| input.set_value("#2F7D6D", window, cx));
+        })
+    });
+
+    window.simulate_keystrokes("j");
+    assert_eq!(
+        general_cursor(&settings, window),
+        1,
+        "the cursor is on the dark accent"
+    );
+
+    window.simulate_keystrokes("r");
+
+    let text = window.update(|_, cx| {
+        section
+            .read(cx)
+            .input_accent_dark
+            .read(cx)
+            .value()
+            .to_string()
+    });
+    assert_eq!(text, "#702963", "R resets the focused field");
+}
+
+/// The enabled Reset buttons of a custom accent are covered.
+#[gpui::test]
+fn the_accent_reset_buttons_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::SETTINGS;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Appearance);
+    let capture = FrameCapture::observe(window);
+    let section = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Appearance(section) => section.clone(),
+        _ => unreachable!("the appearance section is open"),
+    });
+    window.update(|window, cx| {
+        section.update(cx, |section, cx| {
+            section
+                .input_accent_dark
+                .update(cx, |input, cx| input.set_value("#2F7D6D", window, cx));
+        })
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let checked = Coverage::new(SETTINGS).assert_covered(&capture.frame(window));
+    assert!(
+        checked.iter().any(|id| id == "accent-reset-dark"),
+        "{checked:?}"
+    );
 }

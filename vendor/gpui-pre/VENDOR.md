@@ -1,12 +1,15 @@
 # Vendored `gpui-pre`
 
-This directory is the published `gpui-pre` crate source plus seven patches. It exists so the
+This directory is the published `gpui-pre` crate source plus nine patches. It exists so the
 schema visualizer can pan and zoom, and so agents can drive a running DBFlux window, without
 DBFlux depending on a fork of Zed. The third patch makes a dropped window-bound subscription
 delivery visible in the log. The fourth lets the automation bridge fill a text input by its
 element id. The fifth lets a wrapper report a text input it does not render as read-only.
 The sixth adds letter spacing to text styles. The seventh adjusts key dispatch and focus
-visibility for the app keymap.
+visibility for the app keymap. The eighth reports to the platform whether a dragged file would
+be taken where the pointer is. The ninth lets a platform install its system fonts after the
+first window, without that window waiting for them, and keeps the text drawn before they
+arrive from aborting the process.
 
 ## Why
 
@@ -52,7 +55,28 @@ which needs hooks upstream gpui does not have:
   no other role reports `Role::Group`;
 - pointer ownership, so a stale native mouse position does not cancel a programmatic hover
   before the physical mouse moves. `Window::dispatch_event` is treated as programmatic
-  input; events from the platform go through a separate internal path.
+  input; events from the platform go through a separate internal path;
+- frame cost and view-cache observation: `FrameObserver::frame_drawn` receives a
+  `DrawnFrame` when `Window::draw` returns, with the draw's wall time, the part of it spent
+  only because the frame was observed, and a `ViewDraw` per view (rendered or replayed, and
+  the `ViewRenderCause` of a render). `FrameObserver::accessibility_frame` hands observers a
+  shared `Arc<AccessibilityFrame>` instead of a borrowed frame;
+- `Window::request_frame`, which schedules a frame without the view-cache invalidation of
+  `Window::refresh`, and `Window::frame_pending`, which reports whether the window is
+  invalidated;
+- `Window::focus_observed_element` runs a node's AccessKit `Focus` listener when it has one,
+  so a composite control can move focus to its inner editor, and falls back to the node's
+  own focus handle otherwise. A wrapped `div` contributes its interaction provenance
+  (actions, metadata, redaction) during prepaint, and text inside a redacted element no
+  longer reaches ancestor labels.
+
+  The `Focus` redirect changed one observable result with the refresh to `eb248ccf`: focusing
+  gpui-component's `Input` frame by its element id now runs the frame's `Focus` listener,
+  which focuses the inner editor, so `Window::has_input_handler` is true afterwards and
+  `Window::replace_input_text` succeeds. Before, the frame's own focus handle took focus and
+  no input handler was installed. Only the automation bridge calls
+  `focus_observed_element`, so the app itself behaves as before. `bolt`'s
+  `controls::input::tests` pins the new result.
 
 These come from [themixednuts/gpui-mcp](https://github.com/themixednuts/gpui-mcp), which
 carries them as a patched copy of Zed's `crates/gpui` and lists them for removal as soon as
@@ -170,6 +194,96 @@ the Zed repository), so the behaviour is covered by DBFlux tests instead:
 `primitives::focus_ring::tests::moving_the_pointer_keeps_keyboard_focus_visible` in
 `dbflux_components`, and the Replace-mode tests in `dbflux_ui_document`'s Vim suite.
 
+### External drop acceptance
+
+A platform file drag that enters a window is answered by the display server's protocol before
+the app has said anything: X11's `XdndStatus` told the source to accept the drop wherever the
+pointer was, so a window offered files on elements that would ignore them (a row that refuses
+them in `can_drop`, plain chrome) showed the source an accepting cursor and received a drop
+that did nothing.
+
+`DispatchEventResult::external_drop_accepted` carries the answer. For
+`FileDropEvent::Entered` and `FileDropEvent::Pending`, `Window::dispatch_event` asks the
+elements under the pointer after dispatching the move, with a `DropAcceptanceProbe` sent
+through the mouse listeners. Every element with an `on_drop` listener registers a listener for
+the probe next to its mouse-up listener, so the probe reaches the same elements in the same
+order as the mouse-up that completes a drop: the first hovered element with a listener for the
+dragged type decides, and `can_drop` runs on the dragged value. The answer is `None` for every
+other event and when no drag is active, so a platform that does not look at it behaves as
+before. `can_drop` is shared between the two listeners, so `Interactivity::can_drop_predicate`
+is an `Rc`.
+
+The behaviour is covered by `linux::external_drop_tests` in `gpui-pre-linux`
+(`cargo test -p gpui-pre-linux --lib`), because this crate's own test suite does not build
+outside Zed's tree.
+
+### Background system fonts
+
+On Linux the text system was created from a font database that `CosmicTextSystem::new` filled
+synchronously, which parses every face fontconfig reports: 594 faces on the reference machine
+and about half a second with a cold page cache, before the first window could be created. The
+platform now starts its text system without them and installs them later, so `Platform` gains
+`take_system_font_receiver`: it returns a receiver of `Vec<Cow<'static, [u8]>>` that the
+platform fills once its font load finishes, or `None` (the default) when it has nothing to
+send.
+
+`App` takes that receiver while it is constructed and spends it on a foreground task: each
+message is passed to `TextSystem::add_fonts`, which clears the cached font ids and bumps the
+font generation so every cached line layout is rebuilt, then `App::refresh_windows` schedules a
+frame so text that fell back to a missing glyph is drawn again with the faces that arrived.
+`App::on_fonts_changed` reports the change to the app, which is where a theme re-derives the
+family it named from the installed set (gpui-component does this). A platform that loads its
+fonts up front has no receiver and none of this runs.
+
+`TextSystem::try_resolve_font` is the non-panicking form of `resolve_font`: it reports a font
+stack that no installed family covers instead of panicking. A theme probe needs that while the
+system fonts are still on their way, because in that state nothing outside the app's own fonts
+is installed and `resolve_font` would abort the process.
+
+Drawing before the fonts arrive is the other half. The first window lays out text before the
+system fonts are installed, and a stack it names may be covered by nothing yet: on the
+reference machine a path input was set to `.SystemUIFont` before any system font existed, and
+`TextSystem::resolve_font` panicked from `TextSystem::line_wrapper`. `resolve_font` now answers
+with a font that is installed, after the requested family and every fallback in the stack fail:
+the first family in `TextSystem::all_font_names` (the platform's own sorted, deduplicated list),
+so the choice is deterministic for a given installed set. The requested weight and style are
+tried first and the font's defaults after, so a family that only ships regular faces still
+resolves. The substitution is reported once per family and font generation at debug level
+(`unresolved_fonts_reported`).
+
+Nothing about that answer survives `add_fonts`: it clears `font_ids_by_font`, including the
+cached failures, so the requested family is asked again rather than shadowed by the
+substitution, and it bumps the font generation, which discards every line layout
+(`LineLayoutCache::clear_if_font_generation_changed`). The line wrapper pool is keyed by the id
+`resolve_font` answers with rather than by the requested font, so a family gets a different
+wrapper after the fonts arrive, with its own font id and its own measured character widths.
+Only when no family at all is installed, which leaves nothing to draw text with, does the panic
+remain, and it says so: "…, and no font is installed".
+
+`try_resolve_font` deliberately keeps returning `None` for a stack the installed families do
+not cover, so the theme probe can ask again: it answers whether the stack a caller named can be
+honoured, not which face the text will be drawn with.
+
+The fallback is covered by
+`crates/bolt/src/typography.rs` tests (`an_unresolved_family_uses_an_installed_face`,
+`the_requested_family_wins_once_the_system_fonts_arrive`,
+`the_default_fallback_stack_is_tried_before_an_installed_family`,
+`try_resolve_font_reports_a_stack_no_installed_family_covers` and
+`resolving_with_no_installed_font_still_fails_loudly`) through `gpui::TextSystem` and a
+platform text system whose families arrive in queued batches; bolt is the crate that installs
+the app's own faces at startup, and this crate's own suite cannot run here (see below).
+
+Out of scope, as a follow-up: the SVG renderer keeps its own `SYSTEM_FONT_DB`
+(`src/svg_renderer.rs`), built on first use, and the `usvg` text it shapes still resolves
+through that database alone. Text inside an SVG therefore ignores the fonts installed after
+startup; the same receiver would have to feed it.
+
+The Linux side is `vendor/gpui-pre-linux` (`src/linux/system_fonts.rs`,
+`cargo test -p gpui-pre-linux --lib`). The app side has no automated test here for the same
+reason as the patch above: this crate's own test suite needs assets that are not vendored, and
+`gpui-pre-linux` cannot take a dev-dependency on `gpui-pre` with `test-support` because cargo
+refuses to test a non-member package that has dev-dependencies.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -187,10 +301,15 @@ delta to this directory.
   `feature/53306-gpui-transforms`) against Zed's `main` at its merge base — 14 commits over
   seven files, rebased onto gpui-pre 0.3.9, 2532 diff lines.
 - Patch 2: `frame-observer.patch`, the GPUI delta of
-  `themixednuts/gpui-mcp@7b834c1705cb3353650dfc681f29eaa29e4cf308` (`vendor/gpui`, licensed
-  Apache-2.0 like the rest of this crate) against the Zed commit it snapshots,
+  `themixednuts/gpui-mcp@eb248ccf43847797b9067c47eeef1dd188dc03a6` (2026-10-09; `vendor/gpui`,
+  licensed Apache-2.0 like the rest of this crate) against the Zed commit it snapshots,
   `zed@16c9aa7ea6d897a8044d9501cde1b295256722f2`, rebased onto this directory with patch 1
-  already applied — eight files, 1596 diff lines.
+  already applied — nine files, 2152 diff lines. Refreshed on 2026-10-31 from `7b834c17`
+  (2026-09-22, eight files, 1596 diff lines) together with `vendor/gpui-mcp`; the refresh
+  added frame cost and view-cache observation, `request_frame` / `frame_pending`, the
+  AccessKit `Focus` redirect in `focus_observed_element`, wrapper interaction provenance and
+  redaction of text inside redacted elements, and touched `src/view.rs` for the first time.
+  Patches 3 to 8 apply on top of it unchanged.
 - Patch 3: `subscription-drop-log.patch`, written for DBFlux against this directory with
   patches 1 and 2 applied — three files, 168 diff lines. It has no upstream counterpart.
 - Patch 4: `text-input-automation.patch`, written for DBFlux against this directory with
@@ -201,12 +320,20 @@ delta to this directory.
   patches 1 to 5 applied — five files, 279 diff lines. It has no upstream counterpart.
 - Patch 7: `keyboard-dispatch.patch`, written for DBFlux against this directory with
   patches 1 to 6 applied — three files, 171 diff lines. It has no upstream counterpart.
+- Patch 8: `external-drop-acceptance.patch`, written for DBFlux against this directory with
+  patches 1 to 7 applied — two files, 145 diff lines. It has no upstream counterpart.
+- Patch 9: `background-system-fonts.patch`, written for DBFlux against this directory with
+  patches 1 to 8 applied — three files, 171 added and 5 removed lines. It has no upstream
+  counterpart. `App::install_system_fonts` logs the batch it installed and the size of the
+  family set the text system now shapes with: both probes that ride `App::on_fonts_changed`
+  stay silent when they have nothing to correct, so without it a cold-start log cannot tell a
+  finished install from one that never ran.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
 The patches are applied in that order, and each one is written against the tree the
 previous ones produce. They were regenerated against 0.3.9 when the base moved from 0.3.5, so
-`refresh.sh 0.3.9` applies all seven without a reject and reproduces `src/` exactly. All use the same path layout (`a/crates/gpui/src/...`, applied with
+`refresh.sh 0.3.9` applies all nine without a reject and reproduces `src/` exactly. All use the same path layout (`a/crates/gpui/src/...`, applied with
 `-p3`).
 
 ### Manual merges
@@ -225,10 +352,15 @@ next refresh starts clean again.
    on top of patch 1, but if patch 1 changes that loop, patch 2 rejects there and needs the
    same merge again.
 3. `Window::draw`, where patch 2 moves the AccessKit `end_frame` before painting so frame
-   observers receive the tree, and sends the platform update only when the platform
-   accessibility flag was active for the whole frame. Upstream edits that block often (0.3.9
-   added draw-phase profiling around it), so its hunks are ported by hand.
-4. The activation-key branch of `Window::dispatch_key_event` (patch 7). It calls
+   observers receive the tree, sends the platform update only when the platform
+   accessibility flag was active for the whole frame, and times the draw for
+   `FrameObserver::frame_drawn`. Upstream edits that block often (0.3.9 added draw-phase
+   profiling around it, and `draw_duration` is computed outside the `profiler` block), so
+   its hunks are ported by hand.
+4. `prepaint_view` in `src/view.rs`, whose cache check patch 1 extends with the transform.
+   Patch 2 replaces that check with `view_cache_miss`, so the transform comparison is merged
+   into it by hand.
+5. The activation-key branch of `Window::dispatch_key_event` (patch 7). It calls
    `finish_dispatch_key_event`, whose signature follows upstream: 0.3.9 added
    `recognized_keystroke` and `input_preference`, which the branch passes as the other
    early returns there do.
@@ -241,13 +373,23 @@ dropping the `ShapedGlyph` and `ShapedRun` that upstream's current code no longe
 Without that trim the crate builds with an `unused_imports` warning, and a path dependency
 is linted as first-party code, so `cargo clippy --workspace -- -D warnings` would fail.
 
-Patch 2 leaves out two parts of gpui-mcp's GPUI delta:
+Patch 2 leaves out three parts of gpui-mcp's GPUI delta:
 
 - Its font-family fallback change in `src/text_system.rs`, which makes a fallback family
   keep the requested weight, style and OpenType features. It has nothing to do with
   automation and would change how text renders in every window of the app, so it does not
   ride along with a feature that is off by default. Nothing in the patch depends on it.
 - Its whitespace-only cleanup of two doc comments in `src/_accessibility.rs`.
+- Its view-scoped redraws in `src/elements/div.rs`: pressing and releasing an element with
+  click or drag handlers, its active state, and showing a tooltip notify the view that
+  painted the element instead of refreshing the window, and hiding a tooltip calls
+  `request_frame`. Upstream calls it the one change that alters GPUI's behavior rather than
+  adding to it. The bridge does not depend on it, and DBFlux keeps upstream gpui's redraws,
+  so it stays out of a patch that only ships with the automation feature in mind.
+
+The ported `view_cache_miss` also compares the view's `transform`, which patch 1 added to
+the view cache key: a view drawn under a new element transform renders again, as it did
+before the refresh, and reports `ViewRenderCause::LayoutChanged`.
 
 The manifest also carries a `[package.metadata.cargo-machete]` exemption for `tracing`,
 which the published crate does not declare: CI runs `cargo machete` over the whole
@@ -264,8 +406,9 @@ vendor/gpui-pre/refresh.sh 0.3.6   # new upstream version
 
 The script downloads the published crate, rebuilds this directory from it and re-applies
 `element-transform.patch`, `frame-observer.patch`, `subscription-drop-log.patch`,
-`text-input-automation.patch`, `read-only-accessibility.patch` and then `letter-spacing.patch`.
-It leaves a
+`text-input-automation.patch`, `read-only-accessibility.patch`, `letter-spacing.patch`,
+`keyboard-dispatch.patch`, `external-drop-acceptance.patch` and
+`background-system-fonts.patch`. It leaves a
 `<file>.<patch>.rej` file behind for any hunk that no longer applies, for example
 `src/window.rs.frame-observer.rej`; resolve them by reading the rejected hunk and porting
 it (see [Manual merges](#manual-merges)), then delete the `.rej`.

@@ -22,13 +22,39 @@ use dbflux_storage::repositories::connection_profile_value_refs::ConnectionProfi
 use dbflux_storage::repositories::connection_profiles::ConnectionProfileDto;
 use dbflux_storage::repositories::driver_overrides::DriverOverridesDto;
 use dbflux_storage::repositories::driver_setting_values::DriverSettingValueDto;
-use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
+use dbflux_storage::repositories::general_settings::{
+    GeneralSettingsDto, GeneralSettingsRepository,
+};
 use dbflux_storage::repositories::hook_definitions::{
     HookDefinitionDto, HookDefinitionReplacement,
 };
 
 pub fn save_general_settings(
     runtime: &StorageRuntime,
+    settings: &GeneralSettings,
+) -> Result<(), dbflux_storage::error::StorageError> {
+    save_general_settings_to(&runtime.general_settings(), settings)
+}
+
+/// Saves `settings` through a connection of its own to the database at
+/// `db_path`. The repository connection of a [`StorageRuntime`] cannot leave
+/// the thread that owns it, so a write made on a background thread opens its
+/// own.
+pub fn save_general_settings_at(
+    db_path: &std::path::Path,
+    settings: &GeneralSettings,
+) -> Result<(), dbflux_storage::error::StorageError> {
+    let connection = dbflux_storage::sqlite::open_database(db_path)?;
+    // The repository takes the shared connection type; this one never leaves
+    // the thread that opened it.
+    #[allow(clippy::arc_with_non_send_sync)]
+    let repo = GeneralSettingsRepository::new(std::sync::Arc::new(connection));
+
+    save_general_settings_to(&repo, settings)
+}
+
+fn save_general_settings_to(
+    repo: &GeneralSettingsRepository,
     settings: &GeneralSettings,
 ) -> Result<(), dbflux_storage::error::StorageError> {
     let editor_row_limit = i64::try_from(settings.editor_row_limit)
@@ -40,8 +66,6 @@ pub fn save_general_settings(
             )
         })?;
 
-    // Save to normalized general_settings table
-    let repo = runtime.general_settings();
     let dto = GeneralSettingsDto {
         id: 1,
         theme: general_settings_theme_to_storage(settings.theme).to_string(),
@@ -113,6 +137,12 @@ pub fn save_general_settings(
         grid_font_size: f64::from(settings.grid_font_size),
         toast_auto_dismiss_secs: i64::from(settings.toast_auto_dismiss_secs),
         grid_fk_labels: if settings.grid_fk_labels { 1 } else { 0 },
+        scrollbar_visibility: scrollbar_visibility_to_storage(settings.scrollbar_visibility)
+            .to_string(),
+        workspace_inspector_width_px: settings.workspace_inspector_width_px.map(f64::from),
+        accent_dark: settings.accent_dark.map(dbflux_core::AccentColor::to_hex),
+        accent_light: settings.accent_light.map(dbflux_core::AccentColor::to_hex),
+        mcp_approval_notifications: i32::from(settings.mcp_approval_notifications),
         grid_header_click_sorts: i32::from(settings.grid_header_click_sorts),
         updated_at: String::new(),
     };
@@ -804,6 +834,12 @@ fn value_ref_to_dto(
             path.clone(),
             dotenv_key.clone(),
         ),
+        ValueRef::File { path, json_key } => ConnectionProfileValueRefDto::new_file(
+            profile_id.to_string(),
+            key.to_string(),
+            path.clone(),
+            json_key.clone(),
+        ),
         ValueRef::Secret {
             provider,
             locator,
@@ -1110,7 +1146,9 @@ fn load_general_settings(
         confirm_dangerous_queries: dto.confirm_dangerous_queries != 0,
         dangerous_requires_where: dto.dangerous_requires_where != 0,
         dangerous_requires_preview: dto.dangerous_requires_preview != 0,
-        workspace_inspector_width_px: None,
+        workspace_inspector_width_px: inspector_width_from_storage(
+            dto.workspace_inspector_width_px,
+        ),
         schema_snapshot_retention: dto.schema_snapshot_retention as usize,
         object_preview_size_limit_mib: dto.object_preview_size_limit_mib as u64,
         language: language_setting_from_storage(&dto.language),
@@ -1141,8 +1179,27 @@ fn load_general_settings(
         toast_auto_dismiss_secs: u32::try_from(dto.toast_auto_dismiss_secs)
             .unwrap_or(GeneralSettings::DEFAULT_TOAST_AUTO_DISMISS_SECS),
         grid_fk_labels: dto.grid_fk_labels != 0,
+        scrollbar_visibility: scrollbar_visibility_from_storage(&dto.scrollbar_visibility),
+        accent_dark: accent_from_storage(dto.accent_dark.as_deref()),
+        accent_light: accent_from_storage(dto.accent_light.as_deref()),
+        mcp_approval_notifications: dto.mcp_approval_notifications != 0,
         grid_header_click_sorts: dto.grid_header_click_sorts != 0,
     }
+}
+
+/// Reads a stored accent. A value that is not `#RRGGBB` (written by hand or
+/// by another build) reads as no override, so the palette accent applies and
+/// the rest of the settings still load.
+fn accent_from_storage(stored: Option<&str>) -> Option<dbflux_core::AccentColor> {
+    stored.and_then(dbflux_core::AccentColor::parse)
+}
+
+/// Converts a stored inspector width to the `f32` the settings carry. A
+/// width that is not a positive finite `f32` falls back to the default.
+fn inspector_width_from_storage(width: Option<f64>) -> Option<f32> {
+    width
+        .map(|width| width as f32)
+        .filter(|width| width.is_finite() && *width > 0.0)
 }
 
 /// Converts a stored font size to the clamped `f32` the settings carry.
@@ -1187,6 +1244,26 @@ fn app_style_from_storage(style: &str) -> dbflux_core::AppStyle {
     match style {
         "compact" => dbflux_core::AppStyle::Compact,
         _ => dbflux_core::AppStyle::Default,
+    }
+}
+
+fn scrollbar_visibility_to_storage(visibility: dbflux_core::ScrollbarVisibility) -> &'static str {
+    match visibility {
+        dbflux_core::ScrollbarVisibility::WhileScrolling => "while_scrolling",
+        dbflux_core::ScrollbarVisibility::OnHover => "on_hover",
+        dbflux_core::ScrollbarVisibility::Always => "always",
+    }
+}
+
+/// Maps a storage `scrollbar_visibility` string to `ScrollbarVisibility`.
+///
+/// Unknown values fall back to `WhileScrolling`, the behavior before the
+/// setting existed.
+fn scrollbar_visibility_from_storage(visibility: &str) -> dbflux_core::ScrollbarVisibility {
+    match visibility {
+        "on_hover" => dbflux_core::ScrollbarVisibility::OnHover,
+        "always" => dbflux_core::ScrollbarVisibility::Always,
+        _ => dbflux_core::ScrollbarVisibility::WhileScrolling,
     }
 }
 
@@ -1644,6 +1721,12 @@ fn load_profiles(
                             ValueRef::Dotenv {
                                 path: vr.ref_value,
                                 key,
+                            }
+                        }
+                        dbflux_storage::repositories::connection_profile_value_refs::RefKind::File => {
+                            ValueRef::File {
+                                path: vr.ref_value,
+                                json_key: vr.ref_json_key,
                             }
                         }
                         dbflux_storage::repositories::connection_profile_value_refs::RefKind::Secret => {
@@ -2517,6 +2600,40 @@ mod tests {
     }
 
     #[test]
+    fn file_value_refs_round_trip_with_and_without_a_json_key() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut profile = ConnectionProfile::new("file-sourced", DbConfig::default_postgres());
+        profile.value_refs.insert(
+            "password".to_string(),
+            dbflux_core::ValueRef::file("/run/user/1000/credentials/db-password", None),
+        );
+        profile.value_refs.insert(
+            "user".to_string(),
+            dbflux_core::ValueRef::file("~/.config/dbflux/db.json", Some("user".to_string())),
+        );
+
+        save_profiles(&runtime, std::slice::from_ref(&profile)).expect("save file profile");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let reloaded = loaded
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("reloaded profile");
+
+        assert!(matches!(
+            reloaded.value_refs.get("password"),
+            Some(dbflux_core::ValueRef::File { path, json_key: None })
+                if path == "/run/user/1000/credentials/db-password"
+        ));
+        assert!(matches!(
+            reloaded.value_refs.get("user"),
+            Some(dbflux_core::ValueRef::File { path, json_key: Some(json_key) })
+                if path == "~/.config/dbflux/db.json" && json_key == "user"
+        ));
+    }
+
+    #[test]
     fn dotenv_value_ref_without_a_key_is_skipped_and_the_profile_still_loads() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
@@ -2697,6 +2814,11 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -2796,6 +2918,11 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };
@@ -2918,6 +3045,155 @@ mod tests {
         assert_eq!(dto.theme, "system");
         assert_eq!(dto.max_history_entries, 77);
         assert_eq!(dto.auto_save_interval_ms, 1234);
+    }
+
+    #[test]
+    fn inspector_width_round_trips_through_save_and_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert_eq!(loaded.general_settings.workspace_inspector_width_px, None);
+
+        let settings = GeneralSettings {
+            workspace_inspector_width_px: Some(420.5),
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save inspector width");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.workspace_inspector_width_px,
+            Some(420.5)
+        );
+
+        let settings = GeneralSettings {
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("clear inspector width");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(loaded.general_settings.workspace_inspector_width_px, None);
+    }
+
+    #[test]
+    fn inspector_width_from_storage_rejects_unusable_widths() {
+        assert_eq!(super::inspector_width_from_storage(None), None);
+        assert_eq!(super::inspector_width_from_storage(Some(0.0)), None);
+        assert_eq!(super::inspector_width_from_storage(Some(-5.0)), None);
+        assert_eq!(super::inspector_width_from_storage(Some(f64::NAN)), None);
+        assert_eq!(super::inspector_width_from_storage(Some(f64::MAX)), None);
+        assert_eq!(
+            super::inspector_width_from_storage(Some(420.5)),
+            Some(420.5)
+        );
+    }
+
+    #[test]
+    fn accent_colors_round_trip_through_save_and_load_and_null_keeps_the_palette() {
+        use dbflux_core::AccentColor;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert_eq!(loaded.general_settings.accent_dark, None);
+        assert_eq!(loaded.general_settings.accent_light, None);
+
+        let settings = GeneralSettings {
+            accent_dark: Some(AccentColor::from_rgb(0x2F7D6D)),
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save accent");
+
+        let dto = runtime
+            .general_settings()
+            .get()
+            .expect("load saved dto")
+            .expect("general settings row");
+        assert_eq!(dto.accent_dark.as_deref(), Some("#2F7D6D"));
+        assert_eq!(dto.accent_light, None);
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.accent_dark,
+            Some(AccentColor::from_rgb(0x2F7D6D))
+        );
+        assert_eq!(loaded.general_settings.accent_light, None);
+
+        super::save_general_settings(&runtime, &GeneralSettings::default()).expect("reset accent");
+        let dto = runtime.general_settings().get().expect("dto").expect("row");
+        assert_eq!(dto.accent_dark, None, "reset stores NULL");
+
+        assert_eq!(super::accent_from_storage(Some("not a color")), None);
+        assert_eq!(super::accent_from_storage(None), None);
+    }
+
+    #[test]
+    fn mcp_approval_notifications_default_on_and_stored_zero_loads_as_false() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert!(loaded.general_settings.mcp_approval_notifications);
+
+        let dto = runtime
+            .general_settings()
+            .get()
+            .expect("load dto")
+            .expect("general settings row");
+        runtime
+            .general_settings()
+            .upsert(
+                &dbflux_storage::repositories::general_settings::GeneralSettingsDto {
+                    mcp_approval_notifications: 0,
+                    ..dto
+                },
+            )
+            .expect("store zero");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(!loaded.general_settings.mcp_approval_notifications);
+
+        super::save_general_settings(&runtime, &loaded.general_settings).expect("save");
+        let dto = runtime.general_settings().get().expect("dto").expect("row");
+        assert_eq!(dto.mcp_approval_notifications, 0);
+    }
+
+    #[test]
+    fn scrollbar_visibility_round_trips_through_save_and_load() {
+        use dbflux_core::ScrollbarVisibility;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let loaded = load_config(&runtime).expect("load default configuration");
+        assert_eq!(
+            loaded.general_settings.scrollbar_visibility,
+            ScrollbarVisibility::WhileScrolling
+        );
+
+        for (visibility, stored) in [
+            (ScrollbarVisibility::OnHover, "on_hover"),
+            (ScrollbarVisibility::Always, "always"),
+            (ScrollbarVisibility::WhileScrolling, "while_scrolling"),
+        ] {
+            let settings = GeneralSettings {
+                scrollbar_visibility: visibility,
+                ..Default::default()
+            };
+            super::save_general_settings(&runtime, &settings).expect("save visibility");
+
+            let dto = runtime
+                .general_settings()
+                .get()
+                .expect("load saved dto")
+                .expect("general settings row");
+            assert_eq!(dto.scrollbar_visibility, stored);
+
+            let loaded = load_config(&runtime).expect("load configuration");
+            assert_eq!(loaded.general_settings.scrollbar_visibility, visibility);
+        }
+
+        assert_eq!(
+            super::scrollbar_visibility_from_storage("unknown"),
+            ScrollbarVisibility::WhileScrolling
+        );
     }
 
     #[test]
@@ -3146,6 +3422,11 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 0,
             updated_at: String::new(),
         };

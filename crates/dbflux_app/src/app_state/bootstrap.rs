@@ -21,7 +21,7 @@ use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
 use dbflux_storage::repositories::viz_saved_chart_series::SavedChartSeriesRepository;
 use dbflux_storage::repositories::viz_saved_charts::SavedChartsRepository;
-use dbflux_storage::{DocumentQueryRepo, SavedQueryRepo};
+use dbflux_storage::{DocumentQueryRepo, SavedQueryRepo, SnippetRepo};
 
 #[cfg(feature = "mcp")]
 use dbflux_mcp::{
@@ -214,7 +214,13 @@ impl AppState {
         }
 
         let secret_provider_registry = Self::build_secret_provider_registry(services.clone());
-        let auth_provider_registry = Self::build_auth_provider_registry(services, audit_emitter);
+        // An in-memory runtime is a test runtime: it must not reflect the host's
+        // `~/.aws` profiles into the app state, or results depend on the machine.
+        let auth_provider_registry = if storage_runtime.temp_root().is_some() {
+            AuthProviderRegistry::new()
+        } else {
+            Self::build_auth_provider_registry(services, audit_emitter)
+        };
 
         let facade = Self::build_session_facade(
             drivers,
@@ -240,6 +246,7 @@ impl AppState {
             dashboard_panels_repo,
             saved_query_repo,
             document_query_repo,
+            snippet_repo,
             schema_snapshot_repo,
         ) = Self::build_viz_repositories(&storage_runtime)?;
 
@@ -251,6 +258,8 @@ impl AppState {
             general_settings,
             update_settings,
             update_check: crate::updates::UpdateCheckState::default(),
+            #[cfg(feature = "telemetry")]
+            telemetry: None,
             driver_overrides,
             driver_settings,
             hook_definitions,
@@ -280,6 +289,7 @@ impl AppState {
             dashboard_panels_repo,
             saved_query_repo,
             document_query_repo,
+            snippet_repo,
             schema_snapshot_repo,
         };
 
@@ -464,6 +474,7 @@ impl AppState {
             Arc<DashboardPanelsRepository>,
             Arc<SavedQueryRepo>,
             Arc<DocumentQueryRepo>,
+            Arc<SnippetRepo>,
             Arc<SchemaSnapshotRepo>,
         ),
         dbflux_storage::error::StorageError,
@@ -478,6 +489,7 @@ impl AppState {
         let dashboard_panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&viz_conn)));
         let saved_query_repo = Arc::new(SavedQueryRepo::new(Arc::clone(&viz_conn)));
         let document_query_repo = Arc::new(DocumentQueryRepo::new(Arc::clone(&viz_conn)));
+        let snippet_repo = Arc::new(SnippetRepo::new(Arc::clone(&viz_conn)));
         let schema_snapshot_repo = Arc::new(SchemaSnapshotRepo::new(Arc::clone(&viz_conn)));
 
         Ok((
@@ -488,6 +500,7 @@ impl AppState {
             dashboard_panels_repo,
             saved_query_repo,
             document_query_repo,
+            snippet_repo,
             schema_snapshot_repo,
         ))
     }

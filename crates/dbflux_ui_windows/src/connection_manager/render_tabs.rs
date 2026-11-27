@@ -706,6 +706,18 @@ impl ConnectionManagerWindow {
                             } else {
                                 0.6
                             })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    if this.settings_tab.conn_override_refresh_interval {
+                                        this.enter_edit_mode_for_field(
+                                            FormFocus::SettingsRefreshInterval,
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                }),
+                            )
                             .child(
                                 Input::new(&self.settings_tab.conn_refresh_interval_input)
                                     .id(cm_setting_id("refresh_interval"))

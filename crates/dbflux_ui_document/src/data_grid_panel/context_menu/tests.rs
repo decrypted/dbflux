@@ -1,7 +1,8 @@
 use super::DataGridPanel;
-use super::QueryGroupSeparators;
-use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
+use super::{CONTEXT_MENU_EDGE_GAP, place_context_menu};
 use super::{ExportMenuEntry, step_export_selection};
+use dbflux_components::composites::{FlyoutSide, FlyoutSpec, place_flyout};
+use dbflux_components::tokens::MenuMetrics;
 use dbflux_export::ExportFormat;
 use gpui::{Bounds, Pixels, Point, Size, px};
 
@@ -23,52 +24,39 @@ fn export_selection_wraps_and_skips_the_binary_copy_row() {
     assert_eq!(step_export_selection(&[], 0, true), 0);
 }
 
-/// A window whose top-left corner is the panel's: the panel fills it.
-fn window_at_panel(width: f32, height: f32) -> Bounds<Pixels> {
-    Bounds {
-        origin: Point::default(),
-        size: Size {
-            width: px(width),
-            height: px(height),
-        },
+/// The window the menu is placed in, in window coordinates.
+fn window() -> Size<Pixels> {
+    Size {
+        width: px(1000.0),
+        height: px(600.0),
     }
 }
 
-fn panel() -> Bounds<Pixels> {
-    window_at_panel(1000.0, 600.0)
-}
-
-#[test]
-fn query_group_has_one_separator_before_its_first_member() {
-    assert_eq!(
-        QueryGroupSeparators::new(true, true, true, true),
-        QueryGroupSeparators {
-            filter: true,
-            order: false,
-            generate_sql: false,
-            copy_query: false,
-        }
-    );
-
-    assert_eq!(
-        QueryGroupSeparators::new(false, false, true, true),
-        QueryGroupSeparators {
-            filter: false,
-            order: false,
-            generate_sql: true,
-            copy_query: false,
-        }
-    );
-
-    assert_eq!(
-        QueryGroupSeparators::new(false, false, false, true),
-        QueryGroupSeparators {
-            filter: false,
-            order: false,
-            generate_sql: false,
-            copy_query: true,
-        }
-    );
+/// Where the flyout of a `menu_width` panel at `origin` goes: Bolt's
+/// placement owns the side the flyout opens on, so the flip the old
+/// `submenus_open_left` arithmetic decided is asserted through it.
+fn flyout_side(origin: Point<Pixels>, menu_width: Pixels, viewport: Size<Pixels>) -> FlyoutSide {
+    place_flyout(
+        Bounds {
+            origin,
+            size: Size {
+                width: menu_width,
+                height: px(300.0),
+            },
+        },
+        origin.y,
+        MenuMetrics::PADDING_Y,
+        FlyoutSpec {
+            size: Size {
+                width: px(280.0),
+                height: px(200.0),
+            },
+            viewport,
+            margin: MenuMetrics::FLYOUT_MARGIN,
+            overlap: MenuMetrics::SUBMENU_OVERLAP,
+        },
+    )
+    .side
 }
 
 #[test]
@@ -77,9 +65,9 @@ fn a_menu_that_fits_stays_at_the_click_and_opens_submenus_to_the_right() {
         x: px(100.0),
         y: px(100.0),
     };
-    let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-    assert_eq!(placed.origin, click);
-    assert!(!placed.submenus_open_left);
+    let placed = place_context_menu(click, px(180.0), px(300.0), window());
+    assert_eq!(placed, click);
+    assert_eq!(flyout_side(placed, px(180.0), window()), FlyoutSide::Right);
 }
 
 #[test]
@@ -88,39 +76,39 @@ fn a_menu_near_the_right_edge_is_shifted_in_and_opens_submenus_to_the_left() {
         x: px(950.0),
         y: px(100.0),
     };
-    let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-    assert_eq!(
-        placed.origin.x,
-        px(1000.0) - px(180.0) - CONTEXT_MENU_EDGE_GAP
-    );
-    assert_eq!(placed.origin.y, click.y);
-    assert!(placed.submenus_open_left);
+    let placed = place_context_menu(click, px(180.0), px(300.0), window());
+    assert_eq!(placed.x, px(1000.0) - px(180.0) - CONTEXT_MENU_EDGE_GAP);
+    assert_eq!(placed.y, click.y);
+    assert_eq!(flyout_side(placed, px(180.0), window()), FlyoutSide::Left);
 }
 
 #[test]
 fn submenus_open_left_as_soon_as_the_widest_one_would_not_fit() {
     let click = Point {
-        x: px(1000.0) - px(180.0) + SUBMENU_OVERLAP - SUBMENU_MAX_WIDTH + px(1.0),
+        x: px(1000.0) - px(180.0) + MenuMetrics::SUBMENU_OVERLAP - px(280.0) + px(1.0),
         y: px(100.0),
     };
-    let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-    assert_eq!(placed.origin.x, click.x, "the menu itself still fits");
-    assert!(placed.submenus_open_left);
+    let placed = place_context_menu(click, px(180.0), px(300.0), window());
+    assert_eq!(placed.x, click.x, "the menu itself still fits");
+    assert_eq!(flyout_side(placed, px(180.0), window()), FlyoutSide::Left);
 }
 
-/// A panel too narrow for a submenu on either side keeps them on the
+/// A window too narrow for a submenu on either side keeps them on the
 /// right: a submenu pushed off the left edge would be invisible, one
 /// hanging past the right edge is at least partly usable.
 #[test]
-fn a_narrow_panel_keeps_submenus_on_the_right() {
-    let narrow = window_at_panel(400.0, 600.0);
+fn a_narrow_window_keeps_submenus_on_the_right() {
+    let narrow = Size {
+        width: px(400.0),
+        height: px(600.0),
+    };
     let click = Point {
         x: px(20.0),
         y: px(100.0),
     };
     let placed = place_context_menu(click, px(180.0), px(300.0), narrow);
-    assert_eq!(placed.origin, click);
-    assert!(!placed.submenus_open_left);
+    assert_eq!(placed, click);
+    assert_eq!(flyout_side(placed, px(180.0), narrow), FlyoutSide::Right);
 }
 
 #[test]
@@ -129,43 +117,74 @@ fn a_menu_near_the_bottom_is_moved_up_to_fit() {
         x: px(100.0),
         y: px(500.0),
     };
-    let placed = place_context_menu(click, px(180.0), px(300.0), panel());
-    assert_eq!(placed.origin.x, click.x);
-    assert_eq!(
-        placed.origin.y,
-        px(600.0) - px(300.0) - CONTEXT_MENU_EDGE_GAP
-    );
+    let placed = place_context_menu(click, px(180.0), px(300.0), window());
+    assert_eq!(placed.x, click.x);
+    assert_eq!(placed.y, px(600.0) - px(300.0) - CONTEXT_MENU_EDGE_GAP);
 }
 
-/// A grid below the editor: the panel starts 400px down a 1000px window
+/// The root panel of a menu in an unmeasured window stays at the click;
+/// where its flyout goes is clamped by Bolt's placement into the
+/// viewport's edge, rather than hanging off it.
+#[test]
+fn an_unmeasured_window_leaves_the_click_alone() {
+    let click = Point {
+        x: px(950.0),
+        y: px(500.0),
+    };
+    let placed = place_context_menu(click, px(180.0), px(300.0), Size::default());
+    assert_eq!(placed, click);
+
+    let flyout = place_flyout(
+        Bounds {
+            origin: placed,
+            size: Size {
+                width: px(180.0),
+                height: px(300.0),
+            },
+        },
+        placed.y,
+        MenuMetrics::PADDING_Y,
+        FlyoutSpec {
+            size: Size {
+                width: px(280.0),
+                height: px(200.0),
+            },
+            viewport: Size::default(),
+            margin: MenuMetrics::FLYOUT_MARGIN,
+            overlap: MenuMetrics::SUBMENU_OVERLAP,
+        },
+    );
+    assert_eq!(flyout.origin.x, MenuMetrics::FLYOUT_MARGIN);
+}
+
+/// A grid below the editor: the panel starts 400px down a 1400x1000 window
 /// and is 300px tall, shorter than the menu.
-fn short_panel_low_in_window() -> Bounds<Pixels> {
-    Bounds {
-        origin: Point {
-            x: px(-200.0),
-            y: px(-400.0),
-        },
-        size: Size {
-            width: px(1400.0),
-            height: px(1000.0),
-        },
+fn window_with_a_short_panel_low_in_it() -> Size<Pixels> {
+    Size {
+        width: px(1400.0),
+        height: px(1000.0),
     }
 }
 
 /// The menu is drawn at window level, so one taller than the panel is
 /// lifted until its bottom clears the window edge instead of hanging off
-/// it from the click.
+/// it from the click, or being given up on and left at the click.
 #[test]
 fn a_menu_taller_than_the_panel_is_lifted_inside_the_window() {
     let click = Point {
-        x: px(100.0),
-        y: px(250.0),
+        x: px(300.0),
+        y: px(650.0),
     };
-    let placed = place_context_menu(click, px(270.0), px(700.0), short_panel_low_in_window());
-    assert_eq!(placed.origin.x, click.x);
+    let placed = place_context_menu(
+        click,
+        px(270.0),
+        px(700.0),
+        window_with_a_short_panel_low_in_it(),
+    );
+    assert_eq!(placed.x, click.x);
     assert_eq!(
-        placed.origin.y,
-        px(600.0) - px(700.0) - CONTEXT_MENU_EDGE_GAP,
+        placed.y,
+        px(1000.0) - px(700.0) - CONTEXT_MENU_EDGE_GAP,
         "the menu's bottom sits one gap above the window's bottom"
     );
 }
@@ -175,47 +194,48 @@ fn a_menu_taller_than_the_panel_is_lifted_inside_the_window() {
 #[test]
 fn a_menu_that_fits_in_the_window_stays_at_the_click_past_the_panel() {
     let click = Point {
-        x: px(100.0),
-        y: px(50.0),
+        x: px(300.0),
+        y: px(450.0),
     };
-    let placed = place_context_menu(click, px(270.0), px(500.0), short_panel_low_in_window());
-    assert_eq!(placed.origin, click);
+    let placed = place_context_menu(
+        click,
+        px(270.0),
+        px(500.0),
+        window_with_a_short_panel_low_in_it(),
+    );
+    assert_eq!(placed, click);
 }
 
 /// A menu taller than the window starts at the window's top gap, so its
-/// first rows stay reachable.
+/// first rows stay reachable; Bolt caps its height and scrolls it.
 #[test]
 fn a_menu_taller_than_the_window_starts_at_its_top() {
     let click = Point {
-        x: px(100.0),
-        y: px(250.0),
+        x: px(300.0),
+        y: px(650.0),
     };
-    let placed = place_context_menu(click, px(270.0), px(1200.0), short_panel_low_in_window());
-    assert_eq!(placed.origin.y, px(-400.0) + CONTEXT_MENU_EDGE_GAP);
+    let placed = place_context_menu(
+        click,
+        px(270.0),
+        px(1200.0),
+        window_with_a_short_panel_low_in_it(),
+    );
+    assert_eq!(placed.y, CONTEXT_MENU_EDGE_GAP);
 }
 
-/// The right edge that decides the submenu side is the window's, 1200px
-/// right of the panel's origin here: the widest submenu still fits there.
+/// The right edge that decides the submenu side is the window's, not the
+/// panel's: a menu near a narrow panel's right edge still opens its
+/// submenus to the right while the window has the room.
 #[test]
 fn submenu_side_follows_the_window_edge() {
     let click = Point {
-        x: px(600.0),
-        y: px(50.0),
+        x: px(800.0),
+        y: px(450.0),
     };
-    let placed = place_context_menu(click, px(270.0), px(300.0), short_panel_low_in_window());
-    assert_eq!(placed.origin.x, click.x);
-    assert!(!placed.submenus_open_left);
-}
-
-#[test]
-fn an_unmeasured_panel_leaves_the_click_alone() {
-    let click = Point {
-        x: px(950.0),
-        y: px(500.0),
-    };
-    let placed = place_context_menu(click, px(180.0), px(300.0), Bounds::default());
-    assert_eq!(placed.origin, click);
-    assert!(!placed.submenus_open_left);
+    let window = window_with_a_short_panel_low_in_it();
+    let placed = place_context_menu(click, px(270.0), px(300.0), window);
+    assert_eq!(placed.x, click.x);
+    assert_eq!(flyout_side(placed, px(270.0), window), FlyoutSide::Right);
 }
 
 fn labels(items: &[super::ContextMenuItem]) -> Vec<String> {
@@ -236,6 +256,9 @@ fn empty_table_menu_keeps_insert_actions_but_hides_row_actions() {
     let labels = labels(&items);
 
     assert!(labels.contains(&item_label("document.data.context_menu.item.add_row")));
+    assert!(labels.contains(&item_label(
+        "document.data.context_menu.item.copy_column_name"
+    )));
     assert!(!labels.contains(&item_label("document.data.context_menu.item.edit")));
     assert!(!labels.contains(&item_label("document.data.context_menu.item.edit_in_modal")));
     assert!(!labels.contains(&item_label("document.data.context_menu.item.duplicate_row")));
@@ -248,7 +271,11 @@ fn non_editable_table_menu_stays_unchanged_without_row_target() {
 
     assert_eq!(
         labels(&items),
-        vec![item_label("document.data.context_menu.item.copy")]
+        vec![
+            item_label("document.data.context_menu.item.copy"),
+            item_label("document.data.context_menu.item.copy_as_markdown"),
+            item_label("document.data.context_menu.item.copy_column_name"),
+        ]
     );
 }
 
@@ -265,6 +292,30 @@ fn non_editable_table_menu_offers_view_value_over_a_row() {
         false, false, false, false, true,
     ));
     assert!(!without_row.contains(&item_label("document.data.context_menu.item.view_value")));
+}
+
+/// Copy as Markdown and Copy column name sit right after Copy, and the
+/// document menu, which has no columns or table, leaves both out.
+#[test]
+fn copy_column_name_follows_copy_in_the_table_menu_only() {
+    let table = DataGridPanel::build_context_menu_items(false, false, true, false, true);
+    assert_eq!(
+        table[1].action,
+        Some(dbflux_components::components::data_table::ContextMenuAction::CopyAsMarkdown)
+    );
+    assert_eq!(
+        table[2].action,
+        Some(dbflux_components::components::data_table::ContextMenuAction::CopyColumnName)
+    );
+
+    let document = DataGridPanel::build_context_menu_items(true, true, true, false, true);
+    assert!(!document.iter().any(|item| matches!(
+        item.action,
+        Some(
+            dbflux_components::components::data_table::ContextMenuAction::CopyColumnName
+                | dbflux_components::components::data_table::ContextMenuAction::CopyAsMarkdown
+        )
+    )));
 }
 
 #[test]

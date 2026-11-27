@@ -765,6 +765,7 @@ mod overflow {
             braces_icon: gpui_component::IconName::ChevronRight.into(),
             chevron_icon: gpui_component::IconName::ChevronRight.into(),
             reference_icon: gpui_component::IconName::ChevronRight.into(),
+            on_row_press: None,
         };
 
         render_rows(

@@ -30,9 +30,9 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseDownEvent, ParentElement, Pixels, Role, SharedString, StatefulInteractiveElement, Styled,
-    Window, div, px,
+    AccessibleAction, AnyElement, App, ClickEvent, Div, ElementId, FontWeight, Hsla,
+    InteractiveElement, IntoElement, Modifiers, MouseButton, MouseDownEvent, ParentElement, Pixels,
+    Role, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::Theme;
 
@@ -178,7 +178,14 @@ pub struct GridHost<'a> {
     pub chevron_icon: IconSource,
     /// Icon drawn in the gutter of the reference row.
     pub reference_icon: IconSource,
+    /// A left press on a row's number, or its accessible click (with no
+    /// modifiers). With it set the gutter cell is a button named by the
+    /// row's number.
+    pub on_row_press: Option<GridRowPress>,
 }
+
+/// A row-number callback taking the row and the modifiers held.
+pub type GridRowPress = Arc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
 
 /// The paint decisions one cell derives from the [`CellView`] contract plus
 /// the host state that is not data (the active cell, the row's pending
@@ -514,7 +521,7 @@ pub fn render_rows(
                     row_bg.is_none() && !is_reference_row && !is_active_row && visual_ix % 2 == 1,
                     |d| d.bg(colors.table_even),
                 )
-                .child(
+                .child(row_number_cell(
                     div()
                         .flex()
                         .flex_shrink_0()
@@ -540,11 +547,41 @@ pub fn render_rows(
                                 gutter.child(row_number.to_string())
                             }
                         }),
-                )
+                    visual_ix,
+                    row_number,
+                    host,
+                ))
                 .children(cells)
                 .into_any_element()
         })
         .collect()
+}
+
+/// With [`GridHost::on_row_press`] set the row number is a button. The row
+/// is selected on press, before the release a click needs, so a drag can
+/// start from it.
+fn row_number_cell(
+    gutter: Div,
+    visual_ix: usize,
+    row_number: usize,
+    host: &GridHost<'_>,
+) -> AnyElement {
+    let Some(on_press) = host.on_row_press.clone() else {
+        return gutter.into_any_element();
+    };
+    let on_accessible_press = Arc::clone(&on_press);
+    gutter
+        .id(("row-number", visual_ix))
+        .role(Role::Button)
+        .aria_label(SharedString::from(row_number.to_string()))
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            on_press(visual_ix, event.modifiers, window, cx)
+        })
+        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+            on_accessible_press(visual_ix, Modifiers::default(), window, cx)
+        })
+        .into_any_element()
 }
 
 /// The width column `col_ix` draws at: the host's laid-out width, or the

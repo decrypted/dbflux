@@ -1266,6 +1266,20 @@ impl DataTable {
                     braces_icon: AppIcon::Braces.into(),
                     chevron_icon: AppIcon::ChevronRight.into(),
                     reference_icon: AppIcon::Crosshair.into(),
+                    on_row_press: Some({
+                        let state = state_entity.clone();
+                        Arc::new(
+                            move |row: usize,
+                                  modifiers: gpui::Modifiers,
+                                  window: &mut Window,
+                                  cx: &mut App| {
+                                state.update(cx, |state, cx| {
+                                    state.focus(window, cx);
+                                    state.click_row(row, modifiers, cx);
+                                });
+                            },
+                        )
+                    }),
                 };
                 // The inline editor the editing cell draws: a dropdown when
                 // the cell enumerates values, the text input otherwise.
@@ -1386,6 +1400,56 @@ mod tests {
             let horizontal = state.read(cx).horizontal_scroll_handle().offset().x;
             (vertical, horizontal)
         })
+    }
+
+    /// Clicks land on the row-number gutter itself: a click there selects
+    /// the whole row, and Shift+click on another row number every row in
+    /// between, as in a database IDE's grid.
+    #[gpui::test]
+    fn clicking_row_numbers_selects_whole_rows(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let state_holder: std::rc::Rc<std::cell::RefCell<Option<Entity<DataTableState>>>> =
+            std::rc::Rc::default();
+        let holder_for_view = state_holder.clone();
+        let (_, visual) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| DataTableState::new(overflow_model(), cx));
+            let table = cx.new(|cx| DataTable::new("row-number-table", state.clone(), cx));
+            holder_for_view.replace(Some(state));
+            ScrollHarness { table }
+        });
+        visual.run_until_parked();
+        let state = state_holder.borrow().clone().expect("state entity");
+
+        let harness = visual
+            .debug_bounds("scroll-harness")
+            .expect("harness must render");
+        let header_height = visual.update(|_, cx| fonts::grid_header_height(cx));
+        let row_height = visual.update(|_, cx| fonts::grid_row_height(cx));
+        let gutter = |row: usize| {
+            gpui::point(
+                harness.origin.x + ROW_NUMBER_WIDTH / 2.0,
+                harness.origin.y + header_height + row_height * (row as f32 + 0.5),
+            )
+        };
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        visual.simulate_click(gutter(1), gpui::Modifiers::default());
+        visual.run_until_parked();
+        visual.simulate_click(gutter(3), shift);
+        visual.run_until_parked();
+
+        visual.update(|_, cx| {
+            let selection = state.read(cx).selection();
+            for row in 1..=3 {
+                assert!(selection.is_full_row_selected(row, 2), "row {row} selected");
+            }
+            assert!(!selection.is_full_row_selected(0, 2));
+            assert!(!selection.is_full_row_selected(4, 2));
+        });
     }
 
     /// Clicking the vertical scrollbar track must scroll the body vertically

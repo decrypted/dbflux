@@ -1,8 +1,9 @@
 //! Render tests of the grid's column features: fitting a column's width,
-//! hiding and moving columns.
+//! hiding, moving and pinning columns.
 
 mod fit_width;
 mod layout;
+mod pinned;
 
 use std::sync::Arc;
 

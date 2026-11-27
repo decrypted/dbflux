@@ -264,6 +264,64 @@ fn a_table_reopens_with_its_column_layout(cx: &mut TestAppContext) {
     assert_eq!(stored, None, "the default layout keeps no row");
 }
 
+/// Pin column from the column menu keeps the column at the left edge, the
+/// menu then offers Unpin column, and a reopened table comes back with the
+/// column pinned.
+#[gpui::test]
+fn pin_column_is_kept_with_the_table_layout(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let app_state = isolated_test_app_state(cx);
+
+    let (first, window) = table_panel(cx, app_state.clone());
+    window.update(|window, cx| {
+        let table_state = table_state(&first, cx);
+        table_state.update(cx, |state, cx| {
+            state.select_cell(
+                dbflux_components::components::data_table::selection::CellCoord::new(0, 2),
+                cx,
+            );
+        });
+        let focus_handle = table_state.read(cx).focus_handle().clone();
+        focus_handle.focus(window, cx);
+    });
+    window.run_until_parked();
+    window.simulate_keystrokes("shift-m");
+    window.update(|window, cx| {
+        first.update(cx, |panel, cx| {
+            panel.handle_context_menu_action(ContextMenuAction::PinColumn, window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    let (shown, offers_unpin) = window.update(|_, cx| {
+        let panel = first.read(cx);
+        (
+            table_state(&first, cx).read(cx).visible_columns().to_vec(),
+            panel
+                .column_menu_items(2, cx)
+                .iter()
+                .any(|item| item.action == ContextMenuAction::UnpinColumn),
+        )
+    });
+    assert_eq!(shown, [2, 0, 1], "the pinned `email` leads the screen");
+    assert!(offers_unpin, "the menu offers Unpin column");
+
+    let (second, window) = table_panel(cx, app_state);
+    let pinned = window.update(|_, cx| {
+        let state = table_state(&second, cx);
+        let state = state.read(cx);
+        (
+            state.visible_columns().to_vec(),
+            state.column_layout().pinned_count(),
+        )
+    });
+    assert_eq!(
+        pinned,
+        (vec![2, 0, 1], 1),
+        "the reopened table keeps the pin"
+    );
+}
+
 /// `Shift+m` opens nothing where the grid draws no column headers: the
 /// transposed record view and the document tree.
 #[gpui::test]
@@ -420,4 +478,79 @@ fn the_columns_chooser_toggles_from_the_keyboard_and_keeps_its_row_in_view(
     window.simulate_keystrokes("down");
     window.run_until_parked();
     assert_eq!(scroll_y(window), gpui::px(0.0), "back at the top");
+}
+
+/// Pinning the leading column keeps the model order, yet it is a layout to
+/// keep: the store holds it, a reopened table comes back with it, and a
+/// re-run of the same query keeps it.
+#[gpui::test]
+fn pinning_the_first_column_is_kept(cx: &mut TestAppContext) {
+    init_keyboard_runtime(cx);
+    let app_state = isolated_test_app_state(cx);
+
+    let (first, window) = table_panel(cx, app_state.clone());
+    let key = window.update(|_, cx| first.read(cx).column_layout_key().expect("a table key"));
+    window.update(|_, cx| {
+        table_state(&first, cx).update(cx, |state, cx| assert!(state.pin_column(0, cx)));
+    });
+    window.run_until_parked();
+
+    let stored = window.update(|_, cx| {
+        app_state
+            .read(cx)
+            .storage_runtime()
+            .ui_state()
+            .get(&key)
+            .expect("the store reads")
+    });
+    assert!(
+        stored.is_some_and(|json| json.contains("\"pinned\":[\"id\"]")),
+        "the pin on `id` is stored"
+    );
+
+    let pinned = |panel: &gpui::Entity<DataGridPanel>, window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            let state = table_state(panel, cx);
+            let state = state.read(cx);
+            (
+                state.visible_columns().to_vec(),
+                state.column_layout().pinned_count(),
+            )
+        })
+    };
+
+    let (second, window) = table_panel(cx, app_state);
+    assert_eq!(
+        pinned(&second, window),
+        (vec![0, 1, 2], 1),
+        "the reopened table keeps the pin"
+    );
+
+    window.update(|_, cx| {
+        second.update(cx, |panel, cx| {
+            panel.set_result(
+                QueryResult::table(
+                    vec![
+                        key_column("id", true),
+                        key_column("name", false),
+                        key_column("email", false),
+                    ],
+                    vec![vec![
+                        dbflux_core::Value::Int(2),
+                        dbflux_core::Value::Text("bob".into()),
+                        dbflux_core::Value::Text("bob@example.com".into()),
+                    ]],
+                    None,
+                    Duration::ZERO,
+                ),
+                cx,
+            );
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        pinned(&second, window),
+        (vec![0, 1, 2], 1),
+        "a re-run keeps the pin"
+    );
 }

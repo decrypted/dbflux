@@ -184,6 +184,9 @@ pub struct GridHost<'a> {
     /// source's order. Cell coordinates and widths stay source column
     /// indices either way.
     pub columns: Option<&'a [usize]>,
+    /// The leading drawn columns the host keeps at the grid's left edge, and
+    /// the strip it holds them in. `None` scrolls every column.
+    pub pinned: Option<GridPinned<'a>>,
     /// A left press on a cell, before the release that completes a click,
     /// so the host can start a drag selection on it.
     pub on_cell_press: Option<GridCellMouseDown>,
@@ -200,6 +203,18 @@ pub type GridCellMouseDown = Arc<dyn Fn(GridCellCoord, &MouseDownEvent, &mut Win
 
 /// A cell callback taking the pointer move that reached it.
 pub type GridCellMouseMove = Arc<dyn Fn(GridCellCoord, &MouseMoveEvent, &mut Window, &mut App)>;
+
+/// Pinned leading columns, as [`GridHost::pinned`] describes them.
+pub struct GridPinned<'a> {
+    /// How many of the drawn columns are pinned.
+    pub count: usize,
+    /// Their total width, which a spacer keeps free in the scrolling part
+    /// so the other cells stay where they are.
+    pub width: f32,
+    /// Builds the strip drawn over the row's left edge: it takes the row's
+    /// fill (`None` for a plain row), the gutter cell and the pinned cells.
+    pub strip: &'a dyn Fn(Option<Hsla>, AnyElement, Vec<AnyElement>) -> AnyElement,
+}
 
 /// A row-number callback taking the row and the modifiers held.
 pub type GridRowPress = Arc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
@@ -507,8 +522,50 @@ pub fn render_rows(
                 })
                 .collect();
 
-            div()
+            // Row state background (dirty=yellow, error=red); otherwise the
+            // reference row, the row holding the focused cell and every
+            // second clean row take their washes. A pinned strip repeats the
+            // fill over its own base.
+            let row_fill = row_bg.or(if is_reference_row {
+                Some(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
+            } else if is_active_row {
+                Some(colors.table_active)
+            } else if visual_ix % 2 == 1 {
+                Some(colors.table_even)
+            } else {
+                None
+            });
+
+            let gutter = div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_end()
+                .w(GridMetrics::ROW_NUMBER_WIDTH)
+                .h_full()
+                .pr(GridMetrics::CELL_PADDING_X)
+                .text_size(font_size)
+                .text_color(if is_active_row || is_reference_row {
+                    tint
+                } else {
+                    colors.input
+                })
+                .map(|gutter| {
+                    if is_reference_row {
+                        gutter.child(
+                            Icon::new(host.reference_icon.clone())
+                                .size(nested_icon)
+                                .color(tint),
+                        )
+                    } else {
+                        gutter.child(row_number.to_string())
+                    }
+                });
+            let gutter = row_number_cell(gutter, visual_ix, row_number, host);
+
+            let row = div()
                 .id(("row", visual_ix))
+                .relative()
                 .flex()
                 .flex_shrink_0()
                 .w(px(total_width))
@@ -516,54 +573,12 @@ pub fn render_rows(
                 .overflow_hidden()
                 .border_b_1()
                 .border_color(colors.table_row_border)
-                // Row state background (dirty=yellow, error=red)
-                .when_some(row_bg, |d, bg| d.bg(bg))
-                // The row holding the focused cell gets the selected-row
-                // wash; clean rows otherwise alternate.
+                .when_some(row_fill, |d, fill| d.bg(fill))
                 .when(row_bg.is_none() && is_reference_row, |d| {
-                    d.bg(tint.opacity(GridMetrics::REFERENCE_ROW_ALPHA))
-                        .border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
-                })
-                .when(
-                    row_bg.is_none() && !is_reference_row && is_active_row,
-                    |d| d.bg(colors.table_active),
-                )
-                .when(
-                    row_bg.is_none() && !is_reference_row && !is_active_row && visual_ix % 2 == 1,
-                    |d| d.bg(colors.table_even),
-                )
-                .child(row_number_cell(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .justify_end()
-                        .w(GridMetrics::ROW_NUMBER_WIDTH)
-                        .h_full()
-                        .pr(GridMetrics::CELL_PADDING_X)
-                        .text_size(font_size)
-                        .text_color(if is_active_row || is_reference_row {
-                            tint
-                        } else {
-                            colors.input
-                        })
-                        .map(|gutter| {
-                            if is_reference_row {
-                                gutter.child(
-                                    Icon::new(host.reference_icon.clone())
-                                        .size(nested_icon)
-                                        .color(tint),
-                                )
-                            } else {
-                                gutter.child(row_number.to_string())
-                            }
-                        }),
-                    visual_ix,
-                    row_number,
-                    host,
-                ))
-                .children(cells)
-                .into_any_element()
+                    d.border_color(tint.opacity(GridMetrics::REFERENCE_ROW_BORDER_ALPHA))
+                });
+
+            place_cells(row, gutter, cells, row_fill, host.pinned.as_ref())
         })
         .collect()
 }
@@ -633,6 +648,31 @@ fn row_number_cell(
             on_accessible_press(visual_ix, Modifiers::default(), window, cx)
         })
         .into_any_element()
+}
+
+/// With pinned columns the gutter and the pinned cells move into the host's
+/// strip, and a spacer of the same width keeps the scrolling cells where they
+/// were.
+fn place_cells(
+    row: Stateful<Div>,
+    gutter: AnyElement,
+    mut cells: Vec<AnyElement>,
+    row_fill: Option<Hsla>,
+    pinned: Option<&GridPinned<'_>>,
+) -> AnyElement {
+    let Some(pinned) = pinned.filter(|pinned| pinned.count > 0) else {
+        return row.child(gutter).children(cells).into_any_element();
+    };
+
+    let scrolled = cells.split_off(pinned.count.min(cells.len()));
+    row.child(
+        div()
+            .flex_shrink_0()
+            .w(GridMetrics::ROW_NUMBER_WIDTH + px(pinned.width)),
+    )
+    .children(scrolled)
+    .child((pinned.strip)(row_fill, gutter, cells))
+    .into_any_element()
 }
 
 /// The width column `col_ix` draws at: the host's laid-out width, or the

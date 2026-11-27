@@ -9,10 +9,10 @@ use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, Spacing};
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
-    Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px,
-    uniform_list,
+    Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
+    IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement, Pixels, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
+    Window, canvas, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
@@ -26,8 +26,8 @@ use super::theme::{CELL_PADDING_X, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 // The row list and cell painter moved to `bolt::components::grid`; the old
 // in-file names are the re-exported Bolt API.
 use bolt::components::grid::{
-    ColumnResizeDrag, GridCellCoord, GridColors, GridHost, column_resize_handle_with_fit,
-    render_rows, track_column_resize,
+    ColumnResizeDrag, GridCellCoord, GridColors, GridHost, GridPinned,
+    column_resize_handle_with_fit, render_rows, track_column_resize,
 };
 use dbflux_core::SortDirection;
 
@@ -138,6 +138,13 @@ pub struct DataTable {
 }
 
 impl DataTable {
+    fn drag_tracking(&self) -> DragTracking {
+        DragTracking {
+            resize: self.resize_drag.clone(),
+            state: self.state.clone(),
+        }
+    }
+
     pub fn new(
         id: impl Into<ElementId>,
         state: Entity<DataTableState>,
@@ -478,9 +485,9 @@ impl gpui::Render for DataTable {
         let state_for_empty_context = self.state.clone();
         let focus_for_empty = focus_handle.clone();
 
-        let state_for_resize_move = self.state.clone();
-        let state_for_drag_up = self.state.clone();
-        let state_for_drag_up_out = self.state.clone();
+        // Resize drag handlers live on the root div so they keep firing
+        // even when the cursor leaves the narrow 6px resize handle.
+        let drag_tracking = self.drag_tracking();
 
         // Forward horizontal wheel/trackpad deltas to the horizontal scroll
         // handle. The handle is owned by a 1px phantom scroller at the bottom
@@ -574,175 +581,159 @@ impl gpui::Render for DataTable {
                 })
         };
 
-        // Resize drag handlers live on the root div so they keep firing
-        // even when the cursor leaves the narrow resize handle.
-        track_column_resize(
-            div()
-                .id(self.id.clone())
-                .key_context(CONTEXT)
-                .track_focus(&focus_handle)
-                .relative()
-                .size_full()
-                .overflow_hidden()
-                .font_family(fonts::grid_family(cx))
-                .bg(theme.table)
-                // Navigation actions
-                .on_action(on_move_up)
-                .on_action(on_move_down)
-                .on_action(on_move_left)
-                .on_action(on_move_right)
-                .on_action(on_select_up)
-                .on_action(on_select_down)
-                .on_action(on_select_left)
-                .on_action(on_select_right)
-                .on_action(on_line_start)
-                .on_action(on_line_end)
-                .on_action(on_top)
-                .on_action(on_bottom)
-                .on_action(on_select_line_start)
-                .on_action(on_select_line_end)
-                .on_action(on_select_top)
-                .on_action(on_select_bottom)
-                .on_action(on_select_all)
-                .on_action(on_clear_selection)
-                .on_action(on_start_edit)
-                .on_action(on_confirm_edit)
-                .on_action(on_cancel_edit)
-                .on_action(on_save_row)
-                .on_action(on_copy)
-                .on_action(on_copy_row)
-                // Row operations (vim-style)
-                .on_action(on_delete_row)
-                .on_action(on_add_row)
-                .on_action(on_duplicate_row)
-                .on_action(on_set_null)
-                .on_action(on_toggle_expression)
-                // Undo/Redo
-                .on_action(on_undo)
-                .on_action(on_redo)
-                .on_action(on_toggle_column_group)
-                .on_action(on_step_out)
-                .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
-                    state_for_drag_up.update(cx, |state, _| state.end_drag_select());
-                })
-                // A release outside the table (another pane, outside the
-                // window) never reaches the handler above; without this the
-                // drag would still be running when the pointer comes back with
-                // the button pressed for something else.
-                .on_mouse_up_out(MouseButton::Left, move |_event, _window, cx| {
-                    state_for_drag_up_out.update(cx, |state, _| state.end_drag_select());
-                }),
-            &self.resize_drag,
-            move |resize, _window, cx| {
-                state_for_resize_move.update(cx, |state, cx| {
-                    state.set_column_width(resize.column, resize.width, cx);
-                });
-            },
-        )
-        .child(inner_table)
-        // Measure viewport size and sync horizontal scroll offset using canvas
-        .child({
-            let scroll_sync = self.scroll_sync.clone();
-            canvas(
-                move |bounds, _, cx| {
-                    let mut sync = match scroll_sync.lock() {
-                        Ok(guard) => guard,
-                        Err(poison_err) => {
-                            log::warn!("Scroll sync mutex poisoned, recovering");
-                            poison_err.into_inner()
-                        }
-                    };
-                    state_entity.update(cx, |state, cx| {
-                        let new_size = bounds.size;
-                        let viewport_changed = new_size != sync.last_viewport_size;
-
-                        if viewport_changed {
-                            sync.last_viewport_size = new_size;
-                            if state.viewport_size() != new_size {
-                                state.set_viewport_size(new_size, cx);
-                            }
-                        }
-
-                        // Only sync horizontal offset if viewport changed or offset actually changed
-                        let current_h_offset = state.horizontal_scroll_handle().offset().x;
-                        let h_offset_changed =
-                            (current_h_offset - sync.last_h_offset).abs() > gpui::px(0.5);
-
-                        if viewport_changed || h_offset_changed {
-                            sync.last_h_offset = current_h_offset;
-                            // Sync horizontal offset from scroll handle to trigger body re-render
-                            state.sync_horizontal_offset(cx);
-                        }
-                    });
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
+        div()
+            .id(self.id.clone())
+            .key_context(CONTEXT)
+            .track_focus(&focus_handle)
+            .relative()
             .size_full()
-        })
-        // Grid-only scroll chrome. Record mode owns a single vertical list
-        // and no horizontal axis, so it brings its own scrollbar instead.
-        .when(!record_mode, |root| {
-            root
-                // Phantom scroller: owns the horizontal scroll handle for the scrollbar.
-                // It's 1px tall and positioned at the bottom, so it never receives wheel events.
-                // The mouse is always over the header or body, which don't capture horizontal wheel.
-                .child(
-                    div()
-                        .id("table-hscroll-owner")
-                        .absolute()
-                        .left_0()
-                        .right(SCROLLBAR_WIDTH)
-                        .bottom_0()
-                        .h(px(1.0))
-                        .overflow_x_scroll()
-                        .track_scroll(&horizontal_scroll_handle)
-                        .child(div().min_w(px(total_width)).h(px(1.0))),
+            .overflow_hidden()
+            .font_family(fonts::grid_family(cx))
+            .bg(theme.table)
+            // Navigation actions
+            .on_action(on_move_up)
+            .on_action(on_move_down)
+            .on_action(on_move_left)
+            .on_action(on_move_right)
+            .on_action(on_select_up)
+            .on_action(on_select_down)
+            .on_action(on_select_left)
+            .on_action(on_select_right)
+            .on_action(on_line_start)
+            .on_action(on_line_end)
+            .on_action(on_top)
+            .on_action(on_bottom)
+            .on_action(on_select_line_start)
+            .on_action(on_select_line_end)
+            .on_action(on_select_top)
+            .on_action(on_select_bottom)
+            .on_action(on_select_all)
+            .on_action(on_clear_selection)
+            .on_action(on_start_edit)
+            .on_action(on_confirm_edit)
+            .on_action(on_cancel_edit)
+            .on_action(on_save_row)
+            .on_action(on_copy)
+            .on_action(on_copy_row)
+            // Row operations (vim-style)
+            .on_action(on_delete_row)
+            .on_action(on_add_row)
+            .on_action(on_duplicate_row)
+            .on_action(on_set_null)
+            .on_action(on_toggle_expression)
+            // Undo/Redo
+            .on_action(on_undo)
+            .on_action(on_redo)
+            .on_action(on_toggle_column_group)
+            .on_action(on_step_out)
+            // Column resize: move and up handlers on the root div so the
+            // drag continues even when the cursor leaves the handle.
+            .map(|root| drag_tracking.attach(root))
+            .child(inner_table)
+            // Measure viewport size and sync horizontal scroll offset using canvas
+            .child({
+                let scroll_sync = self.scroll_sync.clone();
+                canvas(
+                    move |bounds, _, cx| {
+                        let mut sync = match scroll_sync.lock() {
+                            Ok(guard) => guard,
+                            Err(poison_err) => {
+                                log::warn!("Scroll sync mutex poisoned, recovering");
+                                poison_err.into_inner()
+                            }
+                        };
+                        state_entity.update(cx, |state, cx| {
+                            let new_size = bounds.size;
+                            let viewport_changed = new_size != sync.last_viewport_size;
+
+                            if viewport_changed {
+                                sync.last_viewport_size = new_size;
+                                if state.viewport_size() != new_size {
+                                    state.set_viewport_size(new_size, cx);
+                                }
+                            }
+
+                            // Only sync horizontal offset if viewport changed or offset actually changed
+                            let current_h_offset = state.horizontal_scroll_handle().offset().x;
+                            let h_offset_changed =
+                                (current_h_offset - sync.last_h_offset).abs() > gpui::px(0.5);
+
+                            if viewport_changed || h_offset_changed {
+                                sync.last_h_offset = current_h_offset;
+                                // Sync horizontal offset from scroll handle to trigger body re-render
+                                state.sync_horizontal_offset(cx);
+                            }
+                        });
+                    },
+                    |_, _, _, _| {},
                 )
-                // Scrollbars as absolute overlays.
-                .child(
-                    div()
-                        .absolute()
-                        .top(header_height)
-                        .right_0()
-                        .bottom_0()
-                        .w(SCROLLBAR_WIDTH)
-                        .when(row_count > 0, |this| {
-                            // The overlay strip below the header is the
-                            // visible viewport. The handle's own bounds are
-                            // the uniform_list element, which extends past
-                            // the visible area when the grid overflows
-                            // horizontally — deriving the hitbox from them
-                            // makes right-edge track clicks miss. Same
-                            // binding the horizontal bar above uses.
-                            this.child(
-                                Scrollbar::vertical(&vertical_scroll_handle).viewport_from_layout(),
-                            )
-                        }),
-                )
-                // Horizontal scrollbar uses `ScrollbarMode::Always` because the phantom
-                // scroller that owns the handle is 1px tall and never captures the wheel,
-                // so the bar would otherwise stay transparent until the user navigates
-                // off-screen with the keyboard.
-                //
-                // The scrollbar lays itself out over its handle's viewport by default,
-                // which here is the 1px phantom, so the bar would be clipped to a
-                // single pixel. It takes this overlay strip as its viewport instead;
-                // the strip spans the phantom's width, so the thumb math matches.
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right(SCROLLBAR_WIDTH)
-                        .bottom_0()
-                        .h(SCROLLBAR_WIDTH)
-                        .child(
-                            Scrollbar::horizontal(&horizontal_scroll_handle)
-                                .mode(ScrollbarMode::Always)
-                                .viewport_from_layout(),
-                        ),
-                )
-        })
+                .absolute()
+                .size_full()
+            })
+            // Grid-only scroll chrome. Record mode owns a single vertical list
+            // and no horizontal axis, so it brings its own scrollbar instead.
+            .when(!record_mode, |root| {
+                root
+                    // Phantom scroller: owns the horizontal scroll handle for the scrollbar.
+                    // It's 1px tall and positioned at the bottom, so it never receives wheel events.
+                    // The mouse is always over the header or body, which don't capture horizontal wheel.
+                    .child(
+                        div()
+                            .id("table-hscroll-owner")
+                            .absolute()
+                            .left_0()
+                            .right(SCROLLBAR_WIDTH)
+                            .bottom_0()
+                            .h(px(1.0))
+                            .overflow_x_scroll()
+                            .track_scroll(&horizontal_scroll_handle)
+                            .child(div().min_w(px(total_width)).h(px(1.0))),
+                    )
+                    // Scrollbars as absolute overlays.
+                    .child(
+                        div()
+                            .absolute()
+                            .top(header_height)
+                            .right_0()
+                            .bottom_0()
+                            .w(SCROLLBAR_WIDTH)
+                            .when(row_count > 0, |this| {
+                                // The overlay strip below the header is the
+                                // visible viewport. The handle's own bounds are
+                                // the uniform_list element, which extends past
+                                // the visible area when the grid overflows
+                                // horizontally — deriving the hitbox from them
+                                // makes right-edge track clicks miss. Same
+                                // binding the horizontal bar above uses.
+                                this.child(
+                                    Scrollbar::vertical(&vertical_scroll_handle)
+                                        .viewport_from_layout(),
+                                )
+                            }),
+                    )
+                    // Horizontal scrollbar uses `ScrollbarMode::Always` because the phantom
+                    // scroller that owns the handle is 1px tall and never captures the wheel,
+                    // so the bar would otherwise stay transparent until the user navigates
+                    // off-screen with the keyboard.
+                    //
+                    // The scrollbar lays itself out over its handle's viewport by default,
+                    // which here is the 1px phantom, so the bar would be clipped to a
+                    // single pixel. It takes this overlay strip as its viewport instead;
+                    // the strip spans the phantom's width, so the thumb math matches.
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right(SCROLLBAR_WIDTH)
+                            .bottom_0()
+                            .h(SCROLLBAR_WIDTH)
+                            .child(
+                                Scrollbar::horizontal(&horizontal_scroll_handle)
+                                    .mode(ScrollbarMode::Always)
+                                    .viewport_from_layout(),
+                            ),
+                    )
+            })
     }
 }
 
@@ -768,9 +759,11 @@ impl DataTable {
         let fk_cols = state.fk_columns().clone();
         let annotated = state.has_header_annotations();
         let header_height = state.header_height(cx);
+        let pinned_width = state.pinned_width();
+        let pinned_count = state.pinned_shown_count();
         let reorderable = state.columns_reorderable();
 
-        let header_cells: Vec<_> = state
+        let mut header_cells: Vec<AnyElement> = state
             .visible_columns()
             .iter()
             .filter_map(|&col_ix| model.columns.get(col_ix).map(|spec| (col_ix, spec)))
@@ -782,6 +775,7 @@ impl DataTable {
 
                 let is_pk = pk_cols.contains(&col_ix);
                 let is_fk = fk_cols.contains(&col_ix);
+                let is_pinned = state.column_layout().is_pinned(col_ix);
 
                 let key_icon = if is_pk {
                     Some((AppIcon::KeyRound, theme.warning))
@@ -846,6 +840,14 @@ impl DataTable {
                                 });
                             });
                         }
+                    })
+                    // A pin marks a column that stays at the left edge.
+                    .when(is_pinned, |d| {
+                        d.child(
+                            Icon::new(AppIcon::Pin)
+                                .size(GridMetrics::HEADER_ICON)
+                                .color(theme.muted_foreground),
+                        )
                     })
                     // PK / FK key icon: amber key for a primary key, blue
                     // cable for a foreign key.
@@ -930,6 +932,7 @@ impl DataTable {
                         ChromeColors::tint(theme),
                     ))
             })
+            .map(IntoElement::into_any_element)
             .collect();
 
         // Header uses overflow_hidden and applies horizontal offset via margin.
@@ -944,15 +947,29 @@ impl DataTable {
             .border_b_1()
             .border_color(theme.input)
             .font_family(fonts::grid_family(cx))
-            .child(
+            .child({
+                let scrolled = header_cells.split_off(pinned_count.min(header_cells.len()));
+
                 div()
+                    .relative()
                     .flex()
                     .h_full()
                     .min_w(px(total_width))
                     .ml(-h_offset)
-                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
-                    .children(header_cells),
-            )
+                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH + px(pinned_width)))
+                    .children(scrolled)
+                    .when(pinned_count > 0, |row| {
+                        row.child(pinned_strip(
+                            h_offset,
+                            theme.table_head,
+                            None,
+                            div().flex_shrink_0().w(ROW_NUMBER_WIDTH).into_any_element(),
+                            header_cells,
+                            &self.drag_tracking(),
+                            theme,
+                        ))
+                    })
+            })
     }
 
     /// Header of a document grid: an optional row of column-group labels over
@@ -1201,6 +1218,7 @@ impl DataTable {
         let model = Arc::clone(state.model_arc());
 
         let state_entity = self.state.clone();
+        let drag_tracking = self.drag_tracking();
 
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
@@ -1213,7 +1231,8 @@ impl DataTable {
                 let font_size = fonts::grid_font_size(cx);
                 let row_height = fonts::grid_row_height(cx);
                 let nested_icon = fonts::grid_px(cx, CollectionMetrics::NESTED_ICON);
-                let grid_colors = GridColors::of(cx.theme());
+                let theme = cx.theme();
+                let grid_colors = GridColors::of(theme);
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
                 let selection = state.selection();
@@ -1223,6 +1242,23 @@ impl DataTable {
                     state.edit_buffer(),
                     state.document_presentation(),
                 );
+
+                // The pinned columns sit in a strip that cancels the
+                // horizontal scroll and repeats the drag tracking, since it
+                // blocks the mouse from the table root under it.
+                let pinned_h_offset = state.horizontal_offset();
+                let strip = |fill: Option<Hsla>, gutter: AnyElement, cells: Vec<AnyElement>| {
+                    pinned_strip(
+                        pinned_h_offset,
+                        theme.table,
+                        fill,
+                        gutter,
+                        cells,
+                        &drag_tracking,
+                        theme,
+                    )
+                    .into_any_element()
+                };
 
                 // The host state the Bolt row renderer reads: the grid's
                 // selection and editing facts, its interaction policy and
@@ -1304,6 +1340,11 @@ impl DataTable {
                     chevron_icon: AppIcon::ChevronRight.into(),
                     reference_icon: AppIcon::Crosshair.into(),
                     columns: Some(state.visible_columns()),
+                    pinned: Some(GridPinned {
+                        count: state.pinned_shown_count(),
+                        width: state.pinned_width(),
+                        strip: &strip,
+                    }),
                     on_cell_press: Some({
                         let state = state_entity.clone();
                         Arc::new(
@@ -1411,6 +1452,81 @@ impl DataTable {
             .overflow_hidden()
             .child(list)
     }
+}
+
+/// The pointer tracking a column resize and a drag selection need while the
+/// button is held: a move resizes the column being dragged, a release ends
+/// both. The table root carries it so a resize survives the cursor leaving
+/// the narrow handle. Each pinned strip carries it too: a strip blocks the
+/// mouse from everything under it, the root included.
+#[derive(Clone)]
+struct DragTracking {
+    resize: ColumnResizeDrag,
+    state: Entity<DataTableState>,
+}
+
+impl DragTracking {
+    fn attach<E: InteractiveElement>(&self, element: E) -> E {
+        let state_for_resize = self.state.clone();
+        let (state_for_up, state_for_up_out) = (self.state.clone(), self.state.clone());
+
+        let element = element
+            .on_mouse_up(MouseButton::Left, move |_event, _window, cx| {
+                state_for_up.update(cx, |state, _| state.end_drag_select());
+            })
+            // A release outside the table (another pane, outside the window)
+            // never reaches the handler above; without this the drag would
+            // still be running when the pointer comes back with the button
+            // pressed for something else.
+            .on_mouse_up_out(MouseButton::Left, move |_event, _window, cx| {
+                state_for_up_out.update(cx, |state, _| state.end_drag_select());
+            });
+
+        // The shared Bolt tracker follows a column resize and ends it on a
+        // release, inside the table or out of it.
+        track_column_resize(element, &self.resize, move |resize, _window, cx| {
+            state_for_resize.update(cx, |state, cx| {
+                state.set_column_width(resize.column, resize.width, cx);
+            });
+        })
+    }
+}
+
+/// The strip that keeps the row-number gutter and the pinned columns at the
+/// grid's left edge, like a frozen pane. It sits inside a row (or the header
+/// row) that scrolls by `-h_offset`, so it is placed `h_offset` in to stay
+/// put. Drawn after the scrolling cells, it covers the ones passing under it,
+/// on an opaque `base` with the row's own `fill` on top. It also blocks the
+/// mouse from them: without that a click on a pinned cell or the gutter
+/// would reach the hidden scrolling cell under it as well. Wheel scrolling
+/// still passes through.
+fn pinned_strip(
+    h_offset: Pixels,
+    base: Hsla,
+    fill: Option<Hsla>,
+    gutter: AnyElement,
+    cells: Vec<AnyElement>,
+    drag: &DragTracking,
+    theme: &gpui_component::theme::Theme,
+) -> impl IntoElement {
+    drag.attach(div())
+        .debug_selector(|| "pinned-columns".to_string())
+        .block_mouse_except_scroll()
+        .absolute()
+        .top_0()
+        .left(h_offset)
+        .h_full()
+        .bg(base)
+        .border_r_2()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex()
+                .h_full()
+                .when_some(fill, |strip, fill| strip.bg(fill))
+                .child(gutter)
+                .children(cells),
+        )
 }
 
 /// What a header carries while it is dragged onto another header to move

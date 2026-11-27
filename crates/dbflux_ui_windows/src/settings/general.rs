@@ -7,13 +7,16 @@ use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Fields, ui};
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
+use dbflux_ui_base::settings_writer::persist_general_settings;
 use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::select::Select;
 
-use super::general_section::{FontFamilyField, FontFamilySelect, GeneralFormRow, GeneralSection};
+use super::general_section::{
+    FontFamilyField, FontFamilySelect, GeneralFormRow, GeneralPage, GeneralSection,
+};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 
@@ -31,13 +34,19 @@ impl GeneralSection {
         let saved = self.app_state.read(cx).general_settings();
         let current = &self.gen_settings;
 
-        let setting_changes = [
+        let appearance = self.page == GeneralPage::Appearance;
+
+        let appearance_setting_changes = [
             current.theme != saved.theme,
             current.style != saved.style,
             current.language != saved.language,
             current.ui_font_family != saved.ui_font_family,
             current.editor_font_family != saved.editor_font_family,
             current.grid_font_family != saved.grid_font_family,
+            current.scrollbar_visibility != saved.scrollbar_visibility,
+        ];
+
+        let general_setting_changes = [
             current.restore_session_on_startup != saved.restore_session_on_startup,
             current.reopen_last_connections != saved.reopen_last_connections,
             current.default_focus_on_startup != saved.default_focus_on_startup,
@@ -55,15 +64,19 @@ impl GeneralSection {
             current.grid_copy_column_names != saved.grid_copy_column_names,
             current.grid_header_click_sorts != saved.grid_header_click_sorts,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
+            current.mcp_approval_notifications != saved.mcp_approval_notifications,
         ];
 
-        let input_changes = [
+        let appearance_inputs = [
             (&self.input_ui_font_size, saved.ui_font_size.to_string()),
             (
                 &self.input_editor_font_size,
                 saved.editor_font_size.to_string(),
             ),
             (&self.input_grid_font_size, saved.grid_font_size.to_string()),
+        ];
+
+        let general_inputs = [
             (
                 &self.input_max_history,
                 saved.max_history_entries.to_string(),
@@ -92,16 +105,34 @@ impl GeneralSection {
                 &self.input_key_value_size_limit,
                 saved.key_value_size_limit_mib.to_string(),
             ),
-        ]
-        .into_iter()
-        .filter(|(input, saved_value)| input.read(cx).value().trim() != saved_value.as_str())
-        .count();
+        ];
+
+        let (setting_changes, input_candidates) = if appearance {
+            (
+                appearance_setting_changes.to_vec(),
+                appearance_inputs.to_vec(),
+            )
+        } else {
+            (general_setting_changes.to_vec(), general_inputs.to_vec())
+        };
+
+        let input_changes = input_candidates
+            .into_iter()
+            .filter(|(input, saved_value)| input.read(cx).value().trim() != saved_value.as_str())
+            .count();
+
+        let accent_changes = if appearance {
+            self.accent_change_count(cx)
+        } else {
+            0
+        };
 
         setting_changes
             .into_iter()
             .filter(|changed| *changed)
             .count()
             + input_changes
+            + accent_changes
     }
 
     /// Parses the editor row limit input. Accepts a whole number of at least 1
@@ -113,16 +144,11 @@ impl GeneralSection {
     }
 
     pub(super) fn gen_form_rows(&self) -> Vec<GeneralFormRow> {
+        if self.page == GeneralPage::Appearance {
+            return Self::appearance_form_rows();
+        }
+
         let mut rows = vec![
-            GeneralFormRow::Theme,
-            GeneralFormRow::Style,
-            GeneralFormRow::Language,
-            GeneralFormRow::UiFontFamily,
-            GeneralFormRow::UiFontSize,
-            GeneralFormRow::EditorFontFamily,
-            GeneralFormRow::EditorFontSize,
-            GeneralFormRow::GridFontFamily,
-            GeneralFormRow::GridFontSize,
             GeneralFormRow::VimMode,
             GeneralFormRow::VimLeader,
             GeneralFormRow::TableAlias,
@@ -148,6 +174,9 @@ impl GeneralSection {
             GeneralFormRow::KeyValueSizeLimit,
             GeneralFormRow::ToastTimeout,
         ];
+
+        #[cfg(feature = "mcp")]
+        rows.push(GeneralFormRow::McpApprovalNotifications);
 
         // The shared-database toggle only makes sense on nightly, which is the
         // only channel that uses a separate database by default.
@@ -183,7 +212,7 @@ impl GeneralSection {
         }
     }
 
-    fn gen_current_row(&self) -> Option<GeneralFormRow> {
+    pub(super) fn gen_current_row(&self) -> Option<GeneralFormRow> {
         self.gen_form_rows().get(self.gen_form_cursor).copied()
     }
 
@@ -208,7 +237,8 @@ impl GeneralSection {
         self.gen_form_cursor = self.gen_form_rows().len().saturating_sub(1);
     }
 
-    /// Left and Right on a segmented row (theme, style, startup focus) move
+    /// Left and Right on a segmented row (theme, style, scrollbars, startup
+    /// focus) move
     /// its choice, stopping at either end. Returns whether the cursor was on
     /// such a row.
     pub(super) fn gen_step_segmented(&mut self, step: isize) -> bool {
@@ -227,6 +257,14 @@ impl GeneralSection {
             Some(GeneralFormRow::Style) => {
                 let next = stepped(Self::style_index(self.gen_settings.style), 2);
                 self.gen_settings.style = Self::style_for_index(next);
+                true
+            }
+            Some(GeneralFormRow::Scrollbars) => {
+                let next = stepped(
+                    Self::scrollbar_visibility_index(self.gen_settings.scrollbar_visibility),
+                    3,
+                );
+                self.gen_settings.scrollbar_visibility = Self::scrollbar_visibility_for_index(next);
                 true
             }
             Some(GeneralFormRow::DefaultFocus) => {
@@ -255,6 +293,13 @@ impl GeneralSection {
             Some(GeneralFormRow::Style) => {
                 let next = (Self::style_index(self.gen_settings.style) + 1) % 2;
                 self.gen_settings.style = Self::style_for_index(next);
+                cx.notify();
+            }
+            Some(GeneralFormRow::Scrollbars) => {
+                let next =
+                    (Self::scrollbar_visibility_index(self.gen_settings.scrollbar_visibility) + 1)
+                        % 3;
+                self.gen_settings.scrollbar_visibility = Self::scrollbar_visibility_for_index(next);
                 cx.notify();
             }
             Some(GeneralFormRow::Language) => {
@@ -325,6 +370,11 @@ impl GeneralSection {
                     !self.gen_settings.auto_refresh_pause_on_error;
                 cx.notify();
             }
+            Some(GeneralFormRow::McpApprovalNotifications) => {
+                self.gen_settings.mcp_approval_notifications =
+                    !self.gen_settings.mcp_approval_notifications;
+                cx.notify();
+            }
             Some(GeneralFormRow::RefreshOnlyIfVisible) => {
                 self.gen_settings.auto_refresh_only_if_visible =
                     !self.gen_settings.auto_refresh_only_if_visible;
@@ -352,6 +402,8 @@ impl GeneralSection {
             Some(GeneralFormRow::UiFontFamily)
             | Some(GeneralFormRow::EditorFontFamily)
             | Some(GeneralFormRow::GridFontFamily)
+            | Some(GeneralFormRow::AccentDark)
+            | Some(GeneralFormRow::AccentLight)
             | Some(GeneralFormRow::UiFontSize)
             | Some(GeneralFormRow::EditorFontSize)
             | Some(GeneralFormRow::GridFontSize)
@@ -371,7 +423,7 @@ impl GeneralSection {
         }
     }
 
-    fn gen_focus_current_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn gen_focus_current_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.gen_editing_field = true;
 
         match self.gen_current_row() {
@@ -385,6 +437,14 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::GridFontFamily) => {
                 self.select_grid_font_family
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::AccentDark) => {
+                self.input_accent_dark
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::AccentLight) => {
+                self.input_accent_light
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             Some(GeneralFormRow::UiFontSize) => {
@@ -597,6 +657,11 @@ impl GeneralSection {
                 self.gen_move_up();
                 cx.notify();
             }
+            ("r", modifiers)
+                if modifiers == Modifiers::none() && self.reset_current_accent(window, cx) =>
+            {
+                cx.notify();
+            }
             ("g", modifiers) if modifiers == Modifiers::none() => {
                 self.gen_move_first();
                 cx.notify();
@@ -613,7 +678,7 @@ impl GeneralSection {
     /// cursor and focus to it, and scrolls it into view on the next render.
     /// Toasts show in the main window, away from the form the user is
     /// editing.
-    fn reject_field(
+    pub(super) fn reject_field(
         &mut self,
         row: GeneralFormRow,
         message: String,
@@ -685,7 +750,7 @@ impl GeneralSection {
 
     /// Reads a font size input, or reports `error_key` on `row` and returns
     /// `None`.
-    fn read_font_size(
+    pub(super) fn read_font_size(
         &mut self,
         input: &Entity<InputState>,
         row: GeneralFormRow,
@@ -712,33 +777,10 @@ impl GeneralSection {
     pub(super) fn save_general_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.gen_field_error = None;
 
-        let Some(ui_font_size) = self.read_font_size(
-            &self.input_ui_font_size.clone(),
-            GeneralFormRow::UiFontSize,
-            "settings.general.ui_font_size.error",
-            window,
-            cx,
-        ) else {
+        if self.page == GeneralPage::Appearance {
+            self.save_appearance_settings(window, cx);
             return;
-        };
-        let Some(editor_font_size) = self.read_font_size(
-            &self.input_editor_font_size.clone(),
-            GeneralFormRow::EditorFontSize,
-            "settings.general.editor_font_size.error",
-            window,
-            cx,
-        ) else {
-            return;
-        };
-        let Some(grid_font_size) = self.read_font_size(
-            &self.input_grid_font_size.clone(),
-            GeneralFormRow::GridFontSize,
-            "settings.general.grid_font_size.error",
-            window,
-            cx,
-        ) else {
-            return;
-        };
+        }
 
         let max_history_str = self.input_max_history.read(cx).value().trim().to_string();
         let max_history = match max_history_str.parse::<usize>() {
@@ -850,9 +892,6 @@ impl GeneralSection {
             }
         };
 
-        self.gen_settings.ui_font_size = ui_font_size;
-        self.gen_settings.editor_font_size = editor_font_size;
-        self.gen_settings.grid_font_size = grid_font_size;
         self.gen_settings.max_history_entries = max_history;
         self.gen_settings.auto_save_interval_ms = auto_save_ms;
         self.gen_settings.default_refresh_interval_secs = refresh_interval;
@@ -861,25 +900,37 @@ impl GeneralSection {
         self.gen_settings.object_preview_size_limit_mib = object_preview_limit;
         self.gen_settings.key_value_size_limit_mib = key_value_size_limit;
 
-        let runtime = self.app_state.read(cx).storage_runtime();
-        if let Err(e) =
-            dbflux_app::config_loader::save_general_settings(runtime, &self.gen_settings)
-        {
-            report_error(
-                UserFacingError::new(
-                    ErrorKind::Storage,
-                    dbflux_i18n::t!("settings.general.save.error", error = e),
-                ),
-                cx,
-            );
-            return;
-        }
+        self.commit_general_settings(window, cx);
+    }
+
+    /// Applies `gen_settings` to the running app and writes them to storage.
+    /// Shared by the General and Appearance pages, which each validate only
+    /// the fields they show.
+    pub(super) fn commit_general_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The inspector width is set by dragging, not by this form, so take the
+        // live value: saving another setting must not write back the width this
+        // window captured when it opened.
+        let inspector_width = self
+            .app_state
+            .read(cx)
+            .general_settings()
+            .workspace_inspector_width_px;
+        self.gen_settings.workspace_inspector_width_px = inspector_width;
 
         // Open code editors pick up settings such as Vim mode from this event.
         self.app_state.update(cx, |state, cx| {
             state.update_general_settings(self.gen_settings.clone());
             cx.emit(AppStateChanged);
         });
+
+        // The theme applied below reads the accents from this global.
+        dbflux_components::theme::set_accent_overrides(
+            cx,
+            dbflux_components::theme::AccentOverrides::new(
+                self.gen_settings.accent_dark,
+                self.gen_settings.accent_light,
+            ),
+        );
 
         // Update the density global so cx-based accessors reflect the new style immediately.
         dbflux_components::density::set_style(cx, self.gen_settings.style);
@@ -891,90 +942,23 @@ impl GeneralSection {
             cx,
         );
 
-        Toast::success(dbflux_i18n::t!("settings.general.save.success"))
-            .meta_right(now_hms())
-            .push(cx);
+        // The writer reports a failed write itself.
+        persist_general_settings(
+            &self.app_state,
+            self.gen_settings.clone(),
+            |saved, cx| {
+                if saved {
+                    Toast::success(dbflux_i18n::t!("settings.general.save.success"))
+                        .meta_right(now_hms())
+                        .push(cx);
+                }
+            },
+            cx,
+        );
     }
 
     pub(super) fn render_general_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme_index = Self::theme_index(self.gen_settings.theme);
-        let style_index = Self::style_index(self.gen_settings.style);
         let focus_index = Self::startup_focus_index(self.gen_settings.default_focus_on_startup);
-
-        let appearance = div()
-            .flex()
-            .flex_col()
-            .child(dbflux_components::composites::section_header(
-                dbflux_i18n::t!("settings.general.appearance.group"),
-                Some(AppIcon::Eye.into()),
-                cx,
-            ))
-            .child(self.render_gen_segmented(
-                dbflux_i18n::t!("settings.general.theme.label"),
-                Some(dbflux_i18n::t!("settings.general.theme.help")),
-                Self::theme_items(),
-                theme_index,
-                GeneralFormRow::Theme,
-                "theme",
-                |this, index| this.gen_settings.theme = Self::theme_for_index(index),
-                cx,
-            ))
-            .child(self.render_gen_segmented(
-                dbflux_i18n::t!("settings.general.style.label"),
-                Some(dbflux_i18n::t!("settings.general.style.help")),
-                Self::style_items(),
-                style_index,
-                GeneralFormRow::Style,
-                "density",
-                |this, index| this.gen_settings.style = Self::style_for_index(index),
-                cx,
-            ))
-            .child(self.render_gen_dropdown(
-                dbflux_i18n::t!("settings.general.language.label"),
-                Some(dbflux_i18n::t!("settings.general.language.notice")),
-                self.dropdown_language.clone(),
-                GeneralFormRow::Language,
-                cx,
-            ))
-            .child(self.render_gen_font_family(
-                FontFamilyField::Ui,
-                &self.select_ui_font_family,
-                GeneralFormRow::UiFontFamily,
-                cx,
-            ))
-            .child(self.render_gen_font_size(
-                dbflux_i18n::t!("settings.general.ui_font_size.label"),
-                dbflux_i18n::t!("settings.general.ui_font_size.help"),
-                &self.input_ui_font_size,
-                GeneralFormRow::UiFontSize,
-                cx,
-            ))
-            .child(self.render_gen_font_family(
-                FontFamilyField::Editor,
-                &self.select_editor_font_family,
-                GeneralFormRow::EditorFontFamily,
-                cx,
-            ))
-            .child(self.render_gen_font_size(
-                dbflux_i18n::t!("settings.general.editor_font_size.label"),
-                dbflux_i18n::t!("settings.general.editor_font_size.help"),
-                &self.input_editor_font_size,
-                GeneralFormRow::EditorFontSize,
-                cx,
-            ))
-            .child(self.render_gen_font_family(
-                FontFamilyField::Grid,
-                &self.select_grid_font_family,
-                GeneralFormRow::GridFontFamily,
-                cx,
-            ))
-            .child(self.render_gen_font_size(
-                dbflux_i18n::t!("settings.general.grid_font_size.label"),
-                dbflux_i18n::t!("settings.general.grid_font_size.help"),
-                &self.input_grid_font_size,
-                GeneralFormRow::GridFontSize,
-                cx,
-            ));
 
         let editor = div()
             .flex()
@@ -1265,7 +1249,20 @@ impl GeneralSection {
                 self.dropdown_toast_timeout.clone(),
                 GeneralFormRow::ToastTimeout,
                 cx,
-            ));
+            ))
+            .when(cfg!(feature = "mcp"), |this| {
+                this.child(self.render_gen_checkbox(
+                    "mcp-approval-notifications",
+                    dbflux_i18n::t!("settings.general.mcp_approval_notifications.label"),
+                    Some(dbflux_i18n::t!(
+                        "settings.general.mcp_approval_notifications.hint"
+                    )),
+                    self.gen_settings.mcp_approval_notifications,
+                    GeneralFormRow::McpApprovalNotifications,
+                    |this, value, _cx| this.gen_settings.mcp_approval_notifications = value,
+                    cx,
+                ))
+            });
 
         let nightly_storage = Self::is_nightly().then(|| {
             div()
@@ -1296,7 +1293,6 @@ impl GeneralSection {
             div()
                 .flex()
                 .flex_col()
-                .child(appearance)
                 .child(editor)
                 .child(data_grid)
                 .child(startup)
@@ -1314,31 +1310,33 @@ impl GeneralSection {
     pub(super) fn render_general_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         let is_save_focused = self.is_at(GeneralFormRow::SaveButton);
 
-        FluxButton::new(
-            "save-general",
-            dbflux_i18n::t!("settings.general.save.button"),
-        )
-        .primary()
-        .icon(AppIcon::Save)
-        .when_some(
-            crate::settings::save_shortcut(),
-            dbflux_components::controls::Button::kbd,
-        )
-        .focused(is_save_focused)
-        .on_click(cx.listener(|this, _, window, cx| {
-            this.select_row(GeneralFormRow::SaveButton);
-            this.save_general_settings(window, cx);
-        }))
-        .into_any_element()
+        let button_id = match self.page {
+            GeneralPage::General => "save-general",
+            GeneralPage::Appearance => "save-appearance",
+        };
+
+        FluxButton::new(button_id, dbflux_i18n::t!("settings.general.save.button"))
+            .primary()
+            .icon(AppIcon::Save)
+            .when_some(
+                crate::settings::save_shortcut(),
+                dbflux_components::controls::Button::kbd,
+            )
+            .focused(is_save_focused)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.select_row(GeneralFormRow::SaveButton);
+                this.save_general_settings(window, cx);
+            }))
+            .into_any_element()
     }
 
     /// Whether the keyboard cursor is on `row` while the page holds focus.
-    fn is_at(&self, row: GeneralFormRow) -> bool {
+    pub(super) fn is_at(&self, row: GeneralFormRow) -> bool {
         self.content_focused && self.gen_form_rows().get(self.gen_form_cursor).copied() == Some(row)
     }
 
     /// Moves the keyboard cursor to `row` and gives the page focus.
-    fn select_row(&mut self, row: GeneralFormRow) {
+    pub(super) fn select_row(&mut self, row: GeneralFormRow) {
         self.content_focused = true;
 
         if let Some(position) = self
@@ -1351,7 +1349,7 @@ impl GeneralSection {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render_gen_checkbox(
+    pub(super) fn render_gen_checkbox(
         &self,
         id: &'static str,
         label: String,
@@ -1385,7 +1383,7 @@ impl GeneralSection {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render_gen_segmented(
+    pub(super) fn render_gen_segmented(
         &self,
         label: String,
         help: Option<String>,
@@ -1425,7 +1423,7 @@ impl GeneralSection {
     }
 
     /// Select-width form row around `control`, a dropdown or select.
-    fn render_gen_dropdown(
+    pub(super) fn render_gen_dropdown(
         &self,
         label: String,
         help: Option<String>,
@@ -1453,7 +1451,7 @@ impl GeneralSection {
     }
 
     /// Font family row: a searchable select of the installed families.
-    fn render_gen_font_family(
+    pub(super) fn render_gen_font_family(
         &self,
         field: FontFamilyField,
         select: &FontFamilySelect,
@@ -1506,7 +1504,7 @@ impl GeneralSection {
     }
 
     /// Font size row: a numeric field with the pixel unit and a help line.
-    fn render_gen_font_size(
+    pub(super) fn render_gen_font_size(
         &self,
         label: String,
         help: String,
@@ -1525,8 +1523,10 @@ impl GeneralSection {
     }
 
     /// Stable element id for inputs that UI automation addresses by name.
-    fn input_element_id(row: GeneralFormRow) -> &'static str {
+    pub(super) fn input_element_id(row: GeneralFormRow) -> &'static str {
         match row {
+            GeneralFormRow::AccentDark => "general-accent-dark",
+            GeneralFormRow::AccentLight => "general-accent-light",
             GeneralFormRow::UiFontSize => "general-ui-font-size",
             GeneralFormRow::EditorFontSize => "general-editor-font-size",
             GeneralFormRow::GridFontSize => "general-grid-font-size",

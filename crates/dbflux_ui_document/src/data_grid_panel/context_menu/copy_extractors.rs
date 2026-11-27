@@ -47,10 +47,12 @@ pub(super) fn insert_statements(
             let assignments = columns
                 .iter()
                 .zip(values)
-                .map(|(column, value)| ColumnAssignment {
-                    name: column.name.clone(),
-                    value: value.clone(),
-                    type_name: Some(column.type_name.clone()),
+                .map(|(column, value)| {
+                    ColumnAssignment::typed(
+                        column.name.clone(),
+                        value.clone(),
+                        column.type_name.clone(),
+                    )
                 })
                 .collect();
             let insert = RowInsert::with_typed_assignments(
@@ -177,6 +179,9 @@ impl DataGridPanel {
             AppIcon::Table,
         ));
 
+        // The Markdown table joins the other extractors, in place of the
+        // plain list's own Copy as Markdown row.
+        items.retain(|item| item.action != Some(ContextMenuAction::CopyAsMarkdown));
         let insert_at = json_index + 1;
         items.splice(insert_at..insert_at, extractors);
         items

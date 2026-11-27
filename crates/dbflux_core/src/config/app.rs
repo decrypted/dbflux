@@ -1,4 +1,5 @@
 use crate::ConnectionHook;
+use crate::config::accent_color::AccentColor;
 use crate::driver::form::FormValues;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -416,6 +417,25 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub grid_fk_labels: bool,
 
+    // -- Appearance --
+    /// The accent the user picked for the Dark palette. `None` keeps the
+    /// palette's own accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent_dark: Option<AccentColor>,
+
+    /// The accent the user picked for the Light palette. `None` keeps the
+    /// palette's own accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent_light: Option<AccentColor>,
+
+    /// Notify when an MCP agent requests approval. Global only: it has no
+    /// per-driver override. On by default.
+    #[serde(default = "default_true")]
+    pub mcp_approval_notifications: bool,
+
+    /// When scrollbars are shown in every window. While scrolling by default.
+    #[serde(default)]
+    pub scrollbar_visibility: ScrollbarVisibility,
     /// Start a plain copy from the data grid (Ctrl+C, tab-separated) with a
     /// line of column names. Off by default, which keeps values only.
     #[serde(default)]
@@ -452,12 +472,23 @@ pub struct GeneralSettings {
     pub grid_font_size: f32,
 }
 
+/// A change the interface size commands make to the font sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterfaceSizeChange {
+    Increase,
+    Decrease,
+    Reset,
+}
+
 impl GeneralSettings {
     pub const DEFAULT_UI_FONT_SIZE: f32 = 13.0;
     pub const DEFAULT_EDITOR_FONT_SIZE: f32 = 13.0;
     pub const DEFAULT_GRID_FONT_SIZE: f32 = 12.5;
     pub const MIN_FONT_SIZE: f32 = 8.0;
     pub const MAX_FONT_SIZE: f32 = 32.0;
+    /// Pixels one interface size command adds to or removes from each font
+    /// size.
+    pub const INTERFACE_SIZE_STEP: f32 = 1.0;
     pub const DEFAULT_TOAST_AUTO_DISMISS_SECS: u32 = 8;
 
     /// Clamps a font size to `[MIN_FONT_SIZE, MAX_FONT_SIZE]`. A non-finite
@@ -469,6 +500,30 @@ impl GeneralSettings {
         } else {
             default
         }
+    }
+
+    /// Moves the interface, editor and data grid font sizes together, as the
+    /// interface size commands do. A step changes each size by
+    /// [`Self::INTERFACE_SIZE_STEP`] and stops it at the supported range, so
+    /// a size already at a limit stays there while the others still move.
+    pub fn change_interface_size(&mut self, change: InterfaceSizeChange) {
+        let step = match change {
+            InterfaceSizeChange::Increase => Self::INTERFACE_SIZE_STEP,
+            InterfaceSizeChange::Decrease => -Self::INTERFACE_SIZE_STEP,
+            InterfaceSizeChange::Reset => {
+                self.ui_font_size = Self::DEFAULT_UI_FONT_SIZE;
+                self.editor_font_size = Self::DEFAULT_EDITOR_FONT_SIZE;
+                self.grid_font_size = Self::DEFAULT_GRID_FONT_SIZE;
+                return;
+            }
+        };
+
+        self.ui_font_size =
+            Self::clamp_font_size(self.ui_font_size + step, Self::DEFAULT_UI_FONT_SIZE);
+        self.editor_font_size =
+            Self::clamp_font_size(self.editor_font_size + step, Self::DEFAULT_EDITOR_FONT_SIZE);
+        self.grid_font_size =
+            Self::clamp_font_size(self.grid_font_size + step, Self::DEFAULT_GRID_FONT_SIZE);
     }
 
     /// Trims a font family name. A missing or blank name becomes `None`,
@@ -555,6 +610,10 @@ impl Default for GeneralSettings {
             table_alias_use_as: false,
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: true,
+            scrollbar_visibility: ScrollbarVisibility::WhileScrolling,
             grid_copy_column_names: false,
             grid_header_click_sorts: false,
             ui_font_family: None,
@@ -584,9 +643,31 @@ mod font_settings_tests {
 
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
         assert!(!legacy.grid_fk_labels);
+        assert_eq!(
+            legacy.scrollbar_visibility,
+            super::ScrollbarVisibility::WhileScrolling
+        );
         assert!(!legacy.grid_copy_column_names);
         assert!(!legacy.grid_header_click_sorts);
         assert_eq!(legacy, settings);
+    }
+
+    #[test]
+    fn accent_overrides_default_to_the_palette_and_round_trip() {
+        let settings = GeneralSettings::default();
+        assert_eq!((settings.accent_dark, settings.accent_light), (None, None));
+
+        let custom = GeneralSettings {
+            accent_dark: Some(super::AccentColor::from_rgb(0x2F7D6D)),
+            ..GeneralSettings::default()
+        };
+        let json = serde_json::to_string(&custom).expect("serializes");
+        assert!(json.contains("\"accent_dark\":\"#2F7D6D\""), "{json}");
+        assert!(!json.contains("accent_light"), "{json}");
+        assert_eq!(
+            serde_json::from_str::<GeneralSettings>(&json).expect("round trips"),
+            custom
+        );
     }
 
     #[test]
@@ -683,6 +764,21 @@ pub enum AppStyle {
     #[default]
     Default,
     Compact,
+}
+
+/// When scrollbars are shown.
+///
+/// - `WhileScrolling` — the bar appears while the content scrolls and fades
+///   out when idle.
+/// - `OnHover` — the bar appears while the pointer is over the scroll area.
+/// - `Always` — the bar stays visible.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollbarVisibility {
+    #[default]
+    WhileScrolling,
+    OnHover,
+    Always,
 }
 
 fn default_true() -> bool {

@@ -685,11 +685,19 @@ use dbflux_components::components::data_table::selection::CellCoord;
 mod builder_binding;
 mod builder_draft_and_fk;
 mod builder_mutations;
+#[cfg(feature = "telemetry")]
+mod builder_usage;
 mod bulk_delete_outcome;
 mod close_completion;
 mod collection_views;
+mod column_header_menu;
+mod copy_as_markdown;
 mod copy_extractors;
+mod copy_selection;
+mod edit_guard;
+mod explain_entry;
 mod export_all;
+mod expressions;
 mod facets;
 mod fk_label_identity;
 mod fk_navigation;
@@ -698,6 +706,9 @@ mod reload_pending_edits;
 mod reload_state;
 mod sources_and_keys;
 mod statement_outcome;
+
+#[cfg(feature = "telemetry")]
+pub(super) use builder_usage::run_builder_fixture_worker;
 
 fn reload_columns(names: &[&str]) -> Vec<ColumnMeta> {
     names

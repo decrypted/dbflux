@@ -184,6 +184,7 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             KeyboardPath::Command(Command::Execute),
         ),
         ("grid-fk-labels", KeyboardPath::Command(Command::Execute)),
+        ("grid-pk-sort-desc", KeyboardPath::Command(Command::Execute)),
         (
             "mcp-approval-notifications",
             KeyboardPath::Command(Command::Execute),

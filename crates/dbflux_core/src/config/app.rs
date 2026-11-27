@@ -416,6 +416,10 @@ pub struct GeneralSettings {
     /// grid. Off by default; the row inspector always resolves references.
     #[serde(default)]
     pub grid_fk_labels: bool,
+    /// Open tables ordered by primary key descending, so the newest rows of
+    /// an auto-increment key come first. Off by default (ascending).
+    #[serde(default)]
+    pub grid_pk_sort_desc: bool,
 
     // -- Appearance --
     /// The accent the user picked for the Dark palette. `None` keeps the
@@ -601,6 +605,7 @@ impl Default for GeneralSettings {
             table_alias_use_as: false,
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
+            grid_pk_sort_desc: false,
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: true,

@@ -698,6 +698,7 @@ mod explain_entry;
 mod export_all;
 mod expressions;
 mod facets;
+mod first_page_order;
 mod fk_label_identity;
 mod fk_navigation;
 mod reload_pending_edits;

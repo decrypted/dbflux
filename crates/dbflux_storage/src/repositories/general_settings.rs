@@ -45,7 +45,8 @@ impl GeneralSettingsRepository {
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        table_alias_completion, table_alias_use_as,
                        grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
-                       accent_dark, accent_light, mcp_approval_notifications, updated_at
+                       accent_dark, accent_light, mcp_approval_notifications, grid_pk_sort_desc,
+                       updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -94,7 +95,8 @@ impl GeneralSettingsRepository {
                 accent_dark: row.get(35)?,
                 accent_light: row.get(36)?,
                 mcp_approval_notifications: row.get(37)?,
-                updated_at: row.get(38)?,
+                grid_pk_sort_desc: row.get(38)?,
+                updated_at: row.get(39)?,
             })
         });
 
@@ -127,8 +129,9 @@ impl GeneralSettingsRepository {
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     table_alias_completion, table_alias_use_as,
                     grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
-                    accent_dark, accent_light, mcp_approval_notifications, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, datetime('now'))
+                    accent_dark, accent_light, mcp_approval_notifications, grid_pk_sort_desc,
+                    updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -167,6 +170,7 @@ impl GeneralSettingsRepository {
                     accent_dark = excluded.accent_dark,
                     accent_light = excluded.accent_light,
                     mcp_approval_notifications = excluded.mcp_approval_notifications,
+                    grid_pk_sort_desc = excluded.grid_pk_sort_desc,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -207,6 +211,7 @@ impl GeneralSettingsRepository {
                     settings.accent_dark,
                     settings.accent_light,
                     settings.mcp_approval_notifications,
+                    settings.grid_pk_sort_desc,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -313,6 +318,8 @@ pub struct GeneralSettingsDto {
     pub accent_light: Option<String>,
     /// Whether a new pending MCP approval raises a notification (1) or not (0).
     pub mcp_approval_notifications: i32,
+    /// Whether tables open ordered by primary key descending: 1 on, 0 off.
+    pub grid_pk_sort_desc: i32,
     pub updated_at: String,
 }
 
@@ -411,6 +418,7 @@ mod tests {
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: 1,
+            grid_pk_sort_desc: 0,
             updated_at: String::new(),
         };
 
@@ -478,6 +486,7 @@ mod tests {
                 accent_dark: None,
                 accent_light: None,
                 mcp_approval_notifications: 1,
+                grid_pk_sort_desc: 0,
                 updated_at: String::new(),
             };
 
@@ -565,6 +574,7 @@ mod tests {
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: 1,
+            grid_pk_sort_desc: 0,
             updated_at: String::new(),
         };
 
@@ -670,6 +680,7 @@ mod tests {
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: 1,
+            grid_pk_sort_desc: 0,
             updated_at: String::new(),
         };
 
@@ -731,6 +742,7 @@ mod tests {
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: 1,
+            grid_pk_sort_desc: 0,
             updated_at: String::new(),
         };
 
@@ -824,6 +836,7 @@ mod tests {
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: 1,
+            grid_pk_sort_desc: 0,
             updated_at: String::new(),
         };
 
@@ -907,6 +920,7 @@ mod tests {
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: 1,
+            grid_pk_sort_desc: 1,
             updated_at: String::new(),
         };
 
@@ -914,6 +928,7 @@ mod tests {
 
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.grid_fk_labels, 1);
+        assert_eq!(fetched.grid_pk_sort_desc, 1);
         assert_eq!(fetched.scrollbar_visibility, "while_scrolling");
 
         repo.upsert(&GeneralSettingsDto {

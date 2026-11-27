@@ -61,6 +61,7 @@ impl GeneralSection {
             current.table_alias_completion != saved.table_alias_completion,
             current.table_alias_use_as != saved.table_alias_use_as,
             current.grid_fk_labels != saved.grid_fk_labels,
+            current.grid_pk_sort_desc != saved.grid_pk_sort_desc,
             current.toast_auto_dismiss_secs != saved.toast_auto_dismiss_secs,
             current.mcp_approval_notifications != saved.mcp_approval_notifications,
         ];
@@ -152,6 +153,7 @@ impl GeneralSection {
             GeneralFormRow::TableAlias,
             GeneralFormRow::TableAliasUseAs,
             GeneralFormRow::GridFkLabels,
+            GeneralFormRow::GridPkSortDesc,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -323,6 +325,10 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::GridFkLabels) => {
                 self.gen_settings.grid_fk_labels = !self.gen_settings.grid_fk_labels;
+                cx.notify();
+            }
+            Some(GeneralFormRow::GridPkSortDesc) => {
+                self.gen_settings.grid_pk_sort_desc = !self.gen_settings.grid_pk_sort_desc;
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -1006,6 +1012,15 @@ impl GeneralSection {
                 self.gen_settings.grid_fk_labels,
                 GeneralFormRow::GridFkLabels,
                 |this, value, _cx| this.gen_settings.grid_fk_labels = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "grid-pk-sort-desc",
+                dbflux_i18n::t!("settings.general.grid_pk_sort_desc.label"),
+                Some(dbflux_i18n::t!("settings.general.grid_pk_sort_desc.hint")),
+                self.gen_settings.grid_pk_sort_desc,
+                GeneralFormRow::GridPkSortDesc,
+                |this, value, _cx| this.gen_settings.grid_pk_sort_desc = value,
                 cx,
             ));
 

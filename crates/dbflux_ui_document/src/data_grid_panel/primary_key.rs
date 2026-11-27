@@ -22,6 +22,7 @@ impl DataGridPanel {
                     "[PK] Cannot fetch table details: profile {} is not connected",
                     profile_id
                 );
+                self.release_first_page(cx);
                 return;
             };
             Self::table_details_database(connected, source_database.as_deref())
@@ -74,6 +75,7 @@ impl DataGridPanel {
                     ),
                     cx,
                 );
+                self.release_first_page(cx);
                 return;
             }
         };
@@ -103,6 +105,7 @@ impl DataGridPanel {
                         );
                         entity.update(cx, |panel, cx| {
                             panel.pk_details_pending = false;
+                            panel.release_first_page(cx);
                             cx.notify();
                         });
                         return;
@@ -155,7 +158,42 @@ impl DataGridPanel {
 
     /// Applies primary-key columns the panel just learned about and rebuilds the
     /// table, so editability and any committed builder binding see them.
+    ///
+    /// A first page held back for the key is read here: in key order when the
+    /// key arrived (the requery), unsorted when the table has none.
     pub(super) fn apply_pk_details(&mut self, pk_names: Vec<String>, cx: &mut Context<Self>) {
+        self.apply_pk_details_to_source(pk_names, cx);
+        self.release_first_page(cx);
+    }
+
+    /// Read the first page if it was held back for the primary key, through
+    /// `refresh` like every other read of the table: with the order just
+    /// learned, or as the source stands when no key is coming.
+    ///
+    /// The read runs once the current update ends, in the window the table
+    /// opened in, rather than on the next frame: a tab that is not drawn yet
+    /// still loads its rows. A window closed meanwhile has no grid to fill.
+    pub(super) fn release_first_page(&mut self, cx: &mut Context<Self>) {
+        let Some(window_handle) = self.first_page_awaits_pk.take() else {
+            return;
+        };
+
+        // The key requery rewrote the source with the order it asks for, so
+        // `refresh` reads the same page; left queued it would read it twice.
+        self.pending.requery = None;
+
+        let panel = cx.entity();
+        cx.defer(move |cx| {
+            let read = window_handle.update(cx, |_, window, cx| {
+                panel.update(cx, |panel, cx| panel.refresh(window, cx));
+            });
+            if read.is_err() {
+                log::debug!("[PK] window closed before the first page was read");
+            }
+        });
+    }
+
+    fn apply_pk_details_to_source(&mut self, pk_names: Vec<String>, cx: &mut Context<Self>) {
         self.pk_details_pending = false;
         // The details carry the table's facets (a hypertable's time axis).
         self.sync_source_facets(cx);
@@ -288,6 +326,7 @@ impl DataGridPanel {
         cx: &Context<Self>,
     ) -> Vec<OrderByColumn> {
         let state = app_state.read(cx);
+        let descending = state.general_settings().grid_pk_sort_desc;
         let Some(connected) = state.connections().get(&profile_id) else {
             return Vec::new();
         };
@@ -299,12 +338,7 @@ impl DataGridPanel {
             table.name.clone(),
         );
         if let Some(table_info) = connected.table_details.get(&cache_key) {
-            let columns = table_info.columns.as_deref().unwrap_or(&[]);
-            return columns
-                .iter()
-                .filter(|c| c.is_primary_key)
-                .map(|c| OrderByColumn::asc(&c.name))
-                .collect();
+            return primary_key_order(table_info.columns.as_deref().unwrap_or(&[]), descending);
         }
 
         // Check database_schemas (MySQL/MariaDB lazy loading)
@@ -313,12 +347,7 @@ impl DataGridPanel {
         {
             for t in &db_schema.tables {
                 if t.name == table.name {
-                    let columns = t.columns.as_deref().unwrap_or(&[]);
-                    return columns
-                        .iter()
-                        .filter(|c| c.is_primary_key)
-                        .map(|c| OrderByColumn::asc(&c.name))
-                        .collect();
+                    return primary_key_order(t.columns.as_deref().unwrap_or(&[]), descending);
                 }
             }
         }
@@ -332,12 +361,7 @@ impl DataGridPanel {
             if table.schema.as_deref() == Some(&db_schema.name) || table.schema.is_none() {
                 for t in &db_schema.tables {
                     if t.name == table.name {
-                        let columns = t.columns.as_deref().unwrap_or(&[]);
-                        return columns
-                            .iter()
-                            .filter(|c| c.is_primary_key)
-                            .map(|c| OrderByColumn::asc(&c.name))
-                            .collect();
+                        return primary_key_order(t.columns.as_deref().unwrap_or(&[]), descending);
                     }
                 }
             }
@@ -359,5 +383,59 @@ impl DataGridPanel {
         }
 
         !self.pk_columns.is_empty()
+    }
+}
+
+/// The default order of a table: its primary key columns, in key order,
+/// ascending or, with the `grid_pk_sort_desc` setting, descending.
+fn primary_key_order(columns: &[dbflux_core::ColumnInfo], descending: bool) -> Vec<OrderByColumn> {
+    columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| {
+            if descending {
+                OrderByColumn::desc(&c.name)
+            } else {
+                OrderByColumn::asc(&c.name)
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod primary_key_order_tests {
+    use super::primary_key_order;
+    use dbflux_core::{ColumnInfo, SortDirection};
+
+    fn column(name: &str, is_primary_key: bool) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            type_name: "int4".to_string(),
+            nullable: false,
+            is_primary_key,
+            default_value: None,
+            enum_values: None,
+        }
+    }
+
+    #[test]
+    fn orders_by_the_key_columns_in_the_chosen_direction() {
+        let columns = [
+            column("tenant", true),
+            column("name", false),
+            column("id", true),
+        ];
+
+        for (descending, direction) in [
+            (false, SortDirection::Ascending),
+            (true, SortDirection::Descending),
+        ] {
+            let order = primary_key_order(&columns, descending);
+            let got: Vec<(&str, SortDirection)> = order
+                .iter()
+                .map(|o| (o.column.name.as_str(), o.direction))
+                .collect();
+            assert_eq!(got, vec![("tenant", direction), ("id", direction)]);
+        }
     }
 }

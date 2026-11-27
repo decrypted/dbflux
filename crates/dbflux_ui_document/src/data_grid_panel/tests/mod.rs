@@ -157,9 +157,13 @@ impl dbflux_core::Connection for StubConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
+
+    #[expect(
+        clippy::unimplemented,
+        reason = "test-only stub connection: no test path in this suite calls the dialect"
+    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        // Read when the grid builds a table, for its cell expressions.
-        &dbflux_core::DefaultSqlDialect
+        unimplemented!()
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
@@ -517,9 +521,13 @@ impl dbflux_core::Connection for StubBuilderConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
+
+    #[expect(
+        clippy::unimplemented,
+        reason = "test-only stub connection: no test path in this suite calls the dialect"
+    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        // Read when the grid builds a table, for its cell expressions.
-        &dbflux_core::DefaultSqlDialect
+        unimplemented!("StubBuilderConnection::dialect not needed for this test")
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {
@@ -677,11 +685,19 @@ use dbflux_components::components::data_table::selection::CellCoord;
 mod builder_binding;
 mod builder_draft_and_fk;
 mod builder_mutations;
+#[cfg(feature = "telemetry")]
+mod builder_usage;
 mod bulk_delete_outcome;
-mod cell_expressions;
 mod close_completion;
 mod collection_views;
+mod column_header_menu;
+mod copy_as_markdown;
+mod copy_selection;
+mod edit_guard;
+mod events_grid;
+mod explain_entry;
 mod export_all;
+mod expressions;
 mod facets;
 mod fk_label_identity;
 mod fk_navigation;
@@ -692,6 +708,9 @@ mod review_changes;
 mod selection_totals;
 mod sources_and_keys;
 mod statement_outcome;
+
+#[cfg(feature = "telemetry")]
+pub(super) use builder_usage::run_builder_fixture_worker;
 
 fn reload_columns(names: &[&str]) -> Vec<ColumnMeta> {
     names

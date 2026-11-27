@@ -12,6 +12,7 @@ use gpui::prelude::*;
 use gpui::{App, ClipboardItem, Context, FocusHandle, Window, div, px};
 use gpui_component::ActiveTheme;
 
+use super::edit_guard::OnStop;
 use super::row_statements::{row_delete, row_insert, staged_row_patch};
 use super::{DataGridPanel, DataSource, PendingBatchRemaining};
 
@@ -144,7 +145,9 @@ impl DataGridPanel {
 
     /// Runs the reviewed statements: the save the review showed, with the
     /// row lists it was built from. The deletes run without the separate
-    /// delete confirmation, which the review already was.
+    /// delete confirmation, and the saves without the expression
+    /// confirmation, which the review already was. The table's key is still
+    /// checked before anything is written, as a Save without a review does.
     pub(crate) fn confirm_change_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(review) = self.change_review.take() else {
             return;
@@ -156,12 +159,16 @@ impl DataGridPanel {
             ..
         } = review;
 
-        if !inserts.is_empty() || !dirty_rows.is_empty() {
-            self.pending_batch_remaining = Some(PendingBatchRemaining {
+        self.expressions_reviewed = true;
+        let needs_key_check = !dirty_rows.is_empty();
+        let remaining = (!inserts.is_empty() || !dirty_rows.is_empty()).then(|| {
+            let dirty_keys = self.dirty_row_keys(&dirty_rows, cx);
+            PendingBatchRemaining {
                 pending_inserts: inserts,
                 dirty_rows,
-            });
-        }
+                dirty_keys,
+            }
+        });
 
         match &self.source {
             DataSource::Table {
@@ -170,20 +177,50 @@ impl DataGridPanel {
                 table,
                 ..
             } if !deletes.is_empty() => {
-                self.batch_op_in_flight = true;
-                self.commit_bulk_deletes_table(
-                    *profile_id,
-                    database.clone(),
-                    table.clone(),
-                    deletes,
-                    cx,
-                );
-            }
-            _ => {
-                if self.pending_batch_remaining.is_some() {
-                    self.process_next_batch_op(cx);
+                let (profile_id, database, table) = (*profile_id, database.clone(), table.clone());
+                self.pending_batch_remaining = remaining;
+                if let Some((identities, unidentified)) =
+                    self.capture_delete_identities(&deletes, cx)
+                {
+                    self.batch_op_in_flight = true;
+                    self.guard_edit(
+                        OnStop::AbandonBatch,
+                        move |panel, cx| {
+                            panel.run_captured_deletes(
+                                profile_id,
+                                database,
+                                table,
+                                identities,
+                                unidentified,
+                                cx,
+                            );
+                        },
+                        cx,
+                    );
                 }
             }
+            _ => match remaining {
+                Some(remaining) if needs_key_check => {
+                    // Parked on the guard, as Save parks it, so an insert
+                    // removed while the key is checked still renumbers it.
+                    self.batch_op_in_flight = true;
+                    self.edit_guard.parked_batch = Some(remaining);
+                    self.guard_edit(
+                        OnStop::AbandonBatch,
+                        |panel, cx| {
+                            panel.batch_op_in_flight = false;
+                            panel.pending_batch_remaining = panel.edit_guard.parked_batch.take();
+                            panel.process_next_batch_op(cx);
+                        },
+                        cx,
+                    );
+                }
+                Some(remaining) => {
+                    self.pending_batch_remaining = Some(remaining);
+                    self.process_next_batch_op(cx);
+                }
+                None => self.expressions_reviewed = false,
+            },
         }
 
         self.focus_active_view(window, cx);

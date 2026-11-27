@@ -675,6 +675,21 @@ bitflags! {
         /// `Connection::secret_stores`. A driver whose connections return no
         /// stores MUST NOT advertise this flag.
         const SECRET_STORE = 1 << 64;
+
+        /// Connection reaches one cloud region, and the user can move it to
+        /// another one without editing the profile: `Connection::current_region`
+        /// reports the region in use, `Connection::available_regions` lists the
+        /// ones it can move to, and `DbDriver::with_region` builds the config
+        /// for the new one. Gates the region control in the documents that
+        /// browse cloud resources; a driver without a region MUST NOT
+        /// advertise this flag.
+        const REGION_SWITCH = 1 << 65;
+
+        /// Connection declares sidebar root sections through
+        /// `Connection::root_section_source`. The sidebar renders them with
+        /// one generic builder; a driver whose connections return no source
+        /// MUST NOT advertise this flag.
+        const ROOT_SECTIONS = 1 << 66;
     }
 }
 
@@ -735,6 +750,16 @@ mod capability_bits_tests {
     #[test]
     fn secret_store_bit_value() {
         assert_eq!(DriverCapabilities::SECRET_STORE.bits(), 1u128 << 64);
+    }
+
+    #[test]
+    fn region_switch_bit_value() {
+        assert_eq!(DriverCapabilities::REGION_SWITCH.bits(), 1u128 << 65);
+    }
+
+    #[test]
+    fn root_sections_bit_value() {
+        assert_eq!(DriverCapabilities::ROOT_SECTIONS.bits(), 1u128 << 66);
     }
 
     #[test]
@@ -805,6 +830,8 @@ mod capability_bits_tests {
             DriverCapabilities::NATIVE_CONSOLE,
             DriverCapabilities::REQUEST_ROW_LIMIT,
             DriverCapabilities::SECRET_STORE,
+            DriverCapabilities::REGION_SWITCH,
+            DriverCapabilities::ROOT_SECTIONS,
         ];
 
         let mut seen_bits: u128 = 0;
@@ -1671,6 +1698,16 @@ pub struct QueryCapabilities {
 
     /// Whether the driver supports EXPLAIN (query planning).
     pub supports_explain: bool,
+
+    /// Whether the driver can run a read statement and report an analyzed
+    /// plan with actual rows and timings.
+    ///
+    /// Not carried over the driver RPC: `DriverMetadata` crosses it as a
+    /// positional postcard payload, so a field here would shift every later
+    /// byte for a peer built before it existed. No RPC operation returns an
+    /// analyzed plan, so a remote driver never claims it.
+    #[serde(skip)]
+    pub supports_explain_analyze: bool,
 }
 
 impl Default for QueryCapabilities {
@@ -1709,6 +1746,7 @@ impl Default for QueryCapabilities {
             supports_window_functions: true,
             supports_ctes: true,
             supports_explain: true,
+            supports_explain_analyze: false,
         }
     }
 }
@@ -2979,6 +3017,25 @@ mod tests {
         let limits = DriverLimits::default();
         assert_eq!(limits.max_identifier_length, 63);
         assert_eq!(limits.max_nested_subqueries, 16);
+    }
+
+    /// `DriverMetadata` crosses the driver RPC as a positional postcard
+    /// payload, so a field that serializes shifts every later byte for a peer
+    /// built before it existed. The list of serialized fields is what a
+    /// positional format encodes.
+    #[test]
+    fn the_analyze_capability_is_not_serialized() {
+        let capabilities = QueryCapabilities {
+            supports_explain_analyze: true,
+            ..QueryCapabilities::default()
+        };
+
+        let value = serde_json::to_value(&capabilities).expect("serialize");
+        let object = value.as_object().expect("a struct is an object");
+        assert!(!object.contains_key("supports_explain_analyze"));
+
+        let decoded: QueryCapabilities = serde_json::from_value(value).expect("deserialize");
+        assert!(!decoded.supports_explain_analyze);
     }
 
     #[test]

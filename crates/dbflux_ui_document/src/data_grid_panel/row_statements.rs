@@ -4,10 +4,19 @@
 //! shows the requests the save will make, not a reconstruction of them.
 
 use dbflux_components::components::data_table::DataTableState;
-use dbflux_components::components::data_table::model::CellValue;
+use dbflux_components::components::data_table::model::{CellValue, ColumnSpec};
 use dbflux_core::{ColumnAssignment, RowDelete, RowIdentity, RowInsert, RowPatch, TableRef, Value};
 
-use super::cell_expressions::column_assignment;
+/// The assignment a save writes for `cell` in `column`: the expression the
+/// cell holds, written verbatim, or its value, bound.
+pub(super) fn column_assignment(column: &ColumnSpec, cell: &CellValue) -> ColumnAssignment {
+    ColumnAssignment {
+        name: column.title.to_string(),
+        value: cell.to_value(),
+        type_name: Some(column.type_name.to_string()),
+        expression: cell.as_expression().map(str::to_owned),
+    }
+}
 
 /// Why a staged row edit cannot become an UPDATE.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +122,8 @@ pub(super) fn staged_row_patch(
 /// The INSERT of pending insert `insert_idx`, or `None` when there is no
 /// such insert. The insert names no value for a null or column-default
 /// cell, leaving those to the database, and has no assignments when every
-/// cell is one of them.
+/// cell is one of them. An expression is written even though its bound
+/// value is NULL.
 pub(super) fn row_insert(
     state: &DataTableState,
     insert_idx: usize,
@@ -125,7 +135,9 @@ pub(super) fn row_insert(
     let assignments = cells
         .iter()
         .enumerate()
-        .filter(|(_, cell)| !matches!(cell.to_value(), Value::Null))
+        .filter(|(_, cell)| {
+            cell.as_expression().is_some() || !matches!(cell.to_value(), Value::Null)
+        })
         .filter_map(|(col_idx, cell)| {
             model
                 .columns

@@ -97,14 +97,11 @@ pub struct ColumnAssignment {
     /// `serde(default)` present.
     #[serde(default)]
     pub type_name: Option<String>,
-    /// Whether `value` is a `Value::Text` holding a SQL expression the
-    /// statement carries unquoted (`NOW()`) instead of a literal.
-    ///
-    /// Never serialized: an assignment that crosses a process or protocol
-    /// boundary (IPC, MCP) always arrives as a literal, so no remote input
-    /// can turn its text into SQL.
-    #[serde(skip)]
-    pub is_expression: bool,
+    /// A SQL expression written verbatim in place of the value literal
+    /// (`gen_random_uuid()`, `now()`). `value` is `Value::Null` when it is
+    /// set. Always encoded, for the same `postcard` reason as `type_name`.
+    #[serde(default)]
+    pub expression: Option<String>,
 }
 
 impl ColumnAssignment {
@@ -113,8 +110,22 @@ impl ColumnAssignment {
             name: name.into(),
             value,
             type_name: None,
-            is_expression: false,
+            expression: None,
         }
+    }
+
+    /// An assignment whose right-hand side is raw SQL, not a quoted literal.
+    pub fn expression(name: impl Into<String>, expression: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: Value::Null,
+            type_name: None,
+            expression: Some(expression.into()),
+        }
+    }
+
+    pub fn is_expression(&self) -> bool {
+        self.expression.is_some()
     }
 
     pub fn typed(name: impl Into<String>, value: Value, type_name: impl Into<String>) -> Self {
@@ -122,51 +133,7 @@ impl ColumnAssignment {
             name: name.into(),
             value,
             type_name: Some(type_name.into()),
-            is_expression: false,
-        }
-    }
-
-    /// An assignment of the SQL expression `expression`, written into the
-    /// statement as it is. See [`crate::validate_cell_expression`] for what
-    /// the statement builders accept.
-    pub fn expression(
-        name: impl Into<String>,
-        expression: impl Into<String>,
-        type_name: Option<String>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            value: Value::Text(expression.into()),
-            type_name,
-            is_expression: true,
-        }
-    }
-
-    /// The SQL expression this assignment carries, or `None` for a literal.
-    pub fn sql_expression(&self) -> Option<&str> {
-        match (&self.value, self.is_expression) {
-            (Value::Text(expression), true) => Some(expression),
-            _ => None,
-        }
-    }
-
-    /// The right-hand side of this assignment in a statement of `dialect`:
-    /// the expression as it is, or the value as a literal typed by
-    /// `type_name`.
-    ///
-    /// # Errors
-    ///
-    /// An expression that [`crate::validate_cell_expression`] rejects.
-    pub fn to_sql(
-        &self,
-        dialect: &dyn crate::SqlDialect,
-    ) -> Result<String, crate::CellExpressionError> {
-        match self.sql_expression() {
-            Some(expression) => {
-                crate::validate_cell_expression(expression)?;
-                Ok(expression.trim().to_string())
-            }
-            None => Ok(dialect.value_to_literal_typed(&self.value, self.type_name.as_deref())),
+            expression: None,
         }
     }
 
@@ -178,13 +145,23 @@ impl ColumnAssignment {
 
 impl From<(String, Value)> for ColumnAssignment {
     fn from((name, value): (String, Value)) -> Self {
-        Self::new(name, value)
+        Self {
+            name,
+            value,
+            type_name: None,
+            expression: None,
+        }
     }
 }
 
 impl From<(&str, Value)> for ColumnAssignment {
     fn from((name, value): (&str, Value)) -> Self {
-        Self::new(name, value)
+        Self {
+            name: name.to_string(),
+            value,
+            type_name: None,
+            expression: None,
+        }
     }
 }
 
@@ -201,6 +178,8 @@ struct RowPatchWire {
     changes: Vec<(String, Value)>,
     #[serde(default)]
     change_types: Vec<Option<String>>,
+    #[serde(default)]
+    change_expressions: Vec<Option<String>>,
 }
 
 /// Changes to apply to a single row via UPDATE.
@@ -267,6 +246,7 @@ impl From<RowPatchWire> for RowPatch {
             schema,
             changes,
             change_types,
+            change_expressions,
         } = wire;
 
         let changes = changes
@@ -276,7 +256,7 @@ impl From<RowPatchWire> for RowPatch {
                 name,
                 value,
                 type_name: change_types.get(idx).cloned().flatten(),
-                is_expression: false,
+                expression: change_expressions.get(idx).cloned().flatten(),
             })
             .collect();
 
@@ -293,18 +273,28 @@ impl From<RowPatch> for RowPatchWire {
     fn from(patch: RowPatch) -> Self {
         let mut changes = Vec::with_capacity(patch.changes.len());
         let mut change_types = Vec::with_capacity(patch.changes.len());
+        let mut change_expressions = Vec::with_capacity(patch.changes.len());
         let mut any_typed = false;
+        let mut any_expression = false;
 
         for assignment in patch.changes {
             if assignment.type_name.is_some() {
                 any_typed = true;
             }
+            if assignment.expression.is_some() {
+                any_expression = true;
+            }
             change_types.push(assignment.type_name);
+            change_expressions.push(assignment.expression);
             changes.push((assignment.name, assignment.value));
         }
 
         if !any_typed {
             change_types.clear();
+        }
+
+        if !any_expression {
+            change_expressions.clear();
         }
 
         Self {
@@ -313,6 +303,7 @@ impl From<RowPatch> for RowPatchWire {
             schema: patch.schema,
             changes,
             change_types,
+            change_expressions,
         }
     }
 }
@@ -326,6 +317,8 @@ struct RowInsertWire {
     values: Vec<Value>,
     #[serde(default)]
     column_types: Vec<Option<String>>,
+    #[serde(default)]
+    column_expressions: Vec<Option<String>>,
 }
 
 /// Data for INSERT operation.
@@ -366,7 +359,7 @@ impl RowInsert {
                 name,
                 value,
                 type_name: None,
-                is_expression: false,
+                expression: None,
             })
             .collect();
         Self {
@@ -411,6 +404,7 @@ impl From<RowInsertWire> for RowInsert {
             columns,
             values,
             column_types,
+            column_expressions,
         } = wire;
 
         let assignments = columns
@@ -421,7 +415,7 @@ impl From<RowInsertWire> for RowInsert {
                 name,
                 value,
                 type_name: column_types.get(idx).cloned().flatten(),
-                is_expression: false,
+                expression: column_expressions.get(idx).cloned().flatten(),
             })
             .collect();
 
@@ -438,13 +432,19 @@ impl From<RowInsert> for RowInsertWire {
         let mut columns = Vec::with_capacity(insert.assignments.len());
         let mut values = Vec::with_capacity(insert.assignments.len());
         let mut column_types = Vec::with_capacity(insert.assignments.len());
+        let mut column_expressions = Vec::with_capacity(insert.assignments.len());
         let mut any_typed = false;
+        let mut any_expression = false;
 
         for assignment in insert.assignments {
             if assignment.type_name.is_some() {
                 any_typed = true;
             }
+            if assignment.expression.is_some() {
+                any_expression = true;
+            }
             column_types.push(assignment.type_name);
+            column_expressions.push(assignment.expression);
             columns.push(assignment.name);
             values.push(assignment.value);
         }
@@ -453,12 +453,17 @@ impl From<RowInsert> for RowInsertWire {
             column_types.clear();
         }
 
+        if !any_expression {
+            column_expressions.clear();
+        }
+
         Self {
             table: insert.table,
             schema: insert.schema,
             columns,
             values,
             column_types,
+            column_expressions,
         }
     }
 }
@@ -525,6 +530,9 @@ pub struct SqlDeleteRequest {
 }
 
 /// Wire shape for SqlUpsertRequest — kept stable for IPC backward compatibility.
+///
+/// It does not carry `ColumnAssignment::expression`; the request never crosses
+/// the driver wire, and only `RowInsert`/`RowPatch` accept expressions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SqlUpsertRequestWire {
     table: String,
@@ -622,7 +630,7 @@ impl From<SqlUpdateRequestWire> for SqlUpdateRequest {
                 name,
                 value,
                 type_name: change_types.get(idx).cloned().flatten(),
-                is_expression: false,
+                expression: None,
             })
             .collect();
 
@@ -706,7 +714,7 @@ impl SqlUpsertRequest {
                 name,
                 value,
                 type_name: None,
-                is_expression: false,
+                expression: None,
             })
             .collect();
 
@@ -764,7 +772,7 @@ impl From<SqlUpsertRequestWire> for SqlUpsertRequest {
                 name,
                 value,
                 type_name: column_types.get(idx).cloned().flatten(),
-                is_expression: false,
+                expression: None,
             })
             .collect();
 
@@ -775,7 +783,7 @@ impl From<SqlUpsertRequestWire> for SqlUpsertRequest {
                 name,
                 value,
                 type_name: update_assignment_types.get(idx).cloned().flatten(),
-                is_expression: false,
+                expression: None,
             })
             .collect();
 

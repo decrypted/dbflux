@@ -43,6 +43,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(add_panel_picker_layer());
     stack.add_layer(mcp_approvals_layer());
     stack.add_layer(migrate_wizard_layer());
+    stack.add_layer(import_wizard_layer());
     stack.add_layer(vim_normal_layer());
 
     stack
@@ -218,6 +219,28 @@ fn global_layer() -> KeymapLayer {
     #[cfg(not(target_os = "macos"))]
     let full_screen = KeyChord::new("f11", Modifiers::none());
     layer.bind(full_screen, Command::ToggleFullScreen);
+
+    // Interface size, as in most desktop apps. `+` and `=` share a key on
+    // common layouts, and some platforms report the chord with Shift held as
+    // `+`, so every form of that key makes the interface larger.
+    for key in ["=", "+"] {
+        layer.bind(
+            KeyChord::new(key, Modifiers::primary()),
+            Command::IncreaseInterfaceSize,
+        );
+        layer.bind(
+            KeyChord::new(key, Modifiers::primary_shift()),
+            Command::IncreaseInterfaceSize,
+        );
+    }
+    layer.bind(
+        KeyChord::new("-", Modifiers::primary()),
+        Command::DecreaseInterfaceSize,
+    );
+    layer.bind(
+        KeyChord::new("0", Modifiers::primary()),
+        Command::ResetInterfaceSize,
+    );
 
     // Tab context menu — stays Ctrl+M everywhere: Cmd+M is the system
     // "minimize window" shortcut on macOS.
@@ -460,6 +483,37 @@ fn editor_layer() -> KeymapLayer {
         Command::ToggleComment,
     );
 
+    // Format: Ctrl+Shift+F as in most SQL clients. On macOS Cmd+Shift+F is
+    // the editor's Replace, so Format takes Cmd+Option+L (JetBrains' Reformat
+    // Code) instead.
+    #[cfg(target_os = "macos")]
+    let format_query = KeyChord::new(
+        "l",
+        Modifiers {
+            platform: true,
+            alt: true,
+            ..Modifiers::none()
+        },
+    );
+    #[cfg(not(target_os = "macos"))]
+    let format_query = KeyChord::new("f", Modifiers::ctrl_shift());
+    layer.bind(format_query, Command::FormatQuery);
+
+    // Insert snippet. Plain Ctrl+J is the pane move FocusDown, so Linux and
+    // Windows add Alt; Cmd+J is free on macOS.
+    #[cfg(target_os = "macos")]
+    let insert_snippet = KeyChord::new("j", Modifiers::primary());
+    #[cfg(not(target_os = "macos"))]
+    let insert_snippet = KeyChord::new(
+        "j",
+        Modifiers {
+            ctrl: true,
+            alt: true,
+            ..Modifiers::none()
+        },
+    );
+    layer.bind(insert_snippet, Command::InsertSnippet);
+
     // The toolbar menu from the text itself: Shift+F10 types nothing, so it
     // is free in every Vim mode and without Vim.
     layer.bind(
@@ -556,6 +610,15 @@ fn results_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("n", Modifiers::primary()),
         Command::NewQueryTab,
+    );
+
+    // The secret store's Edit value; other documents leave it unhandled.
+    layer.bind(KeyChord::new("e", Modifiers::none()), Command::EditValue);
+
+    // The secret store's Roll back; other documents leave it unhandled.
+    layer.bind(
+        KeyChord::new("b", Modifiers::none()),
+        Command::RollBackVersion,
     );
 
     // Panel navigation (Ctrl+hjkl) — vim-style, literal Ctrl on every platform.
@@ -682,6 +745,10 @@ fn results_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("s", Modifiers::shift()),
         Command::FindSimilarRows,
+    );
+    layer.bind(
+        KeyChord::new("0", Modifiers::ctrl_shift()),
+        Command::ResultsSetDefault,
     );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
@@ -1530,6 +1597,14 @@ fn data_table_layer() -> KeymapLayer {
         KeyChord::new("n", Modifiers::ctrl()),
         Command::ResultsSetNull,
     );
+    // The literal / expression editor toggle. Ctrl+E and Ctrl+Shift+E belong
+    // to the input component and the export menu, so it takes Ctrl+Shift+I.
+    // It also works inside the cell input, to flip an open editor.
+    layer.bind_with_predicate(
+        KeyChord::new("i", Modifiers::ctrl_shift()),
+        Command::ResultsToggleExpression,
+        "DataTable",
+    );
 
     // Undo / redo: the standard primary chords plus the vim-style `u` and
     // `ctrl-r`, kept literal as familiar editor aliases.
@@ -2123,6 +2198,29 @@ fn migrate_wizard_layer() -> KeymapLayer {
     layer
 }
 
+/// Keys of the import wizard's configure step. J and K move the cursor over
+/// its choices (the CSV delimiter and encoding, then each table's mapping
+/// mode, target column and source column); H and L (or the arrows) pick the
+/// previous or next delimiter and encoding. Enter, which the dialog hands to
+/// its owner, picks the next delimiter or encoding, or opens the dropdown
+/// under the cursor. The keys stay with a text field and an open dropdown.
+fn import_wizard_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::ImportWizard);
+
+    for (key, command) in [
+        ("j", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+    ] {
+        layer.bind(KeyChord::new(key, Modifiers::none()), command);
+    }
+
+    layer
+}
+
 /// Keys of the MCP approvals document: J and K move over the pending calls,
 /// A approves the selected one and R rejects it with the typed reason, Enter
 /// or I types the reason, and Escape brings the keyboard back from it.
@@ -2210,6 +2308,9 @@ fn settings_layer() -> KeymapLayer {
     let section = "Settings && focus == section && !Input";
     let list_section = "Settings && focus == section && section != keybindings && !Input";
     let keybindings = "Settings && focus == section && section == keybindings && !Input";
+    // `R` resets the focused item to its default: a key binding in the editor,
+    // an accent color on the Appearance page.
+    let resettable = "Settings && focus == section && (section == keybindings || section == appearance) && !Input";
 
     layer.bind_with_predicate(
         KeyChord::new("n", Modifiers::none()),
@@ -2239,13 +2340,14 @@ fn settings_layer() -> KeymapLayer {
     layer.bind_with_predicate(
         KeyChord::new("r", Modifiers::none()),
         Command::ResetBinding,
-        keybindings,
+        resettable,
     );
     layer.bind_with_predicate(
         KeyChord::new("r", Modifiers::shift()),
         Command::ResetAllBindings,
         keybindings,
     );
+
     layer.bind_with_predicate(
         KeyChord::new("p", Modifiers::none()),
         Command::EditBindingContext,

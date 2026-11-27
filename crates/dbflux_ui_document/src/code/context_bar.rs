@@ -1,7 +1,7 @@
 use super::*;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
-use dbflux_components::controls::Button;
+use dbflux_components::controls::{Button, DropdownEnvironment};
 use dbflux_components::icons::DriverIconTone;
 use dbflux_components::primitives::{FocusShape, Icon, Text, focus_ring};
 use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields};
@@ -171,12 +171,28 @@ impl CodeDocument {
     }
 
     fn connection_items(app_state: &Entity<AppStateEntity>, cx: &App) -> Vec<DropdownItem> {
-        let mut items: Vec<_> = app_state
-            .read(cx)
+        let state = app_state.read(cx);
+
+        let mut items: Vec<_> = state
             .connections()
             .values()
             .map(|connected| {
-                DropdownItem::with_value(&connected.profile.name, connected.profile.id.to_string())
+                let item = DropdownItem::with_value(
+                    &connected.profile.name,
+                    connected.profile.id.to_string(),
+                );
+
+                // Each row carries its driver's logo, so the list says which
+                // engine a profile talks to before the name is read.
+                let Some(driver) = state.drivers().get(&connected.profile.driver_id()) else {
+                    return item;
+                };
+
+                let metadata = driver.metadata();
+                item.icon(AppIcon::for_driver(metadata.icon, metadata.category))
+                    .icon_tone(
+                        DriverIconTone::for_driver(metadata.icon, metadata.category).badge_tone(),
+                    )
             })
             .collect();
 
@@ -218,15 +234,17 @@ impl CodeDocument {
         self.editor.cached_comment_prefix = editor_profile.comment_prefix;
         self.editor.cached_effective_language = query_language.clone();
 
-        let completion_provider: Rc<dyn CompletionProvider> =
-            Rc::new(QueryCompletionProvider::new(
+        let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
+            QueryCompletionProvider::new(
                 query_language,
                 self.app_state.clone(),
                 connection_id,
                 self.source.exec_ctx.database.clone(),
                 self.source.exec_ctx.schema.clone(),
                 self.editor.completion_query_generation.clone(),
-            ));
+            )
+            .with_snippets(self.editor.snippet_offers.clone()),
+        );
         let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
             self.app_state.clone(),
             connection_id,
@@ -1561,26 +1579,15 @@ impl CodeDocument {
     }
 
     /// The right end of the context bar: "Read only" on a read-only
-    /// document, the run summary ("3 statements · last run 0.32 s"), then the
+    /// document, the run summary ("3 statements"), then the
     /// script file and its state. It takes the room the controls leave and
     /// truncates the path instead of wrapping onto a row of its own.
     fn render_context_bar_trailing(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let is_db_language = self.supports_connection_context();
 
-        let execution_time = self
-            .execution
-            .active_execution_index
-            .and_then(|index| self.execution.execution_history.get(index))
-            .and_then(|record| {
-                record
-                    .finished_at
-                    .map(|finished| finished.duration_since(record.started_at))
-            });
-        let run_summary = super::statements::run_summary_label(
-            self.statement_count().filter(|_| is_db_language),
-            execution_time.map(|duration| duration.as_secs_f64()),
-        );
+        let run_summary =
+            super::statements::run_summary_label(self.statement_count().filter(|_| is_db_language));
 
         let file_state = if is_db_language {
             self.render_script_file_state(cx)
@@ -2006,11 +2013,17 @@ impl CodeDocument {
                             .disabled(!can_apply)
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
-                                    panel.update(cx, |p, cx| {
-                                        // Ignore the returned bounds — the panel emits
-                                        // TimeRangeChanged which is the authoritative signal.
-                                        let _ = p.apply_custom_range(cx);
-                                    });
+                                    // The returned bounds are not needed: the panel emits
+                                    // TimeRangeChanged, which is the authoritative signal.
+                                    let applied =
+                                        panel.update(cx, |p, cx| p.apply_custom_range(cx));
+                                    if let Err(error) = applied {
+                                        report_error(
+                                            UserFacingError::new(ErrorKind::User, error),
+                                            cx,
+                                        );
+                                        return;
+                                    }
                                     this.sync_source_exec_context(cx);
                                     cx.emit(DocumentEvent::MetaChanged);
                                     cx.notify();

@@ -714,6 +714,25 @@ impl DataGridPanel {
             }
         }
 
+        // A save that writes SQL expressions waits for the user.
+        if self.pending_expression_confirm.is_some() {
+            match cmd {
+                Command::Cancel => {
+                    self.cancel_expressions(window, cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.confirm_expressions(window, cx);
+                    return true;
+                }
+                _ => return true,
+            }
+        }
+
+        if self.dispatch_edit_guard_command(cmd, cx) {
+            return true;
+        }
+
         // Handle context menu commands when menu is open
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);
@@ -925,6 +944,14 @@ impl DataGridPanel {
                 self.handle_copy(window, cx);
                 true
             }
+            Command::ResultsCopyAsMarkdown => {
+                self.copy_to_clipboard_with_format(
+                    dbflux_export::ExportFormat::Markdown,
+                    window,
+                    cx,
+                );
+                true
+            }
             Command::CycleDocumentView => {
                 self.toggle_view_mode(cx);
                 true
@@ -962,6 +989,19 @@ impl DataGridPanel {
                 true
             }
             Command::FindSimilarRows => self.find_similar_rows(cx),
+            Command::ResultsSetDefault => {
+                let active = self.grid_table.table_state.as_ref().and_then(|state| {
+                    let state = state.read(cx);
+                    state
+                        .is_editable()
+                        .then(|| state.selection().active)
+                        .flatten()
+                });
+                if let Some(coord) = active {
+                    self.handle_set_default(coord.row, coord.col, cx);
+                }
+                true
+            }
             _ => false,
         }
     }

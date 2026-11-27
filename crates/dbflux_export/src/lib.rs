@@ -1,6 +1,9 @@
 mod binary;
 mod csv;
+mod encoding;
 mod json;
+mod markup;
+mod options;
 mod streaming;
 mod text;
 
@@ -9,9 +12,12 @@ use std::io::Write;
 use thiserror::Error;
 
 pub use binary::{BinaryExportMode, BinaryExporter};
-pub use csv::{CsvDelimiter, CsvExporter, CsvOptions};
+pub use csv::{CsvExporter, CsvOptions};
+pub use encoding::{DecodingReader, decode_to_utf8};
 pub use json::JsonExporter;
-pub use streaming::{CsvStreamWriter, JsonStreamWriter};
+pub use markup::{HtmlStreamWriter, MarkdownStreamWriter, XmlStreamWriter};
+pub use options::{CsvDelimiter, DEFAULT_SQL_BATCH_SIZE, DateFormat, FormatOptions, TextEncoding};
+pub use streaming::{CsvStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter};
 pub use text::TextExporter;
 
 #[derive(Debug, Error)]
@@ -34,6 +40,7 @@ pub enum ExportFormat {
     Csv,
     JsonPretty,
     JsonCompact,
+    Markdown,
     Text,
     Binary,
     Hex,
@@ -46,6 +53,7 @@ impl ExportFormat {
             Self::Csv => "CSV",
             Self::JsonPretty => "JSON (pretty)",
             Self::JsonCompact => "JSON (compact)",
+            Self::Markdown => "Markdown",
             Self::Text => "Text",
             Self::Binary => "Binary",
             Self::Hex => "Hex",
@@ -57,6 +65,7 @@ impl ExportFormat {
         match self {
             Self::Csv => "csv",
             Self::JsonPretty | Self::JsonCompact => "json",
+            Self::Markdown => "md",
             Self::Text => "txt",
             Self::Binary => "bin",
             Self::Hex => "hex",
@@ -71,6 +80,7 @@ pub fn available_formats(shape: &QueryResultShape) -> &'static [ExportFormat] {
             ExportFormat::Csv,
             ExportFormat::JsonPretty,
             ExportFormat::JsonCompact,
+            ExportFormat::Markdown,
         ],
         QueryResultShape::Json => &[
             ExportFormat::JsonPretty,
@@ -106,6 +116,7 @@ pub fn export_with_csv_options(
         ExportFormat::Csv => CsvExporter.export_with_options(result, csv, writer),
         ExportFormat::JsonPretty => JsonExporter { pretty: true }.export(result, writer),
         ExportFormat::JsonCompact => JsonExporter { pretty: false }.export(result, writer),
+        ExportFormat::Markdown => export_markdown(result, writer),
         ExportFormat::Text => TextExporter.export(result, writer),
         ExportFormat::Binary => BinaryExporter {
             mode: BinaryExportMode::Raw,
@@ -122,7 +133,19 @@ pub fn export_with_csv_options(
     }
 }
 
+fn export_markdown(result: &QueryResult, writer: &mut dyn Write) -> Result<(), ExportError> {
+    let mut markdown = MarkdownStreamWriter::new(writer);
+    markdown.write_header(&result.columns)?;
+    for row in &result.rows {
+        markdown.write_row(row)?;
+    }
+    markdown.finish()
+}
+
 pub fn export_text_payload(payload: &str, writer: &mut dyn Write) -> Result<(), ExportError> {
     writer.write_all(payload.as_bytes())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

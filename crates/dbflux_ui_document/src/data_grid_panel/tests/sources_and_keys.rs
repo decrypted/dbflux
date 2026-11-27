@@ -292,7 +292,7 @@ fn ctrl_e_opens_an_export_menu_driven_by_the_menu_keys(cx: &mut TestAppContext) 
     );
     assert_eq!(context(window), ContextId::ContextMenu);
 
-    // Save as CSV, JSON (pretty), JSON (compact): the second entry.
+    // Save as CSV, JSON (pretty), JSON (compact), Markdown: the second entry.
     window.simulate_keystrokes("j enter");
     window.run_until_parked();
 
@@ -320,9 +320,21 @@ fn ctrl_e_opens_an_export_menu_driven_by_the_menu_keys(cx: &mut TestAppContext) 
         .update(|_, cx| cx.read_from_clipboard())
         .and_then(|item| item.text())
         .unwrap_or_default();
+    assert_eq!(
+        copied, "| id | name |\n| --- | --- |\n| 1 | row 1 |\n| 2 | row 2 |\n| 3 | row 3 |\n",
+        "Enter on a copy entry copies the result"
+    );
+
+    // One more Up reaches the compact JSON copy entry, unchanged.
+    window.simulate_keystrokes("ctrl-e k k enter");
+    window.run_until_parked();
+    let copied = window
+        .update(|_, cx| cx.read_from_clipboard())
+        .and_then(|item| item.text())
+        .unwrap_or_default();
     assert!(
         copied.starts_with("[{"),
-        "Enter on a copy entry copies the result, got {copied:?}"
+        "the compact JSON copy entry still copies JSON, got {copied:?}"
     );
 
     window.simulate_keystrokes("ctrl-e escape");

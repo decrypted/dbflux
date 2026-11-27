@@ -301,8 +301,8 @@ impl DataGridPanel {
                     menu_frame(cx)
                         .id("column-chooser")
                         .absolute()
-                        .left(placement.origin.x)
-                        .top(placement.origin.y)
+                        .left(placement.x)
+                        .top(placement.y)
                         .w(CHOOSER_WIDTH)
                         .occlude()
                         .child(

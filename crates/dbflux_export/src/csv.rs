@@ -1,29 +1,8 @@
 use crate::ExportError;
+use crate::options::{CsvDelimiter, FormatOptions};
 use csv::{Writer, WriterBuilder};
 use dbflux_core::{QueryResult, QueryResultShape, Value};
 use std::io::Write;
-
-/// The field separator of a CSV document. Semicolon is what spreadsheets in
-/// locales with a decimal comma expect; tab gives TSV.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CsvDelimiter {
-    #[default]
-    Comma,
-    Semicolon,
-    Tab,
-}
-
-impl CsvDelimiter {
-    pub const ALL: [CsvDelimiter; 3] = [Self::Comma, Self::Semicolon, Self::Tab];
-
-    pub fn byte(self) -> u8 {
-        match self {
-            Self::Comma => b',',
-            Self::Semicolon => b';',
-            Self::Tab => b'\t',
-        }
-    }
-}
 
 /// How a CSV document is written. The default is what every CSV export
 /// wrote before the options existed: a header row and commas.
@@ -97,6 +76,38 @@ impl CsvExporter {
         csv_writer.flush()?;
         Ok(())
     }
+}
+
+/// A cell as text: the NULL text and the date format come from `options`,
+/// everything else is rendered as CSV always has.
+pub(crate) fn value_to_field(value: &Value, options: &FormatOptions) -> String {
+    match value {
+        Value::Null => options.null_text.clone(),
+        other => options
+            .date_format
+            .render(other)
+            .unwrap_or_else(|| value_to_csv_field(other)),
+    }
+}
+
+/// `value_to_field` for a format that writes the NULL text: a value whose
+/// text equals a non-empty NULL text would be read back as NULL, so it fails
+/// the export instead of changing the data silently. An empty NULL text is
+/// the default and keeps today's output, where an empty string and NULL look
+/// the same.
+pub(crate) fn checked_field(
+    value: &Value,
+    options: &FormatOptions,
+    column_name: &str,
+) -> Result<String, ExportError> {
+    let field = value_to_field(value, options);
+    if !options.null_text.is_empty() && !matches!(value, Value::Null) && field == options.null_text
+    {
+        return Err(ExportError::Failed(format!(
+            "value '{field}' in column '{column_name}' equals the NULL text; choose a different NULL text"
+        )));
+    }
+    Ok(field)
 }
 
 pub(crate) fn value_to_csv_field(value: &Value) -> String {

@@ -10,6 +10,12 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 
+mod kinds;
+mod snippets;
+use kinds::KindWords;
+pub(crate) use snippets::SnippetOffers;
+use snippets::SnippetWarnings;
+
 /// Rank groups for context-aware SQL completion (`sort_text` prefix): the
 /// items the context asks for come first, keywords last.
 const RANK_PRIMARY: u8 = 0;
@@ -42,6 +48,10 @@ pub(crate) struct QueryCompletionProvider {
     /// Bumped per `completions()` call; the editor's Change handler uses it
     /// to detect deletions the menu plumbing ignored.
     completion_query_generation: Rc<Cell<u64>>,
+    /// Where the snippets of the editor's language are offered and recorded;
+    /// `None` for editors that do not expand snippets.
+    snippets: Option<SnippetOffers>,
+    snippet_warnings: SnippetWarnings,
 }
 
 impl QueryCompletionProvider {
@@ -63,6 +73,8 @@ impl QueryCompletionProvider {
             prefetched_databases: Rc::new(RefCell::new(HashSet::new())),
             sql_context: SqlContextEngine::new(),
             completion_query_generation,
+            snippets: None,
+            snippet_warnings: SnippetWarnings::default(),
         }
     }
 
@@ -365,8 +377,13 @@ impl QueryCompletionProvider {
             .as_ref()
             .and_then(|engine| engine.analyze(source, cursor));
 
-        let mut items =
-            sql_completion_items_with_context(&metadata, source, cursor, analysis.as_ref());
+        let mut items = sql_items_with_kind_words(
+            &metadata,
+            source,
+            cursor,
+            analysis.as_ref(),
+            &KindWords::from_catalog(),
+        );
 
         let app_state = self.app_state.read(cx);
         let mutation_target_alias = self
@@ -1153,6 +1170,40 @@ fn sql_completion_items_with_context(
     }
 }
 
+/// The SQL suggestions at `cursor`, each carrying its kind word. `words` is
+/// resolved by the caller, once per completion request.
+fn sql_items_with_kind_words(
+    metadata: &SqlCompletionMetadata,
+    source: &str,
+    cursor: usize,
+    analysis: Option<&SqlCursorAnalysis>,
+    words: &KindWords,
+) -> Vec<CompletionItem> {
+    let mut items = sql_completion_items_with_context(metadata, source, cursor, analysis);
+    let (prefix_start, _) = extract_identifier_prefix(source, cursor);
+    let qualifier_schema = prefix_start
+        .checked_sub(1)
+        .filter(|dot| source.as_bytes().get(*dot) == Some(&b'.'))
+        .map(|dot| normalize_identifier(&source[scan_identifier_start(source, dot)..dot]));
+
+    // After `schema.` the relations come from the catalog, which a CTE of the
+    // same name does not shadow.
+    let cte_names = match (&qualifier_schema, analysis) {
+        (None, Some(analysis)) => analysis.scope.cte_names.as_slice(),
+        _ => &[],
+    };
+    let effective_schema = qualifier_schema.or_else(|| {
+        metadata
+            .schema_first
+            .as_ref()
+            .and_then(|schema_first| schema_first.selected_schema.clone())
+    });
+    kinds::describe_items(&mut items, words, cte_names, |label| {
+        metadata.is_view(label, effective_schema.as_deref())
+    });
+    items
+}
+
 impl QueryCompletionProvider {
     fn completion_items_for_mongo(
         &self,
@@ -1441,7 +1492,7 @@ impl CompletionProvider for QueryCompletionProvider {
             self.connection_category(_cx),
         );
 
-        let items = if use_sql {
+        let mut items: Vec<CompletionItem> = if use_sql {
             self.prefetch_sql_table_details(&source, cursor, _cx);
             self.completion_items_for_sql(&source, cursor, _cx)
         } else {
@@ -1480,6 +1531,11 @@ impl CompletionProvider for QueryCompletionProvider {
                 }
             }
         };
+
+        // The menu lists items in the order given: a snippet whose prefix the
+        // user typed comes ahead of the keywords the same letters match.
+        let snippet_items = self.snippet_items(&source, cursor, _cx);
+        items.splice(0..0, snippet_items);
 
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
@@ -1523,6 +1579,10 @@ struct SqlCompletionMetadata {
     /// Bare table and view names keyed by normalized schema name, so a
     /// `schema.` qualifier can list the relations of that schema.
     relations_by_schema: HashMap<String, BTreeSet<String>>,
+    /// The views and the tables of `relations_by_schema`, so a relation is
+    /// told apart within its own schema.
+    view_relations_by_schema: HashMap<String, BTreeSet<String>>,
+    table_relations_by_schema: HashMap<String, BTreeSet<String>>,
     /// Schema names as the driver spells them.
     schema_names: BTreeSet<String>,
     /// Tables and views that belong to no schema.
@@ -1552,10 +1612,10 @@ impl SqlCompletionMetadata {
             (Some(schema), _) => {
                 self.table_names
                     .insert(format!("{}.{}", schema, table.name));
-                self.add_schema_relation(schema, &table.name);
+                self.add_schema_relation(schema, &table.name, false);
             }
             (None, Some(enclosing_schema)) => {
-                self.add_schema_relation(enclosing_schema, &table.name);
+                self.add_schema_relation(enclosing_schema, &table.name, false);
             }
             (None, None) => {
                 self.unqualified_relations.insert(table.name.clone());
@@ -1600,10 +1660,10 @@ impl SqlCompletionMetadata {
         match (&view.schema, enclosing_schema) {
             (Some(schema), _) => {
                 self.view_names.insert(format!("{}.{}", schema, view.name));
-                self.add_schema_relation(schema, &view.name);
+                self.add_schema_relation(schema, &view.name, true);
             }
             (None, Some(enclosing_schema)) => {
-                self.add_schema_relation(enclosing_schema, &view.name);
+                self.add_schema_relation(enclosing_schema, &view.name, true);
             }
             (None, None) => {
                 self.unqualified_relations.insert(view.name.clone());
@@ -1611,10 +1671,20 @@ impl SqlCompletionMetadata {
         }
     }
 
-    fn add_schema_relation(&mut self, schema: &str, name: &str) {
+    fn add_schema_relation(&mut self, schema: &str, name: &str, is_view: bool) {
         self.schema_names.insert(schema.to_string());
+        let schema_key = normalize_identifier(schema);
         self.relations_by_schema
-            .entry(normalize_identifier(schema))
+            .entry(schema_key.clone())
+            .or_default()
+            .insert(name.to_string());
+        let kind_sets = if is_view {
+            &mut self.view_relations_by_schema
+        } else {
+            &mut self.table_relations_by_schema
+        };
+        kind_sets
+            .entry(schema_key)
             .or_default()
             .insert(name.to_string());
     }
@@ -1686,6 +1756,25 @@ impl SqlCompletionMetadata {
 
     fn table_names_iter(&self) -> impl Iterator<Item = &str> {
         self.table_names.iter().map(|name| name.as_str())
+    }
+
+    /// Whether `label` names a view. Within `schema` (a schema-qualified
+    /// completion, or the document's selected schema) only that schema's
+    /// relations count; without one, a name that is also a table reads as a
+    /// table.
+    fn is_view(&self, label: &str, schema: Option<&str>) -> bool {
+        if let Some(schema) = schema {
+            let in_schema = |sets: &HashMap<String, BTreeSet<String>>| {
+                sets.get(schema).is_some_and(|names| names.contains(label))
+            };
+            if in_schema(&self.view_relations_by_schema)
+                || in_schema(&self.table_relations_by_schema)
+            {
+                return in_schema(&self.view_relations_by_schema)
+                    && !in_schema(&self.table_relations_by_schema);
+            }
+        }
+        self.view_names.contains(label) && !self.table_names.contains(label)
     }
 
     fn view_names_iter(&self) -> impl Iterator<Item = &str> {

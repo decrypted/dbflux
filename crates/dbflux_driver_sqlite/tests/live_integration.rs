@@ -421,6 +421,78 @@ fn sqlite_explain() -> Result<(), DbError> {
 }
 
 #[test]
+fn sqlite_query_plan_is_structured_and_never_runs_the_statement() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE plan_test (id INTEGER PRIMARY KEY, name TEXT)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "CREATE INDEX idx_plan_name ON plan_test (name)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO plan_test (name) VALUES ('kept')",
+    ))?;
+
+    let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+        "SELECT * FROM plan_test WHERE name = 'kept'",
+    ))?;
+    assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Text);
+    assert_eq!(plan.roots.len(), 1);
+    assert_eq!(plan.roots[0].operation, "SEARCH");
+    assert_eq!(plan.roots[0].relation.as_deref(), Some("plan_test"));
+    assert_eq!(plan.roots[0].index.as_deref(), Some("idx_plan_name"));
+
+    connection.query_plan(&dbflux_core::QueryPlanRequest::new("DELETE FROM plan_test"))?;
+    let remaining = connection.execute(&QueryRequest::new("SELECT count(*) FROM plan_test"))?;
+    assert_eq!(remaining.rows[0][0], Value::Int(1));
+
+    let multiple = connection.query_plan(&dbflux_core::QueryPlanRequest::new("SELECT 1; SELECT 2"));
+    assert!(multiple.is_err());
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_plan_refuses_statements_that_change_the_session() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    connection.set_referential_integrity(true)?;
+
+    let outcome = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+        "PRAGMA foreign_keys = OFF",
+    ));
+
+    let enforced = connection.execute(&QueryRequest::new("PRAGMA foreign_keys"))?;
+    assert_eq!(enforced.rows[0][0], Value::Int(1), "the PRAGMA ran");
+
+    let error = outcome.expect_err("a PRAGMA is not a plannable statement");
+    assert!(
+        error.to_string().contains("SELECT, INSERT, UPDATE"),
+        "{error}"
+    );
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE plan_ok (id INTEGER PRIMARY KEY)",
+    ))?;
+    for query in [
+        "SELECT * FROM plan_ok",
+        "WITH x AS (SELECT 1) SELECT * FROM x",
+        "INSERT INTO plan_ok VALUES (1)",
+        "UPDATE plan_ok SET id = 2",
+        "DELETE FROM plan_ok",
+        "REPLACE INTO plan_ok VALUES (1)",
+        "VALUES (1)",
+        "-- note\nselect 1",
+    ] {
+        connection
+            .query_plan(&dbflux_core::QueryPlanRequest::new(query))
+            .map_err(|error| DbError::query_failed(format!("{query:?}: {error}")))?;
+    }
+
+    Ok(())
+}
+
+#[test]
 fn sqlite_describe_table() -> Result<(), DbError> {
     let connection = connect_sqlite()?;
 
@@ -1359,6 +1431,59 @@ fn sqlite_query_safety_capped_single_statement_with_trailing_comments_executes()
     let quoted = connection.execute(&QueryRequest::new("SELECT ';' AS semi").with_limit(1))?;
     assert_no_rows_truncated(&quoted, 1);
     assert_eq!(quoted.rows[0][0], Value::Text(";".to_string()));
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Error position
+// ---------------------------------------------------------------------------
+
+fn error_position(connection: &dyn dbflux_core::Connection, request: &QueryRequest) -> usize {
+    let error = connection
+        .execute(request)
+        .expect_err("the request must fail");
+
+    error
+        .formatted()
+        .and_then(|formatted| formatted.position)
+        .expect("a SQLite syntax error carries the byte offset of the offending token")
+}
+
+#[test]
+fn sqlite_syntax_error_reports_the_offending_token_offset() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    let sql = "SELECT 1 FROM users WHERE = 1";
+
+    let position = error_position(connection.as_ref(), &QueryRequest::new(sql));
+
+    assert_eq!(&sql[position..position + 1], "=");
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_script_error_position_is_relative_to_the_whole_script() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    let sql =
+        "CREATE TABLE t (id INTEGER);\nINSERT INTO t VALUES ('é');\nSELECT 1 FROM t WHERE = 1;";
+
+    let position = error_position(connection.as_ref(), &QueryRequest::new(sql));
+
+    assert_eq!(&sql[position..position + 1], "=");
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_bounded_script_error_position_is_relative_to_the_whole_script() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    let sql = "SELECT 'é';\n  SELECT 2;\n  SELECT 1 FROM t WHERE = 1;";
+    let request = QueryRequest::new(sql).with_limit(10);
+
+    let position = error_position(connection.as_ref(), &request);
+
+    assert_eq!(&sql[position..position + 1], "=");
 
     Ok(())
 }

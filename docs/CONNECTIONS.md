@@ -297,7 +297,12 @@ field and choose:
 Notes:
 
 - Secret/Parameter sources can target a **JSON key** inside a JSON secret, so one
-  stored JSON document can feed several fields.
+  stored JSON document can feed several fields. Write the key after the secret
+  name or ARN as `<locator>#<key>`, for example `rds!db-1a2b#password` for the
+  password of a secret RDS manages. The hint under the field says whether the
+  whole value or one key is used. A Secrets Manager secret that holds a JSON
+  object but is referenced without a key is refused when connecting, and the
+  error lists the secret's keys (never its values).
 - Values resolved from Secret Manager and Parameter Store references are cached
   for **5 minutes** to avoid re-fetching on every reconnect. Environment
   variable, dotenv file and secret file values are read on every use.

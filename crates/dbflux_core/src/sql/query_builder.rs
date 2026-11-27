@@ -30,7 +30,7 @@ impl<'a> SqlQueryBuilder<'a> {
             .dialect
             .qualified_table(patch.schema.as_deref(), &patch.table);
 
-        let set_clause = self.try_build_set_clause(&patch.changes)?;
+        let set_clause = self.build_set_clause(&patch.changes);
         let where_clause = self.build_where_clause(&patch.identity)?;
 
         let mut sql = format!("UPDATE {} SET {} WHERE {}", table, set_clause, where_clause);
@@ -52,7 +52,7 @@ impl<'a> SqlQueryBuilder<'a> {
             .dialect
             .qualified_table(update.schema.as_deref(), &update.table);
 
-        let set_clause = self.try_build_set_clause(&update.changes)?;
+        let set_clause = self.build_set_clause(&update.changes);
         let where_clause = render_semantic_filter_sql(&update.filter, self.dialect).ok()?;
 
         let mut sql = format!("UPDATE {} SET {} WHERE {}", table, set_clause, where_clause);
@@ -96,8 +96,8 @@ impl<'a> SqlQueryBuilder<'a> {
         let values_str = insert
             .assignments
             .iter()
-            .map(|a| a.to_sql(self.dialect).ok())
-            .collect::<Option<Vec<_>>>()?
+            .map(|a| self.dialect.assignment_to_sql(a))
+            .collect::<Vec<_>>()
             .join(", ");
 
         let mut sql = format!(
@@ -132,6 +132,20 @@ impl<'a> SqlQueryBuilder<'a> {
         column_types: &[Option<String>],
         rows: &[&[Value]],
     ) -> Option<String> {
+        self.build_bulk_insert_with_clause(schema, table, columns, column_types, None, rows)
+    }
+
+    /// [`Self::build_bulk_insert`] with `clause` written between the column
+    /// list and `VALUES` (for example `OVERRIDING SYSTEM VALUE`).
+    pub fn build_bulk_insert_with_clause(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        columns: &[String],
+        column_types: &[Option<String>],
+        clause: Option<&str>,
+        rows: &[&[Value]],
+    ) -> Option<String> {
         if rows.is_empty() {
             return None;
         }
@@ -156,12 +170,17 @@ impl<'a> SqlQueryBuilder<'a> {
             .collect::<Vec<_>>()
             .join(", ");
 
+        let clause = clause.map(|text| format!(" {text}")).unwrap_or_default();
+
         Some(format!(
-            "INSERT INTO {table_ref} ({columns_str}) VALUES {values_str}"
+            "INSERT INTO {table_ref} ({columns_str}){clause} VALUES {values_str}"
         ))
     }
 
     /// Build a `CREATE TABLE` statement from a same-engine [`CreateTableSpec`].
+    ///
+    /// A column without a type name is written bare; the loose-file import
+    /// gives its columns [`SqlDialect::text_column_type`] before they get here.
     ///
     /// Column type, nullability, and primary-key membership map 1:1 from
     /// `spec.columns` since the source and target share the same SQL dialect
@@ -345,40 +364,18 @@ impl<'a> SqlQueryBuilder<'a> {
     /// Returns `"col1" = val1, "col2" = val2`. When an assignment carries a
     /// `type_name`, the dialect is asked to format the literal with that hint
     /// (e.g. PostgreSQL emits `ARRAY[...]::text[]` for array columns).
-    ///
-    /// An assignment holding a SQL expression is written as the expression;
-    /// one [`crate::validate_cell_expression`] rejects is written as a
-    /// quoted literal here. Statement builders use
-    /// [`Self::try_build_set_clause`], which refuses it instead.
     pub fn build_set_clause(&self, changes: &[ColumnAssignment]) -> String {
         changes
             .iter()
             .map(|a| {
-                let value = a.to_sql(self.dialect).unwrap_or_else(|_| {
-                    self.dialect
-                        .value_to_literal_typed(&a.value, a.type_name.as_deref())
-                });
-                format!("{} = {}", self.dialect.quote_identifier(&a.name), value)
+                format!(
+                    "{} = {}",
+                    self.dialect.quote_identifier(&a.name),
+                    self.dialect.assignment_to_sql(a)
+                )
             })
             .collect::<Vec<_>>()
             .join(", ")
-    }
-
-    /// The SET clause, or `None` when an assignment holds an expression that
-    /// [`crate::validate_cell_expression`] rejects.
-    fn try_build_set_clause(&self, changes: &[ColumnAssignment]) -> Option<String> {
-        changes
-            .iter()
-            .map(|a| {
-                let value = a.to_sql(self.dialect).ok()?;
-                Some(format!(
-                    "{} = {}",
-                    self.dialect.quote_identifier(&a.name),
-                    value
-                ))
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(|assignments| assignments.join(", "))
     }
 
     /// Build column list for INSERT.
@@ -627,77 +624,6 @@ mod tests {
     }
 
     #[test]
-    fn an_expression_assignment_is_written_unquoted_and_a_literal_stays_quoted() {
-        let dialect = DefaultSqlDialect;
-        let builder = SqlQueryBuilder::new(&dialect);
-
-        let patch = RowPatch::with_typed_changes(
-            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
-            "events".to_string(),
-            None,
-            vec![
-                ColumnAssignment::expression("seen_at", "NOW()", Some("timestamp".into())),
-                ColumnAssignment::typed("note", Value::Text("NOW()".into()), "text"),
-            ],
-        );
-
-        assert_eq!(
-            builder.build_update(&patch, false).as_deref(),
-            Some("UPDATE \"events\" SET \"seen_at\" = NOW(), \"note\" = 'NOW()' WHERE \"id\" = 1")
-        );
-
-        let insert = RowInsert::with_typed_assignments(
-            "events".to_string(),
-            None,
-            vec![
-                ColumnAssignment::expression("seen_at", "DEFAULT", None),
-                ColumnAssignment::new("note", Value::Text("DEFAULT".into())),
-            ],
-        );
-
-        assert_eq!(
-            builder.build_insert(&insert, false).as_deref(),
-            Some("INSERT INTO \"events\" (\"seen_at\", \"note\") VALUES (DEFAULT, 'DEFAULT')")
-        );
-    }
-
-    #[test]
-    fn a_statement_with_an_expression_that_escapes_its_slot_is_not_built() {
-        let dialect = DefaultSqlDialect;
-        let builder = SqlQueryBuilder::new(&dialect);
-
-        let patch = RowPatch::with_typed_changes(
-            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
-            "events".to_string(),
-            None,
-            vec![ColumnAssignment::expression("n", "1 --", None)],
-        );
-        let insert = RowInsert::with_typed_assignments(
-            "events".to_string(),
-            None,
-            vec![ColumnAssignment::expression(
-                "n",
-                "1); DROP TABLE x; (1",
-                None,
-            )],
-        );
-
-        assert_eq!(builder.build_update(&patch, false), None);
-        assert_eq!(builder.build_insert(&insert, false), None);
-    }
-
-    #[test]
-    fn an_expression_flag_never_survives_serialization() {
-        let assignment = ColumnAssignment::expression("seen_at", "NOW()", None);
-
-        let json = serde_json::to_string(&assignment).unwrap();
-        let back: ColumnAssignment = serde_json::from_str(&json).unwrap();
-
-        assert!(!back.is_expression);
-        assert_eq!(back.sql_expression(), None);
-    }
-
-    #[test]
     fn test_build_update_many() {
         let dialect = DefaultSqlDialect;
         let builder = SqlQueryBuilder::new(&dialect);
@@ -717,6 +643,81 @@ mod tests {
         assert_eq!(
             sql,
             "UPDATE \"public\".\"users\" SET \"archived\" = TRUE WHERE \"status\" = 'active'"
+        );
+    }
+
+    #[test]
+    fn build_insert_writes_an_expression_verbatim_next_to_a_literal() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let insert = RowInsert::with_typed_assignments(
+            "t".to_string(),
+            None,
+            vec![
+                ColumnAssignment::expression("id", "gen_random_uuid()"),
+                ColumnAssignment::new("name", Value::Text("x".to_string())),
+            ],
+        );
+
+        assert_eq!(
+            builder.build_insert(&insert, false).unwrap(),
+            "INSERT INTO \"t\" (\"id\", \"name\") VALUES (gen_random_uuid(), 'x')"
+        );
+    }
+
+    #[test]
+    fn build_update_writes_an_expression_in_the_set_clause() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "t".to_string(),
+            None,
+            vec![ColumnAssignment::expression("deleted_at", "now()")],
+        );
+
+        assert_eq!(
+            builder.build_update(&patch, false).unwrap(),
+            "UPDATE \"t\" SET \"deleted_at\" = now() WHERE \"id\" = 1"
+        );
+    }
+
+    #[test]
+    fn a_text_value_that_looks_like_an_expression_stays_a_quoted_literal() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let assignment = ColumnAssignment::new("deleted_at", Value::Text("now()".to_string()));
+
+        assert!(!assignment.is_expression());
+        assert_eq!(
+            builder.build_set_clause(&[assignment]),
+            "\"deleted_at\" = 'now()'"
+        );
+    }
+
+    #[test]
+    fn upsert_writes_expressions_in_both_value_lists() {
+        let dialect = DefaultSqlDialect;
+
+        let sql = dialect
+            .build_upsert_statement(
+                None,
+                "t",
+                &[
+                    ColumnAssignment::new("id", Value::Int(1)),
+                    ColumnAssignment::expression("seen_at", "now()"),
+                ],
+                &["id".to_string()],
+                &[ColumnAssignment::expression("seen_at", "now()")],
+            )
+            .unwrap();
+
+        assert_eq!(
+            sql,
+            "INSERT INTO \"t\" (\"id\", \"seen_at\") VALUES (1, now()) ON CONFLICT (\"id\") DO UPDATE SET \"seen_at\" = now()"
         );
     }
 
@@ -900,6 +901,29 @@ mod tests {
         assert_eq!(
             sql,
             "CREATE TABLE \"public\".\"users\" (\n    \"id\" integer NOT NULL,\n    \"name\" text,\n    PRIMARY KEY (\"id\")\n);"
+        );
+    }
+
+    #[test]
+    fn test_build_create_table_leaves_a_column_without_a_type_bare() {
+        let dialect = DefaultSqlDialect;
+        let builder = SqlQueryBuilder::new(&dialect);
+
+        let spec = CreateTableSpec {
+            schema: None,
+            table: "events".to_string(),
+            columns: vec![crate::TransferColumn {
+                name: "label".to_string(),
+                type_name: None,
+                nullable: true,
+                is_primary_key: false,
+            }],
+            if_not_exists: false,
+        };
+
+        assert_eq!(
+            builder.build_create_table(&spec).unwrap(),
+            "CREATE TABLE \"events\" (\n    \"label\"\n);"
         );
     }
 

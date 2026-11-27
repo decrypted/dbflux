@@ -402,6 +402,9 @@ A read-only delete does not change the clipboard.
 | `/` | Focus search/filter |
 | `x` | Delete row |
 | `r` | Rename / edit |
+| `e` | Edit the value of the selected secret in the AWS Secrets document: retrieves the value first when it is not loaded (the retrieval is audited when auditing is on; with auditing off, or when the audit write fails, it can succeed without a record), then opens the editor; only when it can be edited (plaintext, not managed by another service, not scheduled for deletion, in a store that accepts writes) |
+| `b` | Roll the selected secret back to its most recent earlier version in the AWS Secrets document (asks first; only in a store with staging labels, for a secret not managed by another service and not scheduled for deletion) |
+| `m` → Open in tab | Open the selected secret of the AWS Secrets document in its own tab (also the expand button of the details pane and the row menu's Open in tab). In that tab `e`, `b`, `x` and `F5` act on its one secret as they do in the listing. A tab whose region differs from the connection's, or whose secret was deleted, starts no read or write and says why (a save already in flight is not cancelled and may still land on the previous region). Edit value (`e`) in the listing opens that tab with the editor active, retrieving the value first when it is not loaded (audited when auditing is on). |
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
@@ -659,7 +662,8 @@ edited.
 | `d d` / `Delete` | Delete the row |
 | `a a` / `Shift+a Shift+a` | Add / duplicate a row |
 | `Ctrl+n` | Set the cell to NULL |
-| `Ctrl+Alt+e` / `Cmd+Alt+e` | Edit the cell as a SQL expression; in an open editor, switch between a value and an expression (`fx`) |
+| `Ctrl+Shift+0` | Set the cell to its column default (stages the default expression) |
+| `Ctrl+Shift+I` | Flip the inline editor between literal and SQL expression, or open it as an expression |
 | `u` / `Ctrl+z` / `Cmd+z` | Undo; once the edits since the table was last read are undone, the previous `WHERE` filter (see [Undoing a filter](RESULTS.md#undoing-a-filter)) |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo, the filters included |
 | `e` | Expand or collapse a nested column (document grids) |
@@ -854,6 +858,21 @@ The keys are listed under the MCP Approvals context in Settings > Keybindings.
 | `m` (or `Shift+F10`) | Pane actions: Continue, Back, set every table's mode, accept the load order, the acknowledgment, Start migration, Cancel migration while it runs and Close once it is done |
 
 The keys are listed under the Migrate Wizard context in Settings > Keybindings.
+
+## Import wizard
+
+On the configure step, a cursor walks the choices that take no focus of their own: the Sheet dropdown of an imported workbook (when it has more than one visible sheet), the CSV delimiter and encoding of an imported file, then each table's mapping mode, target column and source column. `Tab` still reaches the buttons (**Use table**, **Apply mapping**, **Continue**).
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` | Move the cursor to the next / previous choice |
+| `l` / `h` (or `Right` / `Left`) | On the delimiter or encoding: pick the next / previous one and read the file again |
+| `Enter` | On the delimiter or encoding: pick the next one. On the Sheet, a mapping mode, target column or source column: open its dropdown, which then takes `j` / `k` and `Enter` as in [Dropdowns](#dropdowns) |
+| `Escape` | In the target table or NULL text field: leave the field and give the keys above back to the dialog. On an open dropdown: close only the dropdown and give the keys back to the dialog. Anywhere else: close the wizard |
+
+On the configure step of a SQL script, the cursor visits **On error** and **Run in one transaction**: `l` / `h` and `Enter` on **On error** pick the other choice, and `Enter` on the transaction checkbox toggles it (it is skipped while "Continue after errors" or a connection without transactions turns it off).
+
+While a text field or an open dropdown has focus, these keys (including `Enter`) act on that field, not on the cursor. They are listed under the Import Wizard context in Settings > Keybindings.
 
 ## Text fields
 

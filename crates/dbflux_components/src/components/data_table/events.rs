@@ -78,9 +78,6 @@ pub enum ContextMenuAction {
     Paste,
     /// Start inline editing of the selected cell.
     Edit,
-    /// Start inline editing of the selected cell, or of every selected cell,
-    /// as a SQL expression.
-    EditAsExpression,
     /// Write a new identifier of this kind into the selected cell, or one
     /// per cell into every selected cell.
     GenerateId(dbflux_core::GeneratedIdKind),
@@ -95,6 +92,10 @@ pub enum ContextMenuAction {
     SetDefault,
     /// Set the cell to NULL.
     SetNull,
+    /// Stage the `n`th expression the dialect offers for the column's type.
+    SetTypeValue(usize),
+    /// Open the inline editor on the cell in expression mode.
+    SetExpression,
     /// Insert a new row.
     AddRow,
     /// Duplicate the current row.
@@ -130,6 +131,8 @@ pub enum ContextMenuAction {
     AddToSort(SortDirection),
     /// Remove ordering.
     RemoveOrdering,
+    /// Copy the name of the column the header menu was opened on.
+    CopyColumnName,
     /// Open the row inspector panel for the selected row.
     InspectRow,
     /// Open a new ChartDocument seeded with the current query and result columns.
@@ -238,9 +241,6 @@ pub enum DataTableEvent {
     /// Document grid: leave the nested value shown now (Backspace).
     StepOutRequested,
 
-    /// Enter on an expression the save would refuse (a comment, a `;`); the
-    /// editor stays open on it.
-    CellExpressionRejected { message: String },
     /// The user hid, showed or moved a column. The host may keep the new
     /// layout ([`super::DataTableState::column_layout_spec`]).
     ColumnLayoutChanged,
@@ -251,4 +251,9 @@ pub enum DataTableEvent {
         pending_inserts: Vec<usize>,
         dirty_rows: Vec<usize>,
     },
+
+    /// The last row came into view, by scrolling to the bottom or moving the
+    /// cursor onto it. Emitted once per row count, so a host that appends
+    /// rows hears about the new end again.
+    ReachedEnd,
 }

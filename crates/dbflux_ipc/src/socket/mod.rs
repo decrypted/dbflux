@@ -47,7 +47,22 @@ fn build_suffix() -> &'static str {
 
 /// The app-control socket of the GUI (`Focus`, `OpenScript`, `Ping`).
 pub fn app_control_socket() -> io::Result<IpcSocket> {
-    IpcSocket::named(format!("dbflux{}.sock", build_suffix()))
+    IpcSocket::named(app_control_leaf())
+}
+
+fn app_control_leaf() -> String {
+    format!("dbflux{}.sock", build_suffix())
+}
+
+/// Native Tokio pipe opening avoids interprocess's blocking connection waiter.
+#[cfg(all(windows, feature = "telemetry"))]
+pub fn app_control_named_pipe_path() -> String {
+    named_pipe_path(&app_control_leaf())
+}
+
+#[cfg(all(feature = "telemetry", any(windows, test)))]
+fn named_pipe_path(leaf: &str) -> String {
+    format!(r"\\.\pipe\{leaf}")
 }
 
 /// The socket of a driver host addressed by its service id.
@@ -147,6 +162,19 @@ impl IpcSocket {
     pub fn connect_expecting_peer(&self, expected_uid: u32) -> io::Result<Stream> {
         let stream = Stream::connect(self.name()?)?;
         verify_peer_as(&stream, expected_uid)?;
+        Ok(stream)
+    }
+
+    /// [`connect`](Self::connect) for a Tokio client.
+    #[cfg(feature = "telemetry")]
+    pub async fn connect_async(&self) -> io::Result<interprocess::local_socket::tokio::Stream> {
+        use interprocess::local_socket::tokio::{Stream, prelude::*};
+
+        let stream = Stream::connect(self.name()?).await?;
+
+        #[cfg(unix)]
+        check_peer_uid(stream.peer_creds()?.euid(), own_uid())?;
+
         Ok(stream)
     }
 

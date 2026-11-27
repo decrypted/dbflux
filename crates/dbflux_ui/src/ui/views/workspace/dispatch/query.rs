@@ -127,6 +127,7 @@ impl Workspace {
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector
             | Command::FindSimilarRows
+            | Command::ResultsSetDefault
             | Command::ToggleConsole => {
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(cmd, window, cx);
@@ -147,7 +148,7 @@ impl Workspace {
             Command::ResultsDeleteRow
             | Command::ResultsDuplicateRow
             | Command::ResultsSetNull
-            | Command::ToggleCellExpression => {
+            | Command::ResultsToggleExpression => {
                 log::debug!(
                     "Row operation {:?} handled via GPUI actions in Results context",
                     cmd

@@ -57,11 +57,10 @@ pub(super) fn insert_statements(
                         .copied()
                         .unwrap_or(false);
                     match value {
-                        Value::Text(sql) if is_expression => ColumnAssignment::expression(
-                            column.name.clone(),
-                            sql.clone(),
-                            Some(column.type_name.clone()),
-                        ),
+                        Value::Text(sql) if is_expression => {
+                            ColumnAssignment::expression(column.name.clone(), sql.clone())
+                                .with_type_opt(Some(column.type_name.clone()))
+                        }
                         value => ColumnAssignment::typed(
                             column.name.clone(),
                             value.clone(),

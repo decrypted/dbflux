@@ -710,3 +710,330 @@ mod trigger_width_range {
         );
     }
 }
+
+/// The ids of an open menu: automation and tests pick a row by name instead
+/// of by position.
+mod menu_ids {
+    use super::super::{Dropdown, DropdownItem};
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, Modifiers, ParentElement as _, Render,
+        Styled as _, TestAppContext, VisualTestContext, Window, div,
+    };
+
+    const DROPDOWN_ID: &str = "menu-ids-dropdown";
+
+    /// A selector under the dropdown's id. `debug_bounds` takes a
+    /// `&'static str`, and the id the test asserts on is built from the
+    /// dropdown's own id rather than written out, so it leaks this one
+    /// string.
+    fn selector(suffix: &str) -> &'static str {
+        Box::leak(format!("{DROPDOWN_ID}{suffix}").into_boxed_str())
+    }
+
+    struct Host {
+        dropdown: Entity<Dropdown>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.dropdown.clone())
+        }
+    }
+
+    fn open(cx: &mut TestAppContext) -> (Entity<Host>, Entity<Dropdown>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+
+        let (host, window) = cx.add_window_view(|_window, cx| {
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new(DROPDOWN_ID).items(vec![
+                    DropdownItem::new("One"),
+                    DropdownItem::new("Two"),
+                    DropdownItem::new("Three"),
+                ])
+            });
+            Host { dropdown }
+        });
+        window.run_until_parked();
+
+        let dropdown = host.read_with(window, |host, _cx| host.dropdown.clone());
+        window.update(|_, cx| dropdown.update(cx, |dropdown, cx| dropdown.open(cx)));
+        window.run_until_parked();
+
+        (host, dropdown, window)
+    }
+
+    #[gpui::test]
+    fn every_open_row_carries_an_id_named_after_the_dropdown_and_its_index(
+        cx: &mut TestAppContext,
+    ) {
+        let (_host, _dropdown, window) = open(cx);
+
+        assert!(
+            window.debug_bounds(selector("-menu-rows")).is_some(),
+            "the list container is found by name"
+        );
+
+        for index in 0..3 {
+            let row = selector(&format!("-item-{index}"));
+            assert!(
+                window.debug_bounds(row).is_some(),
+                "row {index} is found by `{row}`"
+            );
+        }
+        assert!(
+            window.debug_bounds(selector("-item-3")).is_none(),
+            "the list has three rows"
+        );
+    }
+
+    #[test]
+    fn a_row_forwards_the_icon_source_of_its_own_item() {
+        let source = crate::icon::IconSource::Svg("icons/folder.svg".into());
+
+        let with_icon = DropdownItem::new("One").icon(source.clone());
+        assert_eq!(
+            super::super::row_leading_icon(&with_icon),
+            Some(source),
+            "the row draws the source the item carries"
+        );
+
+        assert_eq!(
+            super::super::row_leading_icon(&DropdownItem::new("Two")),
+            None,
+            "an item without an icon asks for none"
+        );
+    }
+
+    #[gpui::test]
+    fn a_row_draws_the_icon_its_item_carries_before_the_label(cx: &mut TestAppContext) {
+        let (_host, dropdown, window) = open(cx);
+
+        window.update(|_, cx| {
+            dropdown.update(cx, |dropdown, cx| {
+                dropdown.set_items(
+                    vec![
+                        DropdownItem::new("One")
+                            .icon(crate::icon::IconSource::Svg("icons/folder.svg".into())),
+                        DropdownItem::new("Two"),
+                    ],
+                    cx,
+                );
+            })
+        });
+        window.run_until_parked();
+
+        let icon = window
+            .debug_bounds(selector("-item-0-icon"))
+            .expect("the first row draws its icon");
+        let label = window
+            .debug_bounds(selector("-item-0-label"))
+            .expect("the first row draws its label");
+        let row = window
+            .debug_bounds(selector("-item-0"))
+            .expect("the first row is laid out");
+        let rem_size = window.update(|window, _cx| window.rem_size());
+        assert_eq!(
+            icon.size.width,
+            crate::tokens::Fields::LEADING_ICON.to_pixels(rem_size),
+            "the row draws the icon at the leading icon size"
+        );
+        assert!(
+            icon.origin.x < row.center().x,
+            "the icon sits at the start of the row"
+        );
+        assert!(
+            icon.right() <= label.origin.x,
+            "the icon ends before the label starts"
+        );
+        assert!(
+            window.debug_bounds(selector("-item-1-icon")).is_none(),
+            "a row without an icon draws none"
+        );
+    }
+
+    #[gpui::test]
+    fn clicking_a_row_by_its_id_selects_that_row(cx: &mut TestAppContext) {
+        let (_host, dropdown, window) = open(cx);
+
+        let bounds = window.debug_bounds(selector("-item-1"));
+        let row = bounds.expect("the second row is laid out").center();
+
+        window.simulate_click(row, Modifiers::default());
+        window.run_until_parked();
+
+        let selected = window.update(|_window, cx| dropdown.read(cx).selected());
+        assert_eq!(selected, Some(1), "clicking the row by its id selects it");
+    }
+}
+
+/// A wheel over an open menu whose rows overflow `Fields::MENU_MAX_HEIGHT`:
+/// the rows scroll natively and the keyboard highlight stays where the keys
+/// left it. The event goes through GPUI's own pipeline (`simulate_event`),
+/// so the test keeps failing if the menu grows a wheel handler again — that
+/// handler advanced the highlight a row and re-anchored it with
+/// `scroll_to_item(FirstVisible)` on the same element, which pinned the
+/// highlight to its viewport position while the rows streamed past.
+mod menu_scroll {
+    use super::super::{Dropdown, DropdownItem};
+    use crate::tokens::Fields;
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, Modifiers, ParentElement as _, Pixels,
+        Render, ScrollDelta, ScrollWheelEvent, Styled as _, TestAppContext, TouchPhase,
+        VisualTestContext, Window, div, point, px,
+    };
+
+    const DROPDOWN_ID: &str = "scroll-dropdown";
+
+    /// Rows past the ones the menu shows, so the scrollable overflow is
+    /// several whole rows and a wheel notch lands strictly inside it.
+    const EXTRA_ROWS: usize = 8;
+
+    /// How many rows the wheel carries: two, so the assertion is about the
+    /// direction of the scroll and not the exact tracking of one notch.
+    const WHEEL_ROWS: f32 = 2.0;
+
+    /// A selector under the dropdown's id. `debug_bounds` takes a
+    /// `&'static str`, and the id the test asserts on is built from the
+    /// dropdown's own id rather than written out, so it leaks this one
+    /// string.
+    fn selector(suffix: &str) -> &'static str {
+        Box::leak(format!("{DROPDOWN_ID}{suffix}").into_boxed_str())
+    }
+
+    /// The item count that overflows the menu: the rows that fit inside
+    /// `MENU_MAX_HEIGHT` once its own padding is subtracted, plus the extra
+    /// rows that make it scrollable by whole rows.
+    fn menu_item_count(rem_size: Pixels) -> usize {
+        let row_height = Fields::MENU_ROW_HEIGHT.to_pixels(rem_size);
+        let usable = Fields::MENU_MAX_HEIGHT - 2.0 * Fields::MENU_PADDING_Y;
+        let fitted = (usable / row_height).floor() as usize;
+        fitted + EXTRA_ROWS
+    }
+
+    struct Overflow<'a> {
+        dropdown: Entity<Dropdown>,
+        item_count: usize,
+        row_height: Pixels,
+        window: &'a mut VisualTestContext,
+    }
+
+    impl Overflow<'_> {
+        fn highlight(&mut self) -> Option<usize> {
+            self.window
+                .update(|_, cx| self.dropdown.read(cx).highlighted_index())
+        }
+
+        /// The vertical offset of the scrolling rows column. Scrolling the
+        /// content down (a wheel with a negative y delta) takes the offset
+        /// negative.
+        fn rows_offset(&mut self) -> Pixels {
+            self.window
+                .update(|_, cx| self.dropdown.read(cx).menu_scroll_handle.offset().y)
+        }
+
+        /// A real wheel event, delivered through GPUI's event pipeline to
+        /// the center of the rows column.
+        fn wheel(&mut self) {
+            let position = self
+                .window
+                .debug_bounds(selector("-menu-rows"))
+                .expect("the rows column is laid out")
+                .center();
+            let rows = point(px(0.0), -(WHEEL_ROWS * self.row_height));
+            self.window.simulate_event(ScrollWheelEvent {
+                position,
+                delta: ScrollDelta::Pixels(rows),
+                modifiers: Modifiers::none(),
+                touch_phase: TouchPhase::Moved,
+            });
+            self.window.run_until_parked();
+        }
+    }
+
+    struct Host {
+        dropdown: Entity<Dropdown>,
+        item_count: usize,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.dropdown.clone())
+        }
+    }
+
+    fn open_overflowing(cx: &mut TestAppContext) -> Overflow<'_> {
+        cx.update(gpui_component::init);
+
+        let (host, window) = cx.add_window_view(|window, cx| {
+            let rem_size = window.rem_size();
+            let item_count = menu_item_count(rem_size);
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new(DROPDOWN_ID).items(
+                    (0..item_count)
+                        .map(|index| DropdownItem::new(format!("Row {index}")))
+                        .collect(),
+                )
+            });
+            Host {
+                dropdown,
+                item_count,
+            }
+        });
+        window.run_until_parked();
+
+        let (dropdown, item_count) =
+            host.read_with(window, |host, _cx| (host.dropdown.clone(), host.item_count));
+        window.update(|_, cx| dropdown.update(cx, |dropdown, cx| dropdown.open(cx)));
+        window.run_until_parked();
+
+        let row_height =
+            window.update(|window, _| Fields::MENU_ROW_HEIGHT.to_pixels(window.rem_size()));
+        Overflow {
+            dropdown,
+            item_count,
+            row_height,
+            window,
+        }
+    }
+
+    #[gpui::test]
+    fn a_wheel_over_the_rows_scrolls_the_menu_without_moving_the_highlight(
+        cx: &mut TestAppContext,
+    ) {
+        let mut overflow = open_overflowing(cx);
+
+        // The overflow is real before anything is asserted about scrolling:
+        // the last row is drawn below the bottom of the clipped rows column.
+        let item_count = overflow.item_count;
+        let rows = overflow
+            .window
+            .debug_bounds(selector("-menu-rows"))
+            .expect("the rows column is laid out");
+        let last_row = overflow
+            .window
+            .debug_bounds(selector(&format!("-item-{}", overflow.item_count - 1)))
+            .expect("the last row is laid out");
+        assert!(
+            last_row.bottom() > rows.bottom(),
+            "the {item_count} rows overflow the {rows:?} menu: last {last_row:?}"
+        );
+
+        let before = overflow.rows_offset();
+        assert_eq!(before, px(0.0), "an opened menu starts at its first row");
+        let highlight = overflow.highlight();
+        assert_eq!(highlight, Some(0));
+
+        overflow.wheel();
+
+        let after = overflow.rows_offset();
+        assert!(
+            after < before,
+            "the wheel scrolled the rows down: {before} -> {after}"
+        );
+        assert_eq!(
+            overflow.highlight(),
+            Some(0),
+            "the wheel did not move the highlight"
+        );
+    }
+}

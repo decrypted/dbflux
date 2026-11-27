@@ -43,6 +43,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(add_panel_picker_layer());
     stack.add_layer(mcp_approvals_layer());
     stack.add_layer(migrate_wizard_layer());
+    stack.add_layer(import_wizard_layer());
     stack.add_layer(vim_normal_layer());
 
     stack
@@ -580,6 +581,15 @@ fn results_layer() -> KeymapLayer {
         Command::NewQueryTab,
     );
 
+    // The secret store's Edit value; other documents leave it unhandled.
+    layer.bind(KeyChord::new("e", Modifiers::none()), Command::EditValue);
+
+    // The secret store's Roll back; other documents leave it unhandled.
+    layer.bind(
+        KeyChord::new("b", Modifiers::none()),
+        Command::RollBackVersion,
+    );
+
     // Panel navigation (Ctrl+hjkl) — vim-style, literal Ctrl on every platform.
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusToolbar);
@@ -708,6 +718,10 @@ fn results_layer() -> KeymapLayer {
     // `=` as in the condition it adds: the selected cells' values go into
     // the table's WHERE filter, as a middle-click on a cell adds one.
     layer.bind(KeyChord::new("=", Modifiers::none()), Command::AddToFilter);
+    layer.bind(
+        KeyChord::new("0", Modifiers::ctrl_shift()),
+        Command::ResultsSetDefault,
+    );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
     // GPUI reports cmd vs ctrl on separate modifier fields, so binding only
@@ -1579,12 +1593,13 @@ fn data_table_layer() -> KeymapLayer {
         KeyChord::new("n", Modifiers::ctrl()),
         Command::ResultsSetNull,
     );
-    // Primary+Alt like Copy as JSON: primary+Shift+E is a workspace command,
-    // and Alt alone types characters on macOS. It also reaches the open
-    // inline editor, which sits inside the table's context.
-    layer.bind(
-        KeyChord::new("e", Modifiers::primary_alt()),
-        Command::ToggleCellExpression,
+    // The literal / expression editor toggle. Ctrl+E and Ctrl+Shift+E belong
+    // to the input component and the export menu, so it takes Ctrl+Shift+I.
+    // It also works inside the cell input, to flip an open editor.
+    layer.bind_with_predicate(
+        KeyChord::new("i", Modifiers::ctrl_shift()),
+        Command::ResultsToggleExpression,
+        "DataTable",
     );
 
     // Undo / redo: the standard primary chords plus the vim-style `u` and
@@ -2197,6 +2212,29 @@ fn migrate_wizard_layer() -> KeymapLayer {
         Command::Cancel,
         from_field,
     );
+
+    layer
+}
+
+/// Keys of the import wizard's configure step. J and K move the cursor over
+/// its choices (the CSV delimiter and encoding, then each table's mapping
+/// mode, target column and source column); H and L (or the arrows) pick the
+/// previous or next delimiter and encoding. Enter, which the dialog hands to
+/// its owner, picks the next delimiter or encoding, or opens the dropdown
+/// under the cursor. The keys stay with a text field and an open dropdown.
+fn import_wizard_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::ImportWizard);
+
+    for (key, command) in [
+        ("j", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+    ] {
+        layer.bind(KeyChord::new(key, Modifiers::none()), command);
+    }
 
     layer
 }

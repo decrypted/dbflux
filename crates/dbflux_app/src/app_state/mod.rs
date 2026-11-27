@@ -114,6 +114,8 @@ pub struct AppState {
     general_settings: GeneralSettings,
     update_settings: crate::updates::UpdateSettings,
     update_check: crate::updates::UpdateCheckState,
+    #[cfg(feature = "telemetry")]
+    telemetry: Option<crate::telemetry::TelemetryScheduler>,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, EditableGlobalHook>,
@@ -204,6 +206,84 @@ fn same_server(before: &ConnectionProfile, after: &ConnectionProfile) -> bool {
 }
 
 impl AppState {
+    /// Explicit foreground initialization only; constructor/startup neither
+    /// reads endpoint configuration nor constructs a blocking HTTP client.
+    #[cfg(feature = "telemetry")]
+    pub fn initialize_telemetry(
+        &mut self,
+        config: crate::telemetry::TelemetryConfig,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.initialize_telemetry_inner(config, crate::telemetry::BuildIdentity::compiled(), now)
+    }
+
+    /// Test-only seam: the same initialization with a caller-supplied identity,
+    /// so a composition test can drive a scheduler that admits a fixture RC
+    /// build (`BuildIdentity::compiled()` rejects dev versions, which would
+    /// leave every delivery permanently `Skipped(UnsupportedBuild)`). Production
+    /// and telemetry-off builds do not contain this method.
+    #[cfg(all(feature = "telemetry", any(test, feature = "test-support")))]
+    pub fn initialize_telemetry_with_identity(
+        &mut self,
+        config: crate::telemetry::TelemetryConfig,
+        identity: Result<crate::telemetry::BuildIdentity, crate::telemetry::TelemetryError>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.initialize_telemetry_inner(config, identity, now)
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn initialize_telemetry_inner(
+        &mut self,
+        config: crate::telemetry::TelemetryConfig,
+        identity: Result<crate::telemetry::BuildIdentity, crate::telemetry::TelemetryError>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        if self.telemetry.is_none() {
+            self.telemetry = Some(crate::telemetry::TelemetryScheduler::new(
+                self.storage_runtime.telemetry(),
+                config,
+                identity,
+                Arc::new(self.audit_service.clone()),
+                {
+                    let audit = self.audit_service.clone();
+                    let degraded = self.audit_degraded;
+                    Arc::new(move || !degraded && audit.is_enabled())
+                },
+                now,
+            )?);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry(&self) -> Option<&crate::telemetry::TelemetryScheduler> {
+        self.telemetry.as_ref()
+    }
+
+    /// Capture the source before starting work; failures never fail the user's operation.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_usage_source(
+        &mut self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<dbflux_core::observability::usage::UsageSource> {
+        if self.audit_degraded || !self.audit_service.is_enabled() {
+            return None;
+        }
+        match self.telemetry.as_mut()?.usage_source(now) {
+            Ok(source) => source,
+            Err(error) => {
+                log::error!("{error}");
+                None
+            }
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_mut(&mut self) -> Option<&mut crate::telemetry::TelemetryScheduler> {
+        self.telemetry.as_mut()
+    }
+
     /// Writes a profile's secret-kind field values to the OS keyring under
     /// per-field references. The matching SQLite rows store only the reference.
     ///
@@ -1056,6 +1136,23 @@ impl AppState {
             .prepare_fetch_table_details(profile_id, database, schema, table)
     }
 
+    /// Prepares a fenced fetch of one table's details that ignores the cache,
+    /// for checking the table against the database as it is now. Execute it
+    /// off the UI thread, then write the result through
+    /// [`AppState::apply_fetched_table_details`], which rejects it when the
+    /// session or the table's cache changed in between.
+    pub fn prepare_refetch_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<FencedTableDetailsParams, TableDetailsPrepareError> {
+        self.facade
+            .connections
+            .prepare_refetch_table_details(profile_id, database, schema, table)
+    }
+
     /// Invalidates one table's cached details and dependents and fences its older requests.
     pub fn invalidate_table_details(
         &mut self,
@@ -1067,6 +1164,11 @@ impl AppState {
         self.facade
             .connections
             .invalidate_table_details(profile_id, database, schema, table)
+    }
+
+    /// Drops every cached table's details and dependents of one connection.
+    pub fn clear_table_details(&mut self, profile_id: Uuid) -> bool {
+        self.facade.connections.clear_table_details(profile_id)
     }
 
     /// Prepares a session-fenced table-details fetch for the shared object
@@ -1082,6 +1184,17 @@ impl AppState {
         self.facade
             .connections
             .prepare_fetch_table_details_fenced(profile_id, database, schema, table)
+    }
+
+    /// Whether a failed fenced table-details fetch answered for the session,
+    /// connection and cache that are current now.
+    pub fn is_table_details_failure_current(
+        &self,
+        failure: &dbflux_core::FencedTableDetailsFailure,
+    ) -> bool {
+        self.facade
+            .connections
+            .is_table_details_failure_current(failure)
     }
 
     pub fn apply_fetched_table_details(
@@ -2526,6 +2639,65 @@ impl AppState {
         &self.audit_service
     }
 
+    /// The saved telemetry level, or `None` when the optional telemetry
+    /// module is unavailable. UI surfaces use the `TelemetryLevel` re-export
+    /// and must not depend on the protocol crate.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_level(&self) -> Option<crate::telemetry::TelemetryLevel> {
+        self.telemetry
+            .as_ref()
+            .map(|scheduler| scheduler.state().level())
+    }
+
+    /// Persists the telemetry level on the storage owner, in the foreground.
+    /// Leaving Basic cancels a queued Basic delivery and Off also cancels a
+    /// queued ping; it never resets the installation identity.
+    #[cfg(feature = "telemetry")]
+    pub fn set_telemetry_level(
+        &mut self,
+        level: crate::telemetry::TelemetryLevel,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.telemetry_mut()
+            .ok_or(crate::telemetry::TelemetryError::Storage)?
+            .set_level(level, now)
+    }
+
+    /// Rotates the installation identity immediately, in the foreground.
+    /// Cancels old-identity pending work; acknowledged build history survives.
+    #[cfg(feature = "telemetry")]
+    pub fn reset_telemetry_install_id(
+        &mut self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.telemetry_mut()
+            .ok_or(crate::telemetry::TelemetryError::Storage)?
+            .reset(now)
+    }
+
+    /// The installation identifier for display, masked to its first and last
+    /// four hex characters (`a3f9…71c2`). `None` when telemetry is unavailable.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_install_id_masked(&self) -> Option<String> {
+        let id = self
+            .telemetry
+            .as_ref()?
+            .state()
+            .install_id()
+            .simple()
+            .to_string();
+        Some(format!("{}…{}", &id[..4], &id[id.len() - 4..]))
+    }
+
+    /// Whether a delivery endpoint is configured: `None` when telemetry is
+    /// unavailable, `Some(false)` means delivery is honestly unavailable.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_delivery_configured(&self) -> Option<bool> {
+        self.telemetry
+            .as_ref()
+            .map(crate::telemetry::TelemetryScheduler::endpoint_configured)
+    }
+
     /// Wires the tracing bridge's shared atomics into the audit service so that
     /// `set_log_capture_min_level` can update the bridge threshold at runtime
     /// and `dropped_log_event_count` can report the drop counter.
@@ -3415,6 +3587,9 @@ mod tests {
         ServiceRpcApiContract,
     };
     use dbflux_driver_ipc::IpcDriver;
+
+    #[cfg(feature = "telemetry")]
+    mod telemetry;
 
     #[test]
     fn profile_session_generation_absent_profile_is_none() {

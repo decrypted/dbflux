@@ -37,7 +37,7 @@ jobs:
         mode: [site, docs]
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # The site reads each published version's docs out of its own git ref,
           # so a shallow clone cannot build anything but the current branch.

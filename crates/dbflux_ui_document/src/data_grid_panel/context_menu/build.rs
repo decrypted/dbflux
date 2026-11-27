@@ -52,12 +52,6 @@ impl DataGridPanel {
             .then(|| self.column_name(menu.col))
             .flatten();
 
-        let accepts_expression = self
-            .grid_table
-            .table_state
-            .as_ref()
-            .is_some_and(|state| state.read(cx).accepts_cell_expressions(menu.col));
-
         CellMenuParts {
             is_editable,
             has_row_target,
@@ -66,7 +60,7 @@ impl DataGridPanel {
             copy_as: self.copy_as_entries(cx),
             copy_query: (table_queries && self.has_copy_query_support())
                 .then(|| self.copy_query_submenu_label(cx).into()),
-            accepts_expression,
+            set_values: self.set_value_nodes(menu.col, cx),
             document_patches: self.commits_document_patches(cx),
             generated_ids: self.generate_id_entries(menu, cx),
             filter,
@@ -136,6 +130,13 @@ impl DataGridPanel {
         };
 
         let mut nodes = vec![
+            MenuNode::Entry(MenuEntry::action(
+                "copy-column-name",
+                dbflux_i18n::t!("document.data.context_menu.item.copy_column_name"),
+                AppIcon::Copy,
+                ContextMenuAction::CopyColumnName,
+            )),
+            MenuNode::Separator,
             header(
                 "document.data.context_menu.order.title",
                 AppIcon::ArrowUpDown,
@@ -205,6 +206,44 @@ impl DataGridPanel {
             }));
         }
 
+        nodes
+    }
+
+    /// Set value ▸ as rows, for a table that takes SQL expressions: what
+    /// `set_value_entries` lists, with the type's values under their
+    /// caption. Empty for every other source.
+    fn set_value_nodes(&self, col: usize, cx: &App) -> Vec<MenuNode> {
+        if !self.offers_set_value_menu(cx) {
+            return Vec::new();
+        }
+
+        let mut nodes = Vec::new();
+        for (index, set_value) in self.set_value_entries(col, cx).into_iter().enumerate() {
+            if let Some(caption) = set_value.header {
+                nodes.push(MenuNode::Separator);
+                nodes.push(MenuNode::Header(MenuHeader {
+                    label: caption,
+                    icon: Some(AppIcon::Code),
+                    tone: HeaderTone::Muted,
+                }));
+            }
+
+            let id = match set_value.action {
+                ContextMenuAction::SetDefault => "set-default".to_string(),
+                ContextMenuAction::SetNull => "set-null".to_string(),
+                ContextMenuAction::SetExpression => "set-expression".to_string(),
+                _ => format!("set-value-entry-{index}"),
+            };
+            let icon = if set_value.is_expression {
+                AppIcon::Code
+            } else {
+                AppIcon::CircleX
+            };
+            let mut row = MenuEntry::action(id, set_value.label, icon, set_value.action);
+            row.detail = set_value.detail;
+            row.disabled = set_value.disabled;
+            nodes.push(MenuNode::Entry(row));
+        }
         nodes
     }
 

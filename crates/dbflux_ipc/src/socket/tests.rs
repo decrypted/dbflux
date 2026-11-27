@@ -652,3 +652,14 @@ fn socket_names_cannot_leave_the_directory() {
     let error = IpcSocket::in_dir(&dir, long).expect_err("too long");
     assert!(error.to_string().contains("limit"), "{error}");
 }
+
+#[cfg(feature = "telemetry")]
+#[test]
+fn native_pipe_mapping_preserves_the_app_control_name() {
+    let expected = if cfg!(debug_assertions) {
+        r"\\.\pipe\dbflux-debug.sock"
+    } else {
+        r"\\.\pipe\dbflux.sock"
+    };
+    assert_eq!(named_pipe_path(&app_control_leaf()), expected);
+}

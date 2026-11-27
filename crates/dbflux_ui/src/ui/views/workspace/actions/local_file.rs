@@ -703,6 +703,19 @@ pub(super) mod tests {
         };
         use interprocess::local_socket::ListenerNonblockingMode;
 
+        // The IPC server's telemetry owner only receives usage counters; this
+        // test asserts on the opened tab, so an isolated owner entity stands in
+        // for the workspace's own app state.
+        #[cfg(feature = "telemetry")]
+        let telemetry_owner = cx.update(|cx| {
+            let runtime =
+                dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+            .downgrade()
+        });
+
         let (workspace, window) = new_workspace(cx);
         let file = TestFile::new(&format.file_name("cities"));
 
@@ -720,6 +733,8 @@ pub(super) mod tests {
                 workspace.clone(),
                 window.window_handle(),
                 "token".to_string(),
+                #[cfg(feature = "telemetry")]
+                telemetry_owner,
                 cx,
             );
         });

@@ -83,10 +83,6 @@ pub enum CellTone {
     /// A summary of a nested value that can be stepped into rather than
     /// edited in place (`{4 fields}`, `[3]`).
     Nested,
-    /// A value the host writes as an expression its engine evaluates (a
-    /// function call such as `now()`), not as a literal; drawn in the info
-    /// color, italic.
-    Expression,
     /// The cell sits in a row that is a new, not-yet-saved insert.
     PendingInsert,
     /// The cell sits in a row marked for deletion; renderers typically mute
@@ -101,6 +97,9 @@ pub enum CellTone {
     Warning,
     /// A value that flags a failure; drawn in the palette's danger color.
     Danger,
+    /// A SQL expression the database evaluates (`now()`), as opposed to a
+    /// literal value; drawn in the accent color so it never reads as text.
+    Expression,
 }
 
 /// How a row stands relative to its data source, as a grid paints it.

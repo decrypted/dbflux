@@ -1,6 +1,9 @@
 mod binary;
 mod csv;
+mod encoding;
 mod json;
+mod markup;
+mod options;
 mod streaming;
 mod text;
 
@@ -9,9 +12,12 @@ use std::io::Write;
 use thiserror::Error;
 
 pub use binary::{BinaryExportMode, BinaryExporter};
-pub use csv::{CsvDelimiter, CsvExporter, CsvOptions, value_to_csv_field};
+pub use csv::{CsvExporter, CsvOptions, value_to_csv_field};
+pub use encoding::{DecodingReader, decode_to_utf8};
 pub use json::JsonExporter;
-pub use streaming::{CsvStreamWriter, JsonStreamWriter};
+pub use markup::{HtmlStreamWriter, MarkdownStreamWriter, XmlStreamWriter};
+pub use options::{CsvDelimiter, DEFAULT_SQL_BATCH_SIZE, DateFormat, FormatOptions, TextEncoding};
+pub use streaming::{CsvStreamWriter, JsonArrayStreamWriter, JsonLinesStreamWriter};
 pub use text::TextExporter;
 
 #[derive(Debug, Error)]

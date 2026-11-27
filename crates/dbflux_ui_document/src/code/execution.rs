@@ -47,6 +47,10 @@ pub(crate) fn evaluate_dangerous_with_effective_settings(
         ));
     }
 
+    if matches!(kind, AdminScript) {
+        return dbflux_core::DangerousAction::Confirm(kind);
+    }
+
     if !effective.confirm_dangerous {
         return dbflux_core::DangerousAction::Allow;
     }
@@ -90,6 +94,17 @@ pub(crate) fn decide_dangerous_kinds(
     }
 
     decision
+}
+
+pub(crate) fn confirmed_ceiling_for_dangerous(
+    kind: dbflux_core::DangerousQueryKind,
+) -> dbflux_core::ExecutionClassification {
+    match kind {
+        dbflux_core::DangerousQueryKind::AdminScript => {
+            dbflux_core::ExecutionClassification::AdminDestructive
+        }
+        _ => dbflux_core::ExecutionClassification::Destructive,
+    }
 }
 
 /// Returns `true` when the connection's profile is set to read-only and
@@ -327,23 +342,38 @@ impl CodeDocument {
     }
 
     pub fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run_query_with_origin(ExecutionOrigin::User, window, cx);
+    }
+
+    pub(super) fn run_query_with_origin(
+        &mut self,
+        origin: ExecutionOrigin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.read_only {
             return;
         }
         if !self.supports_connection_context() {
-            self.run_script(window, cx);
+            self.run_script(origin, window, cx);
             return;
         }
-        self.run_query_impl(false, window, cx);
+        self.run_query_impl(origin, false, window, cx);
     }
 
-    fn run_query_impl(&mut self, in_new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn run_query_impl(
+        &mut self,
+        origin: ExecutionOrigin,
+        in_new_tab: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.execution.load_all_rows = None;
 
         // A selection always runs as-is, without the script confirmation.
         if let Some(query) = self.selected_query(window, cx) {
             self.execution.query_origin = None;
-            self.run_query_text(query, in_new_tab, window, cx);
+            self.run_query_text(origin, query, in_new_tab, window, cx);
             return;
         }
 
@@ -353,28 +383,31 @@ impl CodeDocument {
 
         // Without a selection, a buffer of several statements runs only the
         // one under the cursor; selecting everything runs the whole script.
+        // `statement_start` is the offset of that statement in the buffer,
+        // distinct from the `ExecutionOrigin` this run was started with.
         let cursor_statement =
             statements::cursor_statement(self.effective_language(), &query, cursor)
                 .and_then(|range| Some((range.start, query.get(range)?.to_string())));
 
-        if let Some((origin, statement)) = cursor_statement {
+        if let Some((statement_start, statement)) = cursor_statement {
             // A lone BEGIN leaves a transaction open that later runs silently
             // join; a lone COMMIT or ROLLBACK ends nothing the script did.
             if statements::is_transaction_boundary(&statement) {
                 let statement_count = self.effective_language().statement_count(&query);
                 let line = query
-                    .get(..origin)
+                    .get(..statement_start)
                     .map_or(0, |prefix| prefix.matches('\n').count())
                     + 1;
 
                 self.ask_script_confirm(
                     PendingScriptConfirm {
+                        origin,
                         query,
                         in_new_tab,
                         statement_count,
                         cursor_statement: Some(CursorStatement {
                             text: statement,
-                            origin,
+                            origin: statement_start,
                             line,
                             offers_script: statements::guard_offers_script(
                                 self.connection_capabilities(cx),
@@ -387,8 +420,8 @@ impl CodeDocument {
                 return;
             }
 
-            self.execution.query_origin = Some(origin);
-            self.run_query_text(statement, in_new_tab, window, cx);
+            self.execution.query_origin = Some(statement_start);
+            self.run_query_text(origin, statement, in_new_tab, window, cx);
             return;
         }
 
@@ -401,6 +434,7 @@ impl CodeDocument {
         if let Some(statement_count) = self.script_statement_count(&query, cx) {
             self.ask_script_confirm(
                 PendingScriptConfirm {
+                    origin,
                     query,
                     in_new_tab,
                     statement_count,
@@ -412,7 +446,7 @@ impl CodeDocument {
             return;
         }
 
-        self.run_query_text(query, in_new_tab, window, cx);
+        self.run_query_text(origin, query, in_new_tab, window, cx);
     }
 
     /// Shows the script confirmation and moves focus into it, off the editor
@@ -498,7 +532,13 @@ impl CodeDocument {
         self.focus(window, cx);
         cx.notify();
         self.execution.query_origin = Some(0);
-        self.run_query_text(pending.query, pending.in_new_tab, window, cx);
+        self.run_query_text(
+            pending.origin,
+            pending.query,
+            pending.in_new_tab,
+            window,
+            cx,
+        );
     }
 
     /// Runs only the transaction boundary the script confirmation was raised
@@ -517,7 +557,13 @@ impl CodeDocument {
         };
 
         self.execution.query_origin = Some(statement.origin);
-        self.run_query_text(statement.text, pending.in_new_tab, window, cx);
+        self.run_query_text(
+            pending.origin,
+            statement.text,
+            pending.in_new_tab,
+            window,
+            cx,
+        );
     }
 
     pub(super) fn cancel_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -529,12 +575,20 @@ impl CodeDocument {
 
     pub(super) fn run_query_text(
         &mut self,
+        origin: ExecutionOrigin,
         query: String,
         in_new_tab: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.run_query_text_with(query, in_new_tab, ReadOnlyEnforcement::None, window, cx);
+        self.run_query_text_with(
+            origin,
+            query,
+            in_new_tab,
+            ReadOnlyEnforcement::None,
+            window,
+            cx,
+        );
     }
 
     /// Runs `query` with the given read-only enforcement. Only auto-refresh
@@ -542,6 +596,7 @@ impl CodeDocument {
     /// goes through [`Self::run_query_text`].
     fn run_query_text_with(
         &mut self,
+        origin: ExecutionOrigin,
         query: String,
         in_new_tab: bool,
         read_only: ReadOnlyEnforcement,
@@ -618,6 +673,7 @@ impl CodeDocument {
                 DangerousAction::Confirm(kind) => {
                     self.ask_dangerous_query_confirm(
                         PendingDangerousQuery {
+                            origin,
                             query,
                             kind,
                             in_new_tab,
@@ -695,180 +751,14 @@ impl CodeDocument {
             }
         }
 
-        // Run the schema drift preflight check asynchronously so it does not
-        // block the UI thread. The actual execution is deferred to the render
-        // loop via `pending.drift_query`.
-        self.start_drift_preflight(query, in_new_tab, read_only, cx);
-    }
-
-    /// Kick off the async drift preflight for `query`.
-    ///
-    /// Captures a snapshot of the current `table_details` cache and the
-    /// connection, then spawns a background task that calls `check_schema_drift`.
-    /// On completion the result is delivered back to the entity via
-    /// `cx.update`, which sets `pending.drift_query` and calls `cx.notify()` so
-    /// the render loop picks it up.
-    fn start_drift_preflight(
-        &mut self,
-        query: String,
-        in_new_tab: bool,
-        read_only: ReadOnlyEnforcement,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(conn_id) = self.connection_id else {
-            // No connection — nothing to preflight; execute directly via pending.
-            self.pending.drift_query = Some(PendingDriftQuery {
-                query,
-                in_new_tab,
-                action: DriftAction::ExecuteNow,
-                cache_updates: Vec::new(),
-                read_only,
-            });
-            cx.notify();
-            return;
-        };
-
-        let state = self.app_state.read(cx);
-        let connections = state.connections();
-        let Some(connected) = connections.get(&conn_id) else {
-            self.pending.drift_query = Some(PendingDriftQuery {
-                query,
-                in_new_tab,
-                action: DriftAction::ExecuteNow,
-                cache_updates: Vec::new(),
-                read_only,
-            });
-            cx.notify();
-            return;
-        };
-
-        let connection = connected.connection.clone();
-        let table_details = connected.table_details.clone();
-
-        let database = self
-            .source
-            .exec_ctx
-            .database
-            .clone()
-            .or_else(|| connected.active_database.clone())
-            .or_else(|| {
-                connected
-                    .schema
-                    .as_ref()
-                    .and_then(|s| s.current_database().map(String::from))
-            });
-
-        let database = match database {
-            Some(database) => database,
-            // Without a database there is no valid fetch key. On
-            // lazy-per-database drivers a fabricated name reaches real
-            // queries (`` `default`.`table` ``), so skip the preflight;
-            // single-catalog drivers ignore the database argument.
-            None if connected.connection.schema_loading_strategy()
-                == dbflux_core::SchemaLoadingStrategy::LazyPerDatabase =>
-            {
-                self.pending.drift_query = Some(PendingDriftQuery {
-                    query,
-                    in_new_tab,
-                    action: DriftAction::ExecuteNow,
-                    cache_updates: Vec::new(),
-                    read_only,
-                });
-                cx.notify();
-                return;
-            }
-            None => "default".to_string(),
-        };
-
-        let default_schema = self.source.exec_ctx.schema.clone();
-
-        self.drift.preflight_running = true;
-        cx.notify();
-
-        let query_capture = query.clone();
-
-        let task = cx.background_executor().spawn(async move {
-            check_schema_drift(
-                &connection,
-                &table_details,
-                &query,
-                &database,
-                default_schema.as_deref(),
-            )
-        });
-
-        cx.spawn(async move |this, cx| {
-            let outcome = task.await;
-
-            let _ = this.update(cx, |doc, cx| {
-                doc.drift.preflight_running = false;
-
-                match outcome {
-                    DriftOutcome::Skip => {
-                        // Driver doesn't support table parsing — execute directly.
-                        doc.pending.drift_query = Some(PendingDriftQuery {
-                            query: query_capture,
-                            in_new_tab,
-                            action: DriftAction::ExecuteNow,
-                            cache_updates: Vec::new(),
-                            read_only,
-                        });
-                    }
-
-                    DriftOutcome::Refresh(entries) => {
-                        // No drift — schedule transparent cache update then execute.
-                        doc.pending.drift_query = Some(PendingDriftQuery {
-                            query: query_capture,
-                            in_new_tab,
-                            action: DriftAction::ExecuteNow,
-                            cache_updates: entries,
-                            read_only,
-                        });
-                    }
-
-                    DriftOutcome::Drift(detected) => {
-                        // Build cache updates from unchanged tables, then add
-                        // per-diff fresh infos so "Refresh & re-run" updates them.
-                        let mut all_updates = detected.refreshes.clone();
-                        for diff in &detected.diffs {
-                            let effective_db = diff
-                                .table
-                                .database
-                                .clone()
-                                .unwrap_or_else(|| "default".to_string());
-                            let schema = diff
-                                .table
-                                .schema
-                                .clone()
-                                .or_else(|| diff.fresh.schema.clone());
-                            all_updates.push((
-                                (effective_db, schema, diff.table.table.clone()),
-                                diff.fresh.clone(),
-                            ));
-                        }
-
-                        doc.pending.drift_query = Some(PendingDriftQuery {
-                            query: query_capture,
-                            in_new_tab,
-                            action: DriftAction::Pending,
-                            cache_updates: all_updates,
-                            read_only,
-                        });
-
-                        doc.drift.schema_drift_modal.update(cx, |modal, cx| {
-                            modal.open(detected, cx);
-                        });
-                    }
-                }
-
-                cx.notify();
-            });
-        })
-        .detach();
+        // Consent is read when the user starts the run.
+        let usage_ticket = self.capture_usage_ticket(origin, cx);
+        self.execute_query_internal(usage_ticket, query, in_new_tab, read_only, window, cx);
     }
 
     fn execute_query_internal(
         &mut self,
+        usage_ticket: Option<super::UsageTicket>,
         query: String,
         in_new_tab: bool,
         read_only: ReadOnlyEnforcement,
@@ -876,6 +766,7 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) {
         self.execute_statement(
+            usage_ticket,
             query,
             in_new_tab,
             read_only,
@@ -891,8 +782,11 @@ impl CodeDocument {
         clippy::result_large_err,
         reason = "the closure returns the driver's own error unchanged, like `Connection::execute`"
     )]
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn execute_statement(
         &mut self,
+        usage_ticket: Option<super::UsageTicket>,
         query: String,
         in_new_tab: bool,
         read_only: ReadOnlyEnforcement,
@@ -989,6 +883,13 @@ impl CodeDocument {
             || self
                 .current_execution_context(cx)
                 .is_some_and(|current| current.same_as(&session_context));
+        // A rerun keeps the language its result ran in: the editor's language
+        // may have changed since, and the rows must come from the same
+        // dialect. The new origin carries it on, so later pages inherit it.
+        let language = rerun_origin
+            .as_ref()
+            .map(|origin| origin.language.clone())
+            .unwrap_or_else(|| self.effective_language().clone());
         let exec_ctx = rerun_origin
             .map(|origin| origin.exec_ctx)
             .unwrap_or_else(|| self.source.exec_ctx.clone());
@@ -996,6 +897,7 @@ impl CodeDocument {
             connection_id: conn_id,
             context: session_context.clone(),
             exec_ctx: exec_ctx.clone(),
+            language: language.clone(),
         };
 
         if on_session {
@@ -1056,7 +958,7 @@ impl CodeDocument {
             query.clone(),
             active_database,
             &exec_ctx,
-            self.effective_language().clone(),
+            language,
             row_limit,
         );
 
@@ -1081,10 +983,12 @@ impl CodeDocument {
                     .connection
                     .language_service()
                     .detect_dangerous(&query)
+                    .map(confirmed_ceiling_for_dangerous)
             });
-        if confirmed_ceiling.is_some() && !run.shows_plan() {
-            request =
-                request.with_confirmed_ceiling(dbflux_core::ExecutionClassification::Destructive);
+        if let Some(ceiling) = confirmed_ceiling
+            && !run.shows_plan()
+        {
+            request = request.with_confirmed_ceiling(ceiling);
         }
         request = request.with_read_only(read_only);
 
@@ -1108,6 +1012,7 @@ impl CodeDocument {
 
         let session_binding = self.execution_session.clone();
         let session_generation = session_binding.current_generation();
+        let invalidation_app_state = self.app_state.clone();
         // An explicit Run is interactive: it starts before the connection's
         // queued background reads (restored tabs, counts).
         let work = dbflux_ui_base::work_queue::QueryWork::interactive(conn_id)
@@ -1171,6 +1076,21 @@ impl CodeDocument {
             let (dispatched, session_execution) = task.await;
             let session_isolated = session_execution.isolated;
             let result = session_execution.result;
+
+            // The statement reached the database whether or not it succeeded
+            // (a SQL Server batch commits a DDL statement before a later error)
+            // and whether or not the editor still wants its result, so the
+            // cache is dropped before the result can be discarded.
+            if dispatched {
+                cx.update(|cx| {
+                    Self::drop_cached_details_after_ddl(
+                        &invalidation_app_state,
+                        Some(conn_id),
+                        &query,
+                        cx,
+                    );
+                });
+            }
 
             if cancel_token.is_cancelled() && session_isolated {
                 // Local task cancellation does not cancel the remote isolated session. Wait for
@@ -1309,6 +1229,14 @@ impl CodeDocument {
                         result_grid,
                         origin: Some(origin),
                         run,
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        #[cfg(feature = "telemetry")]
+                        usage_success: true,
+                        #[cfg(feature = "telemetry")]
+                        usage_cancel: cancel_token,
+                        #[cfg(feature = "telemetry")]
+                        usage_session_generation: on_session.then_some(session_generation),
                     },
                     window,
                     cx,
@@ -1377,7 +1305,9 @@ impl CodeDocument {
         self.dangerous_query_focus.restore(cx);
         self.focus(window, cx);
         cx.notify();
+        let usage_ticket = self.capture_usage_ticket(pending.origin, cx);
         self.execute_query_internal(
+            usage_ticket,
             pending.query,
             pending.in_new_tab,
             ReadOnlyEnforcement::None,
@@ -1643,7 +1573,42 @@ impl CodeDocument {
         self.execution.load_all_rows = None;
         let (query, from_selection) = self.auto_refresh_query(cx);
         self.execution.query_origin = if from_selection { None } else { Some(0) };
-        self.run_query_text_with(query, false, ReadOnlyEnforcement::Required, window, cx);
+        self.run_query_text_with(
+            ExecutionOrigin::Automatic,
+            query,
+            false,
+            ReadOnlyEnforcement::Required,
+            window,
+            cx,
+        );
+    }
+
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    fn capture_usage_ticket(
+        &mut self,
+        origin: ExecutionOrigin,
+        cx: &mut Context<Self>,
+    ) -> Option<super::UsageTicket> {
+        #[cfg(feature = "telemetry")]
+        {
+            if origin != ExecutionOrigin::User {
+                return None;
+            }
+            self.app_state.update(cx, |state, _| {
+                let source = state.telemetry_usage_source(chrono::Utc::now())?;
+                match source.ticket() {
+                    Ok(ticket) => ticket,
+                    Err(error) => {
+                        log::warn!("Usage ticket capture failed: {error:?}");
+                        None
+                    }
+                }
+            })
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            None
+        }
     }
 
     /// Turns auto-refresh off and tells the user why: the query cannot run
@@ -1659,6 +1624,45 @@ impl CodeDocument {
         ))
         .meta_right(now_hms())
         .push(cx);
+    }
+
+    /// A statement that changes the schema changes tables the parser does not
+    /// name, so the connection's cached table details are dropped whole. SQL
+    /// classifies `ALTER` and `DROP` as destructive, not as admin DDL, so the
+    /// destructive class counts too.
+    fn drop_cached_details_after_ddl(
+        app_state: &Entity<AppStateEntity>,
+        connection_id: Option<Uuid>,
+        query: &str,
+        cx: &mut App,
+    ) {
+        let Some(connection_id) = connection_id else {
+            return;
+        };
+
+        let is_ddl = app_state
+            .read(cx)
+            .connections()
+            .get(&connection_id)
+            .is_some_and(|connected| {
+                matches!(
+                    dbflux_core::classify_query_for_language_with_service(
+                        &connected.connection.metadata().query_language,
+                        query,
+                        Some(connected.connection.language_service()),
+                    ),
+                    dbflux_core::ExecutionClassification::AdminSafe
+                        | dbflux_core::ExecutionClassification::Admin
+                        | dbflux_core::ExecutionClassification::AdminDestructive
+                        | dbflux_core::ExecutionClassification::Destructive
+                )
+            });
+
+        if is_ddl {
+            app_state.update(cx, |state, _| {
+                state.clear_table_details(connection_id);
+            });
+        }
     }
 
     /// Moves the keyboard's mode to a new result, when the document is drawn: a tab
@@ -1699,6 +1703,17 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(feature = "telemetry")]
+        let usage_current = !pending.usage_cancel.is_cancelled()
+            && pending
+                .usage_session_generation
+                .is_none_or(|generation| self.execution_session.is_current_generation(generation))
+            && self
+                .execution
+                .active_execution_index
+                .and_then(|index| self.execution.execution_history.get(index))
+                .is_some_and(|record| record.id == pending.exec_id && record.finished_at.is_none());
+
         self.clear_live_output();
         self.state = DocumentState::Clean;
 
@@ -1780,6 +1795,24 @@ impl CodeDocument {
                     window,
                     cx,
                 );
+
+                #[cfg(feature = "telemetry")]
+                if usage_current
+                    && pending.usage_success
+                    && metadata_extra
+                        .as_ref()
+                        .is_none_or(|extra| extra.get("script_failure").is_none())
+                    && let Some(ticket) = pending.usage_ticket
+                {
+                    let feature = if is_script {
+                        dbflux_core::observability::usage::UsageFeature::ScriptRun
+                    } else {
+                        dbflux_core::observability::usage::UsageFeature::QueryRun
+                    };
+                    if let Err(error) = ticket.record(feature) {
+                        log::warn!("Usage completion failed: {error:?}");
+                    }
+                }
 
                 if self.layout == SqlQueryLayout::EditorOnly {
                     self.layout = SqlQueryLayout::Split;
@@ -2217,6 +2250,9 @@ impl CodeDocument {
                     this.pending.load_all_rows = Some(grid.entity_id());
                     cx.notify();
                 }
+                DataGridEvent::NextRowsRequested => {
+                    this.fetch_next_rows(grid, cx);
+                }
                 DataGridEvent::ApplyVisualQuery(_)
                 | DataGridEvent::ClearVisualQuery
                 | DataGridEvent::OpenEditorWithContent { .. } => {
@@ -2281,7 +2317,55 @@ impl CodeDocument {
         LimitedRowActions {
             count: reads && *language == QueryLanguage::Sql,
             load_all: reads,
+            next_rows: reads,
         }
+    }
+
+    fn fetch_next_rows(&mut self, grid: Entity<DataGridPanel>, cx: &mut Context<Self>) {
+        let Some((query, origin)) = self.result_tab_query(&grid, cx) else {
+            grid.update(cx, |grid, cx| grid.next_rows_failed(cx));
+            return;
+        };
+
+        let generation = grid.read(cx).result_generation();
+        let page = self.app_state.read(cx).general_settings().editor_row_limit;
+        let limit = grid.read(cx).loaded_row_count().saturating_add(page);
+        let row_limit = enforces_request_row_limit(origin.context.root.as_ref()).then_some(limit);
+        let request = query_request_for_execution(
+            query,
+            origin.context.database.clone(),
+            &origin.exec_ctx,
+            origin.language.clone(),
+            row_limit,
+        );
+        let task = self.execute_in_result_context(origin.context, request, cx);
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                grid.update(cx, |grid, cx| {
+                    if grid.result_generation() != generation {
+                        return;
+                    }
+                    match result {
+                        Ok(result) => grid.append_next_rows(result, cx),
+                        Err(error) => {
+                            grid.next_rows_failed(cx);
+                            dbflux_ui_base::user_error::report_error(
+                                dbflux_ui_base::user_error::UserFacingError::new(
+                                    dbflux_ui_base::user_error::ErrorKind::Driver,
+                                    dbflux_i18n::t!("document.code.execution.next_rows_failed"),
+                                )
+                                .with_cause(error.to_string()),
+                                cx,
+                            );
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
     }
 
     /// The query behind a result tab and where it ran.
@@ -2344,7 +2428,9 @@ impl CodeDocument {
             dbflux_core::count_query_from_sql(&query),
             origin.context.database.clone(),
             &origin.exec_ctx,
-            self.effective_language().clone(),
+            // The count query is SQL by construction, whatever language the
+            // editor has been retargeted to since the result was produced.
+            dbflux_core::QueryLanguage::Sql,
             count_row_limit,
         );
         let task = self.execute_in_result_context(origin.context, request, cx);
@@ -2420,7 +2506,15 @@ impl CodeDocument {
             grid: grid_id,
             origin,
         });
-        self.execute_query_internal(query, false, ReadOnlyEnforcement::None, window, cx);
+        let usage_ticket = self.capture_usage_ticket(ExecutionOrigin::User, cx);
+        self.execute_query_internal(
+            usage_ticket,
+            query,
+            false,
+            ReadOnlyEnforcement::None,
+            window,
+            cx,
+        );
     }
 
     /// Releases the editor when its running query task was cancelled outside
@@ -2546,10 +2640,10 @@ impl CodeDocument {
             return;
         }
         if !self.supports_connection_context() {
-            self.run_script(window, cx);
+            self.run_script(ExecutionOrigin::User, window, cx);
             return;
         }
-        self.run_query_impl(true, window, cx);
+        self.run_query_impl(ExecutionOrigin::User, true, window, cx);
     }
 
     pub fn close_result_tab(&mut self, tab_id: Uuid, cx: &mut Context<Self>) {
@@ -2685,7 +2779,12 @@ impl CodeDocument {
             .map(|tab| tab.result_panel.clone())
     }
 
-    fn run_script(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn run_script(
+        &mut self,
+        _origin: ExecutionOrigin,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         use dbflux_app::hook_executor::CompositeExecutor;
         use dbflux_core::{
             CancelToken, ConnectionHook, HookContext, HookExecutionMode, HookExecutor,
@@ -2784,7 +2883,14 @@ impl CodeDocument {
         // cancellation fallback even if the document is gone when cancellation is detected.
         let script_started_at = Instant::now();
 
+        #[cfg(feature = "telemetry")]
+        let usage_ticket = self.capture_usage_ticket(_origin, cx);
         let executor = CompositeExecutor::new();
+        #[cfg(all(test, feature = "telemetry"))]
+        let executor: Arc<dyn HookExecutor> = self
+            .script_executor
+            .clone()
+            .unwrap_or_else(|| Arc::new(executor));
         let bg_cancel = cancel_token.clone();
 
         let task = cx.background_executor().spawn(async move {
@@ -2800,6 +2906,8 @@ impl CodeDocument {
 
             match result {
                 Ok(hook_result) => {
+                    #[cfg(feature = "telemetry")]
+                    let usage_success = hook_result.is_success();
                     let mut output = String::new();
 
                     if !hook_result.stdout.is_empty() {
@@ -2836,7 +2944,7 @@ impl CodeDocument {
                     }
 
                     let elapsed = started_at.elapsed();
-                    Ok(QueryResult {
+                    let query_result = Ok(QueryResult {
                         shape: dbflux_core::QueryResultShape::Text,
                         columns: Vec::new(),
                         rows: Vec::new(),
@@ -2848,9 +2956,27 @@ impl CodeDocument {
                         resolved_window: None,
                         metadata_extra: None,
                         additional_results: Vec::new(),
-                    })
+                    });
+                    #[cfg(feature = "telemetry")]
+                    {
+                        (query_result, usage_success)
+                    }
+                    #[cfg(not(feature = "telemetry"))]
+                    {
+                        query_result
+                    }
                 }
-                Err(error) => Err(DbError::query_failed(error)),
+                Err(error) => {
+                    let query_result = Err(DbError::query_failed(error));
+                    #[cfg(feature = "telemetry")]
+                    {
+                        (query_result, false)
+                    }
+                    #[cfg(not(feature = "telemetry"))]
+                    {
+                        query_result
+                    }
+                }
             }
         });
 
@@ -2860,6 +2986,9 @@ impl CodeDocument {
         let content_for_cancel = content.clone();
 
         cx.spawn(async move |this, cx| {
+            #[cfg(feature = "telemetry")]
+            let (result, usage_success) = task.await;
+            #[cfg(not(feature = "telemetry"))]
             let result = task.await;
 
             if cancel_token.is_cancelled() {
@@ -2958,6 +3087,14 @@ impl CodeDocument {
                         result_grid: None,
                         origin: None,
                         run: StatementRun::Query,
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        #[cfg(feature = "telemetry")]
+                        usage_success,
+                        #[cfg(feature = "telemetry")]
+                        usage_cancel: cancel_token,
+                        #[cfg(feature = "telemetry")]
+                        usage_session_generation: None,
                     },
                     window,
                     cx,
@@ -2993,115 +3130,6 @@ impl CodeDocument {
             }
         })
         .detach();
-    }
-
-    /// Handle "Refresh and re-run": apply the pre-fetched fresh table details
-    /// to the cache, close the modal, then queue execution via the render loop.
-    ///
-    /// The fresh `TableInfo` for both changed and unchanged tables was already
-    /// captured during the drift preflight and stored in `pending.drift_query`.
-    pub(super) fn on_schema_drift_refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending.drift_query.take() else {
-            return;
-        };
-
-        let Some(conn_id) = self.connection_id else {
-            return;
-        };
-
-        // Apply all fresh table details (changed + unchanged) to the cache.
-        if !pending.cache_updates.is_empty() {
-            self.app_state.update(cx, |state, _cx| {
-                if let Some(connected) = state.connections_mut().get_mut(&conn_id) {
-                    for (key, info) in &pending.cache_updates {
-                        connected.table_details.insert(key.clone(), info.clone());
-                    }
-                }
-            });
-        }
-
-        self.drift.schema_drift_modal.update(cx, |modal, cx| {
-            modal.close(cx);
-        });
-
-        self.pending.drift_query = Some(PendingDriftQuery {
-            query: pending.query,
-            in_new_tab: pending.in_new_tab,
-            action: DriftAction::ExecuteNow,
-            cache_updates: Vec::new(),
-            read_only: pending.read_only,
-        });
-
-        cx.notify();
-    }
-
-    /// Handle "Continue with stale schema": mark the pending query so the render
-    /// loop picks it up and calls `execute_query_internal` with window access.
-    pub(super) fn on_schema_drift_continue(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref mut pending) = self.pending.drift_query {
-            pending.action = DriftAction::ContinueStale;
-        }
-
-        self.drift.schema_drift_modal.update(cx, |modal, cx| {
-            modal.close(cx);
-        });
-
-        cx.notify();
-    }
-
-    /// Process a pending drift action (called from render where window is available).
-    ///
-    /// Must be called via the `pending_*` + `.take()` pattern in the render method to
-    /// avoid multiple borrows.
-    pub(super) fn process_pending_drift_continue(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(pending) = self.pending.drift_query.take() else {
-            return;
-        };
-
-        match pending.action {
-            DriftAction::Pending => {
-                // Modal not yet answered — put it back and wait.
-                self.pending.drift_query = Some(pending);
-            }
-
-            DriftAction::ExecuteNow => {
-                // Transparent refresh: apply cache updates then execute.
-                if !pending.cache_updates.is_empty()
-                    && let Some(conn_id) = self.connection_id
-                {
-                    self.app_state.update(cx, |state, _cx| {
-                        if let Some(connected) = state.connections_mut().get_mut(&conn_id) {
-                            for (key, info) in &pending.cache_updates {
-                                connected.table_details.insert(key.clone(), info.clone());
-                            }
-                        }
-                    });
-                }
-
-                self.execute_query_internal(
-                    pending.query,
-                    pending.in_new_tab,
-                    pending.read_only,
-                    window,
-                    cx,
-                );
-            }
-
-            DriftAction::ContinueStale => {
-                // User chose to proceed without updating the cache.
-                self.execute_query_internal(
-                    pending.query,
-                    pending.in_new_tab,
-                    pending.read_only,
-                    window,
-                    cx,
-                );
-            }
-        }
     }
 }
 
@@ -3561,75 +3589,6 @@ mod tests {
         );
     }
 
-    /// Writing to `PendingActions::drift_query` and then reading it back
-    /// returns the stored value. This exercises the re-entrant write/read path
-    /// that the background drift-preflight task uses: the task writes via
-    /// `cx.update` and the next render cycle reads the same field.
-    #[test]
-    fn drift_query_written_is_readable_on_next_read() {
-        use super::{DriftAction, PendingActions, PendingDriftQuery};
-
-        let mut pending = PendingActions::default();
-
-        assert!(
-            pending.drift_query.is_none(),
-            "drift_query must be None after default construction"
-        );
-
-        pending.drift_query = Some(PendingDriftQuery {
-            query: "SELECT 1".to_string(),
-            in_new_tab: false,
-            action: DriftAction::Pending,
-            cache_updates: Vec::new(),
-            read_only: dbflux_core::ReadOnlyEnforcement::None,
-        });
-
-        assert!(
-            pending.drift_query.is_some(),
-            "drift_query must be Some after background-task-style write"
-        );
-
-        let stored = pending.drift_query.as_ref().unwrap();
-        assert_eq!(stored.query, "SELECT 1");
-        assert_eq!(stored.action, DriftAction::Pending);
-    }
-
-    /// When `process_pending_drift_continue` encounters a `Pending` action
-    /// it must put the value back rather than consuming it, so the next render
-    /// cycle can check it again. This verifies the put-back invariant without
-    /// requiring a full GPUI harness by inspecting `PendingActions` directly.
-    #[test]
-    fn drift_query_with_pending_action_survives_put_back() {
-        use super::{DriftAction, PendingActions, PendingDriftQuery};
-
-        let mut pending = PendingActions {
-            drift_query: Some(PendingDriftQuery {
-                query: "SELECT 2".to_string(),
-                in_new_tab: true,
-                action: DriftAction::Pending,
-                cache_updates: Vec::new(),
-                read_only: dbflux_core::ReadOnlyEnforcement::None,
-            }),
-            ..Default::default()
-        };
-
-        // Simulate the put-back logic: take the value, inspect action, re-store.
-        let taken = pending.drift_query.take().unwrap();
-        assert_eq!(taken.action, DriftAction::Pending);
-
-        pending.drift_query = Some(taken);
-
-        assert!(
-            pending.drift_query.is_some(),
-            "drift_query must be re-stored when action is Pending"
-        );
-        assert_eq!(
-            pending.drift_query.as_ref().unwrap().query,
-            "SELECT 2",
-            "stored query must be preserved across the put-back"
-        );
-    }
-
     #[test]
     fn execution_toast_keys_resolve_in_both_locales() {
         let keys = [
@@ -3701,6 +3660,40 @@ mod tests {
         );
 
         assert_ne!(en, es);
+    }
+
+    #[test]
+    fn admin_script_ceiling_and_always_prompt() {
+        use super::{confirmed_ceiling_for_dangerous, evaluate_dangerous_with_effective_settings};
+        use dbflux_core::{
+            DangerousAction, DangerousQueryKind, EffectiveSettings, ExecutionClassification,
+            GeneralSettings,
+        };
+        use std::collections::HashMap;
+
+        assert_eq!(
+            confirmed_ceiling_for_dangerous(DangerousQueryKind::AdminScript),
+            ExecutionClassification::AdminDestructive
+        );
+        assert_eq!(
+            confirmed_ceiling_for_dangerous(DangerousQueryKind::Script),
+            ExecutionClassification::Destructive
+        );
+
+        let global = GeneralSettings {
+            confirm_dangerous_queries: false,
+            ..Default::default()
+        };
+        let effective = EffectiveSettings::resolve(&global, None, &HashMap::new(), None, None);
+        assert!(matches!(
+            evaluate_dangerous_with_effective_settings(
+                DangerousQueryKind::AdminScript,
+                true,
+                &effective,
+                true,
+            ),
+            DangerousAction::Confirm(DangerousQueryKind::AdminScript)
+        ));
     }
 }
 
@@ -3939,6 +3932,7 @@ mod confirm_keyboard_tests {
                 match confirmation {
                     Confirmation::Script => document.ask_script_confirm(
                         PendingScriptConfirm {
+                            origin: super::ExecutionOrigin::User,
                             query,
                             in_new_tab: false,
                             statement_count: 2,
@@ -3949,6 +3943,7 @@ mod confirm_keyboard_tests {
                     ),
                     Confirmation::DangerousQuery => document.ask_dangerous_query_confirm(
                         PendingDangerousQuery {
+                            origin: super::ExecutionOrigin::User,
                             query,
                             kind: DangerousQueryKind::DeleteNoWhere,
                             in_new_tab: false,
@@ -4827,6 +4822,166 @@ mod auto_refresh_tests {
         window.update(|_, cx| document.read(cx).pending.dangerous_query.is_some())
     }
 
+    fn seed_table_details(window: &mut VisualTestContext, document: &Entity<CodeDocument>) {
+        window.update(|_, cx| {
+            let app_state = document.read(cx).app_state.clone();
+            let profile_id = document.read(cx).connection_id.expect("connected");
+            app_state.update(cx, |app, _| {
+                app.set_table_details(
+                    profile_id,
+                    "main".to_string(),
+                    None,
+                    "users".to_string(),
+                    dbflux_core::TableInfo {
+                        name: "users".to_string(),
+                        schema: None,
+                        columns: Some(Vec::new()),
+                        indexes: None,
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: None,
+                        presentation: Default::default(),
+                        child_items: None,
+                        storage_hints: None,
+                        pseudo_columns: Box::default(),
+                    },
+                );
+            });
+        });
+    }
+
+    fn has_cached_table_details(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+    ) -> bool {
+        window.update(|_, cx| {
+            let profile_id = document.read(cx).connection_id.expect("connected");
+            document
+                .read(cx)
+                .app_state
+                .read(cx)
+                .get_table_details(profile_id, "main", None, "users")
+                .is_some()
+        })
+    }
+
+    #[gpui::test]
+    fn a_ddl_run_from_the_editor_drops_the_connections_cached_table_details(
+        cx: &mut TestAppContext,
+    ) {
+        for ddl in [
+            "CREATE TABLE t (id INTEGER)",
+            "CREATE INDEX users_name ON users (name)",
+        ] {
+            let driver = FakeDriver::new(DbKind::SQLite);
+            let (document, _toasts, window) = open_connected(cx, &driver, ddl);
+            seed_table_details(window, &document);
+            assert!(has_cached_table_details(window, &document));
+
+            run_query(window, &document);
+
+            assert!(!executed(&driver).is_empty(), "{ddl} must have run");
+            assert!(
+                !has_cached_table_details(window, &document),
+                "{ddl} must drop the cached details"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn an_alter_or_drop_run_from_the_editor_drops_the_connections_cached_table_details(
+        cx: &mut TestAppContext,
+    ) {
+        for ddl in [
+            "ALTER TABLE users ADD COLUMN nickname TEXT",
+            "DROP TABLE users",
+        ] {
+            let driver = FakeDriver::new(DbKind::SQLite);
+            let (document, _toasts, window) = open_connected(cx, &driver, ddl);
+            seed_table_details(window, &document);
+
+            run_query(window, &document);
+            if has_pending_dangerous_query(window, &document) {
+                window.update(|window, cx| {
+                    document.update(cx, |document, cx| {
+                        document.confirm_dangerous_query(false, window, cx);
+                    });
+                });
+                settle(window);
+            }
+
+            assert!(!executed(&driver).is_empty(), "{ddl} must have run");
+            assert!(
+                !has_cached_table_details(window, &document),
+                "{ddl} must drop the cached details"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn a_ddl_run_whose_result_the_editor_discards_still_drops_the_cached_table_details(
+        cx: &mut TestAppContext,
+    ) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, _toasts, window) =
+            open_connected(cx, &driver, "CREATE INDEX users_name ON users (name)");
+        seed_table_details(window, &document);
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.run_query(window, cx);
+                // The editor's context changes while the statement runs.
+                document.execution_session.invalidate();
+            });
+        });
+        settle(window);
+
+        assert!(!executed(&driver).is_empty(), "the statement ran");
+        let discarded = window.update(|_, cx| {
+            document
+                .read(cx)
+                .execution
+                .execution_history
+                .iter()
+                .any(|record| {
+                    record
+                        .error
+                        .as_deref()
+                        .is_some_and(|e| e.contains("discarded"))
+                })
+        });
+        assert!(discarded, "the editor discarded the result");
+        assert!(!has_cached_table_details(window, &document));
+    }
+
+    #[gpui::test]
+    fn a_failing_ddl_run_from_the_editor_still_drops_the_cached_table_details(
+        cx: &mut TestAppContext,
+    ) {
+        let ddl = "CREATE INDEX users_name ON users (name)";
+        let driver =
+            FakeDriver::new(DbKind::SQLite).with_query_error(ddl, "later statement failed");
+        let (document, _toasts, window) = open_connected(cx, &driver, ddl);
+        seed_table_details(window, &document);
+
+        run_query(window, &document);
+
+        assert!(!executed(&driver).is_empty(), "the statement ran");
+        assert!(!has_cached_table_details(window, &document));
+    }
+
+    #[gpui::test]
+    fn a_select_run_from_the_editor_keeps_the_cached_table_details(cx: &mut TestAppContext) {
+        let driver = FakeDriver::new(DbKind::SQLite);
+        let (document, _toasts, window) = open_connected(cx, &driver, "SELECT 1");
+        seed_table_details(window, &document);
+
+        run_query(window, &document);
+
+        assert_eq!(executed(&driver).len(), 1);
+        assert!(has_cached_table_details(window, &document));
+    }
+
     #[gpui::test]
     fn a_read_only_profile_refuses_a_write_from_the_editor(cx: &mut TestAppContext) {
         let driver = FakeDriver::new(DbKind::SQLite);
@@ -4893,6 +5048,7 @@ mod auto_refresh_tests {
         window.update(|window, cx| {
             document.update(cx, |document, cx| {
                 document.pending.dangerous_query = Some(super::super::PendingDangerousQuery {
+                    origin: super::super::ExecutionOrigin::User,
                     query: "DELETE FROM users".to_string(),
                     kind: dbflux_core::DangerousQueryKind::DeleteNoWhere,
                     in_new_tab: false,

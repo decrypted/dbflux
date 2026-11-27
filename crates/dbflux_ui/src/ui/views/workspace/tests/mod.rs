@@ -20,6 +20,11 @@ mod close_flush;
 mod dashboard_layout;
 mod dashboard_rescale;
 mod document_focus;
+mod secret_edit;
+mod secret_open;
+mod sidebar_seam;
+#[cfg(feature = "telemetry")]
+mod telemetry_composition;
 
 fn new_workspace(
     cx: &mut TestAppContext,
@@ -1545,6 +1550,31 @@ fn each_confirmation_in_the_command_palette_chooses_the_item_once(cx: &mut TestA
     window.run_until_parked();
     assert_eq!(chosen.get(), 3, "one click chooses the item once");
     assert!(!window.update(|_, cx| palette.read(cx).is_visible()));
+}
+
+/// The open palette covers the whole window. Without that, the overlay sat at
+/// its static position below the status bar, out of view, while it still held
+/// focus and the modal key context, so every shortcut stopped working (#1314).
+#[gpui::test]
+fn the_open_command_palette_covers_the_window(cx: &mut TestAppContext) {
+    let (workspace, _, window) = new_workspace(cx);
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.toggle_command_palette(window, cx)
+        })
+    });
+    window.run_until_parked();
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let overlay = window
+        .debug_bounds("command-palette-overlay")
+        .expect("the open command palette renders its overlay");
+    let viewport = window.update(|window, _| window.viewport_size());
+
+    assert_eq!(overlay.origin, gpui::Point::default());
+    assert_eq!(overlay.size, viewport);
 }
 
 fn toast_count(window: &mut VisualTestContext) -> usize {

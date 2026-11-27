@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dbflux_core::OffRuntimeDrop;
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionExt, DatabaseInfo, DbError, DbKind, DocumentConnection,
     DriverMetadata, ExecutionClassification, ExplainRequest, KeyValueConnection, QueryCancelHandle,
@@ -720,7 +721,7 @@ fn strip_comments_and_quoted_content(sql: &str) -> String {
 }
 
 pub struct RedshiftConnection {
-    pub(crate) client: Arc<Mutex<Client>>,
+    pub(crate) client: Arc<Mutex<OffRuntimeDrop<Client>>>,
     #[allow(dead_code)]
     pub(crate) ssh_tunnel: Option<SshTunnel>,
     pub(crate) cancel_token: CancelToken,

@@ -7,6 +7,8 @@ pub(crate) mod hook;
 pub(crate) mod instance_catalog;
 pub(crate) mod item_manager;
 pub mod manager;
+mod off_runtime_drop;
+pub use off_runtime_drop::OffRuntimeDrop;
 pub(crate) mod metric_catalog;
 
 pub use metric_catalog::{
@@ -21,6 +23,7 @@ pub(crate) mod secret_store;
 pub mod ssh_tunnel_manager;
 pub(crate) mod tree;
 pub mod tree_manager;
+pub(crate) mod uri;
 
 use crate::DbError;
 
@@ -87,3 +90,4 @@ pub use proxy_manager::ProxyManager;
 pub use ssh_tunnel_manager::SshTunnelManager;
 pub use tree::{ConnectionTree, ConnectionTreeNode, ConnectionTreeNodeKind};
 pub use tree_manager::ConnectionTreeManager;
+pub use uri::{decode_uri_component, split_uri_host_port, uri_host};

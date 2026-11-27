@@ -1,11 +1,18 @@
 mod dispatcher;
 mod display_connection;
+#[cfg(test)]
+mod external_drop_tests;
+#[cfg(any(feature = "wayland", feature = "x11"))]
+mod file_uri_list;
 mod headless;
 mod keyboard;
 mod platform;
+#[cfg(any(feature = "wayland", feature = "x11"))]
+mod system_fonts;
 mod system_notifications;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod text_system;
+pub(crate) mod vulkan_driver;
 #[cfg(feature = "wayland")]
 mod wayland;
 #[cfg(feature = "x11")]
@@ -16,6 +23,8 @@ mod xdg_desktop_portal;
 
 pub use dispatcher::*;
 pub(crate) use display_connection::{Backend, DisplayConnection, select_backend};
+#[cfg(any(feature = "wayland", feature = "x11"))]
+pub(crate) use file_uri_list::file_uri_list;
 pub(crate) use headless::*;
 pub(crate) use keyboard::*;
 pub(crate) use platform::*;

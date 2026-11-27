@@ -322,6 +322,118 @@ fn results_layer_binds_shift_s_to_find_similar_rows() {
     );
 }
 
+/// A text field inside a results document keeps every printable key the
+/// Results layer binds. A text input binds no printable key of its own, so a
+/// bare letter bound at the window root would take the character before the
+/// field saw it: `r` renames a row and `t` cycles the view, but in a focused
+/// filter, sort, projection or builder-rail field they are typed text. The
+/// keys a field does not consume — F5, the panel chords, the result tabs and
+/// Enter — keep reaching the layer from it.
+#[test]
+fn results_layer_letters_are_typed_in_a_focused_field() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    for (keys, command) in [
+        ("r", Command::Rename),
+        ("t", Command::CycleDocumentView),
+        ("o", Command::ResultsAddRow),
+        ("y", Command::ResultsCopyRow),
+        ("i", Command::ToggleRecordView),
+        ("v", Command::ToggleValuePanel),
+        ("x", Command::Delete),
+        ("space", Command::ExpandCollapse),
+    ] {
+        let in_grid = top_action(&keymap, keys, &grid)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the results grid"));
+        assert!(
+            runs_command(in_grid.as_ref(), command),
+            "`{keys}` must run {command:?} in the results grid"
+        );
+
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in a focused results field"
+        );
+    }
+
+    // The keys a field does not consume keep reaching the layer from it. Ctrl+J
+    // and Ctrl+K stay the input's own Down and Up, and Ctrl+Z its undo, which
+    // is why they are not listed here.
+    for (keys, command) in [
+        ("f5", Command::RefreshSchema),
+        ("ctrl-h", Command::FocusLeft),
+        ("ctrl-l", Command::FocusRight),
+        ("alt-h", Command::PrevResultTab),
+        ("alt-l", Command::NextResultTab),
+        ("enter", Command::Execute),
+    ] {
+        let in_field = top_action(&keymap, keys, &field)
+            .unwrap_or_else(|| panic!("`{keys}` bound in a focused results field"));
+        assert!(
+            runs_command(in_field.as_ref(), command),
+            "`{keys}` must run {command:?} from a focused results field"
+        );
+    }
+}
+
+/// The audit log and the side panels hold text fields of their own, so they
+/// get the same gate: a bare printable key a field would receive as typed text
+/// stops matching while that field has the keyboard, and every other key the
+/// layer binds keeps behaving exactly as it does outside a field.
+#[test]
+fn panel_letters_are_typed_in_a_focused_field() {
+    let keymap = native_keymap();
+
+    for context in [ContextId::Audit, ContextId::Inspector] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        let panel = element_stack(root.clone(), &[]);
+        let field = element_stack(root, &["Input"]);
+        let mut gated = 0;
+
+        for letter in 'a'..='z' {
+            let keys = letter.to_string();
+            let Some(in_panel) = top_action(&keymap, &keys, &panel) else {
+                continue;
+            };
+
+            gated += 1;
+            let in_field = top_action(&keymap, &keys, &field);
+            assert!(
+                in_field
+                    .as_ref()
+                    .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+                "`{keys}` is typed text in a focused {context:?} field"
+            );
+            assert!(
+                in_panel.as_any().is::<RunCommand>(),
+                "`{keys}` runs a {context:?} command in the panel"
+            );
+        }
+
+        assert!(gated > 0, "{context:?} binds printable keys");
+
+        for keys in ["f5", "enter", "escape", "down", "up", "pagedown", "ctrl-h"] {
+            let (Some(in_panel), Some(in_field)) = (
+                top_action(&keymap, keys, &panel),
+                top_action(&keymap, keys, &field),
+            ) else {
+                continue;
+            };
+
+            assert!(
+                runs_same_command(in_panel.as_ref(), in_field.as_ref()),
+                "`{keys}` does the same thing from a focused {context:?} field"
+            );
+        }
+    }
+}
+
 /// `space` in the Results layer must resolve to `ExpandCollapse`, matching
 /// the Sidebar layer's binding, so the object browser's "Space
 /// preview"/"Space properties" footer hints are actually live.
@@ -684,6 +796,17 @@ fn runs_command(action: &dyn Action, command: Command) -> bool {
         .as_any()
         .downcast_ref::<RunCommand>()
         .is_some_and(|run| run.command.as_ref() == command.action_id())
+}
+
+/// Whether both actions run the same command.
+fn runs_same_command(left: &dyn Action, right: &dyn Action) -> bool {
+    match (
+        left.as_any().downcast_ref::<RunCommand>(),
+        right.as_any().downcast_ref::<RunCommand>(),
+    ) {
+        (Some(left), Some(right)) => left.command.as_ref() == right.command.as_ref(),
+        _ => false,
+    }
 }
 
 /// The key contexts a window root reports for `context`. The settings
@@ -3125,4 +3248,39 @@ fn persisted_identifiers_round_trip_through_their_storage_forms() {
         Some(KeySequence::parse("ctrl+t").expect("valid sequence")),
         "a stored row keeps rebinding the same binding"
     );
+}
+
+#[test]
+fn test_results_e_edits_the_value() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &KeyChord::new("e", Modifiers::none())),
+        Some(Command::EditValue)
+    );
+}
+
+#[test]
+fn test_results_b_rolls_the_secret_back() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &KeyChord::new("b", Modifiers::none())),
+        Some(Command::RollBackVersion)
+    );
+}
+
+/// The literal / expression toggle must reach the grid while the cell input
+/// has focus, where the other grid chords are held back by `!Input`.
+#[test]
+fn the_expression_toggle_stays_active_inside_the_cell_input() {
+    let keymap = default_keymap();
+    let keys = KeySequence::from(KeyChord::new("i", Modifiers::ctrl_shift()));
+    let layer = keymap.layer(ContextId::DataTable).expect("grid layer");
+
+    assert_eq!(
+        layer.get_sequence(&keys),
+        Some(Command::ResultsToggleExpression)
+    );
+    assert_eq!(layer.predicate_for(&keys), "DataTable");
 }

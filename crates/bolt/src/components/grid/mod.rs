@@ -20,6 +20,7 @@
 //! suppression (a secondary span replaces the cell's own display text), and
 //! the nested braces plus the array-only chevron.
 
+mod overflow;
 mod resize;
 #[cfg(test)]
 mod tests;
@@ -43,6 +44,7 @@ use crate::icon::IconSource;
 use crate::primitives::{Chamfer, ChamferRing, Icon};
 use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors};
 
+pub use overflow::GridOverflow;
 pub use resize::{
     ColumnResize, ColumnResizeDrag, MIN_COLUMN_WIDTH, RESIZE_HANDLE_WIDTH, apply_column_resize,
     clamp_column_width, column_resize_handle, column_resize_handle_with_fit, track_column_resize,
@@ -257,22 +259,18 @@ pub fn cell_paint(
     let text_color = if transition {
         // The transition takes the color precedence over the tone.
         colors.warning
-    } else if row_pending_delete
-        && !matches!(
-            view.tone,
-            CellTone::Missing | CellTone::Nested | CellTone::Expression
-        )
-    {
+    } else if row_pending_delete && !matches!(view.tone, CellTone::Missing | CellTone::Nested) {
         colors.muted_foreground
     } else {
         match view.tone {
             CellTone::Missing => colors.input,
-            CellTone::Nested | CellTone::Expression => colors.info,
+            CellTone::Nested => colors.info,
             CellTone::PendingDelete | CellTone::Muted => colors.muted_foreground,
             CellTone::Null => null_color,
             CellTone::Success => colors.success,
             CellTone::Warning => colors.warning,
             CellTone::Danger => colors.danger,
+            CellTone::Expression => colors.tint,
             CellTone::Normal | CellTone::PendingInsert | CellTone::Error => {
                 if is_active {
                     colors.strong
@@ -287,7 +285,7 @@ pub fn cell_paint(
         text_color,
         italic: matches!(
             view.tone,
-            CellTone::Null | CellTone::Muted | CellTone::Missing | CellTone::Expression
+            CellTone::Null | CellTone::Muted | CellTone::Missing
         ),
         line_through: row_pending_delete,
         // The mark follows the edit-state fact, not the tone: a staged null
@@ -488,7 +486,7 @@ pub fn render_rows(
                                     .text_size(font_size)
                                     .text_color(match span.tone {
                                         CellTone::Missing => colors.input,
-                                        CellTone::Nested | CellTone::Expression => colors.info,
+                                        CellTone::Nested => colors.info,
                                         CellTone::PendingDelete | CellTone::Muted => {
                                             colors.muted_foreground
                                         }
@@ -496,6 +494,7 @@ pub fn render_rows(
                                         CellTone::Success => colors.success,
                                         CellTone::Warning => colors.warning,
                                         CellTone::Danger => colors.danger,
+                                        CellTone::Expression => colors.tint,
                                         CellTone::Normal
                                         | CellTone::PendingInsert
                                         | CellTone::Error => colors.foreground,

@@ -12,7 +12,7 @@ use gpui::{
     Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
     IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
     ParentElement, Pixels, Role, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
-    Styled, Toggled, Window, anchored, canvas, deferred, div, px, uniform_list,
+    Styled, Window, anchored, canvas, deferred, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
@@ -76,10 +76,6 @@ pub mod actions {
             StartEdit,
             ConfirmEdit,
             CancelEdit,
-            /// The editor's `fx` switch: edit the active cell as a SQL
-            /// expression, or flip the open editor between value and
-            /// expression.
-            ToggleCellExpression,
             SaveRow,
             // Row operations (vim-style)
             DeleteRow,
@@ -92,6 +88,9 @@ pub mod actions {
             // Document grids
             ToggleColumnGroup,
             StepOut,
+            // Flips the open inline editor between literal and expression, or
+            // opens it in expression mode.
+            ToggleExpression,
         ]
     );
 }
@@ -113,9 +112,9 @@ pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Key
     let table_action: Box<dyn Action> = match action {
         ContextMenuAction::Copy => Box::new(Copy),
         ContextMenuAction::Edit => Box::new(StartEdit),
-        ContextMenuAction::EditAsExpression => Box::new(ToggleCellExpression),
         ContextMenuAction::DeleteRow => Box::new(DeleteRow),
         ContextMenuAction::SetNull => Box::new(SetNull),
+        ContextMenuAction::SetExpression => Box::new(ToggleExpression),
         ContextMenuAction::AddRow => Box::new(AddRow),
         ContextMenuAction::DuplicateRow => Box::new(DuplicateRow),
         _ => return None,
@@ -178,6 +177,8 @@ impl gpui::Render for DataTable {
 
         self.state
             .update(cx, |state, cx| state.sync_grid_text_metrics(cx));
+        self.state
+            .update(cx, |state, cx| state.report_reached_end(cx));
 
         let state = self.state.read(cx);
         let theme = cx.theme();
@@ -303,12 +304,6 @@ impl gpui::Render for DataTable {
         };
 
         let s = self.state.clone();
-        let on_toggle_cell_expression =
-            move |_: &ToggleCellExpression, window: &mut Window, cx: &mut App| {
-                s.update(cx, |state, cx| state.toggle_cell_expression(window, cx));
-            };
-
-        let s = self.state.clone();
         let on_confirm_edit = move |_: &ConfirmEdit, _: &mut Window, cx: &mut App| {
             s.update(cx, |state, cx| {
                 if state.is_editing() {
@@ -383,6 +378,20 @@ impl gpui::Render for DataTable {
                 }
             });
         };
+
+        let s = self.state.clone();
+        let on_toggle_expression =
+            move |_: &ToggleExpression, window: &mut Window, cx: &mut App| {
+                s.update(cx, |state, cx| {
+                    if !state.is_editable() && !state.is_insertable() {
+                        return;
+                    }
+                    if !state.expressions_allowed() {
+                        return;
+                    }
+                    state.toggle_expression_mode(window, cx);
+                });
+            };
 
         let s = self.state.clone();
         let on_copy_row = move |_: &CopyRow, _: &mut Window, cx: &mut App| {
@@ -611,7 +620,6 @@ impl gpui::Render for DataTable {
             .on_action(on_select_all)
             .on_action(on_clear_selection)
             .on_action(on_start_edit)
-            .on_action(on_toggle_cell_expression)
             .on_action(on_confirm_edit)
             .on_action(on_cancel_edit)
             .on_action(on_save_row)
@@ -622,6 +630,7 @@ impl gpui::Render for DataTable {
             .on_action(on_add_row)
             .on_action(on_duplicate_row)
             .on_action(on_set_null)
+            .on_action(on_toggle_expression)
             // Undo/Redo
             .on_action(on_undo)
             .on_action(on_redo)
@@ -1239,7 +1248,7 @@ impl DataTable {
             "table-rows",
             row_count,
             move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
-                let null_color = crate::tokens::SyntaxColors::for_current(cx).number;
+                let null_color = crate::tokens::SyntaxColors::for_current(cx).null_value();
                 let font_size = fonts::grid_font_size(cx);
                 let row_height = fonts::grid_row_height(cx);
                 let nested_icon = fonts::grid_px(cx, CollectionMetrics::NESTED_ICON);
@@ -1416,27 +1425,40 @@ impl DataTable {
                 };
 
                 // The inline editor the editing cell draws: a dropdown when
-                // the cell enumerates values, the text input otherwise, with
-                // the `fx` switch and the suggestions of a column that takes
-                // SQL expressions.
-                let expression_editor = ExpressionEditorView::of(state);
+                // the cell enumerates values, the expression editor in
+                // expression mode, and otherwise the text input with the
+                // identifiers a column can be given listed under it.
                 let editor = state
                     .enum_dropdown()
                     .map(|dropdown| dropdown.clone().into_any_element())
                     .or_else(|| {
                         state.cell_input().map(|input| {
-                            let width = state
-                                .editing_cell()
-                                .and_then(|coord| state.column_widths().get(coord.col).copied())
-                                .unwrap_or(f32::from(GridMetrics::DEFAULT_COLUMN_WIDTH));
-                            inline_text_editor(
-                                &state_entity,
-                                input,
-                                expression_editor.as_ref(),
-                                px(width),
-                                font_size,
-                                theme,
-                            )
+                            if state.is_expression_mode() {
+                                let (suggestions, selected) = state.editor_suggestions();
+                                super::expression_editor::expression_editor(
+                                    input,
+                                    &state_entity,
+                                    suggestions,
+                                    selected,
+                                    &grid_colors,
+                                    font_size,
+                                )
+                            } else {
+                                let width = state
+                                    .editing_cell()
+                                    .and_then(|coord| state.column_widths().get(coord.col).copied())
+                                    .unwrap_or(f32::from(GridMetrics::DEFAULT_COLUMN_WIDTH));
+                                let (kinds, highlight) = state.editor_id_suggestions();
+                                inline_text_editor(
+                                    &state_entity,
+                                    input,
+                                    kinds,
+                                    highlight,
+                                    px(width),
+                                    font_size,
+                                    theme,
+                                )
+                            }
                         })
                     });
 
@@ -1482,169 +1504,76 @@ impl DataTable {
     }
 }
 
-/// What the open inline editor draws for a column that can hold a SQL
-/// expression: the `fx` switch, and the suggestions while it is on.
-struct ExpressionEditorView {
-    /// The column can hold an expression, so the editor draws `fx`.
-    takes_expressions: bool,
-    active: bool,
-    suggestions: Vec<super::state::EditorSuggestion>,
-    highlight: Option<usize>,
-}
-
-impl ExpressionEditorView {
-    fn of(state: &DataTableState) -> Option<Self> {
-        let coord = state.editing_cell()?;
-        state.cell_input()?;
-
-        let takes_expressions = state.accepts_cell_expressions(coord.col);
-        let suggestions = state.editor_suggestions(coord.col);
-        if !takes_expressions && suggestions.is_empty() {
-            return None;
-        }
-
-        Some(Self {
-            takes_expressions,
-            active: state.is_editing_expression(),
-            suggestions,
-            highlight: state.expression_highlight(),
-        })
-    }
-
-    fn shows_suggestions(&self) -> bool {
-        !self.suggestions.is_empty()
-    }
-}
-
-/// The text editor an editing cell draws: the input, preceded by the `fx`
-/// switch and followed by the suggestions when the column takes SQL
-/// expressions. The arrow keys step through the suggestions from the input.
+/// The text editor an editing cell draws in literal mode: the input, with
+/// the identifiers the column can be given listed under it. The arrow keys
+/// step through them from the input.
 fn inline_text_editor(
     state_entity: &Entity<DataTableState>,
     input: &Entity<InputState>,
-    expression_editor: Option<&ExpressionEditorView>,
+    id_kinds: &[dbflux_core::GeneratedIdKind],
+    highlight: Option<usize>,
     cell_width: Pixels,
     font_size: Pixels,
     theme: &gpui_component::theme::Theme,
 ) -> AnyElement {
+    if id_kinds.is_empty() {
+        return Input::new(input).small().into_any_element();
+    }
+
+    let down = state_entity.clone();
+    let up = state_entity.clone();
+
     div()
         .relative()
         .flex()
         .items_center()
         .size_full()
-        .when_some(expression_editor, |cell, view| {
-            cell.when(view.takes_expressions, |cell| {
-                cell.child(render_expression_toggle(
-                    state_entity,
-                    view.active,
-                    font_size,
-                    theme,
-                ))
-            })
-            .when(view.shows_suggestions(), |cell| {
-                let down = state_entity.clone();
-                let up = state_entity.clone();
-                cell.capture_action(move |_: &InputMoveDown, window, cx| {
-                    down.update(cx, |state, cx| {
-                        state.step_expression_suggestion(true, window, cx)
-                    });
-                    cx.stop_propagation();
-                })
-                .capture_action(move |_: &InputMoveUp, window, cx| {
-                    up.update(cx, |state, cx| {
-                        state.step_expression_suggestion(false, window, cx)
-                    });
-                    cx.stop_propagation();
-                })
-                .child(render_expression_suggestions(
-                    state_entity,
-                    view,
-                    cell_width,
-                    font_size,
-                    theme,
-                ))
-            })
+        .capture_action(move |_: &InputMoveDown, window, cx| {
+            down.update(cx, |state, cx| state.step_id_suggestion(1, window, cx));
+            cx.stop_propagation();
         })
+        .capture_action(move |_: &InputMoveUp, window, cx| {
+            up.update(cx, |state, cx| state.step_id_suggestion(-1, window, cx));
+            cx.stop_propagation();
+        })
+        .child(render_id_suggestions(
+            state_entity,
+            id_kinds,
+            highlight,
+            cell_width,
+            font_size,
+            theme,
+        ))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
-                .when(expression_editor.is_some_and(|view| view.active), |d| {
-                    d.italic()
-                })
                 .child(Input::new(input).small()),
         )
         .into_any_element()
 }
 
-/// The `fx` switch at the start of the inline editor. On, the typed text is
-/// saved as a SQL expression rather than as a value.
-fn render_expression_toggle(
+/// The identifiers a column can be given, under the inline editor. The
+/// arrow keys step through them from the editor and write a new one of the
+/// kind stepped to into it; a click does the same.
+fn render_id_suggestions(
     state_entity: &Entity<DataTableState>,
-    active: bool,
-    font_size: Pixels,
-    theme: &gpui_component::theme::Theme,
-) -> AnyElement {
-    let state = state_entity.clone();
-
-    div()
-        .id("cell-expression-toggle")
-        .role(Role::Switch)
-        .aria_label(SharedString::from(dbflux_i18n::t!(
-            "components.data_table.expression.toggle"
-        )))
-        .aria_toggled(if active {
-            Toggled::True
-        } else {
-            Toggled::False
-        })
-        .flex_shrink_0()
-        .h_full()
-        .px(Spacing::XS)
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .text_size(font_size)
-        .italic()
-        .font_weight(FontWeight::SEMIBOLD)
-        .when(active, |d| {
-            d.bg(theme.info.opacity(0.15)).text_color(theme.info)
-        })
-        .when(!active, |d| d.text_color(theme.muted_foreground))
-        // A press would move focus out of the input and close the editor
-        // before the click lands.
-        .on_mouse_down(MouseButton::Left, |_, window, cx| {
-            window.prevent_default();
-            cx.stop_propagation();
-        })
-        .on_click(move |_, window, cx| {
-            state.update(cx, |state, cx| state.toggle_cell_expression(window, cx));
-        })
-        .child("fx")
-        .into_any_element()
-}
-
-/// The expressions suggested for the column, under the inline editor. The
-/// arrow keys step through them from the editor and write the one stepped to
-/// into it; a click does the same.
-fn render_expression_suggestions(
-    state_entity: &Entity<DataTableState>,
-    view: &ExpressionEditorView,
+    id_kinds: &[dbflux_core::GeneratedIdKind],
+    highlight: Option<usize>,
     min_width: Pixels,
     font_size: Pixels,
     theme: &gpui_component::theme::Theme,
 ) -> AnyElement {
-    let rows = view
-        .suggestions
+    let rows = id_kinds
         .iter()
         .enumerate()
-        .map(|(index, suggestion)| {
+        .map(|(index, kind)| {
             let state = state_entity.clone();
-            let highlighted = view.highlight == Some(index);
+            let highlighted = highlight == Some(index);
 
             div()
-                .id(("cell-expression-suggestion", index))
+                .id(("cell-id-suggestion", index))
                 .role(Role::MenuItem)
                 .px(Spacing::SM)
                 .py(Spacing::XS)
@@ -1654,30 +1583,25 @@ fn render_expression_suggestions(
                 .text_color(theme.foreground)
                 .when(highlighted, |d| d.bg(theme.accent))
                 .hover(|d| d.bg(theme.accent.opacity(0.5)))
+                // A press would move focus out of the input and close the
+                // editor before the click lands.
                 .on_mouse_down(MouseButton::Left, |_, window, cx| {
                     window.prevent_default();
                     cx.stop_propagation();
                 })
                 .on_click(move |_, window, cx| {
-                    state.update(cx, |state, cx| {
-                        state.apply_expression_suggestion(index, window, cx)
-                    });
+                    state.update(cx, |state, cx| state.apply_id_suggestion(index, window, cx));
                 })
-                .child(match suggestion {
-                    super::state::EditorSuggestion::Expression(expression) => expression.clone(),
-                    super::state::EditorSuggestion::GeneratedId(kind) => {
-                        dbflux_i18n::t!(
-                            "components.data_table.expression.generate",
-                            kind = kind.label()
-                        )
-                    }
-                })
+                .child(dbflux_i18n::t!(
+                    "components.data_table.generated_id.generate",
+                    kind = kind.label()
+                ))
                 .into_any_element()
         })
         .collect::<Vec<_>>();
 
     let menu = div()
-        .id("cell-expression-suggestions")
+        .id("cell-id-suggestions")
         .min_w(min_width)
         .py(Spacing::XS)
         .bg(theme.popover)

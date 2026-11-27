@@ -11,6 +11,7 @@ members = [
     "crates/bolt",
     "crates/bolt_keys",
     "crates/dbflux_core",
+    "crates/dbflux_telemetry",
     "crates/dbflux_lua",
     "crates/dbflux_js",
     "crates/dbflux_ipc",
@@ -67,7 +68,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.88"
-version = "0.10.0-dev.0"
+version = "0.11.1"
 authors = ["Ignacio Perez <ignacio@feuer.me>"]
 description = "A fast, keyboard-first database client"
 repository = "https://github.com/0xErwin1/dbflux"
@@ -78,6 +79,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 dbflux = { path = "crates/dbflux" }
 dbflux_core = { path = "crates/dbflux_core" }
+dbflux_telemetry = { path = "crates/dbflux_telemetry" }
 dbflux_lua = { path = "crates/dbflux_lua" }
 dbflux_js = { path = "crates/dbflux_js" }
 dbflux_test_support = { path = "crates/dbflux_test_support" }

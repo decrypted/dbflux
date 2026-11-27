@@ -16,7 +16,7 @@ use gpui::{Pixels, SharedString, px};
 
 /// Widths of the cell menu's flyouts, sized to their longest labels.
 const COPY_AS_WIDTH: Pixels = px(230.0);
-const SET_VALUE_WIDTH: Pixels = px(190.0);
+const SET_VALUE_WIDTH: Pixels = px(300.0);
 const FILTER_WIDTH: Pixels = px(280.0);
 const SORT_WIDTH: Pixels = px(240.0);
 const COLUMN_WIDTH: Pixels = px(200.0);
@@ -42,8 +42,10 @@ pub(in crate::data_grid_panel) struct CellMenuParts {
     /// Copy as ▸ also copies the row as a statement; the caption names the
     /// connection's language ("Copy as SQL").
     pub(in crate::data_grid_panel) copy_query: Option<SharedString>,
-    /// The cell can hold a SQL expression.
-    pub(in crate::data_grid_panel) accepts_expression: bool,
+    /// Set value ▸ for a table that takes SQL expressions: the column
+    /// default, the type's values, NULL and Expression…. Empty for every
+    /// other source, which gets NULL and the default as values.
+    pub(in crate::data_grid_panel) set_values: Vec<MenuNode>,
     /// The grid stages document patches: the column default becomes Unset
     /// field, and a staged edit can be reverted.
     pub(in crate::data_grid_panel) document_patches: bool,
@@ -141,7 +143,8 @@ pub(in crate::data_grid_panel) fn build_cell_menu(parts: CellMenuParts) -> Vec<M
     nodes
 }
 
-/// Copy, Copy as ▸, View value and Add to filter: what reads the cell.
+/// Copy, Copy as ▸, Copy column name, View value and Add to filter: what
+/// reads the cell.
 fn read_group(parts: &CellMenuParts) -> Vec<MenuNode> {
     let mut group = vec![entry(
         "copy",
@@ -170,6 +173,13 @@ fn read_group(parts: &CellMenuParts) -> Vec<MenuNode> {
         COPY_AS_WIDTH,
         copy_as,
     ));
+    // The column name needs no row under the cursor, only the column.
+    group.push(entry(
+        "copy-column-name",
+        "document.data.context_menu.item.copy_column_name",
+        AppIcon::Copy,
+        ContextMenuAction::CopyColumnName,
+    ));
 
     // Offered for read-only results too: the panel is how a long JSON or
     // XML value gets read at all. It still needs a row under the cursor.
@@ -193,7 +203,7 @@ fn read_group(parts: &CellMenuParts) -> Vec<MenuNode> {
     group
 }
 
-/// Edit, Edit in editor, Edit as SQL expression, Paste and Set value ▸.
+/// Edit, Edit in editor, Paste and Set value ▸.
 fn edit_group(parts: &CellMenuParts) -> Vec<MenuNode> {
     if !parts.is_editable || !parts.has_row_target {
         return Vec::new();
@@ -212,29 +222,17 @@ fn edit_group(parts: &CellMenuParts) -> Vec<MenuNode> {
             AppIcon::Maximize2,
             ContextMenuAction::EditInModal,
         ),
+        entry(
+            "paste",
+            "document.data.context_menu.item.paste",
+            AppIcon::Clipboard,
+            ContextMenuAction::Paste,
+        ),
     ];
-    if parts.accepts_expression {
-        group.push(entry(
-            "edit-as-expression",
-            "document.data.context_menu.item.edit_as_expression",
-            AppIcon::Code,
-            ContextMenuAction::EditAsExpression,
-        ));
-    }
-    group.push(entry(
-        "paste",
-        "document.data.context_menu.item.paste",
-        AppIcon::Clipboard,
-        ContextMenuAction::Paste,
-    ));
 
-    let mut set_value = vec![entry(
-        "set-null",
-        "document.data.context_menu.set_value.to_null",
-        AppIcon::CircleX,
-        ContextMenuAction::SetNull,
-    )];
+    let mut set_value = Vec::new();
     if parts.document_patches {
+        set_value.push(set_null_entry());
         set_value.push(entry(
             "unset-field",
             "document.collection.menu.unset_field",
@@ -247,7 +245,10 @@ fn edit_group(parts: &CellMenuParts) -> Vec<MenuNode> {
             AppIcon::RotateCcw,
             ContextMenuAction::RevertCell,
         ));
+    } else if !parts.set_values.is_empty() {
+        set_value.extend(parts.set_values.iter().cloned());
     } else {
+        set_value.push(set_null_entry());
         set_value.push(entry(
             "set-default",
             "document.data.context_menu.set_value.to_default",
@@ -273,6 +274,15 @@ fn edit_group(parts: &CellMenuParts) -> Vec<MenuNode> {
     ));
 
     group
+}
+
+fn set_null_entry() -> MenuNode {
+    entry(
+        "set-null",
+        "document.data.context_menu.set_value.to_null",
+        AppIcon::CircleX,
+        ContextMenuAction::SetNull,
+    )
 }
 
 /// Sort ▸ of the cell menu: the column alone in either direction, as an

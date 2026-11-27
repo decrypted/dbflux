@@ -63,9 +63,9 @@ pub(crate) enum ConsoleGate {
 /// driver does not flag still asks first when `classify_query_for_language`
 /// rates it as destructive.
 ///
-/// The ceilings mirror the code editor: a flagged command that runs, after
-/// confirmation or because the settings allow it, carries `Destructive`
-/// (see `QueryRequest::confirmed_ceiling`); an unflagged destructive command
+/// The ceilings mirror the code editor: a flagged command carries
+/// `AdminDestructive` for `AdminScript` and `Destructive` otherwise (see
+/// `QueryRequest::confirmed_ceiling`); an unflagged destructive command
 /// carries its own classification once confirmed.
 pub(crate) fn console_gate(
     dangerous: &[DangerousQueryKind],
@@ -73,15 +73,22 @@ pub(crate) fn console_gate(
     decide: impl FnMut(DangerousQueryKind) -> DangerousAction,
 ) -> ConsoleGate {
     if let Some(decision) = crate::code::decide_dangerous_kinds(dangerous, decide) {
+        // One run covers every kind, so it carries the strongest ceiling any
+        // of them needs.
+        let ceiling = dangerous
+            .iter()
+            .map(|kind| crate::code::confirmed_ceiling_for_dangerous(*kind))
+            .find(|ceiling| *ceiling == ExecutionClassification::AdminDestructive)
+            .unwrap_or(ExecutionClassification::Destructive);
         return match decision {
             DangerousAction::Allow => ConsoleGate::Run {
-                ceiling: Some(ExecutionClassification::Destructive),
+                ceiling: Some(ceiling),
             },
             DangerousAction::Confirm(kind) => ConsoleGate::Confirm {
                 title: crate::labels::dangerous_query_title(kind),
                 body: crate::labels::dangerous_query_body(kind),
                 kind: Some(kind),
-                ceiling: ExecutionClassification::Destructive,
+                ceiling,
             },
             DangerousAction::Block(message) => ConsoleGate::Refuse(message),
         };
@@ -434,6 +441,20 @@ mod tests {
             },
             "a flagged command the settings allow carries the editor's ceiling"
         );
+
+        let admin_confirm = console_gate(
+            &[DangerousQueryKind::AdminScript],
+            ExecutionClassification::AdminDestructive,
+            DangerousAction::Confirm,
+        );
+        assert!(matches!(
+            admin_confirm,
+            ConsoleGate::Confirm {
+                kind: Some(DangerousQueryKind::AdminScript),
+                ceiling: ExecutionClassification::AdminDestructive,
+                ..
+            }
+        ));
     }
 
     /// `SELECT 1; DROP TABLE t` on SQL Server, with one of its kinds silenced.

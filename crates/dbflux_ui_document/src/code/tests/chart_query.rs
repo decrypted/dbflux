@@ -4213,6 +4213,7 @@ fn run_in_a_tab_not_showing(console: &mut Fixture<'_>, sql: &str) -> Entity<Code
     console.window.update(|window, cx| {
         handle.update(cx, |document, cx| {
             document.execute_statement(
+                None,
                 sql,
                 false,
                 dbflux_core::ReadOnlyEnforcement::None,

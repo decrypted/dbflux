@@ -1,10 +1,12 @@
 pub mod active_query;
 pub mod cell_editor;
+pub mod confirm;
 pub mod delete_connection;
 pub mod document_preview;
 pub mod drop_table;
 pub mod host_key_confirm;
 pub mod import_dashboard;
+pub mod json_report_preview;
 pub mod modal;
 pub mod mutation_confirm;
 // The rendering moved to `bolt`; this path keeps the product's code preview,
@@ -21,6 +23,7 @@ pub use cell_editor::{
     CellEditorClosedEvent, CellEditorCopiedEvent, CellEditorModal, CellEditorSaveEvent,
     EditorGeometry, forget_editor_geometry, install_editor_geometry_store,
 };
+pub use confirm::{ConfirmOutcome, ConfirmRequest, ModalConfirm};
 pub use delete_connection::{
     DeleteConnectionOutcome, DeleteConnectionRequest, ModalDeleteConnection,
 };
@@ -32,6 +35,7 @@ pub use host_key_confirm::{HostKeyConfirmOutcome, HostKeyConfirmRequest, ModalHo
 pub use import_dashboard::{
     ImportDashboardCancelled, ImportDashboardConfirmed, ModalImportDashboard,
 };
+pub use json_report_preview::{JsonReportPreviewRequest, ModalJsonReportPreview};
 pub use modal::{MODAL_KEY_CONTEXT, Modal, ModalFocus, ModalVariant, ResizeEdge};
 pub use mutation_confirm::{
     ModalMutationConfirm, ModalMutationConfirmHard, MutationConfirmHardRequest,
@@ -41,9 +45,7 @@ pub use parts::{
     inline_code, modal_code, modal_field, modal_form_row, modal_frame, modal_hint, modal_lead,
     modal_value_field,
 };
-pub use schema_drift::{
-    ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
-};
+pub use schema_drift::{ModalSchemaDrift, SchemaDriftDismissed, SchemaDriftRefresh};
 pub use tunnel_auth::{
     ConnectionPasswordRequest, ModalTunnelAuth, TunnelAuthOutcome, TunnelAuthRequest,
 };

@@ -1125,7 +1125,13 @@ mod document {
         let run = |window: &mut VisualTestContext, sql: &str| {
             window.update(|window, cx| {
                 document.update(cx, |document, cx| {
-                    document.run_query_text(sql.to_string(), false, window, cx);
+                    document.run_query_text(
+                        crate::code::ExecutionOrigin::User,
+                        sql.to_string(),
+                        false,
+                        window,
+                        cx,
+                    );
                 });
             });
             settle(window);

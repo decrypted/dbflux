@@ -1,4 +1,4 @@
-use super::cell_expressions::{EXPRESSION_DIALECT, events_grid, stage};
+use super::events_grid::{ANSI_DIALECT, events_grid, stage};
 use super::*;
 use crate::data_grid_panel::review_changes::ReviewedStatement;
 use dbflux_components::components::data_table::model::CellValue;
@@ -6,7 +6,7 @@ use dbflux_core::SqlQueryBuilder;
 use dbflux_test_support::fake_driver::{CrudOp, FakeDriver};
 
 fn driver() -> FakeDriver {
-    FakeDriver::new(dbflux_core::DbKind::SQLite).with_dialect(&EXPRESSION_DIALECT)
+    FakeDriver::new(dbflux_core::DbKind::SQLite).with_dialect(&ANSI_DIALECT)
 }
 
 /// An expression edit on the first row, a delete of the second and a new
@@ -56,7 +56,7 @@ fn reviewed_sql(
 /// The statements a recorded operation renders to, built the way the fake
 /// connection renders its previews.
 fn rendered(op: &CrudOp) -> String {
-    let builder = SqlQueryBuilder::new(&EXPRESSION_DIALECT);
+    let builder = SqlQueryBuilder::new(&ANSI_DIALECT);
     match op {
         CrudOp::Update(patch) => builder.build_update(patch, false),
         CrudOp::Insert(insert) => builder.build_insert(insert, false),
@@ -173,7 +173,7 @@ fn with_the_setting_on_save_opens_the_review_instead(cx: &mut TestAppContext) {
 fn without_the_setting_save_runs_directly(cx: &mut TestAppContext) {
     let driver = driver();
     let (panel, window) = events_grid(cx, &driver);
-    stage(&panel, window, 0, 1, CellValue::expression("NOW()"));
+    stage(&panel, window, 0, 2, CellValue::text("later"));
 
     window.update(|_, cx| {
         let table = panel

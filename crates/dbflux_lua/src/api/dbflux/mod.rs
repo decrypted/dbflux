@@ -278,6 +278,10 @@ fn run_process_with_parent_env(
     command.env_clear();
     command.envs(child_environment(parent_env, &explicit_env));
 
+    // The script runs a program of the user's choosing: it starts with the environment the user
+    // gave DBFlux, without the Vulkan driver selection GPUI's startup may have made here.
+    dbflux_core::child_environment::restore_child_environment(&mut command);
+
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }

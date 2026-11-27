@@ -799,6 +799,25 @@ impl DataGridPanel {
             return true;
         }
 
+        // A save that writes SQL expressions waits for the user.
+        if self.pending_expression_confirm.is_some() {
+            match cmd {
+                Command::Cancel => {
+                    self.cancel_expressions(window, cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.confirm_expressions(window, cx);
+                    return true;
+                }
+                _ => return true,
+            }
+        }
+
+        if self.dispatch_edit_guard_command(cmd, cx) {
+            return true;
+        }
+
         if cmd == Command::ReviewChanges {
             return self.open_change_review(window, cx);
         }
@@ -1081,6 +1100,19 @@ impl DataGridPanel {
                 true
             }
             Command::FindSimilarRows => self.find_similar_rows(cx),
+            Command::ResultsSetDefault => {
+                let active = self.grid_table.table_state.as_ref().and_then(|state| {
+                    let state = state.read(cx);
+                    state
+                        .is_editable()
+                        .then(|| state.selection().active)
+                        .flatten()
+                });
+                if let Some(coord) = active {
+                    self.handle_set_default(coord.row, coord.col, cx);
+                }
+                true
+            }
             _ => false,
         }
     }

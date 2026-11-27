@@ -1,31 +1,10 @@
 use crate::ExportError;
+use crate::options::{CsvDelimiter, FormatOptions};
 use csv::{Writer, WriterBuilder};
 use dbflux_core::spreadsheet_formula::protect_spreadsheet_formula;
 use dbflux_core::{QueryResult, QueryResultShape, Value};
 use std::borrow::Cow;
 use std::io::Write;
-
-/// The field separator of a CSV document. Semicolon is what spreadsheets in
-/// locales with a decimal comma expect; tab gives TSV.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CsvDelimiter {
-    #[default]
-    Comma,
-    Semicolon,
-    Tab,
-}
-
-impl CsvDelimiter {
-    pub const ALL: [CsvDelimiter; 3] = [Self::Comma, Self::Semicolon, Self::Tab];
-
-    pub fn byte(self) -> u8 {
-        match self {
-            Self::Comma => b',',
-            Self::Semicolon => b';',
-            Self::Tab => b'\t',
-        }
-    }
-}
 
 /// How a CSV document is written. The default is what every CSV export
 /// wrote before the options existed: a header row and commas.
@@ -57,28 +36,39 @@ impl CsvOptions {
 
     /// A column name as the header row writes it.
     pub(crate) fn header_field<'a>(&self, name: &'a str) -> Cow<'a, str> {
-        if self.protect_formulas {
-            protect_spreadsheet_formula(name)
-        } else {
-            Cow::Borrowed(name)
-        }
+        header_field(name, self.protect_formulas)
     }
 
     /// A value as one field writes it, before quoting.
     pub(crate) fn field(&self, value: &Value) -> String {
-        let field = value_to_csv_field(value);
-        let is_text = matches!(
-            value,
-            Value::Text(_) | Value::Json(_) | Value::ObjectId(_) | Value::Unsupported(_)
-        );
+        protected_field(value, value_to_csv_field(value), self.protect_formulas)
+    }
+}
 
-        // Numbers stay as they are: `-5` is a value, not a formula, and a
-        // quote would turn it into text.
-        if self.protect_formulas && is_text {
-            protect_spreadsheet_formula(&field).into_owned()
-        } else {
-            field
-        }
+/// A column name as a CSV header row writes it.
+pub(crate) fn header_field(name: &str, protect_formulas: bool) -> Cow<'_, str> {
+    if protect_formulas {
+        protect_spreadsheet_formula(name)
+    } else {
+        Cow::Borrowed(name)
+    }
+}
+
+/// `field`, the text written for `value`, with a `'` prefixed when it is a
+/// text cell a spreadsheet would run as a formula and `protect_formulas` is
+/// set.
+pub(crate) fn protected_field(value: &Value, field: String, protect_formulas: bool) -> String {
+    let is_text = matches!(
+        value,
+        Value::Text(_) | Value::Json(_) | Value::ObjectId(_) | Value::Unsupported(_)
+    );
+
+    // Numbers stay as they are: `-5` is a value, not a formula, and a
+    // quote would turn it into text.
+    if protect_formulas && is_text {
+        protect_spreadsheet_formula(&field).into_owned()
+    } else {
+        field
     }
 }
 
@@ -133,6 +123,38 @@ impl CsvExporter {
         csv_writer.flush()?;
         Ok(())
     }
+}
+
+/// A cell as text: the NULL text and the date format come from `options`,
+/// everything else is rendered as CSV always has.
+pub(crate) fn value_to_field(value: &Value, options: &FormatOptions) -> String {
+    match value {
+        Value::Null => options.null_text.clone(),
+        other => options
+            .date_format
+            .render(other)
+            .unwrap_or_else(|| value_to_csv_field(other)),
+    }
+}
+
+/// `value_to_field` for a format that writes the NULL text: a value whose
+/// text equals a non-empty NULL text would be read back as NULL, so it fails
+/// the export instead of changing the data silently. An empty NULL text is
+/// the default and keeps today's output, where an empty string and NULL look
+/// the same.
+pub(crate) fn checked_field(
+    value: &Value,
+    options: &FormatOptions,
+    column_name: &str,
+) -> Result<String, ExportError> {
+    let field = value_to_field(value, options);
+    if !options.null_text.is_empty() && !matches!(value, Value::Null) && field == options.null_text
+    {
+        return Err(ExportError::Failed(format!(
+            "value '{field}' in column '{column_name}' equals the NULL text; choose a different NULL text"
+        )));
+    }
+    Ok(field)
 }
 
 /// A value as one CSV field writes it, before quoting: empty for NULL, bytes

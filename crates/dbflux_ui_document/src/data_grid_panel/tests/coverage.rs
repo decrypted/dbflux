@@ -270,3 +270,68 @@ fn the_sql_builder_rail_is_covered(cx: &mut TestAppContext) {
         "{checked:?}"
     );
 }
+
+/// The confirmation a save with SQL expressions waits on: Enter confirms and
+/// Escape declines (`DataGridPanel::dispatch_command`).
+#[gpui::test]
+fn the_expression_confirmation_is_covered(cx: &mut TestAppContext) {
+    use crate::data_grid_panel::expression_gate::{HeldSave, PendingExpressionConfirm};
+
+    let (panel, window) = host_table_grid_with_rail(cx);
+    let capture = FrameCapture::observe(window);
+
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.pending_expression_confirm = Some(PendingExpressionConfirm {
+                save: HeldSave::Row(0),
+                batch_owned: false,
+                expressions: vec!["created_at = now()".to_string()],
+                kind: dbflux_core::DangerousQueryKind::RawExpressionInSet,
+            });
+            cx.notify();
+        });
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let checked = assert_covered(&panel, &capture, window);
+    assert!(
+        checked.iter().any(|id| id == "expression-confirm-btn"),
+        "{checked:?}"
+    );
+    assert!(
+        checked.iter().any(|id| id == "expression-cancel-btn"),
+        "{checked:?}"
+    );
+}
+
+/// The drift modal a save opens when the table's key changed: Escape cancels
+/// and Enter reloads the table (`DataGridPanel::dispatch_edit_guard_command`).
+#[gpui::test]
+fn the_edit_guard_modal_is_covered(cx: &mut TestAppContext) {
+    let (panel, window) = host_table_grid_with_rail(cx);
+    let capture = FrameCapture::observe(window);
+
+    window.update(|_, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.edit_guard.modal.update(cx, |modal, cx| {
+                modal.open_for_edit(
+                    dbflux_core::QueryTableRef {
+                        database: None,
+                        schema: None,
+                        table: "orders".to_string(),
+                    },
+                    dbflux_core::PrimaryKeyCheck::TableGone,
+                    cx,
+                );
+            });
+            cx.notify();
+        });
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let checked = assert_covered(&panel, &capture, window);
+    assert!(checked.iter().any(|id| id == "drift-reload"), "{checked:?}");
+    assert!(checked.iter().any(|id| id == "drift-close"), "{checked:?}");
+}

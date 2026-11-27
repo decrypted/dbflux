@@ -421,6 +421,9 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `/`                                           | Enfocar búsqueda/filtro                    |
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
+| `e` | Editar el valor del secreto seleccionado en el documento de AWS Secrets: recupera antes el valor si no está cargado (la recuperación se audita cuando la auditoría está activa; con la auditoría desactivada, o si falla la escritura de auditoría, puede completarse sin registro) y luego abre el editor; solo cuando se puede editar (texto sin formato, no gestionado por otro servicio, sin eliminación programada, en un almacén que acepta escrituras) |
+| `b` | Revertir el secreto seleccionado a su versión anterior más reciente en el documento de AWS Secrets (pregunta antes; solo en un almacén con etiquetas de etapa, para un secreto que no gestiona otro servicio ni tiene la eliminación programada) |
+| `m` → Abrir en una pestaña | Abre el secreto seleccionado del documento de AWS Secrets en su propia pestaña (también con el botón de expandir del panel de detalles y la opción Abrir en una pestaña del menú de la fila). En esa pestaña, `e`, `b`, `x` y `F5` actúan sobre su único secreto como en el listado. Una pestaña cuya región difiere de la de la conexión, o cuyo secreto fue eliminado, no inicia lecturas ni escrituras y explica por qué (un guardado ya en curso no se cancela y aún puede llegar a la región anterior). Editar valor (`e`) en el listado abre esa pestaña con el editor activo y recupera antes el valor si no está cargado (auditado cuando la auditoría está activa). |
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
@@ -688,7 +691,8 @@ foco y no se está editando ninguna celda.
 | `d d` / `Delete` | Borrar la fila |
 | `a a` / `Shift+a Shift+a` | Agregar / duplicar una fila |
 | `Ctrl+n` | Poner la celda en NULL |
-| `Ctrl+Alt+e` / `Cmd+Alt+e` | Editar la celda como expresión SQL; con el editor abierto, alternar entre valor y expresión (`fx`) |
+| `Ctrl+Shift+0` | Poner la celda en el valor por defecto de la columna (prepara la expresión por defecto) |
+| `Ctrl+Shift+I` | Alternar el editor en línea entre literal y expresión SQL, o abrirlo como expresión |
 | `u` / `Ctrl+z` / `Cmd+z` | Deshacer; una vez deshechas las ediciones desde la última lectura de la tabla, el filtro `WHERE` anterior (ver [Deshacer un filtro](RESULTS.md#deshacer-un-filtro)) |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer, filtros incluidos |
 | `e` | Expandir o contraer una columna anidada (grillas de documentos) |
@@ -892,6 +896,21 @@ Las teclas aparecen en el contexto Aprobaciones MCP de Settings > Keybindings.
 | `m` (o `Shift+F10`) | Acciones del panel: Continuar, Volver, fijar el modo de todas las tablas, aceptar el orden de carga, la confirmación, Iniciar migración, Cancelar migración mientras corre y Cerrar al terminar |
 
 Las teclas aparecen en el contexto Migrate Wizard de Settings > Keybindings.
+
+## Asistente de importación
+
+En el paso de configuración, un cursor recorre las opciones que no toman foco por sí mismas: el desplegable Hoja de un libro importado (cuando tiene más de una hoja visible), el delimitador y la codificación CSV de un archivo importado y, luego, el modo de mapeo, la columna de destino y la columna de origen de cada tabla. `Tab` sigue llegando a los botones (**Use table**, **Apply mapping**, **Continue**).
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` | Mover el cursor a la opción siguiente / anterior |
+| `l` / `h` (o `Right` / `Left`) | En el delimitador o la codificación: elegir el siguiente / anterior y leer el archivo de nuevo |
+| `Enter` | En el delimitador o la codificación: elegir el siguiente. En la Hoja, un modo de mapeo, columna de destino o columna de origen: abrir su desplegable, que entonces usa `j` / `k` y `Enter` como en [Desplegables](#desplegables) |
+| `Escape` | En el campo de la tabla de destino o del texto NULL: salir del campo y devolver al diálogo las teclas anteriores. En un desplegable abierto: cerrar solo el desplegable y devolver las teclas al diálogo. En cualquier otro sitio: cerrar el asistente |
+
+En el paso de configuración de un script SQL, el cursor visita **Ante un error** y **Ejecutar en una sola transacción**: `l` / `h` y `Enter` en **Ante un error** eligen la otra opción, y `Enter` en la casilla de la transacción la alterna (se omite mientras "Continuar tras los errores" o una conexión sin transacciones la desactivan).
+
+Mientras un campo de texto o un desplegable abierto tiene el foco, estas teclas (incluido `Enter`) actúan sobre ese campo, no sobre el cursor. Aparecen en el contexto Import Wizard de Settings > Keybindings.
 
 ## Campos de texto
 

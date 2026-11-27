@@ -272,7 +272,16 @@ impl CodeDocument {
 
         self.execution.load_all_rows = None;
         self.execution.query_origin = origin;
-        self.execute_statement(statement, false, ReadOnlyEnforcement::None, run, window, cx);
+        // A plan is not a query run, so it counts toward no usage statistic.
+        self.execute_statement(
+            None,
+            statement,
+            false,
+            ReadOnlyEnforcement::None,
+            run,
+            window,
+            cx,
+        );
     }
 
     fn explain_toast(&self, key: &'static str, cx: &mut Context<Self>) {

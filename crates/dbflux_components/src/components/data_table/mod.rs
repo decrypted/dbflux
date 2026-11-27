@@ -3,6 +3,7 @@ pub mod clipboard;
 pub mod column_layout;
 pub mod document;
 mod events;
+mod expression_editor;
 pub mod model;
 mod record;
 pub mod selection;
@@ -20,7 +21,7 @@ pub use document::{ColumnGroupHeader, DocumentColumnHeader, DocumentPresentation
 pub use events::{ContextMenuAction, DataTableEvent, Direction, Edge, FilterOperator, SortState};
 pub use model::TableModel;
 pub use state::{
-    DataTableState, EditorSuggestion, GeneratedIdOffer, HeaderClickSetting, ModelSwap,
+    DataTableState, GeneratedIdOffer, HeaderClickSetting, ModelSwap, SuggestionSource,
     header_click_sorts, set_header_click_sorts,
 };
 pub use table::{CONTEXT, DataTable, actions, context_menu_keystroke};

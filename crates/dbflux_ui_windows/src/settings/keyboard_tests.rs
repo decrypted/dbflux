@@ -365,6 +365,86 @@ fn section_keys_run_through_the_keymap_and_follow_a_rebind(cx: &mut TestAppConte
     );
 }
 
+/// Tab and Shift+Tab wrap around the proxy form, as they do in every other
+/// settings form.
+#[gpui::test]
+fn tab_wraps_around_the_proxy_form(cx: &mut TestAppContext) {
+    use super::proxies_section::{ProxyFocus, ProxyFormField};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Proxies);
+    focus_content(&settings, window);
+    window.simulate_keystrokes("n");
+    assert_eq!(proxies_focus(&settings, window), ProxyFocus::Form);
+
+    let proxies = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Proxies(section) => section.clone(),
+        _ => unreachable!("the proxies section is open"),
+    });
+    let field =
+        |window: &mut VisualTestContext| window.update(|_, cx| proxies.read(cx).proxy_form_field);
+
+    window.update(|_, cx| {
+        proxies.update(cx, |section, _| {
+            section.proxy_form_field = ProxyFormField::SaveButton;
+        })
+    });
+    window.simulate_keystrokes("tab");
+    assert_eq!(
+        field(window),
+        ProxyFormField::Name,
+        "Tab wraps to the first field"
+    );
+
+    window.simulate_keystrokes("shift-tab");
+    assert_eq!(
+        field(window),
+        ProxyFormField::SaveButton,
+        "Shift+Tab wraps to the last field"
+    );
+}
+
+/// Tab and Shift+Tab wrap around the service form too.
+#[gpui::test]
+fn tab_wraps_around_the_service_form(cx: &mut TestAppContext) {
+    use super::services_section::ServiceFocus;
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Services);
+    focus_content(&settings, window);
+
+    let services = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Services(section) => section.clone(),
+        _ => unreachable!("the services section is open"),
+    });
+    let (last_row, last_col) = window.update(|_, cx| {
+        services.update(cx, |section, _| {
+            section.svc_focus = ServiceFocus::Form;
+            section.svc_move_last();
+            let last_row = section.svc_form_cursor;
+            let last_col = section
+                .current_form_row()
+                .map_or(0, super::rpc_services::service_row_max_col);
+            section.svc_env_col = last_col;
+            (last_row, last_col)
+        })
+    });
+    let cursor = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            let section = services.read(cx);
+            (section.svc_form_cursor, section.svc_env_col)
+        })
+    };
+
+    window.simulate_keystrokes("tab");
+    assert_eq!(cursor(window), (0, 0), "Tab wraps to the first field");
+
+    window.simulate_keystrokes("shift-tab");
+    assert_eq!(
+        cursor(window),
+        (last_row, last_col),
+        "Shift+Tab wraps to the last field"
+    );
+}
+
 /// `G` jumps to the last row of the virtual list, which is far below the
 /// rows that were measured.
 #[gpui::test]
@@ -720,4 +800,42 @@ fn every_settings_section_is_covered(cx: &mut TestAppContext) {
             "the confirmation's {button} button is checked: {checked:?}"
         );
     }
+}
+
+/// The shared confirmation a section opens adds its buttons and the dialog
+/// close button to the settings window, and each answers a key.
+#[gpui::test]
+fn the_settings_confirmation_controls_are_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::{SETTINGS, SETTINGS_CONFIRM};
+    use dbflux_components::modals::{ConfirmRequest, ModalVariant};
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, MODAL_CHROME};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::General);
+    let capture = FrameCapture::observe(window);
+    window.update(|_, cx| {
+        settings.update(cx, |settings, cx| {
+            settings.section_confirm.update(cx, |confirm, cx| {
+                confirm.open(
+                    ConfirmRequest {
+                        title: "Discard changes".to_string(),
+                        body: "Discard the unsaved changes?".to_string(),
+                        variant: ModalVariant::Default,
+                        confirm_label: "Discard".to_string(),
+                    },
+                    cx,
+                )
+            })
+        })
+    });
+    window.update(|window, _| window.refresh());
+    window.run_until_parked();
+
+    let covered = Coverage::new(SETTINGS)
+        .with_surface(SETTINGS_CONFIRM)
+        .with_surface(MODAL_CHROME)
+        .assert_covered(&capture.frame(window));
+    assert!(
+        covered.iter().any(|id| id == "confirm-confirm"),
+        "{covered:?}"
+    );
 }

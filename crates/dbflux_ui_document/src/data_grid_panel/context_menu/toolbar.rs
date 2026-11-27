@@ -20,7 +20,7 @@ use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::components::value_format::ValueFormat;
 use dbflux_components::icons::AppIcon;
 use dbflux_ui_base::keymap::{chord_display_parts, effective_keymap};
-use gpui::prelude::FluentBuilder;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
 /// A button of the results toolbar or header.
@@ -216,7 +216,8 @@ impl ToolbarAction {
         }
     }
 
-    fn icon(self) -> AppIcon {
+    /// The icon the toolbar's own button and the menu's flyout row draw.
+    pub(super) fn icon(self) -> AppIcon {
         match self {
             ToolbarAction::Export => AppIcon::FileSpreadsheet,
             ToolbarAction::ClearFilter => AppIcon::X,
@@ -273,7 +274,7 @@ impl ToolbarAction {
     }
 
     /// The command a Results key binding runs for the same button, if any.
-    fn command(self) -> Option<Command> {
+    pub(super) fn command(self) -> Option<Command> {
         match self {
             ToolbarAction::Export => Some(Command::ExportResults),
             ToolbarAction::ClearFilter => Some(Command::ClearFilter),
@@ -544,7 +545,9 @@ impl DataGridPanel {
             && !self.collection.committing
     }
 
-    fn toolbar_action_label(&self, action: ToolbarAction) -> String {
+    /// The label of a Toolbar flyout row (the same label the toolbar's own
+    /// button draws).
+    pub(super) fn toolbar_action_label(&self, action: ToolbarAction) -> String {
         match action {
             ToolbarAction::Export => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.export")
@@ -899,7 +902,7 @@ impl DataGridPanel {
                     // parent document's TimeRangeChanged subscription re-runs.
                     let applied = panel.update(cx, |panel, cx| panel.apply_custom_range(cx));
                     if let Err(error) = applied {
-                        log::debug!("custom range not applied: {error}");
+                        report_error(UserFacingError::new(ErrorKind::User, error), cx);
                     }
                 }
             }

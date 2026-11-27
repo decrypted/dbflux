@@ -198,7 +198,15 @@ fn full_parts() -> CellMenuParts {
             action_entry("copy-as-markdown", ContextMenuAction::CopyAsMarkdown),
         ],
         copy_query: Some("Copy as SQL".into()),
-        accepts_expression: true,
+        set_values: vec![
+            action_entry("set-default", ContextMenuAction::SetDefault),
+            action_entry("set-value-entry-1", ContextMenuAction::SetTypeValue(0)),
+            action_entry("set-null", ContextMenuAction::SetNull),
+            action_entry("set-expression", ContextMenuAction::SetExpression),
+        ]
+        .into_iter()
+        .map(MenuNode::Entry)
+        .collect(),
         document_patches: false,
         generated_ids: GeneratedIdKind::ALL
             .iter()
@@ -245,6 +253,7 @@ fn every_action() -> Vec<ContextMenuAction> {
 
     let mut actions = vec![
         A::Copy,
+        A::CopyColumnName,
         A::CopyAsCsv,
         A::CopyAsJson,
         A::CopyAsSqlInList,
@@ -252,11 +261,12 @@ fn every_action() -> Vec<ContextMenuAction> {
         A::CopyAsMarkdown,
         A::Paste,
         A::Edit,
-        A::EditAsExpression,
         A::EditInModal,
         A::ViewValue,
         A::AddToFilter,
         A::SetDefault,
+        A::SetTypeValue(0),
+        A::SetExpression,
         A::SetNull,
         A::AddRow,
         A::DuplicateRow,
@@ -306,6 +316,7 @@ fn every_action() -> Vec<ContextMenuAction> {
     for action in &actions {
         match action {
             A::Copy
+            | A::CopyColumnName
             | A::CopyAsCsv
             | A::CopyAsJson
             | A::CopyAsSqlInList
@@ -313,12 +324,13 @@ fn every_action() -> Vec<ContextMenuAction> {
             | A::CopyAsMarkdown
             | A::Paste
             | A::Edit
-            | A::EditAsExpression
             | A::GenerateId(_)
             | A::EditInModal
             | A::ViewValue
             | A::AddToFilter
             | A::SetDefault
+            | A::SetTypeValue(_)
+            | A::SetExpression
             | A::SetNull
             | A::AddRow
             | A::DuplicateRow
@@ -415,12 +427,12 @@ fn the_cell_menu_groups_its_rows() {
         vec![
             "copy",
             "copy-as",
+            "copy-column-name",
             "view-value",
             "add-to-filter",
             "--",
             "edit",
             "edit-in-modal",
-            "edit-as-expression",
             "paste",
             "set-value",
             "--",
@@ -480,10 +492,12 @@ fn the_submenus_hold_their_groups() {
 
     let set_value = ids(&submenu(&menu, "set-value").children);
     assert_eq!(
-        set_value.get(..3).map(|ids| ids.to_vec()),
+        set_value.get(..5).map(|ids| ids.to_vec()),
         Some(vec![
-            "set-null".to_string(),
             "set-default".to_string(),
+            "set-value-entry-1".to_string(),
+            "set-null".to_string(),
+            "set-expression".to_string(),
             "--".to_string()
         ])
     );

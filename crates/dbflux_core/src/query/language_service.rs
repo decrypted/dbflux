@@ -171,6 +171,8 @@ pub enum DangerousQueryKind {
     WriteBehindRead {
         word: Option<&'static str>,
     },
+    /// Multi-statement script that requires admin-level confirmation (e.g. `runCommand`).
+    AdminScript,
 
     // MongoDB patterns
     /// deleteMany with empty or missing filter ({} or no arguments)
@@ -212,6 +214,9 @@ impl DangerousQueryKind {
             Self::Script => "This script contains potentially destructive statements",
             Self::WriteBehindRead { .. } => {
                 "This batch starts like a read, but a statement behind it can change data"
+            }
+            Self::AdminScript => {
+                "This script contains admin commands and requires admin-level confirmation"
             }
             Self::MongoDeleteMany => "deleteMany with empty filter will delete all documents",
             Self::MongoUpdateMany => "updateMany with empty filter will update all documents",
@@ -2165,6 +2170,7 @@ mod tests {
         assert!(!DangerousQueryKind::Drop.message().is_empty());
         assert!(!DangerousQueryKind::Alter.message().is_empty());
         assert!(!DangerousQueryKind::Script.message().is_empty());
+        assert!(!DangerousQueryKind::AdminScript.message().is_empty());
         assert!(!DangerousQueryKind::MongoDeleteMany.message().is_empty());
         assert!(!DangerousQueryKind::MongoUpdateMany.message().is_empty());
         assert!(!DangerousQueryKind::MongoDropCollection.message().is_empty());

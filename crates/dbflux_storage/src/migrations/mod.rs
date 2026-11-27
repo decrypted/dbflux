@@ -194,6 +194,7 @@ impl MigrationRegistry {
         registry.register(mod_048_general_settings_scrollbar_visibility::MigrationImpl);
         registry.register(mod_049_connection_profile_connect_on_startup::MigrationImpl);
         registry.register(mod_049_general_settings_inspector_width::MigrationImpl);
+        registry.register(mod_050_cfg_telemetry::MigrationImpl);
         registry.register(mod_050_session_tab_view_state::MigrationImpl);
         registry.register(mod_052_general_settings_grid_copy_column_names::MigrationImpl);
         registry.register(mod_054_general_settings_grid_review_before_save::MigrationImpl);
@@ -446,6 +447,7 @@ mod mod_048_general_settings_grid_pk_sort_desc;
 mod mod_048_general_settings_scrollbar_visibility;
 mod mod_049_connection_profile_connect_on_startup;
 mod mod_049_general_settings_inspector_width;
+mod mod_050_cfg_telemetry;
 mod mod_050_session_tab_view_state;
 mod mod_052_general_settings_grid_copy_column_names;
 mod mod_054_general_settings_grid_review_before_save;
@@ -1310,6 +1312,7 @@ mod tests {
             "048_general_settings_scrollbar_visibility",
             "049_connection_profile_connect_on_startup",
             "049_general_settings_inspector_width",
+            "050_cfg_telemetry",
             "050_session_tab_view_state",
             "052_general_settings_grid_copy_column_names",
             "054_general_settings_grid_review_before_save",

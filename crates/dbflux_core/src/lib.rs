@@ -2,6 +2,7 @@
 
 pub mod access;
 pub mod auth;
+pub mod child_environment;
 mod config;
 mod connection;
 mod core;
@@ -47,6 +48,7 @@ pub use config::{
     hook_script_path, is_openable_script, migrate_app_config, script_content_sha256,
 };
 
+pub use connection::manager::FencedTableDetailsFailure;
 #[allow(deprecated)]
 pub use connection::{
     ApplyFetchOutcome, AuthProfileManager, CacheEntry, CacheKey, ConnectProfileParams,
@@ -67,18 +69,21 @@ pub use connection::{
     HookContext, HookExecution, HookExecutionContext, HookExecutionMode, HookExecutor,
     HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner, Identifiable,
     InfluxVersion, InstallDatabaseConnectionOutcome, ItemManager, LuaCapabilities,
-    MetricQuerySeries, MutationPolicy, NavigatorView, OutputEvent, OutputReceiver, OutputSender,
-    OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProcessContainment,
-    ProcessExecutionError, ProcessExecutor, ProfileManager, ProfilePolicyResolver, ProxyAuth,
-    ProxyKind, ProxyManager, ProxyProfile, ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry,
-    RefreshViewsParams, RefreshedViews, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
-    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo,
-    SslMode, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams, SwitchDatabaseResult,
-    SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError, TestConnectionResult,
-    TreeLoadResult, TreeStore, WritePrivilege, compose_mutation_policy, detached_process_channel,
-    execute_streaming_process, host_matches_no_proxy, output_channel, ssl_mode_from_id,
-    ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
+    MetricQuerySeries, MutationPolicy, NavigatorView, OffRuntimeDrop, OutputEvent, OutputReceiver,
+    OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
+    ProcessContainment, ProcessExecutionError, ProcessExecutor, ProfileManager,
+    ProfilePolicyResolver, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, ReadOnlyReason,
+    RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews, ResolvedProxy,
+    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager,
+    SshTunnelProfile, SslInfo, SslMode, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
+    SwitchDatabaseResult, SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError,
+    TestConnectionResult, TreeLoadResult, TreeStore, WritePrivilege, compose_mutation_policy,
+    detached_process_channel, execute_streaming_process, host_matches_no_proxy, output_channel,
+    ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
+    ssl_mode_requires_root_cert,
 };
+
+pub use connection::{decode_uri_component, split_uri_host_port, uri_host};
 
 pub use connection::{
     DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace,
@@ -95,9 +100,16 @@ pub use connection::root_section::{
     RootSectionPage, RootSectionPresentation, RootSectionSource,
 };
 pub use connection::secret_store::{
-    SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretRotation,
+    DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
+    SecretCreateChoices, SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
+    SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
+    SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
+    SecretRotation, SecretRotationChange, SecretRotationStart, SecretRotationUpdate,
     SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
-    SecretValue,
+    SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage, encode_base64,
+    require_name, scrub_echoed_values, scrub_submitted_payload, validate_rotation_function,
+    validate_rotation_schedule, validate_rotation_window, validate_rotation_window_fits,
+    validate_tag,
 };
 pub use connection::{
     CompressionChoice, CompressionParam, DriverParam, DriverParamKey, DriverParamsSpec,
@@ -277,36 +289,34 @@ pub use schema::{
     CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
     ColumnDiff, ColumnInfo, ColumnSnapshot, ConstraintInfo, ConstraintKind, ContainerInfo,
     CreationBlocker, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo, DatabaseLayout,
-    DbSchemaInfo, DocumentSchema, DriftOutcome, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo,
-    IdentitySpec, IndexBuilder, IndexData, IndexDirection, IndexInfo, IndexSnapshot, KeyInfo,
-    KeySpaceInfo, KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata,
+    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, IdentitySpec,
+    IndexBuilder, IndexData, IndexDirection, IndexInfo, IndexSnapshot, KeyInfo, KeySpaceInfo,
+    KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata,
     NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, ObjectFolder, OrderResult,
-    ParseSchemaNodeIdError, PrimaryKeySpec, QueryTableRef, RelationKind, RelationRef,
-    RelationalSchema, RetentionPolicyInfo, RiskedChange, RoutineInfo, RoutineKind, SchemaChange,
-    SchemaColumnInfo, SchemaDiff, SchemaDriftDetected, SchemaFingerprint, SchemaForeignKeyBuilder,
+    ParseSchemaNodeIdError, PrimaryKeyCheck, PrimaryKeySpec, QueryTableRef, RelationKind,
+    RelationRef, RelationalSchema, RetentionPolicyInfo, RiskedChange, RoutineInfo, RoutineKind,
+    SchemaChange, SchemaColumnInfo, SchemaFingerprint, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind,
     SchemaSnapshot, SchemaSnapshotRecord, SnapshotDepth, TableAlterNormalizationError, TableChange,
-    TableCreationMetadata, TableInfo, TableKey, TableStorageHint, TimeSeriesFacet,
-    TimeSeriesFieldInfo, TimeSeriesSchema, VectorDistance, VectorFacet, ViewInfo,
-    category_collection_facets, check_drift_sync, check_schema_drift, classify_table_added,
-    classify_table_removed, diff_schema, diff_table_info, extract_referenced_tables,
-    normalize_selected_table_alter, topological_order,
+    TableCreationMetadata, TableInfo, TableStorageHint, TimeSeriesFacet, TimeSeriesFieldInfo,
+    TimeSeriesSchema, VectorDistance, VectorFacet, ViewInfo, category_collection_facets,
+    check_primary_key, classify_table_added, classify_table_removed, diff_schema, diff_table_info,
+    extract_referenced_tables, normalize_selected_table_alter, topological_order,
 };
 
 pub use sql::{
     AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
-    CellExpressionColumn, CellExpressionError, CellExpressionVocabulary, CodeGenCapabilities,
-    CodeGenerator, CreateIndexRequest, CreateTypeRequest, DdlRejection, DefaultSpec,
-    DefaultSqlDialect, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest,
-    MutationTargetAlias, NoOpCodeGenerator, OwnedDefaultSpec, PlaceholderStyle, PreparedTableAlter,
-    ReindexRequest, SqlDialect, SqlGenerationOptions, SqlGenerationRequest, SqlOperation,
-    SqlQueryBuilder, SqlValueMode, TableAlterExpectedColumn, TableAlterOperation,
+    CodeGenCapabilities, CodeGenerator, CreateIndexRequest, CreateTypeRequest, DdlRejection,
+    DefaultSpec, DefaultSqlDialect, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest,
+    DropTypeRequest, MutationTargetAlias, NoOpCodeGenerator, OwnedDefaultSpec, PlaceholderStyle,
+    PreparedTableAlter, ReindexRequest, SqlDialect, SqlGenerationOptions, SqlGenerationRequest,
+    SqlOperation, SqlQueryBuilder, SqlValueMode, TableAlterExpectedColumn, TableAlterOperation,
     TableAlterOutcome, TableAlterPlanner, TableAlterPreview, TableAlterRequest, TableAlterRoute,
-    TransactionControl, TypeAttributeDefinition, TypeDefinition, cell_expression_suggestions,
+    TransactionControl, TypeAttributeDefinition, TypeDefinition, TypeFamily,
     classify_sql_transaction_control, generate_create_table, generate_delete_template,
     generate_drop_table, generate_insert_template, generate_select_star, generate_sql,
     generate_truncate, generate_update_template, is_numeric_literal,
-    quote_double_quoted_identifier, quote_postgres_string_literal, validate_cell_expression,
+    quote_double_quoted_identifier, quote_postgres_string_literal, type_family,
     validate_ddl_fragment,
 };
 

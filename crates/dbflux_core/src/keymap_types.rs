@@ -125,9 +125,11 @@ pub enum Command {
     /// context menu's Add to filter.
     AddToFilter,
     ResultsSetNull,
-    /// Edits the active cell as a SQL expression, or flips the open inline
-    /// editor between a value and an expression.
-    ToggleCellExpression,
+    /// Sets the active cell to its column's default expression.
+    ResultsSetDefault,
+    /// Flips the inline cell editor between literal and SQL expression, or
+    /// opens it in expression mode.
+    ResultsToggleExpression,
     /// Shows the statements Save would run for the grid's staged changes.
     ReviewChanges,
     // Context menu
@@ -287,6 +289,12 @@ pub enum Command {
     ToggleConsole,
     LoadMore,
     EditExpiry,
+    /// Opens the editor on the value of the selected entry (the secret
+    /// store's Edit value).
+    EditValue,
+    /// Rolls the selected secret back to its most recent earlier version
+    /// (the secret store's Roll back, `b`).
+    RollBackVersion,
     CopyPreview,
     /// Copies the text of the modal value editor as it stands.
     CopyEditorText,
@@ -470,7 +478,8 @@ impl Command {
             Command::CopySelectionAsJson => "Copy selection as JSON",
             Command::AddToFilter => "Add selection to filter",
             Command::ResultsSetNull => "Set cell to NULL",
-            Command::ToggleCellExpression => "Edit cell as SQL expression",
+            Command::ResultsSetDefault => "Set cell to column default",
+            Command::ResultsToggleExpression => "Toggle literal / expression editor",
             Command::ReviewChanges => "Review changes",
             Command::OpenContextMenu => "Open context menu",
             Command::OpenColumnMenu => "Open column menu",
@@ -578,6 +587,8 @@ impl Command {
             Command::ToggleConsole => "Toggle console",
             Command::LoadMore => "Load more",
             Command::EditExpiry => "Edit expiry…",
+            Command::EditValue => "Edit value",
+            Command::RollBackVersion => "Roll back to the previous version",
             Command::CopyPreview => "Copy preview",
             Command::CopyEditorText => "Copy editor text",
             Command::CopyEditorTextCompact => "Copy editor text compacted",
@@ -688,7 +699,8 @@ impl Command {
             Command::CopySelectionAsJson => "copy_selection_as_json",
             Command::AddToFilter => "add_to_filter",
             Command::ResultsSetNull => "results_set_null",
-            Command::ToggleCellExpression => "toggle_cell_expression",
+            Command::ResultsSetDefault => "results_set_default",
+            Command::ResultsToggleExpression => "results_toggle_expression",
             Command::ReviewChanges => "review_changes",
             Command::OpenContextMenu => "open_context_menu",
             Command::OpenColumnMenu => "open_column_menu",
@@ -797,6 +809,8 @@ impl Command {
             Command::ToggleConsole => "toggle_console",
             Command::LoadMore => "load_more",
             Command::EditExpiry => "edit_expiry",
+            Command::EditValue => "edit_value",
+            Command::RollBackVersion => "roll_back_version",
             Command::CopyPreview => "copy_preview",
             Command::CopyEditorText => "copy_editor_text",
             Command::CopyEditorTextCompact => "copy_editor_text_compact",
@@ -923,7 +937,8 @@ impl Command {
             Command::CopySelectionAsJson,
             Command::AddToFilter,
             Command::ResultsSetNull,
-            Command::ToggleCellExpression,
+            Command::ResultsSetDefault,
+            Command::ResultsToggleExpression,
             Command::ReviewChanges,
             Command::OpenContextMenu,
             Command::OpenColumnMenu,
@@ -1020,6 +1035,8 @@ impl Command {
             Command::ToggleConsole,
             Command::LoadMore,
             Command::EditExpiry,
+            Command::EditValue,
+            Command::RollBackVersion,
             Command::CopyPreview,
             Command::CopyEditorText,
             Command::CopyEditorTextCompact,
@@ -1133,7 +1150,8 @@ impl Command {
             | Command::CopySelectionAsJson
             | Command::AddToFilter
             | Command::ResultsSetNull
-            | Command::ToggleCellExpression
+            | Command::ResultsSetDefault
+            | Command::ResultsToggleExpression
             | Command::ReviewChanges
             | Command::OpenContextMenu
             | Command::OpenColumnMenu
@@ -1244,6 +1262,8 @@ impl Command {
             Command::ToggleConsole => "View",
             Command::LoadMore => "Navigation",
             Command::EditExpiry => "Actions",
+            Command::EditValue => "Actions",
+            Command::RollBackVersion => "Actions",
             Command::CopyPreview
             | Command::CopyEditorText
             | Command::CopyEditorTextCompact
@@ -1438,6 +1458,10 @@ pub enum ContextId {
     /// The table migration wizard document (its steps and footer).
     MigrateWizard,
 
+    /// The import wizard dialog: its configure step's choices (the CSV
+    /// delimiter and encoding, each table's mapping mode and columns).
+    ImportWizard,
+
     /// An editor with Vim mode in Normal or Visual mode, where the leader
     /// key starts a sequence (`<leader> a`).
     VimNormal,
@@ -1485,6 +1509,7 @@ impl ContextId {
             ContextId::AddPanelPicker => None,
             ContextId::McpApprovals => Some(ContextId::Global),
             ContextId::MigrateWizard => Some(ContextId::Global),
+            ContextId::ImportWizard => None,
             ContextId::VimNormal => None,
         }
     }
@@ -1523,6 +1548,7 @@ impl ContextId {
                 | ContextId::TextInput
                 | ContextId::Dropdown
                 | ContextId::SqlPreviewModal
+                | ContextId::ImportWizard
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
                 | ContextId::ContextMenu
@@ -1577,6 +1603,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "Add Panel Picker",
             ContextId::McpApprovals => "MCP Approvals",
             ContextId::MigrateWizard => "Migrate Wizard",
+            ContextId::ImportWizard => "Import Wizard",
             ContextId::VimNormal => "Vim Normal",
         }
     }
@@ -1619,6 +1646,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "add_panel_picker",
             ContextId::McpApprovals => "mcp_approvals",
             ContextId::MigrateWizard => "migrate_wizard",
+            ContextId::ImportWizard => "import_wizard",
             ContextId::VimNormal => "vim_normal",
         }
     }
@@ -1661,6 +1689,7 @@ impl ContextId {
             ContextId::AddPanelPicker,
             ContextId::McpApprovals,
             ContextId::MigrateWizard,
+            ContextId::ImportWizard,
             ContextId::VimNormal,
         ]
     }
@@ -1703,6 +1732,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "AddPanelPicker",
             ContextId::McpApprovals => "McpApprovals",
             ContextId::MigrateWizard => "MigrateWizard",
+            ContextId::ImportWizard => "ImportWizard",
             ContextId::VimNormal => "VimNormal",
         }
     }
@@ -1741,10 +1771,31 @@ impl ContextId {
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",
             ContextId::SqlPreviewModal => "SqlPreviewModal && !Input",
+            // A dialog: its keys stay out of a text field and of an open
+            // dropdown, which answer their own.
+            ContextId::ImportWizard => "ImportWizard && !Input && !Dropdown",
             // An editor inside a dialog takes the leader too: the Vim wrapper
             // hands its commands to the dialog, never to the document behind.
             ContextId::VimNormal => "VimNormal",
             context => context.as_gpui_context(),
+        }
+    }
+
+    /// The predicate that keeps a binding's key out of a focused text field
+    /// inside this context, for the contexts that hold text fields of their
+    /// own.
+    ///
+    /// A text input binds no printable key itself, so a bare letter bound at
+    /// the window root takes the character before the field ever sees it.
+    /// The keymap answers that by narrowing the binding to `!Input`; `None`
+    /// leaves the binding on the context's default predicate, which is what
+    /// every context without a text field wants.
+    pub fn predicate_outside_input(&self) -> Option<&'static str> {
+        match self {
+            ContextId::Results => Some("Results && !Modal && !Input"),
+            ContextId::Audit => Some("Audit && !Modal && !Input"),
+            ContextId::Inspector => Some("Inspector && !Modal && !Input"),
+            _ => None,
         }
     }
 
@@ -1759,6 +1810,7 @@ impl ContextId {
                 | ContextId::Modal
                 | ContextId::KeyValue
                 | ContextId::SqlPreviewModal
+                | ContextId::ImportWizard
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
                 | ContextId::VimNormal

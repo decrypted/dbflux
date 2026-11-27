@@ -1,5 +1,4 @@
 mod builder;
-mod cell_expressions;
 mod chart;
 mod chrome;
 mod column_chooser;
@@ -7,8 +6,10 @@ mod column_layout_store;
 pub(crate) mod context_menu;
 mod document_view;
 mod documents;
+mod edit_guard;
 mod export_all;
 pub(crate) mod export_options;
+mod expression_gate;
 mod facets;
 mod filter_autoquote;
 pub(crate) mod filter_bar;
@@ -304,6 +305,12 @@ pub enum DataGridEvent {
     /// Open the row a foreign-key value points at (see
     /// [`ReferencedRowTarget`]).
     OpenReferencedRow { target: ReferencedRowTarget },
+
+    /// Fetch the next rows of a result the row limit cut short, because its
+    /// last row came into view. Only emitted when the host offered it; the
+    /// host answers with [`DataGridPanel::append_next_rows`] or
+    /// [`DataGridPanel::next_rows_failed`].
+    NextRowsRequested,
 }
 
 /// What the footer offers for a query result the editor row limit cut short.
@@ -313,6 +320,8 @@ pub(crate) struct LimitedRowActions {
     pub(crate) count: bool,
     /// The host can run the query again without the row limit.
     pub(crate) load_all: bool,
+    /// The host can fetch the next rows when the last one comes into view.
+    pub(crate) next_rows: bool,
 }
 
 /// The total row count of a limited result, as far as it is known.
@@ -330,6 +339,8 @@ pub(crate) enum LimitedRowTotal {
 pub(crate) struct LimitedRows {
     pub(crate) actions: LimitedRowActions,
     pub(crate) total: LimitedRowTotal,
+    /// The host is fetching the next rows.
+    pub(crate) loading_next: bool,
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render
@@ -439,6 +450,9 @@ struct PendingDeleteConfirm {
 struct PendingBatchRemaining {
     pending_inserts: Vec<usize>,
     dirty_rows: Vec<usize>,
+    /// The key of each of `dirty_rows`, read when the batch was requested, in
+    /// the same order; empty when the rows are addressed by position alone.
+    dirty_keys: Vec<Option<Vec<Value>>>,
 }
 
 struct PendingDocumentPreview {
@@ -851,7 +865,49 @@ struct InspectorState {
 ///
 /// All nine fields are `pub(crate)` — external crates in the same workspace
 /// read or update them (e.g. the builder panel subscription in `mod.rs`).
+#[cfg(feature = "telemetry")]
+#[derive(Clone)]
+pub(super) struct BuilderUsage {
+    ticket: dbflux_core::observability::usage::UsageTicket,
+    generation: u64,
+    profile_id: Uuid,
+    database: Option<String>,
+    table: TableRef,
+    pagination: Pagination,
+    order_by: Vec<OrderByColumn>,
+    mutation: Option<BuilderMutationUsage>,
+}
+
+#[cfg(feature = "telemetry")]
+#[derive(Clone)]
+struct BuilderMutationUsage {
+    spec: dbflux_core::VisualMutationSpec,
+    draft: Option<VisualQuerySpec>,
+    owner: WeakEntity<QueryBuilderPanel>,
+}
+
+#[cfg(feature = "telemetry")]
+impl std::fmt::Debug for BuilderUsage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BuilderUsage")
+    }
+}
+
+#[cfg(feature = "telemetry")]
+struct QueuedBuilderUsage {
+    usage: BuilderUsage,
+    spec: VisualQuerySpec,
+    select: SelectQuery,
+    cancel: Option<dbflux_core::CancelToken>,
+}
+
 pub(crate) struct BuilderState {
+    #[cfg(feature = "telemetry")]
+    usage_generation: u64,
+    #[cfg(feature = "telemetry")]
+    queued_usage: Option<QueuedBuilderUsage>,
+    #[cfg(feature = "telemetry")]
+    usage_owner_is_alive: Option<Box<dyn Fn() -> bool>>,
     /// FK metadata for the current (connection, database, schema).
     pub(crate) fk_cache: FkLoadState,
     /// Current state of the relational filter bar chip and inline error area.
@@ -950,6 +1006,17 @@ pub struct DataGridPanel {
     pending_delete_confirm: Option<PendingDeleteConfirm>,
     /// The open review of the statements Save would run.
     change_review: Option<review_changes::ChangeReview>,
+    /// A save that writes SQL expressions, held until the user confirms it.
+    pending_expression_confirm: Option<expression_gate::PendingExpressionConfirm>,
+    /// The drift modal a save, delete or mutation opens when the table's
+    /// primary key changed since the grid loaded it.
+    edit_guard: edit_guard::EditGuard,
+    /// Set while a confirmed save re-enters the gate, so it runs once.
+    expression_confirmed: bool,
+    /// Set while a batch the change review confirmed runs: the review showed
+    /// its statements, expressions included, so the batch's saves do not
+    /// ask again.
+    expressions_reviewed: bool,
     pending_batch_remaining: Option<PendingBatchRemaining>,
     /// A close is waiting on the staged edits being applied.
     ///
@@ -979,6 +1046,8 @@ pub struct DataGridPanel {
 /// Pending mutation execution — holds the spec and options while the
 /// confirmation modal is open so the confirm handler can dispatch the executor.
 pub(crate) struct PendingMutationExec {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
     pub(crate) spec: dbflux_core::VisualMutationSpec,
     pub(crate) opts: crate::data_grid_panel::mutation_executor::MutationExecOptions,
     pub(crate) profile_id: uuid::Uuid,
@@ -1006,6 +1075,8 @@ pub(crate) enum MutationIntent {
 /// instead of one arm per execution mode.
 #[derive(Clone, Debug)]
 pub(crate) struct MutationRun {
+    #[cfg(feature = "telemetry")]
+    usage: Option<BuilderUsage>,
     pub(crate) task_id: TaskId,
     pub(crate) mode: crate::labels::VisualMutationTaskMode,
     pub(crate) table_name: String,
@@ -1586,6 +1657,12 @@ impl DataGridPanel {
                 _value_panel_subscription: None,
             },
             builder: BuilderState {
+                #[cfg(feature = "telemetry")]
+                usage_generation: 0,
+                #[cfg(feature = "telemetry")]
+                queued_usage: None,
+                #[cfg(feature = "telemetry")]
+                usage_owner_is_alive: None,
                 fk_cache: FkLoadState::Loading,
                 relational_filter_state: filter_bar::RelationalFilterState::Inactive,
                 builder_draft_spec: None,
@@ -1620,6 +1697,10 @@ impl DataGridPanel {
             pending: PendingActions::default(),
             pending_delete_confirm: None,
             change_review: None,
+            pending_expression_confirm: None,
+            edit_guard: edit_guard::EditGuard::new(window, cx),
+            expression_confirmed: false,
+            expressions_reviewed: false,
             pending_batch_remaining: None,
             close_after_apply: false,
             batch_op_in_flight: false,

@@ -5,12 +5,15 @@ pub(crate) mod join_condition;
 pub(crate) mod keyset;
 pub(crate) mod language_service;
 pub(crate) mod name_suggestion;
+pub(crate) mod plan;
 pub(crate) mod relational_filter;
 pub(crate) mod relaxed_json;
 pub(crate) mod safety;
 pub(crate) mod script_operation;
 pub(crate) mod semantic;
+pub(crate) mod snippet;
 pub(crate) mod sql_context;
+pub(crate) mod sql_format;
 pub(crate) mod table_browser;
 pub(crate) mod time_macros;
 pub(crate) mod transfer;
@@ -47,6 +50,11 @@ pub use language_service::{
     strip_leading_comments,
 };
 pub use name_suggestion::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
+pub use plan::{
+    ESTIMATE_GAP_THRESHOLD, EstimateGap, PlanCondition, PlanFormat, PlanNode, QueryPlan,
+    QueryPlanMode, QueryPlanRequest, analyze_allowed, analyze_statement, analyze_unsupported,
+    parse_sqlite_query_plan, plan_text_from_result, single_plan_statement, sqlite_plan_statement,
+};
 pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
 pub use safety::{
     classify_query_for_governance, classify_sql_execution, contains_compound_block,
@@ -62,10 +70,15 @@ pub use semantic::{
     SemanticRequest, SemanticRequestKind, parse_semantic_filter_json, render_semantic_filter_sql,
     semantic_filter_to_filter_node,
 };
+pub use snippet::{
+    ParsedSnippet, PlaceholderSpan, SnippetParseError, SnippetParseErrorKind, Tabstop,
+    parse_snippet, snippet_placeholder_spans,
+};
 pub use sql_context::{
     ScopeRelation, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,
     StatementScope,
 };
+pub use sql_format::{SqlFormatDialect, format_sql, format_sql_text};
 pub use table_browser::{
     CollectionBrowseRequest, CollectionCountEstimate, CollectionCountRequest, CollectionRef,
     ColumnRef, DescribeRequest, ExplainRequest, OrderByColumn, Pagination, SortDirection,

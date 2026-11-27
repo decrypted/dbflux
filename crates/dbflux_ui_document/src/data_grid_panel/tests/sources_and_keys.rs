@@ -292,7 +292,7 @@ fn ctrl_e_opens_an_export_menu_driven_by_the_menu_keys(cx: &mut TestAppContext) 
     );
     assert_eq!(context(window), ContextId::ContextMenu);
 
-    // Save as CSV, JSON (pretty), JSON (compact): the second entry.
+    // Save as CSV, JSON (pretty), JSON (compact), Markdown: the second entry.
     window.simulate_keystrokes("j enter");
     window.run_until_parked();
 
@@ -312,8 +312,20 @@ fn ctrl_e_opens_an_export_menu_driven_by_the_menu_keys(cx: &mut TestAppContext) 
     assert_eq!(context(window), ContextId::Results);
 
     // Up from the first entry wraps to the last copy entry, which puts
-    // the compact JSON on the clipboard.
+    // the result on the clipboard as a Markdown table.
     window.simulate_keystrokes("ctrl-e k enter");
+    window.run_until_parked();
+    let copied = window
+        .update(|_, cx| cx.read_from_clipboard())
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert_eq!(
+        copied, "| id | name |\n| --- | --- |\n| 1 | row 1 |\n| 2 | row 2 |\n| 3 | row 3 |\n",
+        "Enter on a copy entry copies the result"
+    );
+
+    // One more Up reaches the compact JSON copy entry, unchanged.
+    window.simulate_keystrokes("ctrl-e k k enter");
     window.run_until_parked();
     let copied = window
         .update(|_, cx| cx.read_from_clipboard())
@@ -321,7 +333,7 @@ fn ctrl_e_opens_an_export_menu_driven_by_the_menu_keys(cx: &mut TestAppContext) 
         .unwrap_or_default();
     assert!(
         copied.starts_with("[{"),
-        "Enter on a copy entry copies the result, got {copied:?}"
+        "the compact JSON copy entry still copies JSON, got {copied:?}"
     );
 
     window.simulate_keystrokes("ctrl-e escape");
@@ -874,4 +886,82 @@ fn focus_row_by_key_replaces_the_filter_with_a_quoted_equality(cx: &mut TestAppC
             "the reload must run under the filter"
         );
     });
+}
+
+/// The menu opened from the keyboard hangs off the selected row where it is
+/// drawn: on a grid scrolled to its last row, the anchor stays inside the
+/// grid instead of lying a whole table's height below it.
+#[gpui::test]
+fn keyboard_menu_on_a_scrolled_grid_opens_inside_it(cx: &mut TestAppContext) {
+    use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+
+    init_keyboard_runtime(cx);
+    let app_state = isolated_test_app_state(cx);
+
+    let (host, window) = host_document(
+        cx,
+        move |window, cx| {
+            cx.new(|cx| {
+                DataGridPanel::new_for_result(
+                    Arc::new(QueryResult::table(
+                        vec![key_column("id", false)],
+                        (1..=200)
+                            .map(|id| vec![dbflux_core::Value::Int(id)])
+                            .collect(),
+                        None,
+                        Duration::ZERO,
+                    )),
+                    "SELECT id FROM numbers".to_string(),
+                    None,
+                    app_state,
+                    window,
+                    cx,
+                )
+            })
+        },
+        |panel, cx| panel.active_context(cx),
+        DataGridPanel::dispatch_command,
+    );
+    let panel = window.update(|_, cx| host.read(cx).document.clone());
+
+    window.update(|window, cx| {
+        let table_state = panel
+            .read(cx)
+            .grid_table
+            .table_state
+            .clone()
+            .expect("the result builds a table");
+        let focus_handle = table_state.read(cx).focus_handle().clone();
+        focus_handle.focus(window, cx);
+    });
+    window.run_until_parked();
+
+    window.simulate_keystrokes("j ctrl-end");
+    window.run_until_parked();
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.open_context_menu_at_selection(window, cx)
+        });
+    });
+    window.run_until_parked();
+
+    let (anchor, top, bottom) = window.update(|_, cx| {
+        let panel = panel.read(cx);
+        let anchor = panel
+            .context_menu
+            .as_ref()
+            .map(|menu| menu.position.y)
+            .expect("the menu opens");
+        (
+            anchor,
+            panel.panel_origin.y,
+            panel.panel_origin.y + panel.panel_size.height,
+        )
+    });
+
+    assert!(bottom > top, "the panel has been measured");
+    assert!(
+        anchor >= top && anchor <= bottom,
+        "anchor {anchor:?} must lie inside the grid {top:?}..{bottom:?}"
+    );
 }

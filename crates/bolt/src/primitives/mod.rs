@@ -3,13 +3,16 @@
 mod badge;
 mod banner;
 mod chamfer;
+mod code_view;
 mod divider;
+mod field_well;
 mod file_picker;
 mod focus_ring;
 mod icon;
 mod kbd;
 mod label;
 mod loading_state;
+mod markdown;
 mod segmented_control;
 mod status;
 mod surface;
@@ -24,7 +27,12 @@ pub use chamfer::{
     chamfer_outside_polygons, chamfer_points, chamfer_ring_points, chamfer_top_edge_polygon,
     clamp_cut, motion_ease, snap_bounds_to_device, snap_length_to_device, transition_color,
 };
+pub use code_view::CodeView;
+pub(crate) use code_view::highlight_styles;
+#[cfg(test)]
+pub(crate) use code_view::{CodeLine, split_lines, split_runs};
 pub use divider::{DividerTone, divider, hdivider, vdivider};
+pub use field_well::{FieldWell, FieldWellInspection, inspect_field_well};
 pub use file_picker::{FilePicker, file_picker_label};
 pub use focus_ring::{
     FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR, FocusShape, WhenFocusVisible, focus_ring,
@@ -34,6 +42,7 @@ pub use icon::Icon;
 pub use kbd::{Kbd, KbdTone, key_label};
 pub use label::Label;
 pub use loading_state::{LoadingState, Progress, Spinner, progress_fill_id};
+pub use markdown::{MarkdownTypography, MarkdownView};
 pub use segmented_control::{
     SegmentBounds, SegmentedControl, SegmentedItem, new_active_id, segmented_group_id,
     segmented_item_id, stepped_enabled_segment, stepped_segment,
@@ -43,4 +52,6 @@ pub use surface::{SurfaceInspection, SurfaceRole, inspect_surface_role, overlay_
 pub use text::{
     Text, TextColorSelection, TextDefaultColor, TextInspection, TextRoleContract, TextVariant,
 };
-pub use timeline_strip::{TimelineBar, TimelineStrip};
+pub use timeline_strip::{
+    TimelineBar, TimelineBucket, TimelineHistogram, TimelineLegend, TimelineStrip,
+};

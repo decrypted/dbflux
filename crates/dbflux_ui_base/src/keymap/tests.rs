@@ -195,6 +195,84 @@ fn test_editor_toggle_comment_binding() {
 }
 
 #[test]
+fn format_query_is_bound_in_the_editor_without_taking_replace() {
+    let keymap = default_keymap();
+
+    #[cfg(target_os = "macos")]
+    let format_chord = KeyChord::new(
+        "l",
+        Modifiers {
+            platform: true,
+            alt: true,
+            ..Modifiers::none()
+        },
+    );
+    #[cfg(not(target_os = "macos"))]
+    let format_chord = KeyChord::new("f", Modifiers::ctrl_shift());
+
+    assert_eq!(
+        keymap.resolve(ContextId::Editor, &format_chord),
+        Some(Command::FormatQuery)
+    );
+    // Outside the editor the chord keeps whatever it had: Format is an
+    // editor command.
+    assert_ne!(
+        keymap.resolve(ContextId::Sidebar, &format_chord),
+        Some(Command::FormatQuery)
+    );
+    // Cmd+Shift+F stays the editor's Replace on macOS.
+    assert_eq!(
+        keymap.resolve(
+            ContextId::Editor,
+            &KeyChord::new("f", Modifiers::primary_shift())
+        ),
+        if cfg!(target_os = "macos") {
+            None
+        } else {
+            Some(Command::FormatQuery)
+        }
+    );
+}
+
+#[test]
+fn insert_snippet_is_bound_in_the_editor_next_to_the_pane_move() {
+    let keymap = default_keymap();
+
+    #[cfg(target_os = "macos")]
+    let snippet_chord = KeyChord::new("j", Modifiers::primary());
+    #[cfg(not(target_os = "macos"))]
+    let snippet_chord = KeyChord::new(
+        "j",
+        Modifiers {
+            ctrl: true,
+            alt: true,
+            ..Modifiers::none()
+        },
+    );
+
+    assert_eq!(
+        keymap.resolve(ContextId::Editor, &snippet_chord),
+        Some(Command::InsertSnippet)
+    );
+    // Insert snippet is an editor command; the sidebar keeps whatever the
+    // chord had there.
+    assert_ne!(
+        keymap.resolve(ContextId::Sidebar, &snippet_chord),
+        Some(Command::InsertSnippet)
+    );
+    // Plain Ctrl+J stays the pane move.
+    assert_eq!(
+        keymap.resolve(ContextId::Editor, &KeyChord::new("j", Modifiers::ctrl())),
+        Some(Command::FocusDown)
+    );
+    assert_eq!(
+        Command::from_palette_id("insert_snippet"),
+        Some(Command::InsertSnippet)
+    );
+    assert_eq!(Command::InsertSnippet.id(), "insert_snippet");
+}
+
+#[test]
 fn test_global_fallback_from_sidebar() {
     let keymap = default_keymap();
 
@@ -320,6 +398,118 @@ fn results_layer_binds_shift_s_to_find_similar_rows() {
         keymap.resolve(ContextId::Results, &chord),
         Some(Command::FindSimilarRows),
     );
+}
+
+/// A text field inside a results document keeps every printable key the
+/// Results layer binds. A text input binds no printable key of its own, so a
+/// bare letter bound at the window root would take the character before the
+/// field saw it: `r` renames a row and `t` cycles the view, but in a focused
+/// filter, sort, projection or builder-rail field they are typed text. The
+/// keys a field does not consume — F5, the panel chords, the result tabs and
+/// Enter — keep reaching the layer from it.
+#[test]
+fn results_layer_letters_are_typed_in_a_focused_field() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    for (keys, command) in [
+        ("r", Command::Rename),
+        ("t", Command::CycleDocumentView),
+        ("o", Command::ResultsAddRow),
+        ("y", Command::ResultsCopyRow),
+        ("i", Command::ToggleRecordView),
+        ("v", Command::ToggleValuePanel),
+        ("x", Command::Delete),
+        ("space", Command::ExpandCollapse),
+    ] {
+        let in_grid = top_action(&keymap, keys, &grid)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the results grid"));
+        assert!(
+            runs_command(in_grid.as_ref(), command),
+            "`{keys}` must run {command:?} in the results grid"
+        );
+
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in a focused results field"
+        );
+    }
+
+    // The keys a field does not consume keep reaching the layer from it. Ctrl+J
+    // and Ctrl+K stay the input's own Down and Up, and Ctrl+Z its undo, which
+    // is why they are not listed here.
+    for (keys, command) in [
+        ("f5", Command::RefreshSchema),
+        ("ctrl-h", Command::FocusLeft),
+        ("ctrl-l", Command::FocusRight),
+        ("alt-h", Command::PrevResultTab),
+        ("alt-l", Command::NextResultTab),
+        ("enter", Command::Execute),
+    ] {
+        let in_field = top_action(&keymap, keys, &field)
+            .unwrap_or_else(|| panic!("`{keys}` bound in a focused results field"));
+        assert!(
+            runs_command(in_field.as_ref(), command),
+            "`{keys}` must run {command:?} from a focused results field"
+        );
+    }
+}
+
+/// The audit log and the side panels hold text fields of their own, so they
+/// get the same gate: a bare printable key a field would receive as typed text
+/// stops matching while that field has the keyboard, and every other key the
+/// layer binds keeps behaving exactly as it does outside a field.
+#[test]
+fn panel_letters_are_typed_in_a_focused_field() {
+    let keymap = native_keymap();
+
+    for context in [ContextId::Audit, ContextId::Inspector] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        let panel = element_stack(root.clone(), &[]);
+        let field = element_stack(root, &["Input"]);
+        let mut gated = 0;
+
+        for letter in 'a'..='z' {
+            let keys = letter.to_string();
+            let Some(in_panel) = top_action(&keymap, &keys, &panel) else {
+                continue;
+            };
+
+            gated += 1;
+            let in_field = top_action(&keymap, &keys, &field);
+            assert!(
+                in_field
+                    .as_ref()
+                    .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+                "`{keys}` is typed text in a focused {context:?} field"
+            );
+            assert!(
+                in_panel.as_any().is::<RunCommand>(),
+                "`{keys}` runs a {context:?} command in the panel"
+            );
+        }
+
+        assert!(gated > 0, "{context:?} binds printable keys");
+
+        for keys in ["f5", "enter", "escape", "down", "up", "pagedown", "ctrl-h"] {
+            let (Some(in_panel), Some(in_field)) = (
+                top_action(&keymap, keys, &panel),
+                top_action(&keymap, keys, &field),
+            ) else {
+                continue;
+            };
+
+            assert!(
+                runs_same_command(in_panel.as_ref(), in_field.as_ref()),
+                "`{keys}` does the same thing from a focused {context:?} field"
+            );
+        }
+    }
 }
 
 /// `space` in the Results layer must resolve to `ExpandCollapse`, matching
@@ -686,6 +876,17 @@ fn runs_command(action: &dyn Action, command: Command) -> bool {
         .is_some_and(|run| run.command.as_ref() == command.action_id())
 }
 
+/// Whether both actions run the same command.
+fn runs_same_command(left: &dyn Action, right: &dyn Action) -> bool {
+    match (
+        left.as_any().downcast_ref::<RunCommand>(),
+        right.as_any().downcast_ref::<RunCommand>(),
+    ) {
+        (Some(left), Some(right)) => left.command.as_ref() == right.command.as_ref(),
+        _ => false,
+    }
+}
+
 /// The key contexts a window root reports for `context`. The settings
 /// window adds the active section and whether the section or its navigation
 /// has the keyboard, which the section keys of the Settings layer match on.
@@ -694,7 +895,7 @@ fn roots_reported_for(context: ContextId) -> Vec<KeyContext> {
         return vec![root_key_context(WORKSPACE_KEY_CONTEXT, context, &[])];
     }
 
-    ["proxies", "keybindings"]
+    ["proxies", "keybindings", "appearance"]
         .into_iter()
         .map(|section| {
             root_key_context(
@@ -746,6 +947,34 @@ fn every_root_default_resolves_to_the_same_command_natively() {
                     .collect::<Vec<_>>()
             );
         }
+    }
+}
+
+/// `R` is the reset key of the Settings window: it reaches the key bindings
+/// editor and the Appearance page, and no other section.
+#[test]
+fn r_resets_only_in_the_keybindings_and_appearance_sections() {
+    let keymap = native_keymap();
+    let typed = gpui_keystrokes(&KeySequence::from(KeyChord::new("r", Modifiers::none())));
+
+    for (section, resets) in [
+        ("keybindings", true),
+        ("appearance", true),
+        ("proxies", false),
+        ("general", false),
+    ] {
+        let root = root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Settings,
+            &[
+                ("section".into(), section.into()),
+                ("focus".into(), "section".into()),
+            ],
+        );
+        let runs_reset = top_action(&keymap, &typed, std::slice::from_ref(&root))
+            .is_some_and(|action| runs_command(action.as_ref(), Command::ResetBinding));
+
+        assert_eq!(runs_reset, resets, "section {section}");
     }
 }
 
@@ -2881,6 +3110,218 @@ fn run_command_for_returns_the_bound_action(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// A command declares a home context only while the default keymap leaves it
+/// unbound there: a default binding would list it through that binding, and
+/// the declaration would be stale.
+#[test]
+fn commands_with_a_home_context_have_no_default_binding_in_it() {
+    let slots = dbflux_app::keymap::default_slots(default_keymap());
+    let mut declared = 0;
+
+    for command in Command::all_variants() {
+        let Some(context) = command.home_context() else {
+            continue;
+        };
+        declared += 1;
+
+        assert!(
+            !slots.iter().any(|slot| slot.context == context
+                && slot.command == command
+                && slot.default_keys.is_some()),
+            "{command:?} has a default binding in {context:?}: drop its home_context"
+        );
+        assert!(
+            slots.iter().any(|slot| slot.context == context
+                && slot.command == command
+                && slot.default_keys.is_none()),
+            "{command:?} is listed as an unbound slot of {context:?}"
+        );
+    }
+
+    assert!(declared > 0);
+}
+
+/// Keys the user gives an unbound command work like any other binding, and
+/// resetting the slot unbinds them again.
+#[gpui::test]
+fn a_user_key_on_an_unbound_command_dispatches_and_reset_unbinds(cx: &mut gpui::TestAppContext) {
+    let _keymap_state = keymap_state_test_guard();
+    cx.update(init_keymap);
+
+    let slot = BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown);
+    let keys = KeyChord::new("f19", Modifiers::ctrl_shift());
+
+    assert!(
+        run_command_for(ContextId::Results, Command::ResultsCopyAsMarkdown).is_none(),
+        "no default binding"
+    );
+    assert_eq!(effective_keymap().resolve(ContextId::Results, &keys), None);
+
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(slot.clone(), Some(KeySequence::from(keys.clone())));
+    cx.update(|cx| apply_keymap_overrides(overrides.clone(), cx));
+
+    assert_eq!(
+        effective_keymap().resolve(ContextId::Results, &keys),
+        Some(Command::ResultsCopyAsMarkdown)
+    );
+    let bound = run_command_for(ContextId::Results, Command::ResultsCopyAsMarkdown)
+        .expect("the user key binds the command");
+    assert!(runs_command(&bound, Command::ResultsCopyAsMarkdown));
+    assert!(bound.from_user_binding);
+
+    overrides.reset(&slot);
+    cx.update(|cx| apply_keymap_overrides(overrides, cx));
+
+    assert_eq!(effective_keymap().resolve(ContextId::Results, &keys), None);
+    assert!(run_command_for(ContextId::Results, Command::ResultsCopyAsMarkdown).is_none());
+}
+
+/// The native keymap the user's overrides produce.
+fn native_keymap_with(overrides: &KeymapOverrides) -> gpui::Keymap {
+    let mut keymap = gpui::Keymap::default();
+    keymap.add_bindings(native_bindings(
+        &overrides.effective_bindings(default_keymap()),
+        false,
+    ));
+    keymap
+}
+
+/// Whether `keys` runs `command` in the results grid and in a focused results
+/// text field, in that order.
+fn results_dispatch(keymap: &gpui::Keymap, keys: &str, command: Command) -> (bool, bool) {
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    let runs_in = |stack: &[KeyContext]| {
+        top_action(keymap, keys, stack).is_some_and(|action| runs_command(action.as_ref(), command))
+    };
+
+    (runs_in(&grid), runs_in(&field))
+}
+
+fn unbound_markdown_slot() -> BindingSlot {
+    BindingSlot::unbound(ContextId::Results, Command::ResultsCopyAsMarkdown)
+}
+
+/// A printable key the user gives an unbound Results command is typed text in
+/// a focused field, as the default Results letters are.
+#[test]
+fn a_printable_user_key_on_an_unbound_command_is_typed_text_in_a_results_field() {
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        unbound_markdown_slot(),
+        Some(KeySequence::from(KeyChord::new("m", Modifiers::none()))),
+    );
+    let keymap = native_keymap_with(&overrides);
+
+    assert_eq!(
+        results_dispatch(&keymap, "m", Command::ResultsCopyAsMarkdown),
+        (true, false),
+        "fires in the grid, does not reach a focused field"
+    );
+    assert_eq!(
+        overrides.effective_predicate(&unbound_markdown_slot()),
+        "Results && !Modal && !Input"
+    );
+}
+
+/// A chord that does not print keeps the context default, so it still runs
+/// from a focused field like the shipped Results chords.
+#[test]
+fn a_non_printing_user_key_on_an_unbound_command_keeps_the_context_predicate() {
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        unbound_markdown_slot(),
+        Some(KeySequence::from(KeyChord::new(
+            "f19",
+            Modifiers::ctrl_shift(),
+        ))),
+    );
+    let keymap = native_keymap_with(&overrides);
+
+    assert_eq!(
+        results_dispatch(&keymap, "ctrl-shift-f19", Command::ResultsCopyAsMarkdown),
+        (true, true)
+    );
+    assert_eq!(
+        overrides.effective_predicate(&unbound_markdown_slot()),
+        "Results && !Modal"
+    );
+}
+
+/// A predicate the user set wins over the narrowing.
+#[test]
+fn a_custom_predicate_wins_over_the_printable_key_narrowing() {
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        unbound_markdown_slot(),
+        Some(KeySequence::from(KeyChord::new("m", Modifiers::none()))),
+    );
+    overrides.set_predicate(unbound_markdown_slot(), Some("Results".to_string()));
+    let keymap = native_keymap_with(&overrides);
+
+    assert_eq!(
+        results_dispatch(&keymap, "m", Command::ResultsCopyAsMarkdown),
+        (true, true),
+        "the user's own predicate is kept as typed"
+    );
+}
+
+/// A shipped Results binding moved to a bare letter takes the same path.
+/// Before the narrowing it kept its own default predicate, which for a
+/// non-printing default (`Results && !Modal`) held inside a text field and
+/// took the letter from it.
+#[test]
+fn a_default_moved_to_a_printable_key_is_typed_text_in_a_results_field() {
+    let slots = dbflux_app::keymap::default_slots(default_keymap());
+    let slot_of = |command: Command| {
+        slots
+            .iter()
+            .find(|slot| {
+                slot.context == ContextId::Results
+                    && slot.command == command
+                    && slot.default_keys.is_some()
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("{command:?} has a default Results binding"))
+    };
+    let letter = || Some(KeySequence::from(KeyChord::new("m", Modifiers::none())));
+
+    let copy_cell = slot_of(Command::ResultsCopyCell);
+    assert!(
+        copy_cell
+            .default_keys
+            .as_ref()
+            .is_some_and(|keys| keys.first().modifiers != Modifiers::none()),
+        "the default copy chord is a modified, non-printing one"
+    );
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(copy_cell, letter());
+    assert_eq!(
+        results_dispatch(
+            &native_keymap_with(&overrides),
+            "m",
+            Command::ResultsCopyCell
+        ),
+        (true, false)
+    );
+
+    let copy_row = slot_of(Command::ResultsCopyRow);
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(copy_row, letter());
+    assert_eq!(
+        results_dispatch(
+            &native_keymap_with(&overrides),
+            "m",
+            Command::ResultsCopyRow
+        ),
+        (true, false),
+        "a default that was already narrowed behaves as before"
+    );
+}
+
 #[test]
 fn test_sidebar_tab_switch_bindings() {
     let keymap = default_keymap();
@@ -2909,13 +3350,24 @@ fn persisted_identifiers_round_trip_through_their_storage_forms() {
     for slot in &slots {
         let context_id = slot.context.id();
         let command_id = slot.command.id();
-        let default_keys = slot.default_keys.to_storage_string();
+        let default_keys = slot
+            .default_keys
+            .as_ref()
+            .map(KeySequence::to_storage_string)
+            .unwrap_or_default();
 
         assert_eq!(
-            KeySequence::from_storage_string(&default_keys),
-            Ok(slot.default_keys.clone()),
-            "{context_id}/{command_id}: the stored keys parse back unchanged"
+            slot.default_keys.is_none(),
+            default_keys.is_empty(),
+            "{context_id}/{command_id}: only an unbound slot stores empty default keys"
         );
+        if let Some(keys) = &slot.default_keys {
+            assert_eq!(
+                KeySequence::from_storage_string(&default_keys).as_ref(),
+                Ok(keys),
+                "{context_id}/{command_id}: the stored keys parse back unchanged"
+            );
+        }
         assert!(
             ContextId::all_variants()
                 .iter()
@@ -2958,4 +3410,39 @@ fn persisted_identifiers_round_trip_through_their_storage_forms() {
         Some(KeySequence::parse("ctrl+t").expect("valid sequence")),
         "a stored row keeps rebinding the same binding"
     );
+}
+
+#[test]
+fn test_results_e_edits_the_value() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &KeyChord::new("e", Modifiers::none())),
+        Some(Command::EditValue)
+    );
+}
+
+#[test]
+fn test_results_b_rolls_the_secret_back() {
+    let keymap = default_keymap();
+
+    assert_eq!(
+        keymap.resolve(ContextId::Results, &KeyChord::new("b", Modifiers::none())),
+        Some(Command::RollBackVersion)
+    );
+}
+
+/// The literal / expression toggle must reach the grid while the cell input
+/// has focus, where the other grid chords are held back by `!Input`.
+#[test]
+fn the_expression_toggle_stays_active_inside_the_cell_input() {
+    let keymap = default_keymap();
+    let keys = KeySequence::from(KeyChord::new("i", Modifiers::ctrl_shift()));
+    let layer = keymap.layer(ContextId::DataTable).expect("grid layer");
+
+    assert_eq!(
+        layer.get_sequence(&keys),
+        Some(Command::ResultsToggleExpression)
+    );
+    assert_eq!(layer.predicate_for(&keys), "DataTable");
 }

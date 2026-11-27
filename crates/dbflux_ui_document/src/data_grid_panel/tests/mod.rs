@@ -704,6 +704,7 @@ mod reload_pending_edits;
 mod reload_state;
 mod sources_and_keys;
 mod statement_outcome;
+mod value_panel_images;
 
 #[cfg(feature = "telemetry")]
 pub(super) use builder_usage::run_builder_fixture_worker;

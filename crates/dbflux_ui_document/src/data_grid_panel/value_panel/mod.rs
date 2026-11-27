@@ -23,8 +23,21 @@
 //! `DataGridPanel` reloads the panel as the selection moves, but only while the
 //! editor is unmodified — see `is_modified`. Otherwise moving the cursor would
 //! silently discard whatever the user had typed.
+//!
+//! # Images
+//!
+//! A binary cell, or a text cell holding base64, whose bytes start like an
+//! image opens on the picture (see `image_view`), with a switch to the hex
+//! dump or the text. Binary cells are read-only here: their hex dump is a
+//! view of the bytes, not something that can be written back.
 
-use super::{DataGridEvent, DataGridPanel};
+mod host;
+mod image_view;
+mod picture;
+
+pub(crate) use image_view::ValueView;
+pub(crate) use picture::{CellBytes, ImageKind};
+
 use dbflux_components::components::value_format::{
     self, ValueFormat, compact_value, format_value, validate_value,
 };
@@ -49,6 +62,9 @@ pub(crate) struct ValuePanelTarget {
     pub column_name: String,
     /// The cell's text exactly as the edit buffer holds it.
     pub value: String,
+    /// The stored bytes of a binary cell; `None` for every other value,
+    /// and for a binary cell with a pending edit.
+    pub bytes: Option<CellBytes>,
     /// False for read-only results and read-only columns; hides the footer.
     pub editable: bool,
 }
@@ -66,15 +82,31 @@ pub(crate) enum ValuePanelButton {
     Compact,
     Revert,
     Save,
+    /// The Image / Hex / Text switch of a value that holds an image.
+    View(ValueView),
+    SaveImage,
+    CopyImage,
 }
 
-/// Emitted when the user saves. `DataGridPanel` routes it into the shared
-/// cell-save path.
+/// What the panel asks of the grid, which owns the database writes, the
+/// save prompt and the clipboard toasts.
 #[derive(Clone, Debug)]
-pub(crate) struct ValuePanelSaveEvent {
-    pub row: usize,
-    pub col: usize,
-    pub value: String,
+pub(crate) enum ValuePanelEvent {
+    /// Routed into the shared cell-save path.
+    Save {
+        row: usize,
+        col: usize,
+        value: String,
+    },
+    SaveImage {
+        kind: ImageKind,
+        bytes: std::sync::Arc<[u8]>,
+        column: String,
+    },
+    CopyImage {
+        kind: ImageKind,
+        bytes: std::sync::Arc<[u8]>,
+    },
 }
 
 pub(crate) struct ValuePanelContent {
@@ -97,9 +129,14 @@ pub(crate) struct ValuePanelContent {
     /// Holds the keyboard while the user reads the panel without editing;
     /// Enter moves it on into the editor.
     focus_handle: FocusHandle,
+    /// The image the value holds, if it starts like one.
+    image: Option<image_view::ImageView>,
+    /// Whether the picture is shown instead of the editor.
+    show_image: bool,
+    _release: Subscription,
 }
 
-impl EventEmitter<ValuePanelSaveEvent> for ValuePanelContent {}
+impl EventEmitter<ValuePanelEvent> for ValuePanelContent {}
 
 impl VimHost for ValuePanelContent {
     fn vim(&self, input: EntityId) -> Option<&VimBinding> {
@@ -119,7 +156,7 @@ impl ValuePanelContent {
     ) -> Self {
         let format = value_format::detect_format(&target.value);
         let word_wrap = true;
-        let text = initial_text(&target.value, format);
+        let text = stored_text(&target, format);
         let (input, subscription) = build_input(text.clone(), format, word_wrap, window, cx);
         let vim = VimBinding::new(input.clone(), window, cx);
 
@@ -134,10 +171,14 @@ impl ValuePanelContent {
             _input_subscription: subscription,
             error: None,
             focus_handle: cx.focus_handle(),
+            image: None,
+            show_image: false,
+            _release: cx.on_release(|panel, cx| panel.release_image(None, cx)),
         };
 
         let input = panel.vim.input_id();
         VimBinding::follow_setting(&mut panel, input, cx);
+        panel.load_image(Some(window), cx);
         panel
     }
 
@@ -217,6 +258,11 @@ impl ValuePanelContent {
         self.editor_focused
     }
 
+    #[cfg(test)]
+    pub(crate) fn editor_text(&self, cx: &App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+
     /// Point the panel at a different cell, re-detecting the format.
     pub(crate) fn open(
         &mut self,
@@ -228,6 +274,7 @@ impl ValuePanelContent {
         self.target = target;
         self.error = None;
         self.reload(window, cx);
+        self.load_image(Some(window), cx);
     }
 
     /// The cell the panel is currently showing.
@@ -245,7 +292,7 @@ impl ValuePanelContent {
 
     /// Rebuild the editor from the target value in the current format.
     fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = initial_text(&self.target.value, self.format);
+        let text = stored_text(&self.target, self.format);
         let (input, subscription) =
             build_input(text.clone(), self.format, self.word_wrap, window, cx);
         self.install_input(input, subscription, window, cx);
@@ -270,7 +317,7 @@ impl ValuePanelContent {
         let text = if was_modified {
             current
         } else {
-            initial_text(&self.target.value, format)
+            stored_text(&self.target, format)
         };
 
         let (input, subscription) = build_input(text.clone(), format, self.word_wrap, window, cx);
@@ -279,7 +326,7 @@ impl ValuePanelContent {
         // A modified buffer stays modified across the switch, so `loaded_text`
         // must keep pointing at the stored value's rendering.
         self.loaded_text = if was_modified {
-            initial_text(&self.target.value, format)
+            stored_text(&self.target, format)
         } else {
             text
         };
@@ -323,16 +370,35 @@ impl ValuePanelContent {
         cx.notify();
     }
 
-    /// The buttons the panel shows enabled right now, the format shown
-    /// excepted: the other formats and the wrap toggle, then for an editable
-    /// value Format and Compact (structured formats) and, once the value
-    /// changed, Revert and Save.
+    /// The buttons the panel shows enabled right now, the format and view
+    /// shown excepted: the other view of a value holding an image, then on
+    /// the picture Save image and Copy image, otherwise the other formats
+    /// (not for a hex dump) and the wrap toggle, then for an editable value
+    /// Format and Compact (structured formats) and, once the value changed,
+    /// Revert and Save.
     pub(crate) fn buttons(&self, cx: &App) -> Vec<ValuePanelButton> {
-        let mut buttons: Vec<ValuePanelButton> = ValueFormat::ALL
+        let mut buttons: Vec<ValuePanelButton> = self
+            .other_views()
             .into_iter()
-            .filter(|format| *format != self.format)
-            .map(ValuePanelButton::Format)
+            .map(ValuePanelButton::View)
             .collect();
+
+        if self.shows_image() {
+            if self.decoded_image().is_some() {
+                buttons.push(ValuePanelButton::SaveImage);
+                buttons.push(ValuePanelButton::CopyImage);
+            }
+            return buttons;
+        }
+
+        if self.target.bytes.is_none() {
+            buttons.extend(
+                ValueFormat::ALL
+                    .into_iter()
+                    .filter(|format| *format != self.format)
+                    .map(ValuePanelButton::Format),
+            );
+        }
         buttons.push(ValuePanelButton::Wrap);
 
         if !self.target.editable {
@@ -366,6 +432,9 @@ impl ValuePanelContent {
             ValuePanelButton::Compact => self.apply_transform(compact_value, window, cx),
             ValuePanelButton::Revert => self.revert(window, cx),
             ValuePanelButton::Save => self.save(cx),
+            ValuePanelButton::View(view) => self.set_view(view, cx),
+            ValuePanelButton::SaveImage => self.request_save_image(cx),
+            ValuePanelButton::CopyImage => self.request_copy_image(cx),
         }
     }
 
@@ -384,7 +453,7 @@ impl ValuePanelContent {
         self.loaded_text = value.clone();
         self.target.value = value.clone();
 
-        cx.emit(ValuePanelSaveEvent {
+        cx.emit(ValuePanelEvent::Save {
             row: self.target.row,
             col: self.target.col,
             value,
@@ -397,6 +466,15 @@ impl ValuePanelContent {
 /// a malformed value is still readable and fixable.
 fn initial_text(value: &str, format: ValueFormat) -> String {
     format_value(value, format).unwrap_or_else(|_| value.to_string())
+}
+
+/// What the editor opens with: the hex dump of a binary cell, otherwise
+/// the text as `initial_text` presents it.
+fn stored_text(target: &ValuePanelTarget, format: ValueFormat) -> String {
+    match &target.bytes {
+        Some(cell) => cell.hex_dump(),
+        None => initial_text(&target.value, format),
+    }
 }
 
 fn build_input(
@@ -441,6 +519,19 @@ impl Render for ValuePanelContent {
         // Cloned rather than borrowed: `cx.listener` below needs `cx` mutably.
         let theme = cx.theme().clone();
         let editable = self.target.editable;
+        let header = self.render_header(cx).into_any_element();
+        let notice = self.render_notice(cx).map(IntoElement::into_any_element);
+        // The picture replaces the editor and its footer. The editor entity
+        // is kept, so switching back finds the text as it was.
+        let (body, footer) = if self.shows_image() {
+            (
+                self.render_image_body(cx),
+                Some(self.render_image_footer(cx).into_any_element()),
+            )
+        } else {
+            (self.render_editor(cx), None)
+        };
+        let on_editor = footer.is_none();
 
         div()
             .id("value-panel-content")
@@ -449,20 +540,10 @@ impl Render for ValuePanelContent {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(self.render_header(cx))
-            .child(
-                VimBinding::capture_run_command(
-                    VimBinding::wire(self.vim.leader_scope(div(), cx), self.vim.input_id(), cx),
-                    self.vim.input_id(),
-                    cx,
-                )
-                .id("value-panel-editor")
-                .flex_1()
-                .min_h_0()
-                .overflow_hidden()
-                .child(self.vim.editor(false).h_full()),
-            )
-            .children(self.vim.render_indicator(cx))
+            .child(header)
+            .children(notice)
+            .child(body)
+            .when(on_editor, |d| d.children(self.vim.render_indicator(cx)))
             .when_some(self.error.clone(), |d, error| {
                 d.child(
                     div()
@@ -482,8 +563,9 @@ impl Render for ValuePanelContent {
                         .child(Text::caption(error).font_size(FontSizes::XS).danger()),
                 )
             })
-            .when(editable, |d| d.child(self.render_footer(cx)))
-            .when(!editable, |d| {
+            .children(footer)
+            .when(on_editor && editable, |d| d.child(self.render_footer(cx)))
+            .when(on_editor && !editable, |d| {
                 d.child(
                     div()
                         .px(Spacing::SM)
@@ -501,11 +583,33 @@ impl Render for ValuePanelContent {
 }
 
 impl ValuePanelContent {
-    /// Column name, format selector, and the word-wrap toggle.
+    fn render_editor(&self, cx: &mut Context<Self>) -> AnyElement {
+        VimBinding::capture_run_command(
+            VimBinding::wire(self.vim.leader_scope(div(), cx), self.vim.input_id(), cx),
+            self.vim.input_id(),
+            cx,
+        )
+        .id("value-panel-editor")
+        .flex_1()
+        .min_h_0()
+        .overflow_hidden()
+        .child(self.vim.editor(self.target.bytes.is_some()).h_full())
+        .into_any_element()
+    }
+
+    /// Column name, the Image / Hex switch of an image, and on the editor
+    /// the format selector (not for a hex dump) and the word-wrap toggle.
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let current = self.format;
         let word_wrap = self.word_wrap;
+        let on_editor = !self.shows_image();
+        let formats = if on_editor && self.target.bytes.is_none() {
+            ValueFormat::ALL.to_vec()
+        } else {
+            Vec::new()
+        };
+        let view_chips = self.render_view_chips(cx);
 
         div()
             .flex()
@@ -535,7 +639,8 @@ impl ValuePanelContent {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .children(ValueFormat::ALL.map(|format| {
+                    .children(view_chips)
+                    .children(formats.into_iter().map(|format| {
                         let is_active = format == current;
                         div()
                             .id(SharedString::from(format!(
@@ -559,28 +664,30 @@ impl ValuePanelContent {
                                 this.set_format(format, window, cx);
                             }))
                     }))
-                    .child(
-                        div()
-                            .id("value-panel-wrap")
-                            .px(Spacing::XS)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .text_size(FontSizes::XS)
-                            .when(word_wrap, |d| d.bg(theme.accent.opacity(0.15)))
-                            .when(!word_wrap, |d| d.hover(|d| d.bg(theme.secondary)))
-                            .child(
-                                Text::body(dbflux_i18n::t!("components.value_panel.wrap"))
-                                    .font_size(FontSizes::XS)
-                                    .color(if word_wrap {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    }),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_word_wrap(window, cx);
-                            })),
-                    ),
+                    .when(on_editor, |d| {
+                        d.child(
+                            div()
+                                .id("value-panel-wrap")
+                                .px(Spacing::XS)
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .text_size(FontSizes::XS)
+                                .when(word_wrap, |d| d.bg(theme.accent.opacity(0.15)))
+                                .when(!word_wrap, |d| d.hover(|d| d.bg(theme.secondary)))
+                                .child(
+                                    Text::body(dbflux_i18n::t!("components.value_panel.wrap"))
+                                        .font_size(FontSizes::XS)
+                                        .color(if word_wrap {
+                                            theme.foreground
+                                        } else {
+                                            theme.muted_foreground
+                                        }),
+                                )
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_word_wrap(window, cx);
+                                })),
+                        )
+                    }),
             )
     }
 
@@ -672,325 +779,5 @@ impl ValuePanelContent {
     }
 }
 
-impl DataGridPanel {
-    /// Whether the value panel currently owns the shared inspector rail.
-    pub fn value_panel_is_open(&self) -> bool {
-        self.inspector.value_panel_open
-    }
-
-    /// Open the value panel on the active cell, or close it if already open.
-    pub fn toggle_value_panel(&mut self, cx: &mut Context<Self>) {
-        if self.inspector.value_panel_open {
-            self.close_value_panel(cx);
-            return;
-        }
-
-        let active = self
-            .grid_table
-            .table_state
-            .as_ref()
-            .and_then(|state| state.read(cx).selection().active);
-
-        if let Some(coord) = active {
-            self.request_value_panel(coord.row, coord.col, cx);
-        }
-    }
-
-    /// Queue the value panel to open on `(row, col)`.
-    ///
-    /// The builder and the row inspector share this rail, so taking it means
-    /// the row inspector must stop following the cursor — otherwise the two
-    /// would replace each other on every selection change.
-    pub(crate) fn request_value_panel(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        let Some(target) = self.value_panel_target(row, col, cx) else {
-            return;
-        };
-
-        self.inspector.follow_selection = false;
-        self.inspector.inspector_row = None;
-        self.inspector.value_panel_open = true;
-        self.mark_document_builder_closed();
-        self.pending.value_panel = Some(target);
-        cx.notify();
-    }
-
-    /// Carry the value panel's open state onto this tab.
-    ///
-    /// Called when the tab becomes active. Opening re-reads *this* grid's
-    /// selection, so the rail shows the new table's cell instead of whatever
-    /// the previous tab left there.
-    pub fn set_value_panel_open(&mut self, open: bool, _cx: &mut Context<Self>) {
-        if open && !self.builder.builder_open {
-            self.inspector.value_panel_open = true;
-        } else if !open {
-            self.inspector.value_panel_open = false;
-            self.pending.value_panel = None;
-        }
-    }
-
-    /// Point the value panel at the active cell of this grid.
-    ///
-    /// Returns false when there is nothing to show yet — a tab whose grid has
-    /// not loaded, or one with no selection.
-    pub(super) fn mount_value_panel_for_active_cell(&mut self, cx: &mut Context<Self>) -> bool {
-        let active = self
-            .grid_table
-            .table_state
-            .as_ref()
-            .and_then(|state| state.read(cx).selection().active);
-
-        let Some(coord) = active else {
-            return false;
-        };
-
-        let Some(target) = self.value_panel_target(coord.row, coord.col, cx) else {
-            return false;
-        };
-
-        self.pending.value_panel = Some(target);
-        cx.notify();
-        true
-    }
-
-    /// The value panel when it is open and holds an unsaved edit.
-    pub(crate) fn value_panel_pending_save(&self, cx: &App) -> Option<Entity<ValuePanelContent>> {
-        if !self.inspector.value_panel_open {
-            return None;
-        }
-
-        let panel = self.inspector.value_panel.as_ref()?;
-        panel.read(cx).is_modified(cx).then(|| panel.clone())
-    }
-
-    fn close_value_panel(&mut self, cx: &mut Context<Self>) {
-        self.inspector.value_panel_open = false;
-        self.pending.value_panel = None;
-        cx.emit(DataGridEvent::CloseInspector);
-        cx.notify();
-    }
-
-    /// Read the cell's current edit-buffer text and editability for the panel.
-    fn value_panel_target(&self, row: usize, col: usize, cx: &App) -> Option<ValuePanelTarget> {
-        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
-
-        let table_state = self.grid_table.table_state.as_ref()?;
-        let state = table_state.read(cx);
-        let model = state.model();
-        let column = model.columns.get(col)?;
-
-        let edit_buffer = state.edit_buffer();
-        let null_cell = CellValue::null();
-
-        let value = match edit_buffer.compute_visual_order().get(row).copied()? {
-            VisualRowSource::Base(base_idx) => {
-                let base = model.cell(base_idx, col).unwrap_or(&null_cell);
-                edit_buffer.get_cell(base_idx, col, base).edit_text()
-            }
-            VisualRowSource::Insert(insert_idx) => edit_buffer
-                .get_pending_insert_by_idx(insert_idx)
-                .and_then(|data| data.get(col))
-                .map(|cell| cell.edit_text())
-                .unwrap_or_default(),
-        };
-
-        Some(ValuePanelTarget {
-            row,
-            col,
-            column_name: column.title.to_string(),
-            value,
-            editable: state.is_editable() && !state.readonly_columns().contains(&col),
-        })
-    }
-
-    /// Mount or update the value panel. Called from render, where a `Window`
-    /// is available to build the editor.
-    pub(crate) fn apply_pending_value_panel(
-        &mut self,
-        target: ValuePanelTarget,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let content = match &self.inspector.value_panel {
-            Some(existing) => {
-                existing.update(cx, |panel, cx| panel.open(target, window, cx));
-                existing.clone()
-            }
-            None => {
-                let content = cx.new(|cx| ValuePanelContent::new(target, window, cx));
-                self.inspector._value_panel_subscription = Some(cx.subscribe(
-                    &content,
-                    |this, _, event: &ValuePanelSaveEvent, cx| {
-                        // Save in the panel means "write this value to the
-                        // database", not "stage it": having to confirm again in
-                        // the toolbar after pressing Save reads as the panel
-                        // having done nothing. The commit goes through the
-                        // normal row-save path, so mutation policy, approval,
-                        // and the task list all still apply.
-                        this.write_cell_value(event.row, event.col, &event.value, cx);
-
-                        if let Some(table_state) = this.grid_table.table_state.clone() {
-                            table_state.update(cx, |state, cx| {
-                                state.request_save_row_at(event.row, cx);
-                            });
-                        }
-                    },
-                ));
-                self.inspector.value_panel = Some(content.clone());
-                content
-            }
-        };
-
-        cx.emit(DataGridEvent::OpenInspector {
-            title: SharedString::from(dbflux_i18n::t!("components.value_panel.title")),
-            content: AnyView::from(content),
-            content_has_header: false,
-        });
-    }
-
-    /// Whether the panel may be re-pointed at `(row, col)`.
-    ///
-    /// An edited-but-unsaved panel stays pinned to its cell; following the
-    /// cursor there would throw the user's typing away without asking.
-    pub(super) fn value_panel_can_follow(&self, row: usize, col: usize, cx: &App) -> bool {
-        let Some(panel) = self.inspector.value_panel.as_ref() else {
-            return true;
-        };
-
-        let panel = panel.read(cx);
-        !panel.is_modified(cx) && panel.target_cell() != (row, col)
-    }
-}
-
 #[cfg(test)]
-mod vim_tests {
-    use super::{ValuePanelContent, ValuePanelTarget};
-    use crate::keyboard_test_support::{KeymapHost, host_document, init_keyboard_runtime};
-    use dbflux_app::keymap::{Command, ContextId};
-    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
-
-    /// The panel under a keymap host that routes Cancel the way the grid's
-    /// inspector does: out of the editor into the panel.
-    fn open_panel(
-        cx: &mut TestAppContext,
-        vim: bool,
-    ) -> (Entity<ValuePanelContent>, &mut VisualTestContext) {
-        let (_host, panel, window) = open_panel_with_host(cx, vim);
-        (panel, window)
-    }
-
-    fn open_panel_with_host(
-        cx: &mut TestAppContext,
-        vim: bool,
-    ) -> (
-        Entity<KeymapHost<ValuePanelContent>>,
-        Entity<ValuePanelContent>,
-        &mut VisualTestContext,
-    ) {
-        init_keyboard_runtime(cx);
-        cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, vim));
-
-        let (host, window) = host_document(
-            cx,
-            |window, cx| {
-                cx.new(|cx| {
-                    ValuePanelContent::new(
-                        ValuePanelTarget {
-                            row: 0,
-                            col: 0,
-                            column_name: "notes".to_string(),
-                            value: "ab\ncd".to_string(),
-                            editable: true,
-                        },
-                        window,
-                        cx,
-                    )
-                })
-            },
-            |panel, _cx| {
-                if panel.editor_has_focus() {
-                    ContextId::TextInput
-                } else {
-                    ContextId::Inspector
-                }
-            },
-            |panel, command, window, cx| {
-                if command == Command::Cancel && panel.editor_has_focus() {
-                    panel.leave_editor(window, cx);
-                    return true;
-                }
-                false
-            },
-        );
-        let panel = window.update(|_, cx| host.read(cx).document.clone());
-        window.update(|window, cx| panel.update(cx, |panel, cx| panel.focus_editor(window, cx)));
-        window.run_until_parked();
-
-        (host, panel, window)
-    }
-
-    fn text_and_cursor(
-        panel: &Entity<ValuePanelContent>,
-        window: &mut VisualTestContext,
-    ) -> (String, usize) {
-        window.update(|_, cx| {
-            let state = panel.read(cx).input.read(cx);
-            (state.value().to_string(), state.cursor())
-        })
-    }
-
-    /// With Vim mode on, `j` moves, the first Escape leaves Insert mode and
-    /// keeps the editor, and Escape in Normal mode leaves the editor.
-    #[gpui::test]
-    fn vim_mode_in_the_value_editor(cx: &mut TestAppContext) {
-        let (panel, window) = open_panel(cx, true);
-
-        window.simulate_keystrokes("j");
-        window.run_until_parked();
-        assert_eq!(text_and_cursor(&panel, window), ("ab\ncd".into(), 3));
-
-        window.simulate_keystrokes("i");
-        window.simulate_input("X");
-        window.simulate_keystrokes("escape");
-        window.run_until_parked();
-        assert_eq!(text_and_cursor(&panel, window).0, "ab\nXcd");
-        assert!(window.update(|_, cx| panel.read(cx).editor_has_focus()));
-
-        window.simulate_keystrokes("escape");
-        window.run_until_parked();
-        assert!(!window.update(|_, cx| panel.read(cx).editor_has_focus()));
-    }
-
-    /// With Vim mode off, keys type and Escape leaves the editor at once.
-    #[gpui::test]
-    fn without_vim_mode_escape_leaves_the_editor(cx: &mut TestAppContext) {
-        let (panel, window) = open_panel(cx, false);
-
-        window.simulate_input("j");
-        window.simulate_keystrokes("escape");
-        window.run_until_parked();
-
-        assert_eq!(text_and_cursor(&panel, window).0, "jab\ncd");
-        assert!(!window.update(|_, cx| panel.read(cx).editor_has_focus()));
-    }
-
-    /// The leader works outside the code editor: `space a` in Normal mode
-    /// reaches the host as the pane-actions command, and Insert mode types
-    /// the space.
-    #[gpui::test]
-    fn leader_sequences_reach_the_host_from_the_value_editor(cx: &mut TestAppContext) {
-        let _keymap_state = dbflux_ui_base::keymap::keymap_state_test_guard();
-        let (host, panel, window) = open_panel_with_host(cx, true);
-        let host_commands =
-            |window: &mut VisualTestContext| window.update(|_, cx| host.read(cx).commands.clone());
-
-        window.simulate_keystrokes("space a");
-        window.run_until_parked();
-        assert_eq!(host_commands(window), vec![Command::OpenPaneActions]);
-        assert_eq!(text_and_cursor(&panel, window), ("ab\ncd".into(), 0));
-
-        window.simulate_keystrokes("i space escape");
-        window.run_until_parked();
-        assert_eq!(text_and_cursor(&panel, window).0, " ab\ncd");
-        assert_eq!(host_commands(window).len(), 1);
-    }
-}
+mod tests;

@@ -185,6 +185,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
         ),
         ("grid-fk-labels", KeyboardPath::Command(Command::Execute)),
         (
+            "grid-filter-autoquote",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
             "mcp-approval-notifications",
             KeyboardPath::Command(Command::Execute),
         ),

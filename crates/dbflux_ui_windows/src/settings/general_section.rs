@@ -47,6 +47,7 @@ pub(super) enum GeneralFormRow {
     TableAlias,
     TableAliasUseAs,
     GridFkLabels,
+    GridFilterAutoquote,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,

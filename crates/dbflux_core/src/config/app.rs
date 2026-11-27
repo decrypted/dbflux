@@ -417,6 +417,11 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub grid_fk_labels: bool,
 
+    /// Insert a pair of quotes, with the caret between them, after a
+    /// comparison typed in the data grid's WHERE filter on a string or
+    /// date/time column. Off by default.
+    #[serde(default)]
+    pub grid_filter_autoquote: bool,
     // -- Appearance --
     /// The accent the user picked for the Dark palette. `None` keeps the
     /// palette's own accent.
@@ -601,6 +606,7 @@ impl Default for GeneralSettings {
             table_alias_use_as: false,
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
+            grid_filter_autoquote: false,
             accent_dark: None,
             accent_light: None,
             mcp_approval_notifications: true,
@@ -632,6 +638,7 @@ mod font_settings_tests {
 
         let legacy: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
         assert!(!legacy.grid_fk_labels);
+        assert!(!legacy.grid_filter_autoquote);
         assert_eq!(
             legacy.scrollbar_visibility,
             super::ScrollbarVisibility::WhileScrolling

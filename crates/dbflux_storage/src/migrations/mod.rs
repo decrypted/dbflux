@@ -196,6 +196,7 @@ impl MigrationRegistry {
         registry.register(mod_051_general_settings_accent_color::MigrationImpl);
         registry.register(mod_052_general_settings_mcp_approval_notifications::MigrationImpl);
         registry.register(mod_053_snp_snippets::MigrationImpl);
+        registry.register(mod_056_general_settings_grid_filter_autoquote::MigrationImpl);
         registry
     }
 
@@ -439,6 +440,7 @@ mod mod_050_cfg_telemetry;
 mod mod_051_general_settings_accent_color;
 mod mod_052_general_settings_mcp_approval_notifications;
 mod mod_053_snp_snippets;
+mod mod_056_general_settings_grid_filter_autoquote;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1197,6 +1199,7 @@ mod tests {
             "051_general_settings_accent_color",
             "052_general_settings_mcp_approval_notifications",
             "053_snp_snippets",
+            "056_general_settings_grid_filter_autoquote",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

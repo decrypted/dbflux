@@ -615,7 +615,7 @@ impl DataGridPanel {
         let table_state = self.grid_table.table_state.as_ref()?;
 
         let built =
-            super::row_statements::row_patch(table_state.read(cx), row_idx, changes, &table_ref);
+            super::row_statements::row_patch(table_state.read(cx), row_idx, changes, table_ref);
         let patch = match built {
             Ok(patch) => patch,
             Err(problem) => {

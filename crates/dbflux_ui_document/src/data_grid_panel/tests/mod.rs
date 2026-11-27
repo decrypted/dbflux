@@ -700,6 +700,7 @@ mod expressions;
 mod facets;
 mod fk_label_identity;
 mod fk_navigation;
+mod multi_edit;
 mod reload_pending_edits;
 mod reload_state;
 mod selection_totals;

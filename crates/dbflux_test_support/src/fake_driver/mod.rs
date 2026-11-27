@@ -149,6 +149,7 @@ struct FakeDriverState {
     secret_store_calls: Mutex<FakeSecretStoreCalls>,
     secret_write_errors: RwLock<Vec<(String, String)>>,
     secret_version_errors: RwLock<Vec<(String, String)>>,
+    dialect: RwLock<Option<&'static dyn SqlDialect>>,
     region_switch_enabled: AtomicBool,
     available_regions: RwLock<Vec<String>>,
     region_list_error: RwLock<Option<String>>,
@@ -203,6 +204,14 @@ impl FakeDriver {
             .transactions
             .get_or_insert_with(TransactionCapabilities::default);
         transactions.supports_read_only = supported;
+    }
+
+    /// Connections answer `dialect()` with `dialect` instead of the default
+    /// ANSI one, for callers that read SQL syntax or dialect capabilities
+    /// from the connection.
+    pub fn with_dialect(self, dialect: &'static dyn SqlDialect) -> Self {
+        *rwlock_write(&self.state.dialect) = Some(dialect);
+        self
     }
 
     /// Opts a fake into the live region-switch seam: it advertises

@@ -22,7 +22,9 @@ mod query;
 mod refresh;
 mod render;
 mod result_search;
+mod review_changes;
 pub(crate) mod row_inspector;
+mod row_statements;
 mod selection_totals;
 pub(crate) mod side_island;
 mod table_documents;
@@ -568,6 +570,9 @@ struct PendingActions {
     /// The JSON view has to be reloaded with the page. Deferred to render
     /// because setting an editor's text needs a `Window`.
     json_reload: bool,
+    /// Save was asked for while "Review changes before saving" is on. The
+    /// review opens at render because focusing it needs a `Window`.
+    change_review: bool,
 }
 
 /// How the grid should treat the state held by an existing `DataTableState`
@@ -982,6 +987,12 @@ pub struct DataGridPanel {
     edit_guard: edit_guard::EditGuard,
     /// Set while a confirmed save re-enters the gate, so it runs once.
     expression_confirmed: bool,
+    /// Set while a batch the change review confirmed runs: the review showed
+    /// its statements, expressions included, so the batch's saves do not
+    /// ask again.
+    expressions_reviewed: bool,
+    /// The open review of the statements Save would run.
+    change_review: Option<review_changes::ChangeReview>,
     pending_batch_remaining: Option<PendingBatchRemaining>,
     /// A close is waiting on the staged edits being applied.
     ///
@@ -1593,6 +1604,8 @@ impl DataGridPanel {
             pending_expression_confirm: None,
             edit_guard: edit_guard::EditGuard::new(window, cx),
             expression_confirmed: false,
+            expressions_reviewed: false,
+            change_review: None,
             pending_batch_remaining: None,
             close_after_apply: false,
             batch_op_in_flight: false,

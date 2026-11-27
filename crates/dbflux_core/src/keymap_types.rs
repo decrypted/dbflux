@@ -136,6 +136,8 @@ pub enum Command {
     /// Flips the inline cell editor between literal and SQL expression, or
     /// opens it in expression mode.
     ResultsToggleExpression,
+    /// Shows the statements Save would run for the grid's staged changes.
+    ReviewChanges,
     // Context menu
     OpenContextMenu,
     /// Opens the menu of the focused pane's actions (its toolbar buttons and
@@ -471,6 +473,7 @@ impl Command {
             Command::ResultsSetNull => "Set cell to NULL",
             Command::ResultsSetDefault => "Set cell to column default",
             Command::ResultsToggleExpression => "Toggle literal / expression editor",
+            Command::ReviewChanges => "Review changes",
             Command::OpenContextMenu => "Open context menu",
             Command::OpenPaneActions => "Open pane actions",
             Command::MenuUp => "Menu up",
@@ -685,6 +688,7 @@ impl Command {
             Command::ResultsSetNull => "results_set_null",
             Command::ResultsSetDefault => "results_set_default",
             Command::ResultsToggleExpression => "results_toggle_expression",
+            Command::ReviewChanges => "review_changes",
             Command::OpenContextMenu => "open_context_menu",
             Command::OpenPaneActions => "open_pane_actions",
             Command::MenuUp => "menu_up",
@@ -916,6 +920,7 @@ impl Command {
             Command::ResultsSetNull,
             Command::ResultsSetDefault,
             Command::ResultsToggleExpression,
+            Command::ReviewChanges,
             Command::OpenContextMenu,
             Command::OpenPaneActions,
             Command::MenuUp,
@@ -1122,6 +1127,7 @@ impl Command {
             | Command::ResultsSetNull
             | Command::ResultsSetDefault
             | Command::ResultsToggleExpression
+            | Command::ReviewChanges
             | Command::OpenContextMenu
             | Command::MenuUp
             | Command::MenuDown

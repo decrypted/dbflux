@@ -3332,24 +3332,23 @@ impl Connection for MssqlConnection {
         }
     }
 
-    fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
-        if !patch.identity.is_valid() {
-            return Err(DbError::QueryFailed(
-                "Cannot update row: invalid row identity (missing primary key)"
-                    .to_string()
-                    .into(),
-            ));
-        }
+    fn update_row_statement(&self, patch: &RowPatch) -> Option<Result<String, DbError>> {
+        Some(mssql_update_row_sql(patch))
+    }
 
-        if !patch.has_changes() {
-            return Err(DbError::QueryFailed(
-                "No changes to save".to_string().into(),
-            ));
-        }
+    fn insert_row_statement(&self, insert: &RowInsert) -> Option<Result<String, DbError>> {
+        Some(mssql_insert_row_sql(insert))
+    }
+
+    fn delete_row_statement(&self, delete: &RowDelete) -> Option<Result<String, DbError>> {
+        Some(mssql_delete_row_sql(delete))
+    }
+
+    fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
+        let sql = mssql_update_row_sql(patch)?;
 
         self.recover_session()?;
 
-        let sql = build_update_with_output(patch)?;
         log::debug!("[UPDATE] Executing: {}", sql);
 
         let result = self.execute_simple(&sql)?;
@@ -3357,15 +3356,10 @@ impl Connection for MssqlConnection {
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
-        if !insert.is_valid() {
-            return Err(DbError::QueryFailed(
-                "Cannot insert row: no columns specified".to_string().into(),
-            ));
-        }
+        let sql = mssql_insert_row_sql(insert)?;
 
         self.recover_session()?;
 
-        let sql = build_insert_with_output(insert)?;
         log::debug!("[INSERT] Executing: {}", sql);
 
         let result = self.execute_simple(&sql)?;
@@ -3373,17 +3367,10 @@ impl Connection for MssqlConnection {
     }
 
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
-        if !delete.is_valid() {
-            return Err(DbError::QueryFailed(
-                "Cannot delete row: invalid row identity (missing primary key)"
-                    .to_string()
-                    .into(),
-            ));
-        }
+        let sql = mssql_delete_row_sql(delete)?;
 
         self.recover_session()?;
 
-        let sql = build_delete_with_output(delete)?;
         log::debug!("[DELETE] Executing: {}", sql);
 
         let result = self.execute_simple(&sql)?;
@@ -4531,6 +4518,49 @@ fn skip_delimited(characters: &[char], start: usize, closing: char) -> usize {
 // VALUES/SET/WHERE clauses, not at the end like Postgres `RETURNING`.
 // We build the SQL directly rather than threading a new dialect hook
 // through `SqlQueryBuilder`, keeping the change local to this driver.
+
+/// The UPDATE `update_row` runs for `patch`, and the save preview shows.
+fn mssql_update_row_sql(patch: &RowPatch) -> Result<String, DbError> {
+    if !patch.identity.is_valid() {
+        return Err(DbError::QueryFailed(
+            "Cannot update row: invalid row identity (missing primary key)"
+                .to_string()
+                .into(),
+        ));
+    }
+
+    if !patch.has_changes() {
+        return Err(DbError::QueryFailed(
+            "No changes to save".to_string().into(),
+        ));
+    }
+
+    build_update_with_output(patch)
+}
+
+/// The INSERT `insert_row` runs for `insert`, and the save preview shows.
+fn mssql_insert_row_sql(insert: &RowInsert) -> Result<String, DbError> {
+    if !insert.is_valid() {
+        return Err(DbError::QueryFailed(
+            "Cannot insert row: no columns specified".to_string().into(),
+        ));
+    }
+
+    build_insert_with_output(insert)
+}
+
+/// The DELETE `delete_row` runs for `delete`, and the save preview shows.
+fn mssql_delete_row_sql(delete: &RowDelete) -> Result<String, DbError> {
+    if !delete.is_valid() {
+        return Err(DbError::QueryFailed(
+            "Cannot delete row: invalid row identity (missing primary key)"
+                .to_string()
+                .into(),
+        ));
+    }
+
+    build_delete_with_output(delete)
+}
 
 fn build_insert_with_output(insert: &RowInsert) -> Result<String, DbError> {
     let table = MSSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
@@ -8204,5 +8234,32 @@ mod query_safety_tests {
 
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod row_statement_tests {
+    use super::*;
+    use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch};
+
+    #[test]
+    fn the_previewed_statements_are_the_ones_the_row_mutations_run() {
+        let identity = RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]);
+        let patch = RowPatch::with_typed_changes(
+            identity.clone(),
+            "events".to_string(),
+            None,
+            vec![ColumnAssignment::expression("seen_at", "GETDATE()")],
+        );
+        let delete = dbflux_core::RowDelete::new(identity, "events".to_string(), None);
+
+        assert_eq!(
+            mssql_update_row_sql(&patch).unwrap(),
+            "UPDATE [events] SET [seen_at] = GETDATE() OUTPUT INSERTED.* WHERE [id] = 1"
+        );
+        assert_eq!(
+            mssql_delete_row_sql(&delete).unwrap(),
+            "DELETE FROM [events] OUTPUT DELETED.* WHERE [id] = 1"
+        );
     }
 }

@@ -1791,6 +1791,10 @@ fn general_checkboxes_are_named_after_their_visible_labels() {
             "grid-header-click-sorts",
             "settings.general.grid_header_click_sorts.label",
         ),
+        (
+            "grid-review-before-save",
+            "settings.general.grid_review_before_save.label",
+        ),
         ("restore-session", "settings.general.restore_session.label"),
         ("reopen-conns", "settings.general.reopen_connections.label"),
         (

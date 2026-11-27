@@ -348,6 +348,9 @@ impl Render for DataGridPanel {
             .when(self.edit_guard.modal.read(cx).is_visible(), |d| {
                 d.child(self.edit_guard.modal.clone())
             })
+            .when(self.change_review.is_some(), |d| {
+                d.child(self.render_change_review(cx))
+            })
             .when(self.document_view.cell_editor.read(cx).is_visible(), |d| {
                 d.child(self.document_view.cell_editor.clone())
             })
@@ -435,6 +438,10 @@ impl DataGridPanel {
             self.pending.context_menu_focus = false;
         } else if std::mem::take(&mut self.pending.context_menu_focus) {
             self.focus.context_menu_focus.focus(window, cx);
+        }
+
+        if std::mem::take(&mut self.pending.change_review) {
+            self.open_change_review(window, cx);
         }
 
         if let Some(modal) = self.pending.modal_open.take() {
@@ -1543,6 +1550,21 @@ impl DataGridPanel {
                     this.step_edit_history(false, window, cx);
                 })),
             )
+            .when(matches!(self.source, DataSource::Table { .. }), |bar| {
+                bar.child(
+                    Button::new(
+                        "review-btn",
+                        dbflux_i18n::t!("document.data.grid.edit_bar.review"),
+                    )
+                    .ghost()
+                    .icon(AppIcon::Eye)
+                    .disabled(!has_changes)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_change_review(window, cx);
+                    })),
+                )
+            })
             .child(
                 Button::new(
                     "save-btn",

@@ -192,6 +192,10 @@ pub(crate) const SETTINGS: SurfaceRegistry = SurfaceRegistry {
             "mcp-approval-notifications",
             KeyboardPath::Command(Command::Execute),
         ),
+        (
+            "grid-review-before-save",
+            KeyboardPath::Command(Command::Execute),
+        ),
         ("pause-on-error", KeyboardPath::Command(Command::Execute)),
         ("refresh-visible", KeyboardPath::Command(Command::Execute)),
         ("reopen-conns", KeyboardPath::Command(Command::Execute)),

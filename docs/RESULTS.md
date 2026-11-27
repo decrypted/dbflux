@@ -186,6 +186,12 @@ With several cells selected, `Enter`, `F2` or a double-click on one of them open
   <img src="images/results/editing-light.webp" alt="The customers table with one edited cell not yet saved, and the Save and Revert buttons enabled">
 </picture>
 
+### Review changes before saving
+
+**Review** in the edit bar, next to Save and Revert, or `Ctrl+Alt+S` (`Cmd+Alt+S` on macOS), shows the statements Save will run for the table's unsaved changes, in the order it runs them: deletes, then new rows, then edited rows. They are built by the save itself and rendered by the connection's driver, so they are what the database receives, with SQL expressions unquoted. Values are written into the statements as literals; the MySQL, MariaDB, PostgreSQL, SQLite and SQL Server drivers send no bind parameters. A change that cannot be saved (a row without its key) shows as a comment saying why.
+
+From the review, **Save** (or `Enter`) runs those statements, without the separate confirmation deletes otherwise ask for; **Copy SQL** copies them as a script; **Cancel** (or `Escape`) closes the review and keeps the changes. With **Review changes before saving** on in Settings > General > Data grid, every Save of a table grid opens the review first.
+
 ### When results are editable
 
 Plain table browses are editable when the table has a primary key. Results

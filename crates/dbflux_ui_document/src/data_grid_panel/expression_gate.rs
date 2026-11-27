@@ -47,6 +47,9 @@ impl DataGridPanel {
         if std::mem::take(&mut self.expression_confirmed) {
             return false;
         }
+        if batch_owned && self.expressions_reviewed {
+            return false;
+        }
         if !matches!(self.source, DataSource::Table { .. }) {
             return false;
         }

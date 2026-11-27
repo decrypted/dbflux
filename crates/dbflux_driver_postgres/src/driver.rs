@@ -360,6 +360,55 @@ impl SqlDialect for PostgresDialect {
 
 pub(crate) static POSTGRES_DIALECT: PostgresDialect = PostgresDialect;
 
+/// The DELETE `delete_row` runs for `delete`, and the save preview shows.
+fn postgres_delete_row_sql(delete: &RowDelete) -> Result<String, DbError> {
+    if !delete.is_valid() {
+        return Err(DbError::QueryFailed(
+            "Cannot delete row: invalid row identity (missing primary key)"
+                .to_string()
+                .into(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&POSTGRES_DIALECT)
+        .build_delete(delete, true)
+        .ok_or_else(|| DbError::QueryFailed("Failed to build DELETE query".to_string().into()))
+}
+
+/// The INSERT `insert_row` runs for `insert`, and the save preview shows.
+fn postgres_insert_row_sql(insert: &RowInsert) -> Result<String, DbError> {
+    if !insert.is_valid() {
+        return Err(DbError::QueryFailed(
+            "Cannot insert row: no columns specified".to_string().into(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&POSTGRES_DIALECT)
+        .build_insert(insert, true)
+        .ok_or_else(|| DbError::QueryFailed("Failed to build INSERT query".to_string().into()))
+}
+
+/// The UPDATE `update_row` runs for `patch`, and the save preview shows.
+fn postgres_update_row_sql(patch: &RowPatch) -> Result<String, DbError> {
+    if !patch.identity.is_valid() {
+        return Err(DbError::QueryFailed(
+            "Cannot update row: invalid row identity (missing primary key)"
+                .to_string()
+                .into(),
+        ));
+    }
+
+    if !patch.has_changes() {
+        return Err(DbError::QueryFailed(
+            "No changes to save".to_string().into(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&POSTGRES_DIALECT)
+        .build_update(patch, true)
+        .ok_or_else(|| DbError::QueryFailed("Failed to build UPDATE query".to_string().into()))
+}
+
 // =============================================================================
 // PostgreSQL Code Generator
 // =============================================================================
@@ -2634,25 +2683,20 @@ impl Connection for PostgresConnection {
         }
     }
 
+    fn update_row_statement(&self, patch: &RowPatch) -> Option<Result<String, DbError>> {
+        Some(postgres_update_row_sql(patch))
+    }
+
+    fn insert_row_statement(&self, insert: &RowInsert) -> Option<Result<String, DbError>> {
+        Some(postgres_insert_row_sql(insert))
+    }
+
+    fn delete_row_statement(&self, delete: &RowDelete) -> Option<Result<String, DbError>> {
+        Some(postgres_delete_row_sql(delete))
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
-        if !patch.identity.is_valid() {
-            return Err(DbError::QueryFailed(
-                "Cannot update row: invalid row identity (missing primary key)"
-                    .to_string()
-                    .into(),
-            ));
-        }
-
-        if !patch.has_changes() {
-            return Err(DbError::QueryFailed(
-                "No changes to save".to_string().into(),
-            ));
-        }
-
-        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
-        let sql = builder.build_update(patch, true).ok_or_else(|| {
-            DbError::QueryFailed("Failed to build UPDATE query".to_string().into())
-        })?;
+        let sql = postgres_update_row_sql(patch)?;
 
         log::debug!("[UPDATE] Executing: {}", sql);
 
@@ -2680,16 +2724,7 @@ impl Connection for PostgresConnection {
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
-        if !insert.is_valid() {
-            return Err(DbError::QueryFailed(
-                "Cannot insert row: no columns specified".to_string().into(),
-            ));
-        }
-
-        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
-        let sql = builder.build_insert(insert, true).ok_or_else(|| {
-            DbError::QueryFailed("Failed to build INSERT query".to_string().into())
-        })?;
+        let sql = postgres_insert_row_sql(insert)?;
 
         log::debug!("[INSERT] Executing: {}", sql);
 
@@ -2717,18 +2752,7 @@ impl Connection for PostgresConnection {
     }
 
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
-        if !delete.is_valid() {
-            return Err(DbError::QueryFailed(
-                "Cannot delete row: invalid row identity (missing primary key)"
-                    .to_string()
-                    .into(),
-            ));
-        }
-
-        let builder = SqlQueryBuilder::new(&POSTGRES_DIALECT);
-        let sql = builder.build_delete(delete, true).ok_or_else(|| {
-            DbError::QueryFailed("Failed to build DELETE query".to_string().into())
-        })?;
+        let sql = postgres_delete_row_sql(delete)?;
 
         log::debug!("[DELETE] Executing: {}", sql);
 
@@ -9404,3 +9428,30 @@ mod notice_buffer_tests {
 
 #[cfg(test)]
 mod prefer_fallback_tests;
+
+#[cfg(test)]
+mod row_statement_tests {
+    use super::*;
+    use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch};
+
+    #[test]
+    fn the_previewed_statements_are_the_ones_the_row_mutations_run() {
+        let identity = RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]);
+        let patch = RowPatch::with_typed_changes(
+            identity.clone(),
+            "events".to_string(),
+            None,
+            vec![ColumnAssignment::expression("seen_at", "now()")],
+        );
+        let delete = dbflux_core::RowDelete::new(identity, "events".to_string(), None);
+
+        assert_eq!(
+            postgres_update_row_sql(&patch).unwrap(),
+            "UPDATE \"events\" SET \"seen_at\" = now() WHERE \"id\" = 1 RETURNING *"
+        );
+        assert_eq!(
+            postgres_delete_row_sql(&delete).unwrap(),
+            "DELETE FROM \"events\" WHERE \"id\" = 1 RETURNING *"
+        );
+    }
+}

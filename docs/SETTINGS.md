@@ -56,6 +56,7 @@ the changes stay applied until DBFlux quits; save again to keep them.
 |---------|---------|--------------|
 | **Show referenced-row labels in foreign-key cells** | Off | Cells that hold a foreign key resolve and show the referenced row's label next to its id. Applies to pages loaded after you save; the row inspector always resolves references. |
 | **Clicking a column header sorts the column** | Off | Off: a click on a column header selects the whole column, and the arrow at the header's right edge sorts. On: a plain click sorts the column (none, ascending, descending), and `Shift`+click and `Ctrl`+click still select columns. Tables that keep their rows in file order (CSV, Parquet, spreadsheets) always select. |
+| **Review changes before saving** | Off | Save in a table grid first shows the statements it will run, with Save, Copy SQL and Cancel, as the Review button does. See Working with Results. |
 
 ### Startup & session
 

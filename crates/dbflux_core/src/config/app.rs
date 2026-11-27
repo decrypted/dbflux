@@ -416,6 +416,10 @@ pub struct GeneralSettings {
     /// grid. Off by default; the row inspector always resolves references.
     #[serde(default)]
     pub grid_fk_labels: bool,
+    /// Show the statements Save runs before running them, with Save, Copy
+    /// SQL and Cancel. Off by default.
+    #[serde(default)]
+    pub grid_review_before_save: bool,
 
     // -- Appearance --
     /// The accent the user picked for the Dark palette. `None` keeps the
@@ -611,6 +615,7 @@ impl Default for GeneralSettings {
             mcp_approval_notifications: true,
             scrollbar_visibility: ScrollbarVisibility::WhileScrolling,
             grid_header_click_sorts: false,
+            grid_review_before_save: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
             editor_font_family: None,
@@ -643,6 +648,7 @@ mod font_settings_tests {
             super::ScrollbarVisibility::WhileScrolling
         );
         assert!(!legacy.grid_header_click_sorts);
+        assert!(!legacy.grid_review_before_save);
         assert_eq!(legacy, settings);
     }
 

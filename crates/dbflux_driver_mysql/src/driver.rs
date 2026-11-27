@@ -474,6 +474,51 @@ impl SqlDialect for MysqlDialect {
 
 static MYSQL_DIALECT: MysqlDialect = MysqlDialect;
 
+/// The UPDATE `update_row` runs for `patch`, and the save preview shows.
+fn mysql_update_row_sql(patch: &RowPatch) -> Result<String, DbError> {
+    if !patch.identity.is_valid() {
+        return Err(DbError::query_failed(
+            "Cannot update row: invalid row identity (missing primary key)".to_string(),
+        ));
+    }
+
+    if !patch.has_changes() {
+        return Err(DbError::query_failed("No changes to save".to_string()));
+    }
+
+    let update_sql = SqlQueryBuilder::new(&MYSQL_DIALECT)
+        .build_update(patch, false)
+        .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query".to_string()))?;
+    Ok(format!("{} LIMIT 1", update_sql))
+}
+
+/// The INSERT `insert_row` runs for `insert`, and the save preview shows.
+fn mysql_insert_row_sql(insert: &RowInsert) -> Result<String, DbError> {
+    if !insert.is_valid() {
+        return Err(DbError::query_failed(
+            "Cannot insert row: no columns specified".to_string(),
+        ));
+    }
+
+    SqlQueryBuilder::new(&MYSQL_DIALECT)
+        .build_insert(insert, false)
+        .ok_or_else(|| DbError::query_failed("Failed to build INSERT query".to_string()))
+}
+
+/// The DELETE `delete_row` runs for `delete`, and the save preview shows.
+fn mysql_delete_row_sql(delete: &RowDelete) -> Result<String, DbError> {
+    if !delete.is_valid() {
+        return Err(DbError::query_failed(
+            "Cannot delete row: invalid row identity (missing primary key)".to_string(),
+        ));
+    }
+
+    let delete_sql = SqlQueryBuilder::new(&MYSQL_DIALECT)
+        .build_delete(delete, false)
+        .ok_or_else(|| DbError::query_failed("Failed to build DELETE query".to_string()))?;
+    Ok(format!("{} LIMIT 1", delete_sql))
+}
+
 // =============================================================================
 // MySQL Code Generator
 // =============================================================================
@@ -2738,23 +2783,21 @@ impl Connection for MysqlConnection {
         }
     }
 
+    fn update_row_statement(&self, patch: &RowPatch) -> Option<Result<String, DbError>> {
+        Some(mysql_update_row_sql(patch))
+    }
+
+    fn insert_row_statement(&self, insert: &RowInsert) -> Option<Result<String, DbError>> {
+        Some(mysql_insert_row_sql(insert))
+    }
+
+    fn delete_row_statement(&self, delete: &RowDelete) -> Option<Result<String, DbError>> {
+        Some(mysql_delete_row_sql(delete))
+    }
+
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
-        if !patch.identity.is_valid() {
-            return Err(DbError::query_failed(
-                "Cannot update row: invalid row identity (missing primary key)".to_string(),
-            ));
-        }
-
-        if !patch.has_changes() {
-            return Err(DbError::query_failed("No changes to save".to_string()));
-        }
-
+        let update_sql = mysql_update_row_sql(patch)?;
         let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
-
-        let update_sql = builder
-            .build_update(patch, false)
-            .ok_or_else(|| DbError::query_failed("Failed to build UPDATE query".to_string()))?;
-        let update_sql = format!("{} LIMIT 1", update_sql);
 
         log::debug!("[UPDATE] Executing: {}", update_sql);
 
@@ -2810,17 +2853,8 @@ impl Connection for MysqlConnection {
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
-        if !insert.is_valid() {
-            return Err(DbError::query_failed(
-                "Cannot insert row: no columns specified".to_string(),
-            ));
-        }
-
+        let insert_sql = mysql_insert_row_sql(insert)?;
         let builder = SqlQueryBuilder::new(&MYSQL_DIALECT);
-
-        let insert_sql = builder
-            .build_insert(insert, false)
-            .ok_or_else(|| DbError::query_failed("Failed to build INSERT query".to_string()))?;
 
         log::debug!("[INSERT] Executing: {}", insert_sql);
 
@@ -2918,10 +2952,7 @@ impl Connection for MysqlConnection {
                 .collect::<Row>()
         });
 
-        let delete_sql = builder
-            .build_delete(delete, false)
-            .ok_or_else(|| DbError::query_failed("Failed to build DELETE query".to_string()))?;
-        let delete_sql = format!("{} LIMIT 1", delete_sql);
+        let delete_sql = mysql_delete_row_sql(delete)?;
 
         log::debug!("[DELETE] Executing: {}", delete_sql);
 
@@ -6663,3 +6694,30 @@ fn is_tls_negotiation_failure(error: &mysql::Error) -> bool {
 
 #[cfg(test)]
 mod preferred_fallback_tests;
+
+#[cfg(test)]
+mod row_statement_tests {
+    use super::*;
+    use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch};
+
+    #[test]
+    fn the_previewed_statements_are_the_ones_the_row_mutations_run() {
+        let identity = RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]);
+        let patch = RowPatch::with_typed_changes(
+            identity.clone(),
+            "events".to_string(),
+            None,
+            vec![ColumnAssignment::expression("seen_at", "NOW()")],
+        );
+        let delete = dbflux_core::RowDelete::new(identity, "events".to_string(), None);
+
+        assert_eq!(
+            mysql_update_row_sql(&patch).unwrap(),
+            "UPDATE `events` SET `seen_at` = NOW() WHERE `id` = 1 LIMIT 1"
+        );
+        assert_eq!(
+            mysql_delete_row_sql(&delete).unwrap(),
+            "DELETE FROM `events` WHERE `id` = 1 LIMIT 1"
+        );
+    }
+}

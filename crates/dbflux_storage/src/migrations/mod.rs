@@ -197,6 +197,7 @@ impl MigrationRegistry {
         registry.register(mod_052_general_settings_mcp_approval_notifications::MigrationImpl);
         registry.register(mod_053_snp_snippets::MigrationImpl);
         registry.register(mod_058_general_settings_grid_header_click_sorts::MigrationImpl);
+        registry.register(mod_054_general_settings_grid_review_before_save::MigrationImpl);
         registry
     }
 
@@ -441,6 +442,7 @@ mod mod_051_general_settings_accent_color;
 mod mod_052_general_settings_mcp_approval_notifications;
 mod mod_053_snp_snippets;
 mod mod_058_general_settings_grid_header_click_sorts;
+mod mod_054_general_settings_grid_review_before_save;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1200,6 +1202,7 @@ mod tests {
             "052_general_settings_mcp_approval_notifications",
             "053_snp_snippets",
             "058_general_settings_grid_header_click_sorts",
+            "054_general_settings_grid_review_before_save",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

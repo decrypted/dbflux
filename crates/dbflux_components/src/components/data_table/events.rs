@@ -68,6 +68,9 @@ pub enum ContextMenuAction {
     CopyAsCsv,
     /// Copy the selection as JSON, one object per row keyed by column name.
     CopyAsJson,
+    /// Copy the selected cells, or the whole loaded result when one cell is
+    /// selected, as a Markdown table.
+    CopyAsMarkdown,
     /// Paste from clipboard into the selected cell.
     Paste,
     /// Start inline editing of the selected cell.
@@ -80,6 +83,13 @@ pub enum ContextMenuAction {
     SetDefault,
     /// Set the cell to NULL.
     SetNull,
+    /// Open the "Set value" submenu: the column default, the type's values,
+    /// NULL and a typed expression.
+    SetValueMenu,
+    /// Stage the `n`th expression the dialect offers for the column's type.
+    SetTypeValue(usize),
+    /// Open the inline editor on the cell in expression mode.
+    SetExpression,
     /// Insert a new row.
     AddRow,
     /// Duplicate the current row.
@@ -112,6 +122,8 @@ pub enum ContextMenuAction {
     Order(SortDirection),
     /// Remove ordering.
     RemoveOrdering,
+    /// Copy the name of the column the header menu was opened on.
+    CopyColumnName,
     /// Open the row inspector panel for the selected row.
     InspectRow,
     /// Open a new ChartDocument seeded with the current query and result columns.
@@ -209,4 +221,9 @@ pub enum DataTableEvent {
         pending_inserts: Vec<usize>,
         dirty_rows: Vec<usize>,
     },
+
+    /// The last row came into view, by scrolling to the bottom or moving the
+    /// cursor onto it. Emitted once per row count, so a host that appends
+    /// rows hears about the new end again.
+    ReachedEnd,
 }

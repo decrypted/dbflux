@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use crate::QueryLanguage;
+use crate::query::sql_format::{SqlFormatDialect, format_sql, format_sql_text};
 use dbflux_policy::ExecutionClassification;
 use tree_sitter::{Node, Parser};
 
@@ -165,6 +166,8 @@ pub enum DangerousQueryKind {
     Alter,
     /// Multi-statement script containing at least one dangerous query.
     Script,
+    /// Multi-statement script that requires admin-level confirmation (e.g. `runCommand`).
+    AdminScript,
 
     // MongoDB patterns
     /// deleteMany with empty or missing filter ({} or no arguments)
@@ -204,6 +207,9 @@ impl DangerousQueryKind {
             Self::Drop => "DROP will permanently remove the object",
             Self::Alter => "ALTER will modify the structure",
             Self::Script => "This script contains potentially destructive statements",
+            Self::AdminScript => {
+                "This script contains admin commands and requires admin-level confirmation"
+            }
             Self::MongoDeleteMany => "deleteMany with empty filter will delete all documents",
             Self::MongoUpdateMany => "updateMany with empty filter will update all documents",
             Self::MongoDropCollection => "drop() will permanently remove the collection",
@@ -512,6 +518,19 @@ pub trait LanguageService: Send + Sync {
     ) -> Vec<CodeAction> {
         Vec::new()
     }
+
+    /// Whether [`Self::format`] can reformat text in this language. The
+    /// editor enables its Format command from this, never from a driver id.
+    fn can_format(&self) -> bool {
+        false
+    }
+
+    /// Reformats `text`, or returns `None` when the service has no
+    /// formatter or `text` is blank. Already formatted text comes back
+    /// unchanged.
+    fn format(&self, _text: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Default SQL language service that handles standard SQL dangerous-query detection.
@@ -540,6 +559,14 @@ impl LanguageService for SqlLanguageService {
         schema: &dyn SchemaColumns,
     ) -> Vec<CodeAction> {
         sql_code_actions(query, offset, schema)
+    }
+
+    fn can_format(&self) -> bool {
+        true
+    }
+
+    fn format(&self, text: &str) -> Option<String> {
+        format_sql_text(text, SqlFormatDialect::Generic)
     }
 }
 
@@ -777,13 +804,7 @@ fn format_statement_action(statement: &str, range: std::ops::Range<usize>) -> Op
         return None;
     }
 
-    let options = sqlformat::FormatOptions {
-        indent: sqlformat::Indent::Spaces(2),
-        uppercase: Some(true),
-        ..sqlformat::FormatOptions::default()
-    };
-
-    let formatted = sqlformat::format(statement, &sqlformat::QueryParams::None, &options);
+    let formatted = format_sql(statement, SqlFormatDialect::Generic);
 
     if formatted.trim() == statement.trim() {
         return None;
@@ -1939,6 +1960,7 @@ mod tests {
         assert!(!DangerousQueryKind::Drop.message().is_empty());
         assert!(!DangerousQueryKind::Alter.message().is_empty());
         assert!(!DangerousQueryKind::Script.message().is_empty());
+        assert!(!DangerousQueryKind::AdminScript.message().is_empty());
         assert!(!DangerousQueryKind::MongoDeleteMany.message().is_empty());
         assert!(!DangerousQueryKind::MongoUpdateMany.message().is_empty());
         assert!(!DangerousQueryKind::MongoDropCollection.message().is_empty());
@@ -2973,6 +2995,36 @@ END $$;"#;
             );
             let titles = action_titles(&query, query.len());
             assert!(!titles.contains(&"Format statement".to_string()));
+        }
+
+        // ==================== Format command ====================
+
+        #[test]
+        fn sql_service_can_format_and_formats_like_the_code_action() {
+            assert!(SqlLanguageService.can_format());
+            assert_eq!(
+                SqlLanguageService.format("select id,name from   users where id=1"),
+                Some("SELECT\n  id,\n  name\nFROM\n  users\nWHERE\n  id = 1".to_string())
+            );
+        }
+
+        #[test]
+        fn sql_service_formats_an_already_formatted_statement_to_itself() {
+            let formatted = SqlLanguageService
+                .format("SELECT id FROM users")
+                .expect("SQL formats");
+            assert_eq!(SqlLanguageService.format(&formatted), Some(formatted));
+        }
+
+        #[test]
+        fn sql_service_does_not_format_blank_text() {
+            assert_eq!(SqlLanguageService.format("   \n"), None);
+        }
+
+        #[test]
+        fn a_service_without_a_formatter_cannot_format() {
+            assert!(!NeverOverridesService.can_format());
+            assert_eq!(NeverOverridesService.format("select 1"), None);
         }
 
         // ==================== No-action cases ====================

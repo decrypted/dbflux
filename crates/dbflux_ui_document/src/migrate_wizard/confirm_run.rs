@@ -22,7 +22,8 @@ use dbflux_components::composites::wizard_progress_fraction;
 use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::{AppIcon, DriverIconTone};
 use dbflux_components::primitives::{
-    Badge, BadgeTone, Chamfer, Icon, Spinner, Status, StatusIndicator, Text, environment_label,
+    Badge, Chamfer, Icon, Spinner, Status, StatusIndicator, Text, environment_badge_tone,
+    environment_label,
 };
 use dbflux_components::tokens::{
     ChamferCut, ChromeColors, MigrateRunMetrics, ModalMetrics, Spacing,
@@ -1119,7 +1120,7 @@ impl ConfirmRunPhase {
             .when_some(target_environment, |header, environment| {
                 header.child(Badge::new(
                     environment_label(environment),
-                    BadgeTone::for_environment(environment),
+                    environment_badge_tone(environment),
                 ))
             });
 
@@ -1454,6 +1455,7 @@ mod tests {
             type_name: Some("text".to_string()),
             nullable: true,
             is_primary_key: false,
+            kind: dbflux_core::ColumnKind::Unknown,
         }
     }
 

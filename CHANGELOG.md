@@ -51,6 +51,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Double-clicking a table cell lets you type right away** — Double-clicking a cell in a table tab opened its editor without the keyboard, so typing did nothing until the editor was clicked again. The editor now has the keyboard as soon as it opens. See Working with Results.
 * **Windows on X11 use server-side decorations** — On GNOME X11, every DBFlux window asked for client-side decorations and therefore carried a transparent ARGB shadow margin. The desktop, or the window behind, showed through that margin, and Mutter moved the frame by its extents when focus changed, so the content appeared to overlap itself or jump. Client-side decorations are now requested only on Wayland; X11 windows keep the window manager's frame.
 
 * **Keys moved to a letter no longer take it from a text field in Results, Audit and Inspector** — A binding you assign to a bare printable key (a letter, digit, symbol or Space) in a context that holds text fields now applies only while no text field has focus, as the shipped bindings of those contexts already did. Before, a key assigned to an unbound command such as Copy as Markdown, or a default such as Copy cell moved to a letter, also ran inside a filter, sort or search field and the letter was never typed there. Chords with Ctrl, Alt or Cmd, and bindings whose context you set yourself, are unchanged.

@@ -414,4 +414,323 @@ mod tests {
         assert!(window.update(|_, cx| pane.commit_pending_input(cx)));
         assert_eq!(window.update(|_, cx| pane.change_summary(cx)), None);
     }
+
+    /// A table document with one editable row, rendered, with its pane and
+    /// grid state.
+    fn editable_table_document(
+        cx: &mut TestAppContext,
+    ) -> (
+        &mut gpui::VisualTestContext,
+        PaneHandle,
+        Entity<dbflux_components::components::data_table::DataTableState>,
+    ) {
+        use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        type Built = (PaneHandle, Entity<DataDocument>);
+
+        let holder: Rc<RefCell<Option<Built>>> = Rc::new(RefCell::new(None));
+        let handle = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                DataDocument::new_for_table(
+                    Uuid::nil(),
+                    TableRef::with_schema("public", "orders"),
+                    Some("app".to_string()),
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            });
+
+            handle.replace(Some((
+                DataDocument::into_pane(document.clone(), cx),
+                document.clone(),
+            )));
+            Root::new(document, window, cx)
+        });
+        let (pane, document) = holder.borrow_mut().take().expect("the pane is built");
+
+        let columns = ["id", "note"]
+            .iter()
+            .map(|name| ColumnMeta {
+                name: (*name).to_string(),
+                type_name: "text".to_string(),
+                kind: ColumnKind::Text,
+                nullable: true,
+                is_primary_key: *name == "id",
+            })
+            .collect();
+        let rows = vec![vec![Value::Text("1".into()), Value::Text("a".into())]];
+        window.update(|_, cx| {
+            document
+                .read(cx)
+                .data_grid_for_tests()
+                .clone()
+                .update(cx, |grid, cx| {
+                    grid.set_result(
+                        QueryResult::table(columns, rows, None, std::time::Duration::ZERO),
+                        cx,
+                    );
+                });
+        });
+        window.run_until_parked();
+
+        let state = window.update(|_, cx| {
+            document
+                .read(cx)
+                .data_grid_for_tests()
+                .read(cx)
+                .table_state_for_test()
+                .expect("the result builds a table")
+        });
+        window.update(|_, cx| state.update(cx, |state, _| state.set_positional_editing(true)));
+
+        (window, pane, state)
+    }
+
+    fn assert_cell_editor_focused(
+        window: &mut gpui::VisualTestContext,
+        state: &Entity<dbflux_components::components::data_table::DataTableState>,
+    ) {
+        use gpui::Focusable as _;
+
+        window.update(|window, cx| {
+            let input = state
+                .read(cx)
+                .cell_input()
+                .cloned()
+                .expect("the cell editor is open");
+            assert!(
+                input.read(cx).focus_handle(cx).is_focused(window),
+                "the cell editor keeps the keyboard"
+            );
+        });
+    }
+
+    /// A double-click focuses the grid, which asks the workspace to focus the
+    /// document, and then opens the cell editor. The workspace answers after
+    /// the editor is open, so the document's focus must leave the keyboard in
+    /// the editor; on the document's root it typed nothing until a second click.
+    #[gpui::test]
+    fn focusing_the_document_keeps_an_open_cell_editor_focused(cx: &mut TestAppContext) {
+        use dbflux_components::components::data_table::selection::CellCoord;
+
+        let (window, pane, state) = editable_table_document(cx);
+
+        // What a double-click on a cell runs, then the workspace's answer to
+        // the focus request it raised.
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.focus(window, cx);
+                assert!(state.start_editing(CellCoord::new(0, 1), window, cx));
+            });
+        });
+        window.update(|window, cx| pane.focus(window, cx));
+        window.run_until_parked();
+
+        assert_cell_editor_focused(window, &state);
+    }
+
+    /// F2 and Enter reach the grid as Execute and open the editor of the
+    /// selected cell with the keyboard in it.
+    #[gpui::test]
+    fn execute_opens_the_selected_cell_editor_focused(cx: &mut TestAppContext) {
+        use dbflux_app::keymap::Command;
+        use dbflux_components::components::data_table::selection::CellCoord;
+
+        let (window, pane, state) = editable_table_document(cx);
+
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.select_cell(CellCoord::new(0, 1), cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| pane.focus(window, cx));
+        window.run_until_parked();
+
+        assert!(window.update(|window, cx| pane.dispatch_command(Command::Execute, window, cx)));
+        window.run_until_parked();
+
+        assert_cell_editor_focused(window, &state);
+    }
+
+    /// A table document with an enum `status` column, hosted under the app
+    /// keymap like the workspace hosts it, with its pane and grid state.
+    fn enum_table_document(
+        cx: &mut TestAppContext,
+    ) -> (
+        &mut gpui::VisualTestContext,
+        PaneHandle,
+        Entity<dbflux_components::components::data_table::DataTableState>,
+    ) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
+
+        init_keyboard_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    DataDocument::new_for_table(
+                        Uuid::nil(),
+                        TableRef::with_schema("public", "orders"),
+                        Some("app".to_string()),
+                        app_state.clone(),
+                        window,
+                        cx,
+                    )
+                })
+            },
+            |document, cx| document.active_context(cx),
+            DataDocument::dispatch_command,
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+        let pane = window.update(|_, cx| DataDocument::into_pane(document.clone(), cx));
+
+        let columns = ["id", "status"]
+            .iter()
+            .map(|name| ColumnMeta {
+                name: (*name).to_string(),
+                type_name: "text".to_string(),
+                kind: ColumnKind::Text,
+                nullable: true,
+                is_primary_key: *name == "id",
+            })
+            .collect();
+        let rows = (1..=2)
+            .map(|id| vec![Value::Text(id.to_string()), Value::Text("open".into())])
+            .collect();
+        window.update(|_, cx| {
+            document
+                .read(cx)
+                .data_grid_for_tests()
+                .clone()
+                .update(cx, |grid, cx| {
+                    grid.set_result(
+                        QueryResult::table(columns, rows, None, std::time::Duration::ZERO),
+                        cx,
+                    );
+                });
+        });
+        window.run_until_parked();
+
+        let state = window.update(|_, cx| {
+            document
+                .read(cx)
+                .data_grid_for_tests()
+                .read(cx)
+                .table_state_for_test()
+                .expect("the result builds a table")
+        });
+        window.update(|_, cx| {
+            state.update(cx, |state, _| {
+                state.set_positional_editing(true);
+                state.set_enum_options(1, vec!["open".to_string(), "closed".to_string()]);
+            })
+        });
+
+        (window, pane, state)
+    }
+
+    /// What a double-click on `coord` runs (the grid takes focus, then the
+    /// editor opens), then the workspace's answer to the focus request.
+    fn double_click_then_focus_the_pane(
+        window: &mut gpui::VisualTestContext,
+        pane: &PaneHandle,
+        state: &Entity<dbflux_components::components::data_table::DataTableState>,
+        coord: dbflux_components::components::data_table::selection::CellCoord,
+    ) {
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.select_cell(coord, cx);
+                assert!(state.start_editing(coord, window, cx));
+                assert!(state.is_editing_enum(), "an enum cell opens the dropdown");
+            });
+        });
+        window.update(|window, cx| pane.focus(window, cx));
+        window.run_until_parked();
+    }
+
+    fn staged_status(
+        window: &mut gpui::VisualTestContext,
+        state: &Entity<dbflux_components::components::data_table::DataTableState>,
+        row: usize,
+    ) -> Option<String> {
+        window.update(|_, cx| {
+            let state = state.read(cx);
+            let buffer = state.edit_buffer();
+            buffer.is_cell_dirty(row, 1).then(|| {
+                let base = dbflux_components::components::data_table::model::CellValue::null();
+                buffer.get_cell(row, 1, &base).display_text().to_string()
+            })
+        })
+    }
+
+    /// An enum cell's editor is a dropdown with no input to focus. After the
+    /// double-click path and the pane's focus, Down and Enter must still pick
+    /// a value in the dropdown, not move the grid cursor or reopen the editor.
+    #[gpui::test]
+    fn an_enum_editor_opened_by_double_click_keeps_its_keys(cx: &mut TestAppContext) {
+        use dbflux_components::components::data_table::selection::CellCoord;
+
+        let (window, pane, state) = enum_table_document(cx);
+        double_click_then_focus_the_pane(window, &pane, &state, CellCoord::new(0, 1));
+
+        window.simulate_keystrokes("down");
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let state = state.read(cx);
+            assert!(state.is_editing_enum(), "Down stays in the dropdown");
+            assert_eq!(
+                state.selection().active,
+                Some(CellCoord::new(0, 1)),
+                "Down does not move the grid cursor under the dropdown"
+            );
+        });
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert!(
+            !window.update(|_, cx| state.read(cx).is_editing()),
+            "Enter closes the dropdown"
+        );
+        assert_eq!(
+            staged_status(window, &state, 0).as_deref(),
+            Some("closed"),
+            "Enter picks the value Down highlighted"
+        );
+    }
+
+    /// Escape closes an enum dropdown opened by double-click without staging
+    /// anything, and leaves the grid selection alone.
+    #[gpui::test]
+    fn escape_cancels_an_enum_editor_opened_by_double_click(cx: &mut TestAppContext) {
+        use dbflux_components::components::data_table::selection::CellCoord;
+
+        let (window, pane, state) = enum_table_document(cx);
+        double_click_then_focus_the_pane(window, &pane, &state, CellCoord::new(1, 1));
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let state = state.read(cx);
+            assert!(!state.is_editing(), "Escape closes the dropdown");
+            assert_eq!(
+                state.selection().active,
+                Some(CellCoord::new(1, 1)),
+                "Escape cancels the edit rather than clearing the selection"
+            );
+        });
+        assert_eq!(staged_status(window, &state, 1), None);
+    }
 }

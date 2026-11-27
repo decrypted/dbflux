@@ -692,6 +692,7 @@ mod close_completion;
 mod collection_views;
 mod column_header_menu;
 mod copy_as_markdown;
+mod copy_extractors;
 mod copy_selection;
 mod edit_guard;
 mod explain_entry;

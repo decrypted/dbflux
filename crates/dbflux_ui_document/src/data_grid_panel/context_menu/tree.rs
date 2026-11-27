@@ -286,7 +286,10 @@ fn visible_menu_items(
         can_chart,
         inspect_row_enabled,
     );
-    let adapted = panel.adapt_menu_items_for_documents(base, menu.is_document_view, cx);
+    let adapted = panel.with_copy_extractors(
+        panel.adapt_menu_items_for_documents(base, menu.is_document_view, cx),
+        cx,
+    );
     let with_similar = panel.with_find_similar_rows(adapted, menu, has_row_target, cx);
     panel.with_set_value_menu(with_similar, menu, cx)
 }
@@ -632,6 +635,8 @@ pub(super) fn action_key(action: ContextMenuAction) -> Cow<'static, str> {
         ContextMenuAction::Copy => Cow::Borrowed("copy"),
         ContextMenuAction::CopyAsCsv => Cow::Borrowed("copy-as-csv"),
         ContextMenuAction::CopyAsJson => Cow::Borrowed("copy-as-json"),
+        ContextMenuAction::CopyAsSqlInList => Cow::Borrowed("copy-as-sql-in-list"),
+        ContextMenuAction::CopyAsInsertStatements => Cow::Borrowed("copy-as-insert-statements"),
         ContextMenuAction::CopyAsMarkdown => Cow::Borrowed("copy-as-markdown"),
         ContextMenuAction::Paste => Cow::Borrowed("paste"),
         ContextMenuAction::Edit => Cow::Borrowed("edit"),
@@ -684,6 +689,8 @@ pub(super) fn action_from_key(key: &str) -> Option<ContextMenuAction> {
         "copy" => Some(ContextMenuAction::Copy),
         "copy-as-csv" => Some(ContextMenuAction::CopyAsCsv),
         "copy-as-json" => Some(ContextMenuAction::CopyAsJson),
+        "copy-as-sql-in-list" => Some(ContextMenuAction::CopyAsSqlInList),
+        "copy-as-insert-statements" => Some(ContextMenuAction::CopyAsInsertStatements),
         "copy-as-markdown" => Some(ContextMenuAction::CopyAsMarkdown),
         "paste" => Some(ContextMenuAction::Paste),
         "edit" => Some(ContextMenuAction::Edit),

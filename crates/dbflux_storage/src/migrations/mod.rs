@@ -196,6 +196,7 @@ impl MigrationRegistry {
         registry.register(mod_051_general_settings_accent_color::MigrationImpl);
         registry.register(mod_052_general_settings_mcp_approval_notifications::MigrationImpl);
         registry.register(mod_053_snp_snippets::MigrationImpl);
+        registry.register(mod_052_general_settings_grid_copy_column_names::MigrationImpl);
         registry.register(mod_058_general_settings_grid_header_click_sorts::MigrationImpl);
         registry
     }
@@ -440,6 +441,7 @@ mod mod_050_cfg_telemetry;
 mod mod_051_general_settings_accent_color;
 mod mod_052_general_settings_mcp_approval_notifications;
 mod mod_053_snp_snippets;
+mod mod_052_general_settings_grid_copy_column_names;
 mod mod_058_general_settings_grid_header_click_sorts;
 
 pub use mod_001_initial::MigrationImpl;
@@ -1199,6 +1201,7 @@ mod tests {
             "051_general_settings_accent_color",
             "052_general_settings_mcp_approval_notifications",
             "053_snp_snippets",
+            "052_general_settings_grid_copy_column_names",
             "058_general_settings_grid_header_click_sorts",
         ];
 

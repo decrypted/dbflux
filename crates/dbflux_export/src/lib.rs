@@ -12,7 +12,7 @@ use std::io::Write;
 use thiserror::Error;
 
 pub use binary::{BinaryExportMode, BinaryExporter};
-pub use csv::CsvExporter;
+pub use csv::{CsvExporter, value_to_csv_field};
 pub use encoding::{DecodingReader, decode_to_utf8};
 pub use json::JsonExporter;
 pub use markup::{HtmlStreamWriter, MarkdownStreamWriter, XmlStreamWriter};

@@ -436,6 +436,10 @@ pub struct GeneralSettings {
     /// When scrollbars are shown in every window. While scrolling by default.
     #[serde(default)]
     pub scrollbar_visibility: ScrollbarVisibility,
+    /// Start a plain copy from the data grid (Ctrl+C, tab-separated) with a
+    /// line of column names. Off by default, which keeps values only.
+    #[serde(default)]
+    pub grid_copy_column_names: bool,
     /// A primary click on a column header sorts the column, as before column
     /// selection. Off by default: the click selects the column and the
     /// header's arrow sorts.
@@ -610,6 +614,7 @@ impl Default for GeneralSettings {
             accent_light: None,
             mcp_approval_notifications: true,
             scrollbar_visibility: ScrollbarVisibility::WhileScrolling,
+            grid_copy_column_names: false,
             grid_header_click_sorts: false,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
@@ -642,6 +647,7 @@ mod font_settings_tests {
             legacy.scrollbar_visibility,
             super::ScrollbarVisibility::WhileScrolling
         );
+        assert!(!legacy.grid_copy_column_names);
         assert!(!legacy.grid_header_click_sorts);
         assert_eq!(legacy, settings);
     }

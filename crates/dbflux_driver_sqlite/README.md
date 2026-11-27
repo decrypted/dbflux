@@ -21,9 +21,12 @@ Embedded file-based database.
 - Rejects, before any preparation or execution, requests it cannot bound safely: a row-limited request aimed at instance metrics or inspectors, and a requested statement timeout.
 - Batched primary-key row lookup (`fetch_rows_by_pks`): one `WHERE pk IN (...)` statement per chunk of at most 100 values, with an optional column projection; used to resolve foreign-key labels in the data grid.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, and a per-connection referential-integrity toggle (`PRAGMA foreign_keys`) for FK-safe migrations.
+- Reports where SQLite rejected a statement, when SQLite gives a position: a syntax error with an offending token carries its byte offset (`rusqlite::Error::SqlInputError`), shifted by the start of the statement when it is one of several in a script, and the editor marks that token. The editor marks the token only while the text that was sent still matches the editor: an edit before the error returns, or a text change before sending, leaves no mark. An error without a token, such as an incomplete `SELECT * FROM`, has no position and no mark.
+- Structured query plan (`Connection::query_plan`): runs `EXPLAIN QUERY PLAN` on exactly one statement, so the statement is not executed, and builds the plan tree from the `id`/`parent` rows (operation, relation, index, access condition). SQLite reports no costs or row estimates. A query with several statements, or an empty one, is refused before anything is sent.
 
 ## Limitations
 
+- Analyzed query plans (actual rows and timings) are not supported; SQLite has no `EXPLAIN ANALYZE`, so the plan view offers only the estimate.
 - Local file driver only; no network transport, SSH tunneling, or TLS/SSL mode.
 - A requested row limit is a retention cap, not an engine bound: the statement still runs to completion inside the embedded engine, all rows past the cap are observed and discarded, and no byte, memory, or time budget is enforced — sorter and `RETURNING` allocations are not bounded by the cap. A mutation under a row limit completes all of its effects.
 - Splitting a row-limited batch prepares nothing, but probes the statement text with SQLite's lexer at every `;`, which is quadratic in the length of a statement that holds many semicolons inside literals, comments, or trigger bodies. Unbounded batches keep the legacy split-and-run behavior.

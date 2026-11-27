@@ -52,6 +52,13 @@ Base de datos embebida basada en archivos.
   (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
   de una tabla origen, y un toggle de integridad referencial por conexión
   (`PRAGMA foreign_keys`) para migraciones seguras con FK.
+- Informa dónde rechazó SQLite un statement, cuando SQLite da una posición: un error de sintaxis con un token ofensor lleva su desplazamiento en bytes (`rusqlite::Error::SqlInputError`), desplazado por el inicio del statement cuando es uno de varios en un script, y el editor marca ese token. El editor marca el token solo mientras el texto enviado siga coincidiendo con el del editor: una edición antes de que vuelva el error, o un cambio del texto antes de enviarlo, no deja marca. Un error sin token, como un `SELECT * FROM` incompleto, no tiene posición ni marca.
+- Plan de query estructurado (`Connection::query_plan`): ejecuta `EXPLAIN QUERY
+  PLAN` sobre exactamente un statement, así que el statement no se ejecuta, y
+  construye el árbol del plan a partir de las filas `id`/`parent` (operación,
+  relación, índice, condición de acceso). SQLite no reporta costos ni
+  estimaciones de filas. Un query con varios statements, o uno vacío, se rechaza
+  antes de enviar nada.
 
 ## Limitaciones
 
@@ -87,6 +94,7 @@ Base de datos embebida basada en archivos.
   (`DriverCapabilities::TRUNCATE_TABLE` no está fijado).
 - El descubrimiento del esquema lista solo las columnas con nombre de un índice: una columna de expresión, como `lower(name)` en `CREATE INDEX ... ON t (lower(name), id)`, queda fuera de la lista de columnas del índice.
 - Aplicación de solo lectura: una petición que DBFlux ejecuta sin supervisión como lectura (scripts de `execute_script` en MCP clasificados `Read` o `Metadata`, auto-refresh del editor) se ejecuta bajo `PRAGMA query_only`, que se comprueba antes de cada sentencia y se restaura después, y se rechaza dentro de una transacción abierta. SQLite rechaza entonces las escrituras en la base de datos, pero no los efectos de extensiones cargadas ni de funciones definidas por la aplicación; los permisos de archivo siguen siendo el límite real.
+- Los planes de query analizados (valores reales y tiempos) no están soportados; SQLite no tiene `EXPLAIN ANALYZE`, así que la vista de plan solo ofrece la estimación.
 
 ## Capacidades de DDL
 

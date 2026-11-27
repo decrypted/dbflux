@@ -8,11 +8,11 @@ use dbflux_core::{
     ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionExt, ConstraintInfo, ConstraintKind,
     CrudResult, DatabaseInfo, DbError, DbKind, DbSchemaInfo, DocumentConnection, DriverMetadata,
     ExecutionSession, ExecutionSessionFactory, ExplainRequest, ForeignKeyInfo, IndexData,
-    IndexInfo, KeyValueConnection, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest,
-    QueryResult, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, TableInfo, TableProfile, TableRef, TableViewFeatures,
-    Value, ViewInfo,
+    IndexInfo, KeyValueConnection, LogErr, QueryCancelHandle, QueryGenerator, QueryHandle,
+    QueryRequest, QueryResult, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert,
+    RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
+    SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableInfo, TableProfile, TableRef,
+    TableViewFeatures, Value, ViewInfo,
 };
 use duckdb::arrow::datatypes::{DataType, TimeUnit as ArrowTimeUnit};
 use duckdb::types::{TimeUnit, Value as DuckValue};
@@ -28,6 +28,10 @@ pub(crate) struct SharedDuckDb {
     interrupt: Arc<duckdb::InterruptHandle>,
     key: String,
     settings: InstanceSettings,
+    /// The catalog and schema the instance's first connection was left in by
+    /// its startup SQL. Clones restore them when they are still available.
+    startup_catalog: String,
+    startup_schema: String,
 }
 
 impl SharedDuckDb {
@@ -35,13 +39,25 @@ impl SharedDuckDb {
         connection: duckdb::Connection,
         key: String,
         settings: InstanceSettings,
+        startup_catalog: String,
+        startup_schema: String,
     ) -> Self {
         Self {
             interrupt: connection.interrupt_handle(),
             connection: Mutex::new(connection),
             key,
             settings,
+            startup_catalog,
+            startup_schema,
         }
+    }
+
+    pub(crate) fn startup_catalog(&self) -> String {
+        self.startup_catalog.clone()
+    }
+
+    pub(crate) fn startup_schema(&self) -> String {
+        self.startup_schema.clone()
     }
 
     pub(crate) fn key(&self) -> &str {
@@ -59,9 +75,17 @@ impl SharedDuckDb {
     }
 
     pub(crate) fn try_clone(&self) -> Result<duckdb::Connection, DbError> {
-        self.lock()?
-            .try_clone()
-            .map_err(|error| DbError::connection_failed(format_duckdb_error(&error)))
+        let failed = |error: duckdb::Error| DbError::connection_failed(format_duckdb_error(&error));
+        let clone = self.lock()?.try_clone().map_err(failed)?;
+        clone
+            .execute_batch(&format!(
+                "USE {}.{}",
+                DUCKDB_DIALECT.quote_identifier(&self.startup_catalog),
+                DUCKDB_DIALECT.quote_identifier(&self.startup_schema)
+            ))
+            .map_err(failed)
+            .log_err_with("DuckDB could not restore the startup catalog and schema");
+        Ok(clone)
     }
 }
 
@@ -289,13 +313,27 @@ impl DuckDbConnection {
         params: &[Value],
         limit: Option<u32>,
     ) -> Result<QueryResult, DbError> {
+        self.run_read_only_as(sql, sql, params, limit)
+    }
+
+    /// Like [`Self::run_read_only`], but runs `run_sql` after DuckDB's parser
+    /// accepted `checked_sql` as SELECT statements only. An analyzed plan
+    /// wraps the statement in `EXPLAIN (ANALYZE ...)`, which is not a SELECT,
+    /// so the wrapped statement is the one checked.
+    fn run_read_only_as(
+        &self,
+        checked_sql: &str,
+        run_sql: &str,
+        params: &[Value],
+        limit: Option<u32>,
+    ) -> Result<QueryResult, DbError> {
         let started = Instant::now();
         let connection = self.begin_request()?;
 
         let serialized: String = connection
             .query_row(
                 "SELECT json_serialize_sql(?::VARCHAR)::VARCHAR",
-                [sql],
+                [checked_sql],
                 |row| row.get(0),
             )
             .map_err(|error| self.query_error(error))?;
@@ -304,20 +342,38 @@ impl DuckDbConnection {
                 "DuckDB: read-only enforcement {reason}; the request was rejected before execution"
             )));
         }
-        // duckdb-rs always reports autocommit, so let DuckDB refuse the BEGIN
-        // when the session is already inside a transaction.
+        // A nested BEGIN fails inside the caller's transaction and can poison
+        // it, so the refusal has to come before any BEGIN is sent.
+        if self.in_open_transaction(&connection)? {
+            return Err(DbError::NotSupported(
+                "DuckDB: read-only enforcement needs its own transaction, but one is already open; the request was rejected before execution".to_string(),
+            ));
+        }
         if let Err(error) = connection.execute_batch("BEGIN TRANSACTION READ ONLY") {
             return Err(DbError::NotSupported(format!(
                 "DuckDB: read-only enforcement could not start a read-only transaction ({}); the request was rejected before execution",
                 format_duckdb_error(&error)
             )));
         }
-        let result = run_query(&connection, sql, params, limit, started);
+        let result = run_query(&connection, run_sql, params, limit, started);
         let rollback = connection.execute_batch("ROLLBACK");
 
         let result = result.map_err(|error| self.query_error(error))?;
         rollback.map_err(|error| self.query_error(error))?;
         Ok(result)
+    }
+
+    /// duckdb-rs always reports autocommit, so the state is read from the
+    /// engine: outside a transaction every statement runs in a fresh one with
+    /// a new identifier, and inside one the identifier stays the same. Neither
+    /// probe changes the session.
+    fn in_open_transaction(&self, connection: &duckdb::Connection) -> Result<bool, DbError> {
+        let identifier = || -> Result<i64, DbError> {
+            connection
+                .query_row("SELECT txid_current()", [], |row| row.get(0))
+                .map_err(|error| self.query_error(error))
+        };
+        Ok(identifier()? == identifier()?)
     }
 
     /// Rolls back the open transaction, if any, and reports whether there
@@ -776,7 +832,10 @@ impl Connection for DuckDbConnection {
         // profile, without codecs or ranges.
         let segments = match self.run(
             &format!(
-                "SELECT row_group_id, column_id, column_path, compression, stats, count \
+                "SELECT row_group_id, column_id, column_path, compression, count, \
+                 variant_extract(stats, 'min')::VARCHAR, \
+                 variant_extract(stats, 'max')::VARCHAR, \
+                 variant_extract(stats, 'has_null')::BOOLEAN \
                  FROM pragma_storage_info({})",
                 Self::literal(&qualified)
             ),
@@ -1015,6 +1074,30 @@ impl Connection for DuckDbConnection {
             ),
         };
         self.run(&format!("EXPLAIN {query}"), &[], None)
+    }
+
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        match request.mode {
+            dbflux_core::QueryPlanMode::Estimate => {
+                let sql = crate::plan::explain_statement(&request.query)?;
+                let result = self.run(&sql, &[], None)?;
+                crate::plan::parse_explain_json(&crate::plan::plan_text_from_result(&result)?)
+            }
+            dbflux_core::QueryPlanMode::Analyze => {
+                let sql = crate::plan::analyze_explain_statement(&request.query)?;
+                let statement = dbflux_core::analyze_statement(
+                    &dbflux_core::QueryLanguage::Sql,
+                    &request.query,
+                )?;
+                // The statement runs: DuckDB's parser must accept it as a
+                // SELECT, and it runs inside a read-only transaction.
+                let result = self.run_read_only_as(&statement, &sql, &[], None)?;
+                crate::plan::parse_analyzed_json(&crate::plan::plan_text_from_result(&result)?)
+            }
+        }
     }
 
     fn dialect(&self) -> &dyn SqlDialect {

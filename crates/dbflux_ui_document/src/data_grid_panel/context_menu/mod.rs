@@ -1818,6 +1818,9 @@ impl DataGridPanel {
             ContextMenuAction::Order(direction) => {
                 self.handle_sort_request(menu.col, direction, cx);
             }
+            ContextMenuAction::AddToSort(direction) => {
+                self.handle_add_sort_key(menu.col, direction, cx);
+            }
             ContextMenuAction::RemoveOrdering => {
                 self.handle_sort_clear(cx);
             }

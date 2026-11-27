@@ -81,6 +81,22 @@ fn build_column_header_menu(
             ContextMenuAction::Order(dbflux_core::SortDirection::Descending) => {
                 (format!("{column} DESC"), AppIcon::ArrowDown, false)
             }
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending) => (
+                dbflux_i18n::t!(
+                    "document.data.context_menu.order.add_to_sort",
+                    column = format!("{column} ASC")
+                ),
+                AppIcon::ArrowUp,
+                false,
+            ),
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Descending) => (
+                dbflux_i18n::t!(
+                    "document.data.context_menu.order.add_to_sort",
+                    column = format!("{column} DESC")
+                ),
+                AppIcon::ArrowDown,
+                false,
+            ),
             _ => (
                 dbflux_i18n::t!("document.data.context_menu.order.remove"),
                 AppIcon::X,
@@ -96,7 +112,8 @@ fn build_column_header_menu(
                         .icon(AppIcon::ArrowUpDown),
                 );
             }
-            ContextMenuAction::RemoveOrdering => {
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending)
+            | ContextMenuAction::RemoveOrdering => {
                 rows.push(MenuNode::separator());
             }
             _ => {}
@@ -645,6 +662,9 @@ pub(super) fn action_key(action: ContextMenuAction) -> Cow<'static, str> {
             dbflux_core::SortDirection::Ascending => "order:asc",
             dbflux_core::SortDirection::Descending => "order:desc",
         }),
+        ContextMenuAction::AddToSort(direction) => {
+            Cow::Owned(format!("add-to-sort:{}", direction_key(direction)))
+        }
         ContextMenuAction::RemoveOrdering => Cow::Borrowed("remove-ordering"),
         ContextMenuAction::CopyColumnName => Cow::Borrowed("copy-column-name"),
         ContextMenuAction::InspectRow => Cow::Borrowed("inspect-row"),
@@ -722,6 +742,11 @@ pub(super) fn action_from_key(key: &str) -> Option<ContextMenuAction> {
                 return direction_from_key(payload).map(ContextMenuAction::Order);
             }
 
+            // `add-to-sort:{asc|desc}` and `add-to-sort:{column}:{asc|desc}`.
+            if head == "add-to-sort" || head.strip_prefix("add-to-sort:").is_some() {
+                return direction_from_key(payload).map(ContextMenuAction::AddToSort);
+            }
+
             None
         }
     }
@@ -736,6 +761,9 @@ fn action_row_id(column: &str, action: ContextMenuAction) -> String {
         }
         ContextMenuAction::Order(direction) => {
             format!("order:{column}:{}", direction_key(direction))
+        }
+        ContextMenuAction::AddToSort(direction) => {
+            format!("add-to-sort:{column}:{}", direction_key(direction))
         }
         other => action_key(other).into_owned(),
     }

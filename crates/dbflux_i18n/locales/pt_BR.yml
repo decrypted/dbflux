@@ -1845,6 +1845,7 @@ document:
       order:
         title: Ordenar
         remove: Remover ordenação
+        add_to_sort: "Adicionar à ordenação: %{column}"
       generate_sql:
         title: Gerar SQL
       toolbar:

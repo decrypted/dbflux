@@ -42,6 +42,8 @@ fn copy_column_name_heads_the_column_header_menu() {
             ContextMenuAction::CopyColumnName,
             ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
             ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending),
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Descending),
             ContextMenuAction::RemoveOrdering,
         ]
     );

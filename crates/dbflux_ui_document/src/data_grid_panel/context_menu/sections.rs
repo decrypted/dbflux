@@ -41,11 +41,13 @@ impl DataGridPanel {
     /// The entries of the column header menu that precede its filter
     /// operators, in display order. The tree the menu renders and the
     /// keyboard walks both read this list, so their rows agree.
-    pub(in crate::data_grid_panel) fn column_header_menu_fixed_actions() -> [ContextMenuAction; 4] {
+    pub(in crate::data_grid_panel) fn column_header_menu_fixed_actions() -> [ContextMenuAction; 6] {
         [
             ContextMenuAction::CopyColumnName,
             ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
             ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Ascending),
+            ContextMenuAction::AddToSort(dbflux_core::SortDirection::Descending),
             ContextMenuAction::RemoveOrdering,
         ]
     }

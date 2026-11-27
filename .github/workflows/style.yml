@@ -127,6 +127,12 @@ jobs:
       - name: Check mouse-down handlers
         run: python3 scripts/lint.py mouse-down
 
+      # Names and values in generated SQL go through the dialect's quoting
+      # helper; a self-quoted placeholder must be listed in
+      # scripts/unquoted_sql_allowlist.txt with the reason it is safe.
+      - name: Check self-quoted SQL placeholders
+        run: python3 scripts/lint.py unquoted-sql
+
   # Gated at the job level, unlike cross-platform-check in tests.yml: the
   # required "Clippy" context is carried by clippy-result below, not by these
   # matrix legs. Fail-open like every other gate: `always()` keeps this job

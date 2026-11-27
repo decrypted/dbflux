@@ -9,7 +9,7 @@
 /// never leave that install's keychain/config, so this importer cannot
 /// recover them. A connection with a saved password still imports; only the
 /// secret is skipped, with a reason telling the user to re-enter it.
-use dbflux_core::{DbConfig, DbKind};
+use dbflux_core::{DbConfig, DbKind, quote_double_quoted_identifier};
 use rusqlite::Connection;
 
 use super::{
@@ -50,7 +50,7 @@ impl ConnectionImporter for BeekeeperImporter {
         let table = find_connection_table(&conn)?;
         let columns = resolve_columns(&conn, &table)?;
 
-        let query = format!("SELECT * FROM \"{table}\"");
+        let query = format!("SELECT * FROM {}", quote_double_quoted_identifier(&table));
         let mut stmt = conn
             .prepare(&query)
             .map_err(|e| ExternalImportError::Sqlite(e.to_string()))?;
@@ -122,7 +122,11 @@ fn find_connection_table(conn: &Connection) -> Result<String, ExternalImportErro
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, ExternalImportError> {
-    let query = format!("PRAGMA table_info(\"{table}\")");
+    // Table names come from the imported file's own catalog.
+    let query = format!(
+        "PRAGMA table_info({})",
+        quote_double_quoted_identifier(table)
+    );
     let mut stmt = conn
         .prepare(&query)
         .map_err(|e| ExternalImportError::Sqlite(e.to_string()))?;
@@ -380,6 +384,29 @@ mod tests {
         }
 
         file
+    }
+
+    #[test]
+    fn reads_a_connection_table_whose_name_has_a_double_quote() {
+        let file = NamedTempFile::new().expect("temp file");
+        let conn = Connection::open(file.path()).expect("open");
+        conn.execute_batch(
+            "CREATE TABLE \"we\"\"ird\" (name TEXT, connectionType TEXT, host TEXT, port INTEGER);
+             INSERT INTO \"we\"\"ird\" VALUES ('Quoted', 'postgresql', 'db.example.invalid', 5432);",
+        )
+        .expect("seed");
+        drop(conn);
+
+        let source = ImportSource::Path(file.path().to_path_buf());
+        let outcome = BeekeeperImporter
+            .parse(&ImportInput::new(&source))
+            .expect("parse");
+
+        assert_eq!(outcome.candidates.len(), 1);
+        assert_eq!(
+            outcome.candidates.first().expect("candidate").name,
+            "Quoted"
+        );
     }
 
     #[test]

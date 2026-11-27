@@ -15,7 +15,7 @@ pub use code_generation::{
 };
 pub use dialect::{
     DefaultSqlDialect, MutationTargetAlias, PlaceholderStyle, SqlDialect, TypeFamily,
-    quote_double_quoted_identifier, type_family,
+    is_numeric_literal, quote_double_quoted_identifier, quote_postgres_string_literal, type_family,
 };
 pub use generation::{
     SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_create_table,

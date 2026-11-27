@@ -1176,16 +1176,28 @@ fn rfc3339_from_ms(ms: i64) -> String {
 }
 
 /// Escape a string for safe interpolation inside a Flux double-quoted literal.
+///
+/// Flux evaluates `${...}` inside string literals, so the dollar of an
+/// interpolation opener is escaped as well as backslashes and quotes.
 pub(crate) fn escape_flux_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace("${", "\\${")
 }
 
-/// Wrap an InfluxQL identifier in double quotes, escaping any embedded quotes.
+/// Wrap an InfluxQL identifier in double quotes.
 ///
-/// InfluxQL identifiers (measurement names, field keys) are quoted with double
-/// quotes. Embedded double quotes are escaped by doubling them.
+/// InfluxQL ends a quoted identifier at the first `"` not preceded by a
+/// backslash, and reads `\` as an escape, so doubling quotes is not enough: a
+/// name ending in a backslash would escape the closing quote and the rest of
+/// the statement would come from the name. Same escapes as influxql's
+/// `QuoteIdent`.
 pub(crate) fn escape_influxql_ident(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    format!("\"{escaped}\"")
 }
 
 // ---------------------------------------------------------------------------
@@ -1531,6 +1543,12 @@ mod tests {
         assert_eq!(escape_flux_string("a\\\"b"), "a\\\\\\\"b");
     }
 
+    #[test]
+    fn escape_flux_string_escapes_interpolation() {
+        assert_eq!(escape_flux_string("${r._value}"), "\\${r._value}");
+        assert_eq!(escape_flux_string("cost $5"), "cost $5");
+    }
+
     use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryRequest};
 
     fn make_request_with_mode(sql: &str, mode: Option<&str>) -> QueryRequest {
@@ -1852,8 +1870,19 @@ mod tests {
 
     #[test]
     fn escape_influxql_ident_escapes_embedded_double_quotes() {
-        // Embedded " is doubled per InfluxQL quoting rules.
-        assert_eq!(escape_influxql_ident("a\"b"), "\"a\"\"b\"");
+        assert_eq!(escape_influxql_ident("a\"b"), "\"a\\\"b\"");
+    }
+
+    #[test]
+    fn escape_influxql_ident_keeps_a_trailing_backslash_inside_the_identifier() {
+        // Unescaped, `x\` would escape the closing quote and `; DROP ...`
+        // would run as a second statement.
+        assert_eq!(
+            escape_influxql_ident("x\\\"; DROP MEASUREMENT \"m"),
+            "\"x\\\\\\\"; DROP MEASUREMENT \\\"m\""
+        );
+        assert_eq!(escape_influxql_ident("x\\"), "\"x\\\\\"");
+        assert_eq!(escape_influxql_ident("a\nb"), "\"a\\nb\"");
     }
 
     const AUTHORIZATIONS_FIXTURE_WRITE: &str = r#"{

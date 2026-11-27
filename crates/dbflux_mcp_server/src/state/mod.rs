@@ -12,7 +12,7 @@ use dbflux_core::{
     AccessKind, AuthProfileManager, CancelToken, ConnectionMcpGovernance,
     ConnectionMcpPolicyBinding, ConnectionProfile, DbDriver, DetachedProcessHandle, DriverKey,
     FormValues, GovernanceSettings, KeyringSecretStore, ProfileManager, RpcServiceKind,
-    SecretManager, ServiceConfig, ValueRef,
+    SecretManager, ServiceConfig, SshTunnelProfile, ValueRef,
 };
 use dbflux_ipc::{
     AUTH_PROVIDER_RPC_API_CONTRACT, BUILT_IN_SECRET_PROVIDER_IDS, RpcAuthProvider,
@@ -250,6 +250,8 @@ pub struct ServerState {
     pub connection_setup_lock: Arc<Mutex<HashMap<String, std::sync::Weak<Mutex<()>>>>>,
     pub detached_processes: Arc<DetachedProcessRegistry>,
     pub secret_manager: Arc<SecretManager>,
+    /// SSH tunnel profiles connections reference through `AccessKind::Ssh`.
+    pub ssh_tunnels: Arc<HashMap<uuid::Uuid, SshTunnelProfile>>,
     pub mcp_enabled_by_default: bool,
     /// Path of the `dbflux.db` the profiles were loaded from.
     ///
@@ -285,6 +287,10 @@ impl ServerState {
             build_auth_profile_manager(stored_auth_profiles, &auth_provider_registry);
         let driver_settings = Arc::new(load_driver_settings(&storage_runtime)?);
         let secret_manager = Arc::new(SecretManager::new(Box::new(KeyringSecretStore::new())));
+        let ssh_tunnels = dbflux_storage::load_ssh_tunnel_profiles(&storage_runtime)
+            .into_iter()
+            .map(|tunnel| (tunnel.id, tunnel))
+            .collect();
 
         let state = ServerState {
             client_id,
@@ -299,6 +305,7 @@ impl ServerState {
             connection_setup_lock: Arc::new(Mutex::new(HashMap::new())),
             detached_processes: Arc::new(DetachedProcessRegistry::new()),
             secret_manager,
+            ssh_tunnels: Arc::new(ssh_tunnels),
             mcp_enabled_by_default: governance_settings.mcp_enabled_by_default,
             profile_store_path: Some(storage_runtime.dbflux_db_path().to_path_buf()),
         };

@@ -35,6 +35,7 @@ dbflux_approval = { workspace = true }
 dbflux_audit = { workspace = true }
 dbflux_storage = { workspace = true }
 dbflux_ipc = { workspace = true }
+dbflux_ssh = { workspace = true }
 interprocess = { workspace = true, optional = true }
 
 # Optional driver crates

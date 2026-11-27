@@ -31,8 +31,9 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AccessibleAction, AnyElement, App, ClickEvent, Div, ElementId, FontWeight, Hsla,
-    InteractiveElement, IntoElement, Modifiers, MouseButton, MouseDownEvent, ParentElement, Pixels,
-    Role, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    InteractiveElement, IntoElement, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement, Pixels, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Window, div, px,
 };
 use gpui_component::Theme;
 
@@ -178,11 +179,22 @@ pub struct GridHost<'a> {
     pub chevron_icon: IconSource,
     /// Icon drawn in the gutter of the reference row.
     pub reference_icon: IconSource,
+    /// A left press on a cell, before the release that completes a click,
+    /// so the host can start a drag selection on it.
+    pub on_cell_press: Option<GridCellMouseDown>,
+    /// The pointer moved over a cell with the left button held.
+    pub on_cell_drag: Option<GridCellMouseMove>,
     /// A left press on a row's number, or its accessible click (with no
     /// modifiers). With it set the gutter cell is a button named by the
     /// row's number.
     pub on_row_press: Option<GridRowPress>,
 }
+
+/// A cell callback taking the press that reached it.
+pub type GridCellMouseDown = Arc<dyn Fn(GridCellCoord, &MouseDownEvent, &mut Window, &mut App)>;
+
+/// A cell callback taking the pointer move that reached it.
+pub type GridCellMouseMove = Arc<dyn Fn(GridCellCoord, &MouseMoveEvent, &mut Window, &mut App)>;
 
 /// A row-number callback taking the row and the modifiers held.
 pub type GridRowPress = Arc<dyn Fn(usize, Modifiers, &mut Window, &mut App)>;
@@ -410,6 +422,7 @@ pub fn render_rows(
                         })
                         .when(paint.italic, |d| d.italic())
                         .when(paint.line_through, |d| d.line_through())
+                        .map(|d| with_cell_callbacks(d, coord, host))
                         .on_click({
                             let on_cell_click = Arc::clone(&host.on_cell_click);
                             move |event: &ClickEvent, window, cx| {
@@ -555,6 +568,27 @@ pub fn render_rows(
                 .into_any_element()
         })
         .collect()
+}
+
+/// A drag only counts with the left button held: a move after the release
+/// must not extend the selection.
+fn with_cell_callbacks(
+    cell: Stateful<Div>,
+    coord: GridCellCoord,
+    host: &GridHost<'_>,
+) -> Stateful<Div> {
+    cell.when_some(host.on_cell_press.clone(), |d, on_press| {
+        d.on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            on_press(coord, event, window, cx)
+        })
+    })
+    .when_some(host.on_cell_drag.clone(), |d, on_drag| {
+        d.on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+            if event.pressed_button == Some(MouseButton::Left) {
+                on_drag(coord, event, window, cx)
+            }
+        })
+    })
 }
 
 /// With [`GridHost::on_row_press`] set the row number is a button. The row

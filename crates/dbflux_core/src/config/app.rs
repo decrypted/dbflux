@@ -1,4 +1,5 @@
 use crate::ConnectionHook;
+use crate::config::accent_color::AccentColor;
 use crate::driver::form::FormValues;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -417,6 +418,21 @@ pub struct GeneralSettings {
     pub grid_fk_labels: bool,
 
     // -- Appearance --
+    /// The accent the user picked for the Dark palette. `None` keeps the
+    /// palette's own accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent_dark: Option<AccentColor>,
+
+    /// The accent the user picked for the Light palette. `None` keeps the
+    /// palette's own accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent_light: Option<AccentColor>,
+
+    /// Notify when an MCP agent requests approval. Global only: it has no
+    /// per-driver override. On by default.
+    #[serde(default = "default_true")]
+    pub mcp_approval_notifications: bool,
+
     /// When scrollbars are shown in every window. While scrolling by default.
     #[serde(default)]
     pub scrollbar_visibility: ScrollbarVisibility,
@@ -585,6 +601,9 @@ impl Default for GeneralSettings {
             table_alias_use_as: false,
             vim_leader: default_vim_leader(),
             grid_fk_labels: false,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: true,
             scrollbar_visibility: ScrollbarVisibility::WhileScrolling,
             ui_font_family: None,
             ui_font_size: Self::DEFAULT_UI_FONT_SIZE,
@@ -618,6 +637,24 @@ mod font_settings_tests {
             super::ScrollbarVisibility::WhileScrolling
         );
         assert_eq!(legacy, settings);
+    }
+
+    #[test]
+    fn accent_overrides_default_to_the_palette_and_round_trip() {
+        let settings = GeneralSettings::default();
+        assert_eq!((settings.accent_dark, settings.accent_light), (None, None));
+
+        let custom = GeneralSettings {
+            accent_dark: Some(super::AccentColor::from_rgb(0x2F7D6D)),
+            ..GeneralSettings::default()
+        };
+        let json = serde_json::to_string(&custom).expect("serializes");
+        assert!(json.contains("\"accent_dark\":\"#2F7D6D\""), "{json}");
+        assert!(!json.contains("accent_light"), "{json}");
+        assert_eq!(
+            serde_json::from_str::<GeneralSettings>(&json).expect("round trips"),
+            custom
+        );
     }
 
     #[test]

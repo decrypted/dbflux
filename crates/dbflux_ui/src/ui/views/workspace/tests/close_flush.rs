@@ -152,6 +152,169 @@ fn a_close_flush_refused_over_a_foreign_change_keeps_the_tab_open(cx: &mut TestA
     std::fs::remove_file(&path).ok();
 }
 
+/// Opens a dirty file-backed tab, rewrites its file outside dbflux and closes
+/// it once, so its close save is refused and the tab stays open.
+fn refuse_a_close_over_a_foreign_change(
+    window: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    app_state: &Entity<AppStateEntity>,
+    path: &std::path::Path,
+) -> DocumentId {
+    let id = open_file_backed_code_tab(window, workspace, app_state, path, "MINE;", "OLD;", true);
+    std::fs::write(path, "THEIRS;").expect("the external rewrite must succeed");
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.close_tab(id, window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    window.update(|_, cx| {
+        assert!(
+            workspace
+                .read(cx)
+                .tab_manager
+                .read(cx)
+                .document(id)
+                .is_some(),
+            "the refused close leaves the tab open"
+        );
+    });
+
+    id
+}
+
+fn tab_is_open(
+    window: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    id: DocumentId,
+) -> bool {
+    window.update(|_, cx| {
+        workspace
+            .read(cx)
+            .tab_manager
+            .read(cx)
+            .document(id)
+            .is_some()
+    })
+}
+
+/// Answers the open unsaved-changes confirmation with `outcome`, the way its
+/// buttons do: emit, then close.
+fn answer_unsaved_changes(
+    window: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    outcome: UnsavedChangesOutcome,
+) {
+    window.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.modal_unsaved_changes.update(cx, |modal, cx| {
+                cx.emit(outcome);
+                modal.close(cx);
+            });
+        });
+    });
+    window.run_until_parked();
+}
+
+/// Once a close save is refused, retrying it can only be refused again, so the
+/// next close asks instead of leaving the tab impossible to close.
+#[gpui::test]
+fn closing_again_after_a_refused_close_asks_what_to_do(cx: &mut TestAppContext) {
+    let (workspace, app_state, window) = new_workspace(cx);
+    let path = temp_close_path("refused-asks");
+    let id = refuse_a_close_over_a_foreign_change(window, &workspace, &app_state, &path);
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let accepted = workspace.close_tab(id, window, cx);
+            assert!(!accepted, "the close waits for the user's decision");
+            assert!(
+                workspace.modal_unsaved_changes.read(cx).is_visible(),
+                "the second close raises the unsaved-changes confirmation"
+            );
+        });
+    });
+    window.run_until_parked();
+
+    assert!(
+        tab_is_open(window, &workspace, id),
+        "the tab stays open until the user chooses"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the foreign content must survive"),
+        "THEIRS;",
+        "asking writes nothing"
+    );
+
+    std::fs::remove_file(&path).ok();
+}
+
+/// Discarding after a refused close removes the tab and leaves the change made
+/// outside dbflux on disk.
+#[gpui::test]
+fn discarding_after_a_refused_close_removes_the_tab_and_keeps_the_file(cx: &mut TestAppContext) {
+    let (workspace, app_state, window) = new_workspace(cx);
+    let path = temp_close_path("refused-discard");
+    let id = refuse_a_close_over_a_foreign_change(window, &workspace, &app_state, &path);
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.close_tab(id, window, cx);
+        });
+    });
+    answer_unsaved_changes(
+        window,
+        &workspace,
+        UnsavedChangesOutcome::DiscardAll(vec![id]),
+    );
+
+    assert!(
+        !tab_is_open(window, &workspace, id),
+        "discard removes the tab"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the foreign content must survive"),
+        "THEIRS;",
+        "discard must not write the dropped edits"
+    );
+
+    std::fs::remove_file(&path).ok();
+}
+
+/// Saving after a refused close is the deliberate overwrite: the buffer lands
+/// over the foreign change and the tab closes.
+#[gpui::test]
+fn saving_after_a_refused_close_overwrites_the_file_and_closes(cx: &mut TestAppContext) {
+    let (workspace, app_state, window) = new_workspace(cx);
+    let path = temp_close_path("refused-save");
+    let id = refuse_a_close_over_a_foreign_change(window, &workspace, &app_state, &path);
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.close_tab(id, window, cx);
+        });
+    });
+    answer_unsaved_changes(
+        window,
+        &workspace,
+        UnsavedChangesOutcome::SaveSelected(vec![id]),
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the save must land"),
+        "MINE;",
+        "saving writes the buffer over the foreign change"
+    );
+    assert!(
+        !tab_is_open(window, &workspace, id),
+        "the tab closes once the save lands"
+    );
+
+    std::fs::remove_file(&path).ok();
+}
+
 /// A clean, idle tab closes immediately: no flush, no pointless write.
 #[gpui::test]
 fn a_clean_idle_code_tab_closes_without_a_flush(cx: &mut TestAppContext) {

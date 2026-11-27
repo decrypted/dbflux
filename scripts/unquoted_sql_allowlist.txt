@@ -94,3 +94,7 @@ crates/dbflux_driver_sqlite/src/driver.rs:rowid_pseudo_columns: escaped inline (
 crates/dbflux_driver_sqlite/src/table_rebuild/syntax.rs:rename_table: escaped inline (quotes doubled)
 
 crates/dbflux_driver_turso/src/connection.rs:pragma: escaped inline (escape_string doubles quotes; SQLite has no backslash escapes)
+crates/dbflux_core/src/connection/uri/mod.rs:uri_host: not SQL (URI authority; brackets an IPv6 host)
+crates/dbflux_driver_mssql/src/driver.rs:mssql_column_lookup_sql: escaped inline (escape_string doubles quotes; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:mssql_column_lookup_sql: escaped inline (escape_string doubles quotes; T-SQL has no backslash escapes)
+crates/dbflux_driver_mysql/src/driver.rs:mysql_generated_columns_sql: constant (GENERATED_COLUMN_NAME_PREFIX)

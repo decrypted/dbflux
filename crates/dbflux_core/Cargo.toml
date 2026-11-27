@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 uuid = { workspace = true }
 thiserror = "2"
 dirs = { workspace = true }
@@ -44,6 +44,7 @@ tracing-log = { workspace = true, optional = true }
 tracing-appender = { workspace = true, optional = true }
 
 [features]
+telemetry = []
 mcp = []
 tracing-bridge = [
     "dep:tracing",

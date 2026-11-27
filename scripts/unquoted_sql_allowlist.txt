@@ -14,6 +14,7 @@
 #   generated         - a timestamp, number or already-rendered literal list, never a name
 #   not SQL           - display or error text that is never executed
 
+crates/dbflux_core/src/connection/uri/mod.rs:uri_host: not SQL (URI authority; brackets an IPv6 host)
 crates/dbflux_core/src/query/join_condition.rs:parse_join_condition: not SQL (parse error message)
 crates/dbflux_core/src/query/time_macros.rs:substitute_time_macros: generated (RFC 3339 timestamps)
 crates/dbflux_core/src/sql/dialect.rs:quote_double_quoted_identifier: quoting helper
@@ -59,6 +60,8 @@ crates/dbflux_driver_mssql/src/driver.rs:fetch_schema_foreign_keys: escaped inli
 crates/dbflux_driver_mssql/src/driver.rs:fetch_schema_indexes: escaped inline (quotes doubled; T-SQL has no backslash escapes)
 crates/dbflux_driver_mssql/src/driver.rs:get_schema_routines: escaped inline (quotes doubled; T-SQL has no backslash escapes)
 crates/dbflux_driver_mssql/src/driver.rs:mssql_bracket_identifier: quoting helper
+crates/dbflux_driver_mssql/src/driver.rs:mssql_column_lookup_sql: escaped inline (escape_string doubles quotes; T-SQL has no backslash escapes)
+crates/dbflux_driver_mssql/src/driver.rs:mssql_column_lookup_sql: escaped inline (escape_string doubles quotes; T-SQL has no backslash escapes)
 crates/dbflux_driver_mssql/src/driver.rs:table_creation_metadata: escaped inline (quotes doubled; T-SQL has no backslash escapes)
 crates/dbflux_driver_mssql/src/driver.rs:validate_creation_metadata: not SQL (error message)
 crates/dbflux_driver_mssql/src/driver.rs:validate_creation_metadata: not SQL (error message)
@@ -67,9 +70,13 @@ crates/dbflux_driver_mssql/src/driver.rs:validate_creation_metadata: not SQL (er
 crates/dbflux_driver_mssql/src/driver.rs:view_details: escaped inline (quotes doubled; T-SQL has no backslash escapes)
 crates/dbflux_driver_mssql/src/instance_catalog.rs:fetch_performance_counter: escaped inline (escape_mssql_literal)
 crates/dbflux_driver_mssql/src/instance_catalog.rs:fetch_ratio_counter: escaped inline (escape_mssql_literal)
+crates/dbflux_driver_mssql/src/plan/condition.rs:column_text: not SQL (plan display text from SHOWPLAN)
+crates/dbflux_driver_mssql/src/plan/condition.rs:column_text: not SQL (plan display text from SHOWPLAN)
 
+crates/dbflux_driver_mysql/src/driver.rs:mysql_generated_columns_sql: constant (GENERATED_COLUMN_NAME_PREFIX)
 crates/dbflux_driver_mysql/src/driver.rs:mysql_quote_ident: quoting helper
 crates/dbflux_driver_mysql/src/instance_catalog.rs:fetch_global_status_value: constant (var_name from PIVOTED_COUNTERS)
+crates/dbflux_driver_mysql/src/plan/mod.rs:container_node: not SQL (error message)
 
 crates/dbflux_driver_postgres/src/driver.rs:format_pg_array_literal: generated (ARRAY[...] of rendered literals)
 crates/dbflux_driver_postgres/src/driver.rs:format_pg_array_literal: generated (ARRAY[...] of rendered literals)

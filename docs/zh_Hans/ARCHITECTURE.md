@@ -295,7 +295,8 @@ crates/
         form_nav.rs         # FormGridNav<F> 通用二维网格导航
         form_section.rs     # 用于键盘导航的 FormSection trait
         section_trait.rs    # SettingsSection trait
-        general.rs          # 常规设置（主题、安全开关）
+        general.rs          # 常规设置（安全开关、启动、刷新）
+        appearance_section.rs # 外观页面（主题、密度、语言、字体）
         keybindings.rs      # 键盘快捷键设置节
         auth_profiles_section.rs # 依据提供程序表单定义动态增删改查认证配置文件
         proxies.rs          # 带 FormGridNav 的代理增删改查表单
@@ -556,10 +557,14 @@ crates/
       audit.rs              # 带 AuditEventDto 的 AuditRepository
       *.rs                  # 其他领域存储库
     src/legacy.rs           # JSON 到 SQLite 的导入
+  dbflux_diagram/           # 与领域无关的图表几何（不含 GPUI）
+    src/layout/             # 基于 LayoutNode + LayoutEdge（边权重）的 layered_left_right / compact_grid / radial
+    src/routing.rs          # route_edge：节点矩形之间沿坐标轴的边路由
+    src/navigation/         # next_in_direction / spatial_order：节点之间的键盘选择
   dbflux_schema_viz/        # Schema 可视化
     src/lib.rs              # 重导出：graph、layout、dbml、sql 模块，DbmlScope、SqlScope
     src/graph.rs            # SchemaGraph、TableNode、FkEdge
-    src/layout.rs           # 布局算法：LeftRight、Snowflake、Compact
+    src/layout.rs           # 表格尺寸计算 + LeftRight、Snowflake、Compact，由 dbflux_diagram 负责摆放
     src/dbml.rs             # DBML 导出（3 种范围：FocalTable、Subgraph、FullSchema）
     src/sql.rs              # SQL DDL 导出：CREATE TABLE + ALTER TABLE ADD CONSTRAINT（同样 3 种范围）
   dbflux_test_support/       # 用于集成测试的 Docker 容器与固件（Fixture）
@@ -669,7 +674,8 @@ crates/
 - **文档树**：`crates/dbflux_components/src/components/document_tree/` 面向文档数据库的层级式 JSON/BSON 查看器，支持键盘导航（j/k/h/l）、搜索（Ctrl+F 或 /）、可折叠节点，以及多种视图模式（仅键、键+预览、完整值）。
 - **键值视图**：`crates/dbflux_ui_document/src/key_value/` Redis 专用的文档标签页，按类型渲染（String、Hash、List、Set、SortedSet、Stream），支持分页、变更与右键菜单。通过 `key_value/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
 - **原生控制台**：`crates/dbflux_ui_document/src/console/` 是一个命令控制台，供驱动声明了 `DriverCapabilities::NATIVE_CONSOLE` 的连接使用；`DriverMetadata::native_console()` 根据查询语言推导其提示符与示例。命令先经过驱动 `LanguageService` 的校验与危险命令检测，再通过 `Connection::execute` 运行（当驱动提供隔离会话时，经由编辑器的 `ExecutionSessionBinding`）；确认后会携带已确认的上限，产生与编辑器相同的 `query_execute` 审计记录，并进入共享的查询历史。编辑器的行数上限只会发送给声明了 `DriverCapabilities::REQUEST_ROW_LIMIT` 的驱动。输入补全复用编辑器的 `QueryCompletionProvider`。键值文档以及表和集合的 `DataDocument` 会停靠该控制台；`ConsoleDocument`（`console_document/`、`DocumentKey::Console`）则在单独的标签页中承载它，可从数据库在侧边栏中的菜单打开。
-- **Schema 可视化**：`crates/dbflux_schema_viz/` 提供 `SchemaGraph`（表节点与外键边）、布局算法（LeftRight、Snowflake、Compact）、DBML 导出与 SQL DDL 导出。通过 `crates/dbflux_ui_document/src/schema_viz/mod.rs` 中的 `SchemaVizDocument` 访问，带工具栏下拉菜单（Layout、Export）、Toast 提示、审计事件与可取消的后台任务加载。通过 `schema_viz/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
+- **图表画布**：`crates/dbflux_diagram/` 提供与领域无关的几何能力（基于带尺寸节点与带权重边的分层、紧凑网格和放射状布局，正交边路由，空间键盘导航），`crates/dbflux_components/src/diagram/` 则是构建在其上的 GPUI 画布（用于平移/缩放/适应窗口的视口计算、点阵网格与变换后的表面、带宽度绘制的边、带页眉/主体/页脚插槽的节点卡片）。节点内容与事件处理器由使用方提供；目前的使用方是 Schema 图。
+- **Schema 可视化**：`crates/dbflux_schema_viz/` 提供 `SchemaGraph`（表节点与外键边）、布局算法（LeftRight、Snowflake、Compact，负责计算表格尺寸并将摆放委托给 `dbflux_diagram`）、DBML 导出与 SQL DDL 导出。通过 `crates/dbflux_ui_document/src/schema_viz/mod.rs` 中的 `SchemaVizDocument` 访问，带工具栏下拉菜单（Layout、Export）、Toast 提示、审计事件与可取消的后台任务加载。通过 `schema_viz/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
 - 单元格编辑器模态框：`crates/dbflux_components/src/modals/cell_editor.rs` 为 JSON 列与长文本/多行文本提供模态编辑器，带 JSON 校验与格式化。
 - 文档预览模态框：`crates/dbflux_components/src/modals/document_preview.rs` 全屏 JSON 文档预览，带内联 JSON 编辑器。
 - 命令面板：`crates/dbflux_ui/src/ui/overlays/command_palette.rs` 面向全部应用动作的模糊搜索命令面板。
@@ -764,7 +770,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 ### 设置窗口
 
-- 设置划分为以下各节：常规、键盘快捷键、认证配置文件、代理、SSH 隧道、服务、Hooks、驱动程序、审计与关于。MCP 各节（受信客户端、角色、策略）在 `mcp` feature 下按 feature 门控。
+- 设置划分为以下各节：常规、外观、键盘快捷键、认证配置文件、代理、SSH 隧道、服务、Hooks、驱动程序、审计与关于。MCP 各节（受信客户端、角色、策略）在 `mcp` feature 下按 feature 门控。
 - 侧边栏使用 `TreeNav` 组件，带有可折叠的网络/连接类别。
 - `UiStateStore` 把侧边栏折叠状态持久化到 `~/.local/share/dbflux/dbflux.db` 中的 `st_ui_state` 表。
 - 认证配置文件一节由提供程序驱动（`DynAuthProvider::form_def`），并支持导入提供程序发现的配置（对 AWS 而言来自 `~/.aws/config`）。
@@ -908,7 +914,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - 隧道基础设施：`crates/dbflux_tunnel_core/` 提供 RAII `Tunnel`，带 `TunnelConnector` trait 与 `ForwardingConnection<R>` 双向转发器。
 - 代理隧道：`crates/dbflux_proxy/` 经由 `TunnelConnector` 实现 SOCKS5 与 HTTP CONNECT 代理隧道。
 - SSH 隧道：`crates/dbflux_ssh/src/lib.rs` 经由 `TunnelConnector` 实现 SSH 隧道，为保障 libssh2 安全，所有操作串行到单个线程上。
-- 导出：`crates/dbflux_export/` 提供基于形状的导出（CSV、JSON 美化/紧凑、文本、二进制/Hex/Base64）。可用格式由 `QueryResultShape` 决定，而不是由驱动程序决定。每种格式各有自己的模块（`binary.rs`、`csv.rs`、`json.rs`、`text.rs`）。文件对话框的可用性在运行时通过 `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` 探测（在 Linux 上：检查 `PATH` 中是否有 `xdg-desktop-portal`、`zenity`、`kdialog`）；若没有可用的后端，导出会回退到 `fallback_export_dir()`（`~/.local/share/dbflux/exports/`），并用 `unique_path_in()` 去重。此外还有一条剪贴板导出路径可作为替代目标。
+- 导出：`crates/dbflux_export/` 提供基于形状的导出（CSV、JSON 美化/紧凑、文本、二进制/Hex/Base64）。可用格式由 `QueryResultShape` 决定，而不是由驱动程序决定。每种格式各有自己的模块（`binary.rs`、`csv.rs`、`json.rs`、`text.rs`）。文件对话框的可用性在运行时通过 `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` 探测（在 Linux 上：仅当存在 `org.freedesktop.portal.Desktop` 的 D-Bus 会话服务文件且已安装的后端声明了 `org.freedesktop.impl.portal.FileChooser` 时才认为 XDG portal 可用，否则检查 `PATH` 中是否有 `zenity`、`kdialog`）；若没有可用的后端，导出会回退到 `fallback_export_dir()`（`~/.local/share/dbflux/exports/`），并用 `unique_path_in()` 去重。此外还有一条剪贴板导出路径可作为替代目标。
 - 测试支撑：`crates/dbflux_test_support/` 提供 Docker 容器管理与固件（Fixture），用于跨所有驱动程序的真实集成测试。DynamoDB Local 仅用于集成测试与本地验证；生产环境使用的是远端 AWS DynamoDB 端点。
 - 图标系统：`AppIcon` 枚举定义在 `crates/dbflux_components/src/icons/mod.rs`；内嵌的 SVG 字节与 `ALL_ICONS` 列表仍位于 `crates/dbflux_ui/src/ui/icons/mod.rs`（资源文件在 `crates/dbflux_ui/resources/` 下），通过 `assets.rs` 加载。
 - 平台检测：`crates/dbflux_ui_base/src/platform.rs` 用 `is_x11()`、主窗口的 `apply_main_window_options()`，以及次要窗口的 `floating_window_kind()` 与 `apply_window_options()` 处理 X11/Wayland 差异，以正确设置窗口最小尺寸提示。（`crates/dbflux_ui/src/platform.rs` 处留有垫片。）

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dbflux_core::OffRuntimeDrop;
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionExt, DatabaseInfo, DbError, DbKind, DocumentConnection,
     DriverMetadata, ExecutionClassification, KeyValueConnection, QueryCancelHandle, QueryHandle,
@@ -22,7 +23,9 @@ use uuid::Uuid;
 
 use crate::dialect::REDSHIFT_DIALECT;
 use crate::driver::METADATA;
-use crate::error_formatter::{format_redshift_connection_error, format_redshift_query_error};
+use crate::error_formatter::{
+    format_redshift_connection_error, format_redshift_query_error, format_redshift_query_error_in,
+};
 use crate::introspection::{get_current_database, get_databases, get_schemas, get_table_details};
 use crate::types::{decode_defensive_fallback, decode_numeric_fallback, redshift_oid_to_kind};
 
@@ -354,11 +357,11 @@ fn ensure_read_only(sql: &str) -> Result<(), DbError> {
     }
 }
 
-fn map_statement_error(error: &postgres::Error) -> DbError {
+fn map_statement_error(error: &postgres::Error, sql: &str) -> DbError {
     if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
         DbError::Cancelled
     } else {
-        format_redshift_query_error(error)
+        format_redshift_query_error_in(error, Some(sql))
     }
 }
 
@@ -408,7 +411,7 @@ fn run_statement(
 ) -> Result<StatementRows, DbError> {
     let statement = client
         .prepare(sql)
-        .map_err(|error| map_statement_error(&error))?;
+        .map_err(|error| map_statement_error(&error, sql))?;
 
     let columns: Vec<ColumnMeta> = statement
         .columns()
@@ -424,11 +427,15 @@ fn run_statement(
 
     let mut stream = client
         .query_raw(&statement, std::iter::empty::<i32>())
-        .map_err(|error| map_statement_error(&error))?;
+        .map_err(|error| map_statement_error(&error, sql))?;
 
     let column_count = columns.len();
     let (rows, truncated) = retain_within_budget(
-        || stream.next().map_err(|error| map_statement_error(&error)),
+        || {
+            stream
+                .next()
+                .map_err(|error| map_statement_error(&error, sql))
+        },
         remaining_rows,
         |row| {
             (0..column_count)
@@ -672,7 +679,7 @@ fn strip_comments_and_quoted_content(sql: &str) -> String {
 }
 
 pub struct RedshiftConnection {
-    pub(crate) client: Arc<Mutex<Client>>,
+    pub(crate) client: Arc<Mutex<OffRuntimeDrop<Client>>>,
     #[allow(dead_code)]
     pub(crate) ssh_tunnel: Option<SshTunnel>,
     pub(crate) cancel_token: CancelToken,

@@ -2,6 +2,7 @@
 
 pub mod access;
 pub mod auth;
+pub mod child_environment;
 mod config;
 mod connection;
 mod core;
@@ -35,15 +36,17 @@ pub use auth::{
 };
 
 pub use config::{
-    AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
+    AccentColor, AppConfig, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, ExternalScriptRoot, GeneralSettings,
-    GlobalOverrides, GovernanceSettings, LoadedAppConfig, MountedScriptRoot, PolicyRoleConfig,
-    RefreshPolicy, RefreshPolicySetting, RpcServiceKind, ScriptEntry, ScriptRootAvailability,
-    ScriptsDirectory, ScriptsScan, ScriptsScanRequest, ServiceConfig, ServiceRpcApiContract,
-    StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, all_script_extensions,
-    driver_maps_differ, filter_entries, hook_script_path, is_openable_script, migrate_app_config,
+    GlobalOverrides, GovernanceSettings, InterfaceSizeChange, LoadedAppConfig, MountedScriptRoot,
+    PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting, RpcServiceKind, ScriptEntry,
+    ScriptRootAvailability, ScriptsDirectory, ScriptsScan, ScriptsScanRequest, ScrollbarVisibility,
+    ServiceConfig, ServiceRpcApiContract, StartupFocus, ThemeSetting, ToolPolicyConfig,
+    TrustedClientConfig, all_script_extensions, driver_maps_differ, filter_entries,
+    hook_script_path, is_openable_script, migrate_app_config,
 };
 
+pub use connection::manager::FencedTableDetailsFailure;
 #[allow(deprecated)]
 pub use connection::{
     ApplyFetchOutcome, AuthProfileManager, CacheEntry, CacheKey, ConnectProfileParams,
@@ -64,18 +67,21 @@ pub use connection::{
     HookContext, HookExecution, HookExecutionContext, HookExecutionMode, HookExecutor,
     HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner, Identifiable,
     InfluxVersion, InstallDatabaseConnectionOutcome, ItemManager, LuaCapabilities,
-    MetricQuerySeries, MutationPolicy, NavigatorView, OutputEvent, OutputReceiver, OutputSender,
-    OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProcessContainment,
-    ProcessExecutionError, ProcessExecutor, ProfileManager, ProfilePolicyResolver, ProxyAuth,
-    ProxyKind, ProxyManager, ProxyProfile, ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry,
-    RefreshViewsParams, RefreshedViews, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
-    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo,
-    SslMode, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams, SwitchDatabaseResult,
-    TableDetailsPrepareError, TestConnectionResult, TreeLoadResult, TreeStore, WritePrivilege,
-    compose_mutation_policy, detached_process_channel, execute_streaming_process,
-    host_matches_no_proxy, output_channel, ssl_mode_from_id, ssl_mode_id_is_cert_active,
-    ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
+    MetricQuerySeries, MutationPolicy, NavigatorView, OffRuntimeDrop, OutputEvent, OutputReceiver,
+    OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
+    ProcessContainment, ProcessExecutionError, ProcessExecutor, ProfileManager,
+    ProfilePolicyResolver, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, ReadOnlyReason,
+    RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews, ResolvedProxy,
+    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager,
+    SshTunnelProfile, SslInfo, SslMode, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
+    SwitchDatabaseResult, SwitchRegionParams, SwitchRegionResult, TableDetailsPrepareError,
+    TestConnectionResult, TreeLoadResult, TreeStore, WritePrivilege, compose_mutation_policy,
+    detached_process_channel, execute_streaming_process, host_matches_no_proxy, output_channel,
+    ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
+    ssl_mode_requires_root_cert,
 };
+
+pub use connection::{decode_uri_component, split_uri_host_port, uri_host};
 
 pub use connection::{
     DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace,
@@ -87,10 +93,21 @@ pub use connection::dashboard_import::{
 };
 
 pub use connection::dashboard_source::{DashboardRef, DashboardSource, RemoteDashboard};
+pub use connection::root_section::{
+    LocalizedText, RootItemPresentation, RootSectionAction, RootSectionDef, RootSectionItem,
+    RootSectionPage, RootSectionPresentation, RootSectionSource,
+};
 pub use connection::secret_store::{
-    SecretDetails, SecretListPage, SecretListRequest, SecretPayload, SecretRotation,
+    DEFAULT_RECOVERY_WINDOW_DAYS, MAX_RECOVERY_WINDOW_DAYS, MAX_TAGS, MIN_RECOVERY_WINDOW_DAYS,
+    SecretCreateChoices, SecretCreateRequest, SecretCreated, SecretDeleteRequest, SecretDeletion,
+    SecretDescriptionChange, SecretDescriptionUpdate, SecretDetails, SecretListPage,
+    SecretListRequest, SecretPayload, SecretPutRequest, SecretRollback, SecretRollbackRequest,
+    SecretRotation, SecretRotationChange, SecretRotationStart, SecretRotationUpdate,
     SecretStoreCapabilities, SecretStoreDescriptor, SecretStoreSource, SecretSummary, SecretTag,
-    SecretValue,
+    SecretTagsUpdate, SecretValue, SecretVersionInfo, SecretVersionStage, encode_base64,
+    require_name, scrub_echoed_values, scrub_submitted_payload, validate_rotation_function,
+    validate_rotation_schedule, validate_rotation_window, validate_rotation_window_fits,
+    validate_tag,
 };
 
 pub use connection::dump_analysis::{
@@ -113,8 +130,9 @@ pub use core::{
     PublicAccessStatus, QueryCancelHandle, QueryErrorFormatter, RelationalConnection,
     SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind,
     SchemaSnapshotAuthority, ShutdownCoordinator, ShutdownPhase, SourceContextSpec,
-    SourceQueryMode, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
-    TransactionStateNote, Value, VersioningStatus, redact_uri_credentials, sanitize_uri,
+    SourceQueryMode, StatementLocator, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot,
+    TaskStatus, TaskTarget, TransactionStateNote, Value, VersioningStatus,
+    byte_offset_to_line_column, char_position_to_byte_offset, redact_uri_credentials, sanitize_uri,
 };
 
 pub use data::{AggregatePipelineError, CollectionAggregateRequest, parse_aggregate_pipeline};
@@ -187,14 +205,14 @@ pub use query::{
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
     SemanticRequest, SemanticRequestKind, ServerNotice, SortDirection, SortEntry, SourceTable,
     SpecError, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,
-    SqlLanguageService, SqlMutationGenerator, StatementScope, TableBrowseRequest,
+    SqlFormatDialect, SqlLanguageService, SqlMutationGenerator, StatementScope, TableBrowseRequest,
     TableCountRequest, TableRef, TextPosition, TextPositionRange, TextRange, TransactionVocab,
     TransferColumn, ValidationResult, VisualAggregateSpec, VisualMutationSpec, VisualQuerySpec,
     VisualSortDirection, aggregate_writes_output, ceiling_permits, classify_query_for_governance,
     classify_query_for_language, classify_query_for_language_with_service, classify_sql_execution,
     classify_visual_mutation, contains_compound_block, contains_time_macros,
-    detect_dangerous_query, detect_dangerous_sql, infer_column_kind, inline_params,
-    is_safe_read_query, lower_keyset_predicate, parse_semantic_filter_json,
+    detect_dangerous_query, detect_dangerous_sql, format_sql, format_sql_text, infer_column_kind,
+    inline_params, is_safe_read_query, lower_keyset_predicate, parse_semantic_filter_json,
     project_aggregate_kinds, render_filter_node_sql, render_semantic_filter_sql,
     sql_statement_keywords, strip_leading_comments, substitute_time_macros,
 };
@@ -207,11 +225,20 @@ pub use query::{
     UnrepresentableClause,
 };
 pub use query::{
+    ESTIMATE_GAP_THRESHOLD, EstimateGap, PlanCondition, PlanFormat, PlanNode, QueryPlan,
+    QueryPlanMode, QueryPlanRequest, analyze_allowed, analyze_statement, analyze_unsupported,
+    parse_sqlite_query_plan, plan_text_from_result, single_plan_statement, sqlite_plan_statement,
+};
+pub use query::{
     JOIN_CONDITION_FORM, JoinColumnRef, JoinComparison, JoinConditionError,
     is_plain_sql_identifier, join_on_conditions, parse_join_condition,
     semantic_filter_to_filter_node,
 };
 pub use query::{MAX_NAME_SUGGESTIONS, MAX_SUGGESTED_NAME_LENGTH, suggest_names};
+pub use query::{
+    ParsedSnippet, PlaceholderSpan, SnippetParseError, SnippetParseErrorKind, Tabstop,
+    parse_snippet, snippet_placeholder_spans,
+};
 pub use query::{normalize_relaxed_json, parse_relaxed_json};
 
 pub use query::relational_filter::{
@@ -250,20 +277,19 @@ pub use schema::{
     CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
     ColumnDiff, ColumnInfo, ColumnSnapshot, ConstraintInfo, ConstraintKind, ContainerInfo,
     CreationBlocker, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo, DatabaseLayout,
-    DbSchemaInfo, DocumentSchema, DriftOutcome, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo,
-    IdentitySpec, IndexBuilder, IndexData, IndexDirection, IndexInfo, IndexSnapshot, KeyInfo,
-    KeySpaceInfo, KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata,
+    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, IdentitySpec,
+    IndexBuilder, IndexData, IndexDirection, IndexInfo, IndexSnapshot, KeyInfo, KeySpaceInfo,
+    KeyValueSchema, MeasurementInfo, MetadataCompleteness, MissingCreationMetadata,
     NEAREST_DISTANCE_COLUMN, NearestNeighborRequest, ObjectFacet, ObjectFolder, OrderResult,
-    ParseSchemaNodeIdError, PrimaryKeySpec, QueryTableRef, RelationKind, RelationRef,
-    RelationalSchema, RetentionPolicyInfo, RiskedChange, RoutineInfo, RoutineKind, SchemaChange,
-    SchemaColumnInfo, SchemaDiff, SchemaDriftDetected, SchemaFingerprint, SchemaForeignKeyBuilder,
+    ParseSchemaNodeIdError, PrimaryKeyCheck, PrimaryKeySpec, QueryTableRef, RelationKind,
+    RelationRef, RelationalSchema, RetentionPolicyInfo, RiskedChange, RoutineInfo, RoutineKind,
+    SchemaChange, SchemaColumnInfo, SchemaFingerprint, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind,
     SchemaSnapshot, SchemaSnapshotRecord, SnapshotDepth, TableAlterNormalizationError, TableChange,
-    TableCreationMetadata, TableInfo, TableKey, TableStorageHint, TimeSeriesFacet,
-    TimeSeriesFieldInfo, TimeSeriesSchema, VectorDistance, VectorFacet, ViewInfo,
-    category_collection_facets, check_drift_sync, check_schema_drift, classify_table_added,
-    classify_table_removed, diff_schema, diff_table_info, extract_referenced_tables,
-    normalize_selected_table_alter, topological_order,
+    TableCreationMetadata, TableInfo, TableStorageHint, TimeSeriesFacet, TimeSeriesFieldInfo,
+    TimeSeriesSchema, VectorDistance, VectorFacet, ViewInfo, category_collection_facets,
+    check_primary_key, classify_table_added, classify_table_removed, diff_schema, diff_table_info,
+    extract_referenced_tables, normalize_selected_table_alter, topological_order,
 };
 
 pub use sql::{
@@ -274,10 +300,11 @@ pub use sql::{
     PreparedTableAlter, ReindexRequest, SqlDialect, SqlGenerationOptions, SqlGenerationRequest,
     SqlOperation, SqlQueryBuilder, SqlValueMode, TableAlterExpectedColumn, TableAlterOperation,
     TableAlterOutcome, TableAlterPlanner, TableAlterPreview, TableAlterRequest, TableAlterRoute,
-    TransactionControl, TypeAttributeDefinition, TypeDefinition, classify_sql_transaction_control,
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_sql, generate_truncate, generate_update_template,
-    quote_double_quoted_identifier, validate_ddl_fragment,
+    TransactionControl, TypeAttributeDefinition, TypeDefinition, TypeFamily,
+    classify_sql_transaction_control, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_sql,
+    generate_truncate, generate_update_template, quote_double_quoted_identifier, type_family,
+    validate_ddl_fragment,
 };
 
 pub use pipeline::{
@@ -296,7 +323,8 @@ pub use storage::{
     HasSecretRef, HistoryEntry, KeyringSecretStore, NoopSecretStore, RecentFile, SavedQuery,
     SecretManager, SecretStore, SessionManifest, SessionStore, SessionTab, SessionTabKind, UiState,
     UiStateStore, auth_field_secret_ref, connection_secret_ref, create_secret_store,
-    proxy_secret_ref, ssh_tunnel_secret_ref,
+    keyring_password_for_connect, password_lives_in_keyring, proxy_secret_ref,
+    ssh_tunnel_secret_ref,
 };
 
 pub use observability::{

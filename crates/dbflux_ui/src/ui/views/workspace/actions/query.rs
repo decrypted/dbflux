@@ -221,6 +221,7 @@ impl Workspace {
                     title: snap.title,
                     position: tabs.len(),
                     is_pinned: false,
+                    view_state_json: snap.view_state_json,
                 },
             );
         }
@@ -271,7 +272,14 @@ impl Workspace {
             return;
         }
 
+        // How many tabs were open as each manifest tab came up, and after the
+        // last one. A tab that is skipped opens nothing, so the active tab is
+        // found by the tab it opened, not by its position in the manifest.
+        let mut open_before: Vec<usize> = Vec::with_capacity(manifest.tabs.len() + 1);
+
         for tab in &manifest.tabs {
+            open_before.push(self.tab_manager.read(cx).documents().len());
+
             let manifest_language = match tab.language.as_str() {
                 "sql" => dbflux_core::QueryLanguage::Sql,
                 "mongo" => dbflux_core::QueryLanguage::MongoQuery,
@@ -362,6 +370,13 @@ impl Workspace {
                     mgr.open(Tab::Pane(Box::new(pane)), cx);
                 });
 
+                continue;
+            }
+
+            if tab.tab_kind == crate::ui::document::DataDocument::TABLE_SESSION_TAB_KIND
+                || tab.tab_kind == crate::ui::document::DataDocument::COLLECTION_SESSION_TAB_KIND
+            {
+                self.restore_data_tab(tab, window, cx);
                 continue;
             }
 
@@ -520,28 +535,40 @@ impl Workspace {
             });
         }
 
-        // Restore active tab
-        if let Some(active_idx) = manifest.active_index {
-            let docs: Vec<_> = self
-                .tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .map(|d| d.id())
-                .collect();
+        open_before.push(self.tab_manager.read(cx).documents().len());
 
-            if let Some(id) = docs.get(active_idx) {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.activate(*id, cx);
-                });
-            }
+        // Restore active tab
+        let active_id = manifest
+            .active_index
+            .and_then(|active_idx| restored_tab_position(&open_before, active_idx))
+            .and_then(|position| {
+                self.tab_manager
+                    .read(cx)
+                    .documents()
+                    .get(position)
+                    .map(|doc| doc.id())
+            });
+
+        if let Some(id) = active_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(id, cx);
+            });
         }
     }
 }
 
+/// Where the tab restored from manifest position `manifest_index` landed in
+/// the tab bar, given how many tabs were open before each manifest tab (and,
+/// last, after all of them). `None` when that tab was not restored.
+fn restored_tab_position(open_before: &[usize], manifest_index: usize) -> Option<usize> {
+    let before = *open_before.get(manifest_index)?;
+    let after = *open_before.get(manifest_index + 1)?;
+    (after > before).then_some(before)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::select_restored_file_content;
+    use super::{restored_tab_position, select_restored_file_content};
     use std::io::{Error, ErrorKind};
 
     fn unreadable() -> Error {
@@ -629,6 +656,24 @@ mod tests {
         assert!(
             select_restored_file_content(Err(unreadable()), Some(Err(unreadable()))).is_none(),
             "unreadable file and shadow must skip the tab"
+        );
+    }
+
+    /// Tabs skipped before the active one shift it left in the tab bar; a
+    /// skipped active tab has no position.
+    #[test]
+    fn the_active_tab_is_found_by_what_it_opened() {
+        // Manifest: [skipped, opened, opened, skipped].
+        let open_before = [0, 0, 1, 2, 2];
+
+        assert_eq!(restored_tab_position(&open_before, 0), None);
+        assert_eq!(restored_tab_position(&open_before, 1), Some(0));
+        assert_eq!(restored_tab_position(&open_before, 2), Some(1));
+        assert_eq!(restored_tab_position(&open_before, 3), None);
+        assert_eq!(
+            restored_tab_position(&open_before, 4),
+            None,
+            "an index past the manifest has no tab"
         );
     }
 }

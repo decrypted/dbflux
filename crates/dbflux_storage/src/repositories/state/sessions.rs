@@ -63,6 +63,7 @@ pub(crate) struct FullTab {
     pub exec_ctx_database: Option<String>,
     pub exec_ctx_schema: Option<String>,
     pub exec_ctx_container: Option<String>,
+    pub view_state_json: Option<String>,
 }
 
 /// Session repository — manages session and tab metadata in dbflux.db.
@@ -200,7 +201,7 @@ impl SessionRepository {
                 "SELECT id, tab_kind, title, position, is_pinned,
                         scratch_file_path, shadow_file_path, language, file_path,
                         exec_ctx_json, exec_ctx_connection_id, exec_ctx_database, exec_ctx_schema,
-                        exec_ctx_container, created_at, updated_at
+                        exec_ctx_container, created_at, updated_at, view_state_json
                  FROM st_session_tabs WHERE session_id = ?1 ORDER BY position ASC",
             )
             .map_err(|source| StorageError::Sqlite {
@@ -227,6 +228,7 @@ impl SessionRepository {
                     row.get::<_, Option<String>>(13)?,
                     row.get::<_, String>(14)?,
                     row.get::<_, String>(15)?,
+                    row.get::<_, Option<String>>(16)?,
                 ))
             })
             .map_err(|source| StorageError::Sqlite {
@@ -256,6 +258,7 @@ impl SessionRepository {
                     exec_ctx_container,
                     _tab_created,
                     _tab_updated,
+                    view_state_json,
                 )) => {
                     // Native columns hold the data previously extracted from JSON.
                     tabs.push(FullTab {
@@ -273,6 +276,7 @@ impl SessionRepository {
                         exec_ctx_database,
                         exec_ctx_schema,
                         exec_ctx_container,
+                        view_state_json,
                     });
                 }
                 Err(e) => last_err = Some(e),
@@ -525,6 +529,7 @@ impl SessionRepository {
                         exec_ctx_json,
                         position: tab.position,
                         is_pinned: tab.is_pinned,
+                        view_state_json: tab.view_state_json,
                     }
                 })
                 .collect(),
@@ -683,8 +688,8 @@ impl SessionRepository {
                                          scratch_file_path, shadow_file_path,
                                          language, file_path, exec_ctx_json, exec_ctx_connection_id,
                                          exec_ctx_database, exec_ctx_schema, exec_ctx_container,
-                                         created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                                         view_state_json, created_at, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
                         datetime('now'), datetime('now'))
                 "#,
                 params![
@@ -703,6 +708,7 @@ impl SessionRepository {
                     exec_ctx_database,
                     exec_ctx_schema,
                     exec_ctx_container,
+                    tab.view_state_json,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -798,6 +804,9 @@ pub struct RestoredTab {
     pub exec_ctx_json: String,
     pub position: i32,
     pub is_pinned: bool,
+    /// Document-owned view state (a table tab's filter, limit and sort), as the
+    /// document serialized it; `None` for tabs that keep none.
+    pub view_state_json: Option<String>,
 }
 
 impl Default for TabRestorePayload {
@@ -840,6 +849,8 @@ pub struct WorkspaceTab {
     pub title: String,
     pub position: usize,
     pub is_pinned: bool,
+    /// Document-owned view state, stored as given and handed back on restore.
+    pub view_state_json: Option<String>,
 }
 
 #[cfg(test)]
@@ -1007,6 +1018,7 @@ mod tests {
                 title: "Query 1".to_string(),
                 position: 0,
                 is_pinned: false,
+                view_state_json: None,
             }],
         };
 
@@ -1199,6 +1211,7 @@ mod tests {
                 title: "my-script.sql".to_string(),
                 position: 0,
                 is_pinned: false,
+                view_state_json: None,
             }],
         };
 
@@ -1266,6 +1279,7 @@ mod tests {
                 title: "Query with context".to_string(),
                 position: 0,
                 is_pinned: false,
+                view_state_json: None,
             }],
         };
 
@@ -1340,6 +1354,7 @@ mod tests {
                     title: "CloudWatch One".to_string(),
                     position: 0,
                     is_pinned: false,
+                    view_state_json: None,
                 },
                 WorkspaceTab {
                     id: "cw-2".to_string(),
@@ -1363,6 +1378,7 @@ mod tests {
                     title: "CloudWatch Two".to_string(),
                     position: 1,
                     is_pinned: false,
+                    view_state_json: None,
                 },
             ],
         };
@@ -1552,6 +1568,7 @@ mod tests {
                     title: "Query 0".to_string(),
                     position: 0,
                     is_pinned: false,
+                    view_state_json: None,
                 },
                 WorkspaceTab {
                     id: "tab-1".to_string(),
@@ -1564,6 +1581,7 @@ mod tests {
                     title: "Query 1".to_string(),
                     position: 1,
                     is_pinned: false,
+                    view_state_json: None,
                 },
                 WorkspaceTab {
                     id: "tab-2".to_string(),
@@ -1576,6 +1594,7 @@ mod tests {
                     title: "Query 2 — active".to_string(),
                     position: 2,
                     is_pinned: false,
+                    view_state_json: None,
                 },
             ],
         };
@@ -1629,6 +1648,7 @@ mod tests {
                     title: format!("Save {}", i),
                     position: 0,
                     is_pinned: false,
+                    view_state_json: None,
                 }],
             };
 
@@ -1661,5 +1681,77 @@ mod tests {
             full.tabs[0].title, "Save 2",
             "latest tab must be from last save"
         );
+    }
+
+    /// A table tab carries no file: its table lives in the execution context
+    /// and its filter in the view state, and both must come back unchanged.
+    #[test]
+    fn a_table_tab_round_trips_its_table_and_view_state() {
+        let path = temp_db("table_tab");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
+        let arc_conn = Arc::new(conn);
+        let repo = SessionRepository::new(arc_conn.clone());
+
+        let profile_id = Uuid::new_v4();
+        let profile = ConnectionProfileDto::new(profile_id, "stage".to_string());
+        ConnectionProfileRepository::new(arc_conn.clone())
+            .insert(&profile)
+            .expect("insert profile");
+
+        let artifact_root = std::env::temp_dir().join(format!(
+            "dbflux_test_table_tab_{}_{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let store = ArtifactStore::for_root(artifact_root.clone()).expect("store");
+
+        let view_state = r#"{"filter":"status = 500","limit":250}"#.to_string();
+        let manifest = WorkspaceSessionManifest {
+            version: 1,
+            active_index: Some(0),
+            tabs: vec![WorkspaceTab {
+                id: Uuid::new_v4().to_string(),
+                tab_kind: "Table".to_string(),
+                language: "sql".to_string(),
+                exec_ctx: dbflux_core::ExecutionContext {
+                    connection_id: Some(profile_id),
+                    database: Some("shop".into()),
+                    schema: Some("shop".into()),
+                    container: Some("api_call_log".into()),
+                    source: None,
+                },
+                scratch_path: None,
+                shadow_path: None,
+                file_path: None,
+                title: "shop.api_call_log".to_string(),
+                position: 0,
+                is_pinned: false,
+                view_state_json: Some(view_state.clone()),
+            }],
+        };
+
+        repo.save_workspace_session(&manifest).expect("save");
+        let restored = repo
+            .restore_session(&store)
+            .expect("restore")
+            .expect("a session with one tab");
+
+        assert_eq!(restored.active_index, Some(0));
+        let tab = &restored.tabs[0];
+        assert_eq!(tab.tab_kind, "Table");
+        assert_eq!(tab.view_state_json.as_deref(), Some(view_state.as_str()));
+
+        let exec_ctx: dbflux_core::ExecutionContext =
+            serde_json::from_str(&tab.exec_ctx_json).expect("exec_ctx_json must deserialize");
+        assert_eq!(exec_ctx.connection_id, Some(profile_id));
+        assert_eq!(exec_ctx.database.as_deref(), Some("shop"));
+        assert_eq!(exec_ctx.schema.as_deref(), Some("shop"));
+        assert_eq!(exec_ctx.container.as_deref(), Some("api_call_log"));
+
+        let _ = std::fs::remove_dir_all(&artifact_root);
     }
 }

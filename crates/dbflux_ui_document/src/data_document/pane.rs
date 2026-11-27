@@ -171,29 +171,43 @@ impl DataDocument {
             })
         });
 
+        // The grid helpers below look the grid up on every call: a restored
+        // tab replaces its grid once its connection is up, and a grid captured
+        // here would be the placeholder.
+
         // Populate optional helper: applying the grid's staged edits for an
         // interrupted close. The tab closes only once every staged edit landed,
         // which the grid reports back as `DocumentEvent::RequestClose`.
         handle.apply_for_close = Some({
-            let grid = entity.read(cx).data_grid.clone();
-            Box::new(move |_w, cx| grid.update(cx, |grid, cx| grid.apply_for_close(cx)))
+            let e = entity.clone();
+            Box::new(move |_w, cx| {
+                let grid = e.read(cx).data_grid.clone();
+                grid.update(cx, |grid, cx| grid.apply_for_close(cx))
+            })
         });
 
         handle.commit_pending_input = Some({
-            let grid = entity.read(cx).data_grid.clone();
-            Box::new(move |cx| grid.update(cx, |grid, cx| grid.commit_pending_input(cx)))
+            let e = entity.clone();
+            Box::new(move |cx| {
+                let grid = e.read(cx).data_grid.clone();
+                grid.update(cx, |grid, cx| grid.commit_pending_input(cx))
+            })
         });
 
         handle.side_panels = Some({
-            let grid = entity.read(cx).data_grid.clone();
-            Box::new(move |_window, cx| grid.update(cx, |grid, cx| grid.side_panels(cx)))
+            let e = entity.clone();
+            Box::new(move |_window, cx| {
+                let grid = e.read(cx).data_grid.clone();
+                grid.update(cx, |grid, cx| grid.side_panels(cx))
+            })
         });
 
         // Optional helper: positioning the table on one record from outside
         // the document (foreign-key navigation from the workspace).
         handle.apply_table_filter = Some({
-            let grid = entity.read(cx).data_grid.clone();
+            let e = entity.clone();
             Box::new(move |column, value, window, cx| {
+                let grid = e.read(cx).data_grid.clone();
                 grid.update(cx, |grid, cx| {
                     grid.focus_row_by_key(column, value, window, cx)
                 })
@@ -204,8 +218,15 @@ impl DataDocument {
         // query. The workspace reads it to keep such a tab's query and open
         // a referenced row beside it instead.
         handle.has_applied_builder_query = Some({
-            let grid = entity.read(cx).data_grid.clone();
-            Box::new(move |cx| grid.read(cx).builder_query_applied())
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).data_grid.read(cx).builder_query_applied())
+        });
+
+        // Table and collection tabs reopen with the session; query results
+        // do not (the snapshot is `None` for them).
+        handle.session_tab_snapshot = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).session_tab_snapshot(cx))
         });
 
         handle

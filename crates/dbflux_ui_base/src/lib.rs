@@ -8,9 +8,11 @@
 
 pub mod app_state_entity;
 pub mod async_ext;
+pub mod child_environment;
 pub mod dashboard_manager;
 pub mod file_dialog;
 pub mod hook_phase_runner;
+pub mod interface_size;
 #[cfg(any(test, feature = "test-support"))]
 pub mod keyboard_coverage;
 pub mod keymap;
@@ -23,6 +25,8 @@ pub mod saved_chart_manager;
 pub mod saved_document_query_manager;
 pub mod saved_query_manager;
 pub mod schema_snapshot_manager;
+pub mod settings_writer;
+pub mod snippet_manager;
 pub mod sql_preview_modal;
 pub mod sso_wizard;
 pub mod toast;
@@ -56,4 +60,5 @@ pub use saved_chart_manager::SavedChartManager;
 pub use saved_document_query_manager::SavedDocumentQueryManager;
 pub use saved_query_manager::{ConnectionTableProbe, SavedQueryManager, TableProbe};
 pub use schema_snapshot_manager::{CaptureOutcome, SchemaSnapshotManager};
+pub use snippet_manager::SnippetManager;
 pub use user_error::{ErrorKind, UserFacingError, report_error, report_error_async};

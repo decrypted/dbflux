@@ -7,17 +7,20 @@
 // Required by the `#[gpui::test]` attribute macro expansion in test modules.
 #![recursion_limit = "512"]
 
+pub mod accent;
 pub mod actions;
 pub mod density;
+pub mod diagram;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod accessibility;
-pub mod fonts;
+pub mod font_settings;
 pub mod helpers;
-pub mod icon;
+// Moved to `bolt`; re-exported at these paths so call sites keep compiling.
+pub use bolt::{command_palette, icon, keymap};
 pub mod semantic;
-pub mod tokens;
-pub mod typography;
+// Moved to `bolt`; re-exported at these paths so call sites keep compiling.
+pub use bolt::{fonts, tokens, typography};
 
 pub mod category;
 pub mod chart;

@@ -3,7 +3,9 @@ use super::routing::{NodeBounds, RoutePoint, route_foreign_key};
 ///
 /// Imports are kept minimal (no `super::*`) to avoid triggering GPUI proc-macro
 /// expansion across the full parent module during test compilation.
-use super::{LoadedSchemaData, SchemaVizDocument, fit_diagram, pixel_aligned_diagram_pan};
+use super::{
+    LoadedSchemaData, SchemaVizDocument, fit_diagram, pixel_aligned_diagram_pan, row_anchor_y,
+};
 use dbflux_core::{ColumnInfo, ForeignKeyInfo, SchemaForeignKeyInfo, TableInfo};
 use dbflux_schema_viz::{
     graph::SchemaGraph,
@@ -2186,4 +2188,73 @@ fn tab_title_names_the_database_then_schema() {
         SchemaVizDocument::tab_title(Some("orders"), Some("shop")),
         "orders \u{b7} schema"
     );
+}
+
+fn bulk_with_fetched_indexes_and_keys(fabricated: Option<&str>) -> super::SchemaBulk {
+    super::SchemaBulk {
+        columns: fabricated
+            .map(|name| (name.to_owned(), Vec::new()))
+            .into_iter()
+            .collect(),
+        indexes: std::collections::HashMap::new(),
+        foreign_keys: Vec::new(),
+        columns_ok: true,
+        fetched_columns: Some(Vec::new()),
+        fetched_indexes: Some(Vec::new()),
+        fetched_foreign_keys: Some(Vec::new()),
+    }
+}
+
+/// A relation the bulk column result omitted comes from `table_details`, which
+/// never merges the bulk indexes or keys, so successful bulk calls cannot make
+/// its missing fields count as loaded.
+#[test]
+fn a_fallback_relation_needs_its_own_indexes_and_keys_to_be_complete() {
+    let mut partial = make_table("orders", 2);
+    partial.indexes = None;
+    partial.foreign_keys = None;
+    let bulk = bulk_with_fetched_indexes_and_keys(None);
+    assert!(!bulk.relation_is_complete(&partial));
+
+    let mut full = make_table("orders", 2);
+    full.indexes = Some(dbflux_core::IndexData::Relational(Vec::new()));
+    full.foreign_keys = Some(Vec::new());
+    assert!(bulk.relation_is_complete(&full));
+}
+
+#[test]
+fn a_fabricated_relation_is_complete_when_the_bulk_calls_succeeded() {
+    let mut fabricated = make_table("orders", 2);
+    fabricated.indexes = Some(dbflux_core::IndexData::Relational(Vec::new()));
+    fabricated.foreign_keys = Some(Vec::new());
+    let mut bulk = bulk_with_fetched_indexes_and_keys(Some("orders"));
+    assert!(bulk.relation_is_complete(&fabricated));
+    bulk.fetched_foreign_keys = None;
+    assert!(!bulk.relation_is_complete(&fabricated));
+}
+
+#[test]
+fn a_foreign_key_anchors_on_its_column_row_or_the_body_top() {
+    use dbflux_schema_viz::graph::ColumnSummary;
+    use dbflux_schema_viz::layout::{NODE_BODY_TOP_PX, NODE_HEADER_PX, NODE_ROW_PX};
+
+    let column = |name: &str| ColumnSummary {
+        name: name.to_owned(),
+        type_name: "int".to_owned(),
+        is_pk: false,
+        is_fk: false,
+        nullable: false,
+    };
+    let columns = [column("id"), column("owner_id")];
+    let body_top = NODE_HEADER_PX + NODE_BODY_TOP_PX;
+
+    assert_eq!(
+        row_anchor_y(&columns, Some(&"owner_id".to_owned())),
+        body_top + NODE_ROW_PX + NODE_ROW_PX / 2.0
+    );
+    assert_eq!(
+        row_anchor_y(&columns, Some(&"missing".to_owned())),
+        body_top
+    );
+    assert_eq!(row_anchor_y(&columns, None), body_top);
 }

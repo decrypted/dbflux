@@ -33,6 +33,12 @@ use crate::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::composites::{MenuItem, menu_frame, menu_row};
 use dbflux_components::controls::Button;
+#[cfg(test)]
+use dbflux_components::diagram::GRID_LATTICE;
+use dbflux_components::diagram::{
+    self, CanvasEdge, EdgeEnds, FIT_MAX_ZOOM, NodeCard, OPEN_FIT_MAX_ZOOM, edge_overlay,
+    fit_diagram, pixel_aligned_pan as pixel_aligned_diagram_pan, snap_to_lattice,
+};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Chamfer, ChamferCorners, ChamferRing, Icon, Spinner};
 use dbflux_components::tokens::{
@@ -40,13 +46,10 @@ use dbflux_components::tokens::{
     SyntaxColors,
 };
 use dbflux_components::typography::AppFonts;
+use dbflux_diagram::{Direction, NodeBounds, next_in_direction, spatial_order};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::{RunCommand, effective_keymap, run_command};
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
-
-/// Spacing of the diagram's dot grid, in graph coordinates. Node drags and
-/// keyboard nudges land on this lattice, so tables line up instead of drifting.
-const GRID_LATTICE: f32 = 24.0;
 
 /// Minimum width of the toolbar menus.
 const SCHEMA_MENU_WIDTH: Pixels = px(160.0);
@@ -130,6 +133,21 @@ const SEGMENT_HEIGHT: Rems = SchemaMetrics::TOGGLE_HEIGHT;
 /// characters already identify them.
 const TYPE_NAME_CHARS: usize = 8;
 
+/// Height of a foreign key's anchor inside its table card: the centre of the
+/// column's row, or the top of the body when the column is not listed.
+fn row_anchor_y(
+    columns: &[dbflux_schema_viz::graph::ColumnSummary],
+    column_name: Option<&String>,
+) -> f32 {
+    let body_top = NODE_HEADER_PX + NODE_BODY_TOP_PX;
+
+    column_name
+        .and_then(|name| columns.iter().position(|column| &column.name == name))
+        .map_or(body_top, |index| {
+            body_top + index as f32 * NODE_ROW_PX + NODE_ROW_PX / 2.0
+        })
+}
+
 /// Shortens a column type to fit its row slot, keeping the tail visible.
 fn truncate_type_name(type_name: &str) -> String {
     if type_name.chars().count() <= TYPE_NAME_CHARS {
@@ -137,20 +155,6 @@ fn truncate_type_name(type_name: &str) -> String {
     }
     let head: String = type_name.chars().take(TYPE_NAME_CHARS - 1).collect();
     format!("{head}…")
-}
-
-/// Rounds a graph-space coordinate onto the diagram lattice.
-fn snap_to_lattice(value: f32) -> f32 {
-    (value / GRID_LATTICE).round() * GRID_LATTICE
-}
-
-/// Direction for spatial selection navigation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Direction {
-    Left,
-    Right,
-    Up,
-    Down,
 }
 
 /// Actions for the schema viz context menu.
@@ -462,7 +466,8 @@ pub struct SchemaVizDocument {
     pub zoom: f32,
     pub focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
-    // Dependencies
+    // A live document retains AppStateEntity. The completion's weak App handle
+    // cannot expire independently of a live document during normal operation.
     app_state: Entity<AppStateEntity>,
     // Pan state
     is_panning: bool,
@@ -482,6 +487,8 @@ pub struct SchemaVizDocument {
     pub show_types: bool,
     pub show_indexes: bool,
     pub table_cap_warning: bool,
+    #[cfg(feature = "telemetry")]
+    usage_ticket: Option<dbflux_core::observability::usage::UsageTicket>,
     // Cancellation
     cancel_token: Option<Arc<CancelToken>>,
     /// Frame of the loading spinner, advanced by a timer while the schema loads.
@@ -514,69 +521,6 @@ pub struct SchemaVizDocument {
     // bring back a rail they closed.
     schema_inspector_title: Option<SharedString>,
     _schema_inspector_subscription: Option<Subscription>,
-}
-
-/// Largest zoom the Fit button picks, so a small diagram is not blown up.
-const FIT_MAX_ZOOM: f32 = 1.5;
-
-/// Largest zoom the fit on open picks: a diagram that already fits opens at
-/// its natural size.
-const OPEN_FIT_MAX_ZOOM: f32 = 1.0;
-
-/// Screen margin kept around a fitted diagram, on every side.
-const FIT_MARGIN: f32 = 48.0;
-
-/// Zoom and pan that fit the graph-space box `(min_x, min_y, max_x, max_y)`
-/// inside `viewport` with [`FIT_MARGIN`] on every side, anchored at the
-/// top-left margin, at no more than `max_zoom`. `None` for an empty box or an
-/// unmeasured viewport.
-fn fit_diagram(
-    (min_x, min_y, max_x, max_y): (f32, f32, f32, f32),
-    viewport: Size<Pixels>,
-    max_zoom: f32,
-) -> Option<(f32, Point<Pixels>)> {
-    if min_x > max_x || min_y > max_y {
-        return None;
-    }
-
-    let viewport_width: f32 = viewport.width.into();
-    let viewport_height: f32 = viewport.height.into();
-    if viewport_width <= 0.0 || viewport_height <= 0.0 {
-        return None;
-    }
-
-    let content_width = (max_x - min_x).max(1.0);
-    let content_height = (max_y - min_y).max(1.0);
-    let available_width = (viewport_width - 2.0 * FIT_MARGIN).max(1.0);
-    let available_height = (viewport_height - 2.0 * FIT_MARGIN).max(1.0);
-
-    let zoom = (available_width / content_width)
-        .min(available_height / content_height)
-        .clamp(0.25, max_zoom.max(0.25));
-
-    let pan = Point::new(px(FIT_MARGIN - min_x * zoom), px(FIT_MARGIN - min_y * zoom));
-
-    Some((zoom, pan))
-}
-
-fn pixel_aligned_diagram_pan(
-    pan_offset: Point<Pixels>,
-    viewport_origin: Point<Pixels>,
-    zoom: f32,
-    scale_factor: f32,
-) -> Point<Pixels> {
-    if !scale_factor.is_finite() || scale_factor <= 0.0 {
-        return pan_offset;
-    }
-
-    let pivot_translation = viewport_origin * (1.0 - zoom);
-    let matrix_translation = pan_offset + pivot_translation;
-    Point::new(
-        px((f32::from(matrix_translation.x) * scale_factor).round() / scale_factor)
-            - pivot_translation.x,
-        px((f32::from(matrix_translation.y) * scale_factor).round() / scale_factor)
-            - pivot_translation.y,
-    )
 }
 
 impl SchemaVizDocument {
@@ -620,6 +564,9 @@ impl SchemaVizDocument {
         database: Option<String>,
         mode: SchemaVizMode,
         app_state: Entity<AppStateEntity>,
+        #[cfg(feature = "telemetry")] usage_ticket: Option<
+            dbflux_core::observability::usage::UsageTicket,
+        >,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -667,6 +614,8 @@ impl SchemaVizDocument {
             show_types: true,
             show_indexes: false,
             table_cap_warning: false,
+            #[cfg(feature = "telemetry")]
+            usage_ticket,
             cancel_token: None,
             loading_frame: 0,
             pending_toast: None,
@@ -860,7 +809,10 @@ impl SchemaVizDocument {
                                 capped,
                                 tables_loaded,
                                 bulk,
+                                complete: metadata_complete,
                             } = result;
+                            #[cfg(not(feature = "telemetry"))]
+                            let _metadata_complete = metadata_complete;
                             let (focal_table, focal_schema) = match &doc.mode {
                                 SchemaVizMode::Focused { table, schema } => {
                                     (table.clone(), schema.clone())
@@ -965,6 +917,19 @@ impl SchemaVizDocument {
                             doc.graph = Some(graph);
                             doc.layout = Some(layout);
                             doc.load_status = LoadStatus::Ready;
+                            #[cfg(feature = "telemetry")]
+                            if metadata_complete
+                                && !doc
+                                    .cancel_token
+                                    .as_ref()
+                                    .is_some_and(|token| token.is_cancelled())
+                                && let Some(ticket) = doc.usage_ticket.take()
+                                && let Err(error) = ticket.record(
+                                    dbflux_core::observability::usage::UsageFeature::SchemaInspect,
+                                )
+                            {
+                                log::warn!("Schema inspection usage recording failed: {error:?}");
+                            }
                             doc.table_cap_warning = capped;
                             match initial_pan {
                                 Some(pan) => doc.pan_offset = pan,
@@ -1377,6 +1342,20 @@ impl SchemaVizDocument {
                     }
                 }
 
+                // Judge the final required relation set: the existing second
+                // pass can recover a neighbor whose first detail request failed.
+                let complete = bulk
+                    .get(&schema)
+                    .is_some_and(|schema_bulk| schema_bulk.fetched_foreign_keys.is_some())
+                    && all_table_names.iter().all(|(schema, name)| {
+                        all_tables.iter().any(|table| {
+                            table.name == *name
+                                && table.schema == *schema
+                                && bulk.get(schema).is_some_and(|schema_bulk| {
+                                    schema_bulk.relation_is_complete(table)
+                                })
+                        })
+                    });
                 let graph = SchemaGraph::build(&all_tables);
                 let focused_graph = graph.neighborhood(&table, schema.as_deref(), 1);
                 let layout = dbflux_schema_viz::layout::compute_layout(
@@ -1393,6 +1372,7 @@ impl SchemaVizDocument {
                     layout,
                     capped: false,
                     tables_loaded,
+                    complete,
                     bulk: bulk
                         .into_iter()
                         .map(|(schema, schema_bulk)| {
@@ -1458,6 +1438,15 @@ impl SchemaVizDocument {
                     }
                 }
 
+                let complete = tables_to_load.iter().all(|required| {
+                    all_table_details.iter().any(|table| {
+                        table.name == required.name
+                            && table.schema == required.schema
+                            && bulk
+                                .get(&required.schema)
+                                .is_some_and(|schema_bulk| schema_bulk.relation_is_complete(table))
+                    })
+                });
                 let graph = SchemaGraph::build(&all_table_details);
                 let layout = Self::initial_global_layout(&graph);
 
@@ -1467,6 +1456,7 @@ impl SchemaVizDocument {
                     layout,
                     capped,
                     tables_loaded,
+                    complete,
                     bulk: bulk
                         .into_iter()
                         .map(|(schema, schema_bulk)| {
@@ -1567,27 +1557,19 @@ impl SchemaVizDocument {
             return;
         };
 
-        let mut min_x = f32::MAX;
-        let mut min_y = f32::MAX;
-        let mut max_x = f32::MIN;
-        let mut max_y = f32::MIN;
-        for (idx, _) in graph.nodes() {
-            let Some(node_layout) = layout.nodes.get(&idx) else {
-                continue;
-            };
+        let rects = graph.nodes().filter_map(|(idx, _)| {
+            let node_layout = layout.nodes.get(&idx)?;
             let (x, y) = self
                 .node_position_overrides
                 .get(&idx)
                 .map_or((node_layout.x, node_layout.y), |pos| (pos.x, pos.y));
-            min_x = min_x.min(x);
-            min_y = min_y.min(y);
-            max_x = max_x.max(x + node_layout.width);
-            max_y = max_y.max(y + node_layout.height);
-        }
+            Some((x, y, node_layout.width, node_layout.height))
+        });
 
-        let Some((zoom, pan)) =
-            fit_diagram((min_x, min_y, max_x, max_y), self.viewport_size, max_zoom)
-        else {
+        let Some(bounds) = diagram::content_bounds(rects) else {
+            return;
+        };
+        let Some((zoom, pan)) = fit_diagram(bounds, self.viewport_size, max_zoom) else {
             return;
         };
 
@@ -1735,179 +1717,38 @@ impl SchemaVizDocument {
         );
     }
 
-    /// Returns nodes sorted spatially: y first (top-to-bottom), then x (left-to-right).
-    fn spatial_sorted_nodes(&self) -> Vec<NodeIndex> {
-        let layout = match &self.layout {
-            Some(l) => l,
-            None => return Vec::new(),
+    /// Every node's rectangle as the layout placed it, for spatial navigation.
+    fn layout_bounds(&self) -> Vec<(NodeIndex, NodeBounds)> {
+        let Some(layout) = &self.layout else {
+            return Vec::new();
         };
 
-        let mut nodes: Vec<_> = layout.nodes.keys().copied().collect();
+        layout
+            .nodes
+            .iter()
+            .map(|(&idx, node)| {
+                (
+                    idx,
+                    NodeBounds {
+                        x: node.x,
+                        y: node.y,
+                        width: node.width,
+                        height: node.height,
+                    },
+                )
+            })
+            .collect()
+    }
 
-        nodes.sort_by(|&a, &b| {
-            let pos_a = layout.nodes.get(&a);
-            let pos_b = layout.nodes.get(&b);
-            match (pos_a, pos_b) {
-                (Some(node_a), Some(node_b)) => {
-                    let y_cmp = node_a
-                        .y
-                        .partial_cmp(&node_b.y)
-                        .unwrap_or(std::cmp::Ordering::Equal);
-                    if y_cmp != std::cmp::Ordering::Equal {
-                        y_cmp
-                    } else {
-                        node_a
-                            .x
-                            .partial_cmp(&node_b.x)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    }
-                }
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-        });
-
-        nodes
+    /// Returns nodes sorted spatially: y first (top-to-bottom), then x (left-to-right).
+    fn spatial_sorted_nodes(&self) -> Vec<NodeIndex> {
+        spatial_order(&self.layout_bounds())
     }
 
     /// Finds the next node in the given direction from the currently selected node.
-    #[expect(
-        clippy::unwrap_used,
-        reason = "candidate ids pass a layout.nodes.get(...) probe earlier in the same function"
-    )]
     fn find_next_node(&self, direction: Direction) -> Option<NodeIndex> {
         let current = self.selected_node?;
-        let sorted = self.spatial_sorted_nodes();
-        let _current_idx = sorted.iter().position(|&idx| idx == current)?;
-
-        let layout = self.layout.as_ref()?;
-        let current_pos = layout.nodes.get(&current)?;
-
-        let threshold = 20.0_f32;
-
-        match direction {
-            Direction::Left => {
-                // Find nodes with x < current.x, pick the one with highest x
-                let candidates: Vec<_> = sorted
-                    .iter()
-                    .filter(|&&idx| {
-                        idx != current
-                            && layout
-                                .nodes
-                                .get(&idx)
-                                .map(|n| n.x < current_pos.x - threshold)
-                                .unwrap_or(false)
-                    })
-                    .collect();
-
-                candidates
-                    .into_iter()
-                    .max_by(|a, b| {
-                        let pos_a = layout.nodes.get(a).unwrap();
-                        let pos_b = layout.nodes.get(b).unwrap();
-                        pos_a
-                            .x
-                            .partial_cmp(&pos_b.x)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .copied()
-                    .or_else(|| {
-                        // Wrap: return rightmost node
-                        sorted.last().copied()
-                    })
-            }
-            Direction::Right => {
-                // Find nodes with x > current.x, pick the one with lowest x
-                let candidates: Vec<_> = sorted
-                    .iter()
-                    .filter(|&&idx| {
-                        idx != current
-                            && layout
-                                .nodes
-                                .get(&idx)
-                                .map(|n| n.x > current_pos.x + threshold)
-                                .unwrap_or(false)
-                    })
-                    .collect();
-
-                candidates
-                    .into_iter()
-                    .min_by(|a, b| {
-                        let pos_a = layout.nodes.get(a).unwrap();
-                        let pos_b = layout.nodes.get(b).unwrap();
-                        pos_a
-                            .x
-                            .partial_cmp(&pos_b.x)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .copied()
-                    .or_else(|| {
-                        // Wrap: return leftmost node
-                        sorted.first().copied()
-                    })
-            }
-            Direction::Up => {
-                // Find nodes with y < current.y, pick the one with highest y
-                let candidates: Vec<_> = sorted
-                    .iter()
-                    .filter(|&&idx| {
-                        idx != current
-                            && layout
-                                .nodes
-                                .get(&idx)
-                                .map(|n| n.y < current_pos.y - threshold)
-                                .unwrap_or(false)
-                    })
-                    .collect();
-
-                candidates
-                    .into_iter()
-                    .max_by(|a, b| {
-                        let pos_a = layout.nodes.get(a).unwrap();
-                        let pos_b = layout.nodes.get(b).unwrap();
-                        pos_a
-                            .y
-                            .partial_cmp(&pos_b.y)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .copied()
-                    .or_else(|| {
-                        // Wrap: return bottommost node
-                        sorted.last().copied()
-                    })
-            }
-            Direction::Down => {
-                // Find nodes with y > current.y, pick the one with lowest y
-                let candidates: Vec<_> = sorted
-                    .iter()
-                    .filter(|&&idx| {
-                        idx != current
-                            && layout
-                                .nodes
-                                .get(&idx)
-                                .map(|n| n.y > current_pos.y + threshold)
-                                .unwrap_or(false)
-                    })
-                    .collect();
-
-                candidates
-                    .into_iter()
-                    .min_by(|a, b| {
-                        let pos_a = layout.nodes.get(a).unwrap();
-                        let pos_b = layout.nodes.get(b).unwrap();
-                        pos_a
-                            .y
-                            .partial_cmp(&pos_b.y)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .copied()
-                    .or_else(|| {
-                        // Wrap: return topmost node
-                        sorted.first().copied()
-                    })
-            }
-        }
+        next_in_direction(&self.layout_bounds(), current, direction)
     }
 
     /// Centers the camera on the given node index, focusing on the table header.
@@ -1922,37 +1763,18 @@ impl SchemaVizDocument {
             None => return,
         };
 
-        let viewport_width = if self.viewport_size.width > px(0.0) {
-            self.viewport_size.width.into()
-        } else {
-            800.0
-        };
-        let viewport_height = if self.viewport_size.height > px(0.0) {
-            self.viewport_size.height.into()
-        } else {
-            600.0
-        };
-
-        // Center horizontally on the node center
-        let node_center_x = node_layout.x + node_layout.width / 2.0;
-        let viewport_center_x = viewport_width / 2.0;
-
-        // Center vertically on the table HEADER (top of the node), not the center
-        // NODE_HEADER_PX is the height of the header
-        let header_y = node_layout.y + NODE_HEADER_PX / 2.0;
-        let viewport_center_y = viewport_height / 2.0;
-
-        self.pan_offset = Point::new(
-            px(viewport_center_x - node_center_x * self.zoom),
-            px(viewport_center_y - header_y * self.zoom),
+        // Center horizontally on the node center, and vertically on the table
+        // HEADER (top of the node), not the node center.
+        self.pan_offset = diagram::center_on(
+            node_layout.x + node_layout.width / 2.0,
+            node_layout.y + NODE_HEADER_PX / 2.0,
+            self.viewport_size,
+            self.zoom,
         );
     }
 
     fn viewport_local_position(&self, window_position: Point<Pixels>) -> Point<Pixels> {
-        Point::new(
-            window_position.x - self.viewport_origin.x,
-            window_position.y - self.viewport_origin.y,
-        )
+        diagram::viewport_local_position(window_position, self.viewport_origin)
     }
 
     fn diagram_pan(&self, window: &Window) -> Point<Pixels> {
@@ -2347,12 +2169,12 @@ impl SchemaVizDocument {
                 true
             }
             Command::ZoomIn => {
-                self.zoom = (self.zoom * 1.25).min(4.0);
+                self.zoom = diagram::zoom_in(self.zoom);
                 cx.notify();
                 true
             }
             Command::ZoomOut => {
-                self.zoom = (self.zoom / 1.25).max(0.25);
+                self.zoom = diagram::zoom_out(self.zoom);
                 cx.notify();
                 true
             }
@@ -2661,12 +2483,12 @@ impl SchemaVizDocument {
                 cx.notify();
             }
             SchemaVizMenuAction::ZoomIn => {
-                self.zoom = (self.zoom * 1.25).min(4.0);
+                self.zoom = diagram::zoom_in(self.zoom);
                 self.context_menu = None;
                 cx.notify();
             }
             SchemaVizMenuAction::ZoomOut => {
-                self.zoom = (self.zoom / 1.25).max(0.25);
+                self.zoom = diagram::zoom_out(self.zoom);
                 self.context_menu = None;
                 cx.notify();
             }
@@ -2848,64 +2670,18 @@ impl SchemaVizDocument {
         let border = theme.border;
         let muted_foreground = theme.muted_foreground;
 
-        let diagram_transform = ElementTransform::default()
-            .translate(pan)
-            .scale(size(zoom, zoom));
-
         let diagram_canvas = match &self.layout {
             Some(layout) => {
-                // T20: dot-grid background rendered via a single canvas element.
-                // Each dot is a 1.5px square painted at 24px lattice intersections.
-                let dot_color = border;
-                let dot_lattice = GRID_LATTICE;
-                let dot_extent = 3000.0_f32;
-                let dot_size = SchemaMetrics::DOT;
-                let dot_grid = canvas(
-                    |_bounds, _, _cx| {},
-                    move |bounds, _, window, _cx| {
-                        let ox: f32 = bounds.origin.x.into();
-                        let oy: f32 = bounds.origin.y.into();
-                        let cols = (dot_extent / dot_lattice) as usize + 1;
-                        let rows = (dot_extent / dot_lattice) as usize + 1;
-                        for col in 0..cols {
-                            for row in 0..rows {
-                                let cx_f = col as f32 * dot_lattice + ox;
-                                let cy_f = row as f32 * dot_lattice + oy;
-                                let dot_bounds = gpui::Bounds::centered_at(
-                                    gpui::Point::new(px(cx_f), px(cy_f)),
-                                    gpui::Size {
-                                        width: dot_size,
-                                        height: dot_size,
-                                    },
-                                );
-                                window.paint_quad(gpui::fill(dot_bounds, dot_color));
-                            }
-                        }
-                    },
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .w(px(dot_extent))
-                .h(px(dot_extent));
+                let mut canvas_children: Vec<AnyElement> = vec![diagram::dot_grid(border)];
 
-                let mut canvas_children: Vec<AnyElement> = Vec::new();
-
-                canvas_children.push(dot_grid.into_any_element());
-
-                for seg in self.render_edges_overlay(layout, &theme) {
-                    canvas_children.push(seg.into_any_element());
+                if let Some(edges) = self.render_edges_overlay(layout, &theme) {
+                    canvas_children.push(edges.into_any_element());
                 }
                 for node_div in self.render_nodes(layout, &theme, cx) {
                     canvas_children.push(node_div.into_any_element());
                 }
 
-                div()
-                    .relative()
-                    .size_full()
-                    .bg(background)
-                    .transform(diagram_transform)
-                    .children(canvas_children)
+                diagram::diagram_surface(background, pan, zoom, canvas_children)
             }
             None => div()
                 .size_full()
@@ -3045,10 +2821,10 @@ impl SchemaVizDocument {
                 )
                 .icon(AppIcon::ZoomOut)
                 .icon_only()
-                .disabled(self.zoom <= 0.25)
+                .disabled(!diagram::can_zoom_out(self.zoom))
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.zoom = (this.zoom / 1.25).max(0.25);
+                    this.zoom = diagram::zoom_out(this.zoom);
                     cx.notify();
                 })),
             )
@@ -3081,10 +2857,10 @@ impl SchemaVizDocument {
                 )
                 .icon(AppIcon::ZoomIn)
                 .icon_only()
-                .disabled(self.zoom >= 4.0)
+                .disabled(!diagram::can_zoom_in(self.zoom))
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.zoom = (this.zoom * 1.25).min(4.0);
+                    this.zoom = diagram::zoom_in(this.zoom);
                     cx.notify();
                 })),
             )
@@ -3150,17 +2926,13 @@ impl SchemaVizDocument {
 
                 if let Some(node_idx) = this.dragging_node {
                     let local_position = this.viewport_local_position(event.position);
-                    let screen_x: f32 = local_position.x.into();
-                    let screen_y: f32 = local_position.y.into();
-                    let off_x: f32 = this.drag_offset.x.into();
-                    let off_y: f32 = this.drag_offset.y.into();
                     let pan = this.diagram_pan(window);
-                    let pan_x: f32 = pan.x.into();
-                    let pan_y: f32 = pan.y.into();
-                    let zoom = this.zoom;
-                    // graph_x = (screen_x - drag_offset_x - pan_x) / zoom
-                    let new_graph_x = (screen_x - off_x - pan_x) / zoom;
-                    let new_graph_y = (screen_y - off_y - pan_y) / zoom;
+                    let (new_graph_x, new_graph_y) = diagram::dragged_node_position(
+                        local_position,
+                        this.drag_offset,
+                        pan,
+                        this.zoom,
+                    );
                     this.node_position_overrides.insert(
                         node_idx,
                         Point::new(snap_to_lattice(new_graph_x), snap_to_lattice(new_graph_y)),
@@ -3188,25 +2960,15 @@ impl SchemaVizDocument {
             )
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
                 let mouse = this.viewport_local_position(event.position);
-                let old_zoom = this.zoom;
                 let delta = event.delta.pixel_delta(px(1.0)).y;
-                let factor = if delta > px(0.0) { 1.1_f32 } else { 0.9_f32 };
-                let new_zoom = (old_zoom * factor).clamp(0.25, 4.0);
-
-                if (new_zoom - old_zoom).abs() < 0.001 {
-                    return;
-                }
-
-                // Keep the point under the mouse fixed:
-                // graph_pt = (screen - pan) / old_zoom
-                // new_pan  = screen - graph_pt * new_zoom
                 let pan = this.diagram_pan(window);
-                let graph_x = (mouse.x - pan.x) / old_zoom;
-                let graph_y = (mouse.y - pan.y) / old_zoom;
-                let new_pan_x = mouse.x - graph_x * new_zoom;
-                let new_pan_y = mouse.y - graph_y * new_zoom;
 
-                this.pan_offset = Point::new(new_pan_x, new_pan_y);
+                let Some((new_zoom, new_pan)) = diagram::wheel_zoom(mouse, pan, this.zoom, delta)
+                else {
+                    return;
+                };
+
+                this.pan_offset = new_pan;
                 this.zoom = new_zoom;
                 cx.notify();
             }))
@@ -3253,21 +3015,16 @@ impl SchemaVizDocument {
             }))
             .child({
                 let entity_for_viewport = cx.entity().clone();
-                canvas(
-                    move |bounds: gpui::Bounds<Pixels>, _, cx| {
-                        entity_for_viewport.update(cx, |this, cx| {
-                            if this.viewport_origin != bounds.origin {
-                                this.viewport_origin = bounds.origin;
-                                cx.notify();
-                            }
-                            this.viewport_size = bounds.size;
-                            this.apply_pending_fit(cx);
-                        });
-                    },
-                    |_: gpui::Bounds<Pixels>, _, _, _| {},
-                )
-                .absolute()
-                .size_full()
+                diagram::measure_bounds(move |bounds, cx| {
+                    entity_for_viewport.update(cx, |this, cx| {
+                        if this.viewport_origin != bounds.origin {
+                            this.viewport_origin = bounds.origin;
+                            cx.notify();
+                        }
+                        this.viewport_size = bounds.size;
+                        this.apply_pending_fit(cx);
+                    });
+                })
             })
             .child(diagram_canvas);
 
@@ -3293,16 +3050,11 @@ impl SchemaVizDocument {
         // DataGridPanel and AuditDocument). event.position from mouse events
         // is window-absolute; the menu renders inside this div, so we need
         // to subtract panel_origin to get local coordinates.
-        let origin_tracker = canvas(
-            move |bounds: gpui::Bounds<Pixels>, _, cx| {
-                entity_for_origin.update(cx, |this, _cx| {
-                    this.panel_origin = bounds.origin;
-                });
-            },
-            |_: gpui::Bounds<Pixels>, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
+        let origin_tracker = diagram::measure_bounds(move |bounds, cx| {
+            entity_for_origin.update(cx, |this, _cx| {
+                this.panel_origin = bounds.origin;
+            });
+        });
 
         div()
             .relative()
@@ -3351,11 +3103,8 @@ impl SchemaVizDocument {
         let width = layout.width;
 
         let position_override = self.node_position_overrides.get(&node_idx);
-        let (node_left, node_top) = if let Some(pos) = position_override {
-            (px(pos.x), px(pos.y))
-        } else {
-            (px(layout.x), px(layout.y))
-        };
+        let (node_left, node_top) =
+            position_override.map_or((layout.x, layout.y), |pos| (pos.x, pos.y));
 
         let is_selected = self.selected_node.as_ref() == Some(&node_idx);
 
@@ -3364,11 +3113,6 @@ impl SchemaVizDocument {
         let muted_fg = theme.muted_foreground;
 
         let is_dragging = dragging_node == Some(node_idx);
-        let cursor_style = if is_dragging {
-            CursorStyle::PointingHand
-        } else {
-            CursorStyle::Arrow
-        };
 
         let node_idx_clone = node_idx;
 
@@ -3377,47 +3121,14 @@ impl SchemaVizDocument {
             None => node.id.name.clone(),
         };
 
-        // The header keeps a 1 px inset so its fill never covers the card's
-        // border, and cuts only its top-left corner to follow the card.
-        let header_fill = if is_selected {
-            tint.opacity(SchemaMetrics::SELECTED_HEADER_ALPHA)
-        } else {
-            theme.secondary
-        };
-
-        let node_header = div()
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(SchemaMetrics::HEADER_GAP)
-            .mt(px(1.0))
-            .mx(px(1.0))
-            .px(SchemaMetrics::CARD_PADDING_X)
-            .h(px(NODE_HEADER_PX - 1.0))
-            .border_b_1()
-            .border_color(theme.border)
-            .child(
-                Chamfer::new(ChamferCut::INPUT)
-                    .corners(ChamferCorners::TopLeft)
-                    .fill(header_fill),
-            )
-            .child(
-                Icon::new(AppIcon::Table)
-                    .size(SchemaMetrics::HEADER_ICON)
-                    .color(tint),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_family(dbflux_components::fonts::editor_family(cx))
-                    .text_size(SchemaMetrics::HEADER_FONT)
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(strong)
-                    .child(table_name),
-            );
+        let node_header = diagram::node_header(
+            AppIcon::Table,
+            table_name,
+            is_selected,
+            NODE_HEADER_PX,
+            theme,
+            cx,
+        );
 
         let show_types = self.show_types;
         let col_rows: Vec<_> = node
@@ -3534,18 +3245,16 @@ impl SchemaVizDocument {
         // A selected table shows selection the way the board draws it: its
         // header takes the tinted fill and its edge the tint, with no focus
         // ring, which stays reserved for keyboard focus.
-        let card_shape = Chamfer::new(ChamferCut::INPUT)
-            .fill(theme.popover)
-            .border(if is_selected { tint } else { theme.input });
+        let mut card = NodeCard::new(node_left, node_top, width)
+            .selected(is_selected)
+            .dragging(is_dragging)
+            .header(node_header)
+            .body(diagram::node_body(col_rows));
+        if let Some(section) = indexes_section {
+            card = card.footer(section);
+        }
 
-        div()
-            .absolute()
-            .left(node_left)
-            .top(node_top)
-            .w(px(width))
-            .when(is_selected, |card| card.shadow_lg())
-            .cursor(cursor_style)
-            .child(card_shape)
+        card.build(theme)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -3613,49 +3322,23 @@ impl SchemaVizDocument {
                     cx.stop_propagation();
                 }),
             )
-            .flex()
-            .flex_col()
-            .child(node_header)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .px(SchemaMetrics::CARD_PADDING_X)
-                    .pt(px(NODE_BODY_TOP_PX))
-                    .children(col_rows),
-            )
-            .when_some(indexes_section, |d, sec| d.child(sec))
     }
 
-    /// Renders edges as cubic bezier curves on a canvas element.
+    /// Routes every foreign key and hands the routes to the shared edge overlay.
     ///
     /// Column-level anchor Y positions are computed using the same formula as
     /// `compute_node_height` so that edge endpoints always hit the correct row.
-    /// Edges that connect off-screen nodes are rendered dashed.
     fn render_edges_overlay(
         &self,
         layout: &LayoutResult,
         theme: &gpui_component::theme::Theme,
-    ) -> Vec<Div> {
+    ) -> Option<Div> {
         let edge_color = ChromeColors::tint(theme);
-        let edge_color_dim = ChromeColors::tint(theme).opacity(0.5);
         let edge_color_rest = theme.input;
 
-        let Some(graph) = &self.graph else {
-            return Vec::new();
-        };
+        let graph = self.graph.as_ref()?;
 
-        // Collect all edge data before moving into the canvas closure.
-        struct EdgeData {
-            route: routing::OrthogonalRoute,
-
-            dashed: bool,
-            /// The edge touches the selected table, so it takes the tint.
-            highlighted: bool,
-        }
-
-        let mut edges: Vec<EdgeData> = Vec::new();
-        let row_center = NODE_ROW_PX / 2.0;
+        let mut edges: Vec<CanvasEdge> = Vec::new();
         let mut lane_counts: HashMap<(NodeIndex, NodeIndex), usize> = HashMap::new();
         for edge_idx in graph.edge_indices() {
             if let Some(endpoints) = graph.edge_endpoints(edge_idx) {
@@ -3715,36 +3398,9 @@ impl SchemaVizDocument {
                 continue;
             };
 
-            let from_col_y = edge_weight
-                .from_columns
-                .first()
-                .and_then(|col_name| {
-                    from_node_weight
-                        .columns
-                        .iter()
-                        .position(|c| &c.name == col_name)
-                })
-                .map(|col_idx| {
-                    NODE_HEADER_PX + NODE_BODY_TOP_PX + col_idx as f32 * NODE_ROW_PX + row_center
-                })
-                .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
-
-            let to_col_y = edge_weight
-                .to_columns
-                .first()
-                .and_then(|col_name| {
-                    to_node_weight
-                        .columns
-                        .iter()
-                        .position(|c| &c.name == col_name)
-                })
-                .map(|col_idx| {
-                    NODE_HEADER_PX + NODE_BODY_TOP_PX + col_idx as f32 * NODE_ROW_PX + row_center
-                })
-                .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
-
-            // Anchor a few px outside the node so the curve and arrowhead never
-            // visually overlap the FK / PK badges inside the row.
+            let from_col_y =
+                row_anchor_y(&from_node_weight.columns, edge_weight.from_columns.first());
+            let to_col_y = row_anchor_y(&to_node_weight.columns, edge_weight.to_columns.first());
 
             let route = routing::route_foreign_key(
                 source_bounds,
@@ -3756,141 +3412,25 @@ impl SchemaVizDocument {
                 &obstacles,
             );
 
-            // All edges render solid; the off-screen dashed variant was dropped.
+            // An edge that touches the selected table takes the tint.
             let highlighted = self
                 .selected_node
                 .is_some_and(|selected| selected == source || selected == target);
 
-            edges.push(EdgeData {
-                route,
-
-                dashed: false,
-                highlighted,
-            });
-        }
-
-        if edges.is_empty() {
-            return Vec::new();
-        }
-
-        // Paint all edges on a single canvas element covering the full canvas area.
-        // `paint_path` works in window-absolute coordinates, so every point must be
-        // offset by the canvas element's `bounds.origin`.
-        let canvas_el = canvas(
-            |_bounds, _, _cx| {},
-            move |bounds, _, window, _cx| {
-                use gpui::PathBuilder;
-
-                let ox: f32 = bounds.origin.x.into();
-                let oy: f32 = bounds.origin.y.into();
-
-                for e in &edges {
-                    let start = e.route.start();
-                    let end = e.route.end();
-                    let ox_start = start.x + ox;
-                    let oy_start = start.y + oy;
-                    let ox_end = end.x + ox;
-                    let oy_end = end.y + oy;
-                    let color = if e.dashed {
-                        edge_color_dim
-                    } else if e.highlighted {
+            edges.push(
+                CanvasEdge::new(
+                    route,
+                    if highlighted {
                         edge_color
                     } else {
                         edge_color_rest
-                    };
+                    },
+                )
+                .ends(EdgeEnds::Cardinality),
+            );
+        }
 
-                    let mut builder = PathBuilder::stroke(px(1.5));
-                    if e.dashed {
-                        // FK edge dash on/off lengths are diagram stroke geometry, not UI spacing.
-                        builder = builder.dash_array(&[px(6.0), px(4.0)]); // guardrail-allow: diagram stroke geometry
-                    }
-                    for (position, point) in e.route.points.iter().enumerate() {
-                        let target = gpui::point(px(point.x + ox), px(point.y + oy));
-                        if position == 0 {
-                            builder.move_to(target);
-                        } else {
-                            builder.line_to(target);
-                        }
-                    }
-                    if let Ok(path) = builder.build() {
-                        window.paint_path(path, color);
-                    }
-
-                    // Arrowhead: small filled triangle at the referenced end, along the
-                    // direction the last segment enters with.
-                    let (ux, uy) = e.route.end_direction();
-                    let arrow_len = 8.0_f32;
-                    let arrow_half_base = 3.0_f32;
-                    let tip = gpui::point(px(ox_end), px(oy_end));
-                    let base_center_x = ox_end - ux * arrow_len;
-                    let base_center_y = oy_end - uy * arrow_len;
-                    let left = gpui::point(
-                        px(base_center_x - uy * arrow_half_base),
-                        px(base_center_y + ux * arrow_half_base),
-                    );
-                    let right = gpui::point(
-                        px(base_center_x + uy * arrow_half_base),
-                        px(base_center_y - ux * arrow_half_base),
-                    );
-
-                    let mut arrow_builder = PathBuilder::fill();
-                    arrow_builder.move_to(tip);
-                    arrow_builder.line_to(left);
-                    arrow_builder.line_to(right);
-                    arrow_builder.close();
-
-                    if let Ok(arrow_path) = arrow_builder.build() {
-                        window.paint_path(arrow_path, color);
-                    }
-
-                    // Cardinality notation, as in an IDEF1X diagram: a crow's foot on the
-                    // table that declares the key (many) and a tick on the table it points
-                    // at (one), so the direction is readable without following the line.
-                    let (sx_dir, sy_dir) = e.route.start_direction();
-                    let (perp_x, perp_y) = (-sy_dir, sx_dir);
-                    let foot_len = 9.0_f32;
-                    let foot_spread = 4.5_f32;
-                    let base_x = ox_start + sx_dir * foot_len;
-                    let base_y = oy_start + sy_dir * foot_len;
-
-                    let mut foot_builder = PathBuilder::stroke(px(1.5));
-                    for offset in [-foot_spread, 0.0, foot_spread] {
-                        foot_builder.move_to(gpui::point(px(base_x), px(base_y)));
-                        foot_builder.line_to(gpui::point(
-                            px(ox_start + perp_x * offset),
-                            px(oy_start + perp_y * offset),
-                        ));
-                    }
-                    if let Ok(foot_path) = foot_builder.build() {
-                        window.paint_path(foot_path, color);
-                    }
-
-                    let tick_offset = 6.0_f32;
-                    let tick_half = 5.0_f32;
-                    let tick_x = ox_end - ux * tick_offset;
-                    let tick_y = oy_end - uy * tick_offset;
-                    let mut tick_builder = PathBuilder::stroke(px(1.5));
-                    tick_builder.move_to(gpui::point(
-                        px(tick_x + uy * tick_half),
-                        px(tick_y - ux * tick_half),
-                    ));
-                    tick_builder.line_to(gpui::point(
-                        px(tick_x - uy * tick_half),
-                        px(tick_y + ux * tick_half),
-                    ));
-                    if let Ok(tick_path) = tick_builder.build() {
-                        window.paint_path(tick_path, color);
-                    }
-                }
-            },
-        )
-        .absolute()
-        .top_0()
-        .left_0()
-        .w(px(10000.0))
-        .h(px(10000.0));
-
-        vec![div().absolute().top_0().left_0().child(canvas_el)]
+        edge_overlay(edges)
     }
 }
 
@@ -3912,6 +3452,20 @@ struct SchemaBulk {
 }
 
 impl SchemaBulk {
+    fn relation_is_complete(&self, table: &TableInfo) -> bool {
+        // A relation present in the column map always takes the fabrication
+        // path. Its Some(empty) indexes/FKs may be stand-ins for failed seams,
+        // so only successful bulk results prove those parts were loaded. Any
+        // other relation came from `table_details`, which never merges the
+        // bulk results, so only the fields it returned prove completeness.
+        let fabricated = self.columns.contains_key(&table.name);
+        if fabricated {
+            self.fetched_indexes.is_some() && self.fetched_foreign_keys.is_some()
+        } else {
+            table.columns.is_some() && table.indexes.is_some() && table.foreign_keys.is_some()
+        }
+    }
+
     /// The cache-seed view of this schema's bulk result: the rows exactly as
     /// fetched, including every relation the diagram itself did not use.
     fn cache_seed(&self, database: &str, schema: Option<&str>) -> FetchedSchemaBulk {
@@ -3939,6 +3493,7 @@ struct FetchedSchemaBulk {
 
 /// What `load_focused_schema_blocking` produced for one diagram load.
 struct LoadedSchemaData {
+    complete: bool,
     tables: Vec<TableInfo>,
     graph: SchemaGraph,
     layout: LayoutResult,

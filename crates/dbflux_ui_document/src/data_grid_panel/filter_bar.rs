@@ -103,6 +103,156 @@ pub(crate) fn classify_filter_input(text: &str) -> FilterMode {
     FilterMode::Raw
 }
 
+/// The filter `current` narrowed by `condition`, or `None` when `current`
+/// already holds `condition` as one of its top-level `AND` terms.
+///
+/// A filter with a top-level `OR` is wrapped in parentheses first, so
+/// `a = 1 OR b = 2` narrowed by `c = 3` keeps meaning `(a = 1 OR b = 2)`
+/// and not `a = 1 OR (b = 2 AND c = 3)`.
+pub(crate) fn and_filter(current: &str, condition: &str) -> Option<String> {
+    let current = current.trim();
+    let condition = condition.trim();
+
+    if current.is_empty() {
+        return Some(condition.to_string());
+    }
+
+    let normalized = normalize_condition(condition);
+    if top_level_and_terms(current)
+        .iter()
+        .any(|term| normalize_condition(term) == normalized)
+    {
+        return None;
+    }
+
+    let wrap = |text: &str| {
+        if has_top_level_or(text) {
+            format!("({text})")
+        } else {
+            text.to_string()
+        }
+    };
+
+    Some(format!("{} AND {}", wrap(current), wrap(condition)))
+}
+
+/// A condition compared for duplicates: outer parentheses and runs of
+/// whitespace outside literals do not make it a different condition.
+fn normalize_condition(text: &str) -> String {
+    let mut text = text.trim();
+    while text.starts_with('(') && text.ends_with(')') && wraps_whole(text) {
+        match text.get(1..text.len() - 1) {
+            Some(inner) => text = inner.trim(),
+            None => break,
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whether the parenthesis opening `text` closes at its last character.
+fn wraps_whole(text: &str) -> bool {
+    let mut depth = 0usize;
+    for (index, c) in scan_outside_literals(text) {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return index == text.len() - 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The characters of `text` outside quoted literals and identifiers, at
+/// depth-0 tracking left to the caller, with their byte offsets.
+fn scan_outside_literals(text: &str) -> impl Iterator<Item = (usize, char)> + '_ {
+    let mut quote: Option<char> = None;
+    text.char_indices().filter(move |&(_, c)| match quote {
+        Some(open) => {
+            if c == open {
+                quote = None;
+            }
+            false
+        }
+        None => {
+            if matches!(c, '\'' | '"' | '`') {
+                quote = Some(c);
+                false
+            } else {
+                true
+            }
+        }
+    })
+}
+
+/// Byte ranges of the words `keyword` at parenthesis depth 0.
+fn top_level_keyword_ranges(text: &str, keyword: &str) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut depth = 0usize;
+    let mut word_start: Option<usize> = None;
+    let mut previous_end = 0usize;
+
+    let flush = |start: Option<usize>, end: usize, depth: usize, ranges: &mut Vec<_>| {
+        if let Some(start) = start
+            && depth == 0
+            && text
+                .get(start..end)
+                .is_some_and(|word| word.eq_ignore_ascii_case(keyword))
+        {
+            ranges.push(start..end);
+        }
+    };
+
+    for (index, c) in scan_outside_literals(text) {
+        // A literal between two characters ends a word as well.
+        if index != previous_end {
+            flush(word_start.take(), previous_end, depth, &mut ranges);
+        }
+        previous_end = index + c.len_utf8();
+
+        if c.is_ascii_alphanumeric() || c == '_' {
+            word_start.get_or_insert(index);
+            continue;
+        }
+
+        flush(word_start.take(), index, depth, &mut ranges);
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    flush(word_start.take(), previous_end, depth, &mut ranges);
+
+    ranges
+}
+
+/// Whether `text` has an `OR` outside parentheses and literals.
+pub(crate) fn has_top_level_or(text: &str) -> bool {
+    !top_level_keyword_ranges(text, "or").is_empty()
+}
+
+/// The terms `text` joins with a top-level `AND`. A filter with a
+/// top-level `OR` is one term: its `AND`s bind inside the `OR`s.
+fn top_level_and_terms(text: &str) -> Vec<&str> {
+    if has_top_level_or(text) {
+        return vec![text];
+    }
+
+    let mut terms = Vec::new();
+    let mut start = 0;
+    for range in top_level_keyword_ranges(text, "and") {
+        terms.push(text.get(start..range.start).unwrap_or_default().trim());
+        start = range.end;
+    }
+    terms.push(text.get(start..).unwrap_or_default().trim());
+    terms
+}
+
 /// Render the relational filter chip (T24 / FR-UPGRADE-1 to FR-UPGRADE-3).
 ///
 /// Returns `None` when the state is not `Active` — the caller skips the child
@@ -312,7 +462,52 @@ impl DataGridPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{FilterMode, classify_filter_input};
+    use super::{FilterMode, and_filter, classify_filter_input, has_top_level_or};
+
+    #[test]
+    fn and_filter_appends_and_wraps_a_top_level_or() {
+        assert_eq!(and_filter("", "m = 'x'").as_deref(), Some("m = 'x'"));
+        assert_eq!(
+            and_filter("status = 500", "m = 'x'").as_deref(),
+            Some("status = 500 AND m = 'x'")
+        );
+        assert_eq!(
+            and_filter("a = 1 or b = 2", "m = 'x'").as_deref(),
+            Some("(a = 1 or b = 2) AND m = 'x'")
+        );
+        assert_eq!(
+            and_filter("(a = 1 OR b = 2) AND c = 3", "m = 'x'").as_deref(),
+            Some("(a = 1 OR b = 2) AND c = 3 AND m = 'x'"),
+            "an OR inside parentheses needs no new ones"
+        );
+        assert_eq!(
+            and_filter("note = 'this or that'", "m = 'x'").as_deref(),
+            Some("note = 'this or that' AND m = 'x'"),
+            "an OR inside a literal is not an operator"
+        );
+    }
+
+    #[test]
+    fn and_filter_does_not_repeat_a_condition() {
+        assert_eq!(and_filter("m = 'x'", "m = 'x'"), None);
+        assert_eq!(and_filter("status = 500 and  m = 'x'", "m = 'x'"), None);
+        assert_eq!(and_filter("(m = 'x') AND (s = 1)", "m = 'x'"), None);
+        assert!(
+            and_filter("m = 'x' OR s = 1", "m = 'x'").is_some(),
+            "a term of an OR does not already narrow the filter"
+        );
+        assert!(and_filter("m = 'xy'", "m = 'x'").is_some());
+    }
+
+    #[test]
+    fn top_level_or_ignores_words_literals_and_parentheses() {
+        assert!(has_top_level_or("a = 1 OR b = 2"));
+        assert!(has_top_level_or("a=1 or(b=2)"));
+        assert!(!has_top_level_or("color = 'red' AND orders > 1"));
+        assert!(!has_top_level_or("(a = 1 OR b = 2)"));
+        assert!(!has_top_level_or("note = 'x or y'"));
+        assert!(!has_top_level_or("\"or\" = 1"));
+    }
 
     // T21: classify_filter_input
 

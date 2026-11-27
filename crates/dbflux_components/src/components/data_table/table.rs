@@ -1229,14 +1229,17 @@ impl DataTable {
                                     state.focus(window, cx);
                                 });
 
-                                if event.click_count() == 2 {
+                                let modifiers = event.modifiers();
+
+                                // A quick second Alt+click filters again
+                                // rather than opening the editor.
+                                if event.click_count() == 2 && !modifiers.alt {
                                     state.update(cx, |state, cx| {
                                         state.start_editing(coord, window, cx);
                                     });
                                     return;
                                 }
 
-                                let modifiers = event.modifiers();
                                 state.update(cx, |state, cx| {
                                     state.click_cell(coord, modifiers, cx);
                                 });

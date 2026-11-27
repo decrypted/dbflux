@@ -698,6 +698,7 @@ mod explain_entry;
 mod export_all;
 mod expressions;
 mod facets;
+mod filter_alt_click;
 mod filter_autoquote;
 mod filter_history;
 mod fk_label_identity;

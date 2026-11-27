@@ -624,7 +624,13 @@ fn an_empty_submenu_is_left_out() {
 
     assert_eq!(
         ids(&menu),
-        vec!["copy", "copy-as", "view-value", "add-to-filter"]
+        vec![
+            "copy",
+            "copy-as",
+            "copy-column-name",
+            "view-value",
+            "add-to-filter"
+        ]
     );
 }
 

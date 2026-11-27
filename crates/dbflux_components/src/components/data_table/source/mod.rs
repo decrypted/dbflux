@@ -519,8 +519,11 @@ mod tests {
         assert_eq!(cell.tone, CellTone::Expression);
         assert_eq!(
             drawn_text(&cell),
-            &*CellValue::expression("now()").display_text(),
-            "the model's own display text"
+            format!(
+                "{} now()",
+                super::super::expression_editor::EXPRESSION_MARKER
+            ),
+            "the expression behind its marker"
         );
     }
 

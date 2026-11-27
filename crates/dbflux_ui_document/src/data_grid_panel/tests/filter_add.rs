@@ -247,8 +247,8 @@ fn the_menus_add_to_filter_adds_the_cell(cx: &mut TestAppContext) {
     let (panel, window, _log) = grid_with_filter(cx, "");
 
     select(&panel, window, (1, 1), (1, 1));
-    // Copy, Copy as, View value, Add to filter.
-    keys(window, "m j j j enter");
+    // Copy, Copy as, Copy column name, View value, Add to filter.
+    keys(window, "m j j j j enter");
 
     assert_eq!(
         filter_text(&panel, window),

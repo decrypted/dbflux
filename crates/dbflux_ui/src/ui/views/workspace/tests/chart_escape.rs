@@ -292,10 +292,13 @@ fn escape_in_the_sidebar_leaves_the_chart_tab_open(cx: &mut TestAppContext) {
     assert!(fixture.is_open(chart));
 }
 
-/// A text field in the chart holds the keyboard: its Escape propagates to the
-/// workspace, which only takes the focus off it. The next press closes.
+/// A focused control in the chart that is not a text field keeps the keyboard:
+/// Escape neither closes the chart nor moves the keyboard away from the
+/// control (upstream's "Escape keeps the keyboard where you were working").
+/// A text field hands the keyboard back to the document instead, after which
+/// the next press closes the chart.
 #[gpui::test]
-fn a_focused_field_keeps_escape(cx: &mut TestAppContext) {
+fn a_focused_control_keeps_escape(cx: &mut TestAppContext) {
     use crate::keymap::{Command, CommandDispatcher as _};
 
     let mut fixture = connected_workspace(cx);
@@ -303,7 +306,7 @@ fn a_focused_field_keeps_escape(cx: &mut TestAppContext) {
     let chart = fixture.open_chart_from(source);
 
     let workspace = fixture.workspace.clone();
-    let _field = fixture.window.update(|window, cx| {
+    let field = fixture.window.update(|window, cx| {
         let field = cx.focus_handle();
         field.focus(window, cx);
         field
@@ -313,21 +316,11 @@ fn a_focused_field_keeps_escape(cx: &mut TestAppContext) {
     fixture.window.update(|window, cx| {
         workspace.update(cx, |workspace, cx| {
             assert!(workspace.dispatch(Command::Cancel, window, cx));
-            assert!(
-                workspace.focus_handle.is_focused(window),
-                "the field lost the keyboard"
-            );
         });
-    });
-    assert!(fixture.is_open(chart), "the press stopped at the field");
-
-    fixture.window.update(|window, cx| {
-        workspace.update(cx, |workspace, cx| {
-            workspace.dispatch(Command::Cancel, window, cx);
-        });
+        assert!(field.is_focused(window), "the control lost the keyboard");
     });
     fixture.window.run_until_parked();
-    assert!(!fixture.is_open(chart));
+    assert!(fixture.is_open(chart), "the press stopped at the control");
 }
 
 /// A changed setting would be lost with no way back, so the first press warns.

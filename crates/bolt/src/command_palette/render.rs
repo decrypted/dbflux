@@ -124,6 +124,8 @@ where
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
+                    // Nothing behind the palette may react to a click on the scrim.
+                    cx.stop_propagation();
                     this.hide(cx);
                 }),
             );

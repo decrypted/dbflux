@@ -1,9 +1,12 @@
 mod actions;
+#[cfg(feature = "mcp")]
+mod approval_alerts;
 mod dispatch;
 pub mod inspector;
 #[cfg(test)]
 mod keyboard_coverage_tests;
 mod notifications;
+mod palette_resources;
 mod pane_actions;
 pub mod pipeline;
 mod render;
@@ -38,9 +41,10 @@ use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, 
 use dbflux_ui_base::keymap::{RunCommand, run_command};
 
 use crate::ui::icons::AppIcon;
+#[cfg(test)]
+use crate::ui::overlays::command_palette::ResourceItem;
 use crate::ui::overlays::command_palette::{
     CommandPalette, CommandPaletteClosed, PaletteCommand, PaletteItem, PaletteSelection,
-    ResourceItem,
 };
 use crate::ui::overlays::login_modal::{LoginModal, LoginModalEvent};
 use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
@@ -51,7 +55,7 @@ use crate::ui::views::status_bar::OpenApprovalsRequested;
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::{CollapseTasksPanel, TasksPanel};
 use dbflux_components::icons::DriverIconTone;
-use dbflux_components::tokens::{Heights, Spacing};
+use dbflux_components::tokens::Spacing;
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
 use dbflux_core::{ExecutionContext, QueryLanguage};
@@ -65,88 +69,9 @@ use gpui_component::Root;
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use std::path::PathBuf;
 
-/// Extract resource items from a schema snapshot into a palette item list.
-///
-/// Separated from `Workspace` for testability — this is pure data transformation
-/// with no GPUI dependency.
-pub(super) fn build_resource_items_from_schema(
-    profile_id: uuid::Uuid,
-    profile_name: &str,
-    structure: &dbflux_core::DataStructure,
-    items: &mut Vec<PaletteItem>,
-) {
-    match structure {
-        dbflux_core::DataStructure::Relational(rel) => {
-            let database = rel.current_database.clone();
-            for table in &rel.tables {
-                items.push(PaletteItem::Resource(ResourceItem::Table {
-                    profile_id,
-                    profile_name: profile_name.to_string(),
-                    database: database.clone(),
-                    schema: table.schema.clone(),
-                    name: table.name.clone(),
-                }));
-            }
-            for view in &rel.views {
-                items.push(PaletteItem::Resource(ResourceItem::View {
-                    profile_id,
-                    profile_name: profile_name.to_string(),
-                    database: database.clone(),
-                    schema: view.schema.clone(),
-                    name: view.name.clone(),
-                }));
-            }
-            for db_schema in &rel.schemas {
-                let schema_name = db_schema.name.clone();
-                for table in &db_schema.tables {
-                    items.push(PaletteItem::Resource(ResourceItem::Table {
-                        profile_id,
-                        profile_name: profile_name.to_string(),
-                        database: database.clone(),
-                        schema: Some(schema_name.clone()),
-                        name: table.name.clone(),
-                    }));
-                }
-                for view in &db_schema.views {
-                    items.push(PaletteItem::Resource(ResourceItem::View {
-                        profile_id,
-                        profile_name: profile_name.to_string(),
-                        database: database.clone(),
-                        schema: Some(schema_name.clone()),
-                        name: view.name.clone(),
-                    }));
-                }
-            }
-        }
-        dbflux_core::DataStructure::Document(doc) => {
-            let default_db = doc
-                .current_database
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            for collection in &doc.collections {
-                items.push(PaletteItem::Resource(ResourceItem::Collection {
-                    profile_id,
-                    profile_name: profile_name.to_string(),
-                    database: collection
-                        .database
-                        .clone()
-                        .unwrap_or_else(|| default_db.clone()),
-                    name: collection.name.clone(),
-                }));
-            }
-        }
-        dbflux_core::DataStructure::KeyValue(kv) => {
-            for ks in &kv.keyspaces {
-                items.push(PaletteItem::Resource(ResourceItem::KeyValueDb {
-                    profile_id,
-                    profile_name: profile_name.to_string(),
-                    database: format!("db{}", ks.db_index),
-                }));
-            }
-        }
-        _ => {}
-    }
-}
+use palette_resources::build_resource_items_for_connection;
+#[cfg(test)]
+use palette_resources::build_resource_items_from_schema;
 
 /// Map a `PaletteItem` to its corresponding `PaletteSelection`.
 ///
@@ -317,6 +242,13 @@ pub(super) struct PendingOpenRoutine {
     pub body: String,
 }
 
+#[cfg(feature = "telemetry")]
+#[derive(Default)]
+struct TelemetryWake {
+    pending: std::cell::Cell<bool>,
+    waker: std::cell::RefCell<Option<std::task::Waker>>,
+}
+
 pub struct Workspace {
     app_state: Entity<AppStateEntity>,
     sidebar: Entity<Sidebar>,
@@ -325,6 +257,8 @@ pub struct Workspace {
     tasks_panel: Entity<TasksPanel>,
     toast_host: Entity<ToastHost>,
     command_palette: Entity<CommandPalette>,
+    /// The palette's database lists between opens.
+    palette_sync: palette_resources::PaletteSync,
     sql_preview_modal: Entity<SqlPreviewModal>,
     login_modal: Entity<LoginModal>,
     sso_wizard: Entity<SsoWizard>,
@@ -406,6 +340,16 @@ pub struct Workspace {
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
     _background_purge_task: Option<Task<()>>,
+    /// Requests already announced by the MCP approval alerts.
+    #[cfg(feature = "mcp")]
+    approval_alerts: approval_alerts::ApprovalAlertTracker,
+    /// Poll of the approval queue that raises those alerts.
+    #[cfg(feature = "mcp")]
+    _approval_alert_task: Option<Task<()>>,
+    #[cfg(feature = "telemetry")]
+    _telemetry_task: Option<Task<()>>,
+    #[cfg(feature = "telemetry")]
+    telemetry_wake: std::rc::Rc<TelemetryWake>,
 
     /// Pending login modal open request from a settings window auth-profile
     /// login flow. Consumed in render() to call `login_modal.open_manual`.
@@ -468,12 +412,26 @@ impl Workspace {
         dbflux_ui_base::app_state_entity::publish_vim_setting(&app_state, cx);
         dbflux_ui_base::app_state_entity::publish_font_settings(&app_state, cx);
         dbflux_ui_base::app_state_entity::publish_scrollbar_setting(&app_state, cx);
+        dbflux_ui_base::app_state_entity::publish_accent_setting(&app_state, cx);
         dbflux_ui_base::toast::publish_auto_dismiss_setting(&app_state, &toast_host, cx);
 
         // Subscribed before the startup diagnostics below are reported, so
         // Open Last Error in Audit also reaches those.
         cx.subscribe(&app_state, |this, _, event: &UserErrorReported, _| {
             this.last_user_error = Some(event.correlation_id);
+        })
+        .detach();
+
+        cx.subscribe(
+            &app_state,
+            |this, _, event: &dbflux_ui_base::object_tree::ObjectTreeEvent, cx| {
+                this.on_palette_object_tree_event(event, cx);
+            },
+        )
+        .detach();
+
+        cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+            this.forget_stale_palette_profiles(cx);
         })
         .detach();
 
@@ -505,6 +463,9 @@ impl Workspace {
             cx.new(|cx| StatusBar::new(app_state.clone(), tab_manager.clone(), window, cx));
 
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
+        let palette_sync = palette_resources::PaletteSync::new(std::sync::Arc::clone(
+            &app_state.read(cx).palette_object_index_repo,
+        ));
 
         let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
         let login_modal = cx.new(|cx| LoginModal::new(window, cx));
@@ -514,6 +475,27 @@ impl Workspace {
             cx.new(|cx| crate::ui::overlays::updates::WhatsNewDialog::new(app_state.clone(), cx));
         let welcome_dialog =
             cx.new(|cx| crate::ui::overlays::updates::WelcomeDialog::new(app_state.clone(), cx));
+
+        #[cfg(feature = "telemetry")]
+        cx.subscribe(
+            &welcome_dialog,
+            |this,
+             _,
+             _: &crate::ui::overlays::updates::welcome::TelemetryDisclosureDismissed,
+             cx| {
+                this.dismiss_telemetry_disclosure(cx);
+            },
+        )
+        .detach();
+
+        // Saved Settings preferences (or any app-state change) wake the
+        // retained telemetry worker so a due delivery is prepared at once;
+        // no new worker or emitter is created.
+        #[cfg(feature = "telemetry")]
+        cx.subscribe(&app_state, |this, _, _: &AppStateChanged, _| {
+            this.telemetry_wake.wake();
+        })
+        .detach();
 
         let modal_delete_connection =
             cx.new(crate::ui::overlays::modals::ModalDeleteConnection::new);
@@ -779,83 +761,90 @@ impl Workspace {
         cx.subscribe_in(
             &command_palette,
             window,
-            |this, _, event: &PaletteSelection, window, cx| match event {
-                PaletteSelection::Command { id } => {
-                    this.pending_command = Some(id);
-                    cx.notify();
-                }
-                PaletteSelection::Connect { profile_id } => {
-                    this.sidebar.update(cx, |sidebar, cx| {
-                        sidebar.connect_to_profile(*profile_id, cx);
-                    });
-                }
-                PaletteSelection::FocusConnection { profile_id } => {
-                    // Mirror sidebar's execute_item for connected profiles:
-                    // set the connection as active in AppState, then focus the sidebar.
-                    this.app_state.update(cx, |state, cx| {
-                        state.set_active_connection(*profile_id);
-                        cx.emit(AppStateChanged);
-                    });
-                    this.pending_focus = Some(FocusTarget::Sidebar);
-                    cx.notify();
-                }
-                PaletteSelection::OpenTable {
-                    profile_id,
-                    table,
-                    database,
-                    new_tab,
-                } => {
-                    this.open_table_document(
-                        *profile_id,
-                        table.clone(),
-                        database.clone(),
-                        TabPlacement::from_new_tab(*new_tab),
-                        window,
-                        cx,
-                    );
-                }
-                PaletteSelection::OpenCollection {
-                    profile_id,
-                    collection,
-                    new_tab,
-                } => {
-                    this.open_collection_document(
-                        *profile_id,
-                        collection.clone(),
-                        TabPlacement::from_new_tab(*new_tab),
-                        window,
-                        cx,
-                    );
-                }
-                PaletteSelection::OpenKeyValue {
-                    profile_id,
-                    database,
-                    new_tab,
-                } => {
-                    this.open_key_value_document(
-                        *profile_id,
-                        database.clone(),
-                        TabPlacement::from_new_tab(*new_tab),
-                        window,
-                        cx,
-                    );
-                }
-                PaletteSelection::OpenScript { path } => {
-                    this.open_script_from_path(path.clone(), cx);
-                }
-                PaletteSelection::OpenSavedChart { chart_id } => {
-                    this.open_saved_chart(*chart_id, window, cx);
-                }
-                PaletteSelection::ImportDashboard => {
-                    this.modal_import_dashboard.update(cx, |modal, cx| {
-                        modal.open(window, cx);
-                    });
+            |this, _, event: &PaletteSelection, window, cx| {
+                // Choosing an item closes the palette without its closed
+                // event, so its fetches stop here.
+                this.palette_sync.stop_fetching();
+
+                match event {
+                    PaletteSelection::Command { id } => {
+                        this.pending_command = Some(id);
+                        cx.notify();
+                    }
+                    PaletteSelection::Connect { profile_id } => {
+                        this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.connect_to_profile(*profile_id, cx);
+                        });
+                    }
+                    PaletteSelection::FocusConnection { profile_id } => {
+                        // Mirror sidebar's execute_item for connected profiles:
+                        // set the connection as active in AppState, then focus the sidebar.
+                        this.app_state.update(cx, |state, cx| {
+                            state.set_active_connection(*profile_id);
+                            cx.emit(AppStateChanged);
+                        });
+                        this.pending_focus = Some(FocusTarget::Sidebar);
+                        cx.notify();
+                    }
+                    PaletteSelection::OpenTable {
+                        profile_id,
+                        table,
+                        database,
+                        new_tab,
+                    } => {
+                        this.open_table_document(
+                            *profile_id,
+                            table.clone(),
+                            database.clone(),
+                            TabPlacement::from_new_tab(*new_tab),
+                            window,
+                            cx,
+                        );
+                    }
+                    PaletteSelection::OpenCollection {
+                        profile_id,
+                        collection,
+                        new_tab,
+                    } => {
+                        this.open_collection_document(
+                            *profile_id,
+                            collection.clone(),
+                            TabPlacement::from_new_tab(*new_tab),
+                            window,
+                            cx,
+                        );
+                    }
+                    PaletteSelection::OpenKeyValue {
+                        profile_id,
+                        database,
+                        new_tab,
+                    } => {
+                        this.open_key_value_document(
+                            *profile_id,
+                            database.clone(),
+                            TabPlacement::from_new_tab(*new_tab),
+                            window,
+                            cx,
+                        );
+                    }
+                    PaletteSelection::OpenScript { path } => {
+                        this.open_script_from_path(path.clone(), cx);
+                    }
+                    PaletteSelection::OpenSavedChart { chart_id } => {
+                        this.open_saved_chart(*chart_id, window, cx);
+                    }
+                    PaletteSelection::ImportDashboard => {
+                        this.modal_import_dashboard.update(cx, |modal, cx| {
+                            modal.open(window, cx);
+                        });
+                    }
                 }
             },
         )
         .detach();
 
         cx.subscribe(&command_palette, |this, _, _: &CommandPaletteClosed, cx| {
+            this.palette_sync.stop_fetching();
             this.needs_focus_restore = true;
             cx.notify();
         })
@@ -1307,10 +1296,27 @@ impl Workspace {
                     );
                 }
                 SidebarEvent::OpenDashboard { dashboard_id } => {
-                    this.open_dashboard(*dashboard_id, window, cx);
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = this.capture_dashboard_usage_ticket(cx);
+                    this.open_dashboard(
+                        *dashboard_id,
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenRemoteDashboard { profile_id, name } => {
-                    this.open_remote_dashboard(*profile_id, name.clone(), window, cx);
+                    #[cfg(feature = "telemetry")]
+                    let usage_ticket = this.capture_dashboard_usage_ticket(cx);
+                    this.open_remote_dashboard(
+                        *profile_id,
+                        name.clone(),
+                        #[cfg(feature = "telemetry")]
+                        usage_ticket,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenSavedChart { chart_id } => {
                     this.open_saved_chart(*chart_id, window, cx);
@@ -1551,6 +1557,10 @@ impl Workspace {
                 match event {
                     TabManagerEvent::DocumentRequestedFocus => {
                         this.set_focus(FocusTarget::Document, window, cx);
+                        // The raiser may have queued a secret to open in a tab
+                        // of its own: that is done now, not on a later render,
+                        // so a tab switch in between cannot strand it.
+                        this.open_pending_secret(window, cx);
                     }
                     TabManagerEvent::RequestSqlPreview {
                         context,
@@ -1719,6 +1729,7 @@ impl Workspace {
             tasks_panel,
             toast_host,
             command_palette,
+            palette_sync,
             sql_preview_modal,
             login_modal,
             sso_wizard,
@@ -1763,6 +1774,14 @@ impl Workspace {
             pane_actions_menu: None,
             last_user_error: None,
             _background_purge_task: None,
+            #[cfg(feature = "mcp")]
+            approval_alerts: approval_alerts::ApprovalAlertTracker::default(),
+            #[cfg(feature = "mcp")]
+            _approval_alert_task: None,
+            #[cfg(feature = "telemetry")]
+            _telemetry_task: None,
+            #[cfg(feature = "telemetry")]
+            telemetry_wake: std::rc::Rc::new(TelemetryWake::default()),
             pending_login_modal_open: None,
         };
 
@@ -1788,6 +1807,11 @@ impl Workspace {
                     }
                 }
             }
+        }
+
+        #[cfg(feature = "mcp")]
+        {
+            workspace._approval_alert_task = Some(Self::spawn_approval_alerts(window, cx));
         }
 
         // Spawn periodic audit purge task if configured.
@@ -1941,6 +1965,21 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.editor"),
             ),
             PaletteCommand::new(
+                "format_query",
+                dbflux_i18n::t!("palette.command.format_query.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
+                "insert_snippet",
+                dbflux_i18n::t!("palette.command.insert_snippet.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
+                "go_to_query_error",
+                dbflux_i18n::t!("palette.command.go_to_query_error.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            ),
+            PaletteCommand::new(
                 "open_history",
                 dbflux_i18n::t!("palette.command.open_history.name"),
                 dbflux_i18n::t!("palette.category.editor"),
@@ -1981,6 +2020,11 @@ impl Workspace {
             PaletteCommand::new(
                 "export_results",
                 dbflux_i18n::t!("palette.command.export_results.name"),
+                dbflux_i18n::t!("palette.category.results"),
+            ),
+            PaletteCommand::new(
+                "results_copy_as_markdown",
+                dbflux_i18n::t!("palette.command.results_copy_as_markdown.name"),
                 dbflux_i18n::t!("palette.category.results"),
             ),
             // Connections
@@ -2366,10 +2410,13 @@ impl Workspace {
         let was_visible = self.command_palette.read(cx).is_visible();
 
         if !was_visible {
-            let items = self.build_palette_items(cx);
+            self.forget_stale_palette_profiles(cx);
+            let (items, to_fetch) = self.build_palette_items(cx);
+            self.palette_sync.set_lists_workspace(true);
             self.command_palette.update(cx, |palette, cx| {
                 palette.open_with_items(items, window, cx);
             });
+            self.sync_palette_after_build(to_fetch, cx);
         } else {
             self.command_palette.update(cx, |palette, cx| {
                 palette.hide(cx);
@@ -2378,8 +2425,17 @@ impl Workspace {
         }
     }
 
-    /// Build the palette item list from current app state.
-    fn build_palette_items(&self, cx: &Context<Self>) -> Vec<PaletteItem> {
+    /// Build the palette item list from current app state, with the databases
+    /// it could list once they are fetched.
+    fn build_palette_items(
+        &mut self,
+        cx: &Context<Self>,
+    ) -> (Vec<PaletteItem>, Vec<(uuid::Uuid, String)>) {
+        #[cfg(test)]
+        {
+            self.palette_sync.full_listings += 1;
+        }
+
         let mut items: Vec<PaletteItem> = Self::default_commands()
             .into_iter()
             .map(|cmd| cmd.into())
@@ -2406,17 +2462,19 @@ impl Workspace {
             });
         }
 
+        let mut to_fetch = Vec::new();
         for (&profile_id, connected) in connections.iter() {
-            let profile_name = connected.profile.name.clone();
-
-            if let Some(schema) = &connected.schema {
-                build_resource_items_from_schema(
+            to_fetch.extend(
+                build_resource_items_for_connection(
+                    app_state,
                     profile_id,
-                    &profile_name,
-                    &schema.structure,
+                    connected,
+                    &mut self.palette_sync.cache,
                     &mut items,
-                );
-            }
+                )
+                .into_iter()
+                .map(|database| (profile_id, database)),
+            );
         }
 
         if let Some(dir) = app_state.scripts_directory() {
@@ -2459,7 +2517,7 @@ impl Workspace {
             });
         }
 
-        items
+        (items, to_fetch)
     }
 
     /// Recursively flatten script directory entries into palette items.

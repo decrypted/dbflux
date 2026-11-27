@@ -20,6 +20,7 @@
 //! suppression (a secondary span replaces the cell's own display text), and
 //! the nested braces plus the array-only chevron.
 
+mod overflow;
 mod resize;
 #[cfg(test)]
 mod tests;
@@ -42,6 +43,7 @@ use crate::icon::IconSource;
 use crate::primitives::{Chamfer, ChamferRing, Icon};
 use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors};
 
+pub use overflow::GridOverflow;
 pub use resize::{
     ColumnResize, ColumnResizeDrag, MIN_COLUMN_WIDTH, RESIZE_HANDLE_WIDTH, apply_column_resize,
     clamp_column_width, column_resize_handle, track_column_resize,
@@ -223,6 +225,7 @@ pub fn cell_paint(
             CellTone::Success => colors.success,
             CellTone::Warning => colors.warning,
             CellTone::Danger => colors.danger,
+            CellTone::Expression => colors.tint,
             CellTone::Normal | CellTone::PendingInsert | CellTone::Error => {
                 if is_active {
                     colors.strong
@@ -452,6 +455,7 @@ pub fn render_rows(
                                         CellTone::Success => colors.success,
                                         CellTone::Warning => colors.warning,
                                         CellTone::Danger => colors.danger,
+                                        CellTone::Expression => colors.tint,
                                         CellTone::Normal
                                         | CellTone::PendingInsert
                                         | CellTone::Error => colors.foreground,

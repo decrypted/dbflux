@@ -2501,3 +2501,166 @@ fn explicit_database_projection_yields_nothing_for_a_disconnected_profile(cx: &m
         "a disconnected profile must not leave a stale explicit projection"
     );
 }
+
+#[gpui::test]
+fn a_background_schema_failure_settles_without_a_report(cx: &mut TestAppContext) {
+    let state = test_app_state(cx);
+    wire_production_globals(&state, cx);
+    let profile_id = Uuid::new_v4();
+    let fake = FakeTreeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+    fake.schema_failures
+        .lock()
+        .expect("failures")
+        .insert("analytics".to_string(), 1);
+    connect_profile(&state, cx, profile_id, fake.clone(), None);
+
+    let key = schema_request_key(profile_id, "analytics");
+    state.update(cx, |state, cx| {
+        assert_eq!(
+            state.object_tree_request_in_background(key.clone(), cx),
+            ObjectTreeRequestStatus::Dispatched,
+        );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+        None,
+        "a failure nobody asked for is not shown as a failed load"
+    );
+    assert!(!state.read_with(cx, |state, _| state.object_tree_is_pending(&key)));
+    assert_eq!(
+        state.read_with(cx, |state, _| state.unread_error_count),
+        0,
+        "nobody asked for the request, so its failure is only logged"
+    );
+}
+
+#[gpui::test]
+fn asking_for_a_background_request_reports_its_failure(cx: &mut TestAppContext) {
+    let state = test_app_state(cx);
+    wire_production_globals(&state, cx);
+    let profile_id = Uuid::new_v4();
+    let fake = FakeTreeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+    fake.schema_failures
+        .lock()
+        .expect("failures")
+        .insert("analytics".to_string(), 1);
+    connect_profile(&state, cx, profile_id, fake.clone(), None);
+
+    let key = schema_request_key(profile_id, "analytics");
+    state.update(cx, |state, cx| {
+        assert_eq!(
+            state.object_tree_request_in_background(key.clone(), cx),
+            ObjectTreeRequestStatus::Dispatched,
+        );
+        assert_eq!(
+            state.object_tree_request(key.clone(), cx),
+            ObjectTreeRequestStatus::Pending,
+        );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        state.read_with(cx, |state, _| state.unread_error_count),
+        1,
+        "the user's request shares the attempt and gets its failure reported"
+    );
+    assert!(matches!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+        Some(ObjectTreeOutcome::Failed(_))
+    ));
+    assert_eq!(fake.schema_calls(), vec!["analytics"]);
+}
+
+#[gpui::test]
+fn a_background_request_does_not_quiet_a_pending_user_request(cx: &mut TestAppContext) {
+    let state = test_app_state(cx);
+    wire_production_globals(&state, cx);
+    let profile_id = Uuid::new_v4();
+    let fake = FakeTreeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+    fake.schema_failures
+        .lock()
+        .expect("failures")
+        .insert("analytics".to_string(), 1);
+    connect_profile(&state, cx, profile_id, fake.clone(), None);
+
+    let key = schema_request_key(profile_id, "analytics");
+    state.update(cx, |state, cx| {
+        state.object_tree_request(key.clone(), cx);
+        assert_eq!(
+            state.object_tree_request_in_background(key.clone(), cx),
+            ObjectTreeRequestStatus::Pending,
+        );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(state.read_with(cx, |state, _| state.unread_error_count), 1);
+}
+
+#[gpui::test]
+fn a_background_request_behind_a_failing_slot_install_is_not_reported(cx: &mut TestAppContext) {
+    let state = test_app_state(cx);
+    wire_production_globals(&state, cx);
+    let profile_id = Uuid::new_v4();
+    let driver = InstallTestDriver::new();
+    driver.set_fail_connect(true);
+    state.update(cx, |state, _| {
+        state
+            .facade
+            .connections
+            .drivers
+            .insert(DRIVER_KEY.to_string(), driver.clone());
+    });
+    let fake = FakeTreeConnection::new(SchemaLoadingStrategy::ConnectionPerDatabase);
+    connect_profile(
+        &state,
+        cx,
+        profile_id,
+        fake.clone(),
+        Some(relational_schema(
+            Vec::new(),
+            Some("app"),
+            Vec::new(),
+            Vec::new(),
+        )),
+    );
+
+    let schema = schema_request_key(profile_id, "analytics");
+    state.update(cx, |state, cx| {
+        assert_eq!(
+            state.object_tree_request_in_background(schema.clone(), cx),
+            ObjectTreeRequestStatus::WaitingForSlotInstall,
+        );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&schema).cloned()),
+        None
+    );
+    assert_eq!(state.read_with(cx, |state, _| state.unread_error_count), 0);
+}
+
+#[gpui::test]
+fn a_cancelled_background_request_leaves_no_outcome(cx: &mut TestAppContext) {
+    let state = test_app_state(cx);
+    let profile_id = Uuid::new_v4();
+    let fake = FakeTreeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+    connect_profile(&state, cx, profile_id, fake.clone(), None);
+
+    let key = schema_request_key(profile_id, "analytics");
+    state.update(cx, |state, cx| {
+        assert_eq!(
+            state.object_tree_request_in_background(key.clone(), cx),
+            ObjectTreeRequestStatus::Dispatched,
+        );
+        state.object_tree_cancel(&key, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+        None
+    );
+}

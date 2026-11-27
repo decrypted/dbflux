@@ -83,6 +83,9 @@ impl Sidebar {
         };
 
         self.app_state.update(cx, |state, cx| {
+            // Background loads, such as the palette's, leave it closed.
+            state.object_tree_note_database_closed(profile_id, &db_name);
+
             if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
                 conn.database_schemas.remove(&db_name);
 

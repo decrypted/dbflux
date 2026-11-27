@@ -16,12 +16,16 @@ pub use repositories::audit::{
     AppendAuditEvent, AppendAuditEventExtended, AuditAggregateParams, AuditEventDto,
     AuditGroupColumn, AuditQueryFilter, AuditRepository,
 };
+pub use repositories::pal_object_index::{
+    IndexedDatabase, IndexedObject, IndexedObjectKind, PaletteObjectIndexRepo,
+};
 pub use repositories::qry_saved_document_queries::{
     DOCUMENT_QUERY_FORMAT_VERSION, DocumentQueryRepo, DocumentQueryScope, SavedDocumentQuery,
     SavedDocumentQuerySummary,
 };
 pub use repositories::qry_saved_queries::{SavedQueryRepo, SavedQuerySummary};
 pub use repositories::sch_schema_snapshots::{SchemaSnapshotRepo, SchemaSnapshotSummary};
+pub use repositories::snp_snippets::{SnippetDraft, SnippetError, SnippetRecord, SnippetRepo};
 pub use repositories::state::{
     query_history::QueryHistoryRepository, recent_items::RecentItemsRepository,
     saved_queries::SavedQueriesRepository, sessions::SessionRepository,

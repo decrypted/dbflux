@@ -44,6 +44,8 @@ pub mod services;
 pub mod settings;
 pub mod ssh_tunnel_auth;
 pub mod ssh_tunnel_profiles;
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 pub mod update_settings;
 
 pub mod state;
@@ -56,10 +58,13 @@ pub mod viz_saved_chart_source_metric_dimensions;
 pub mod viz_saved_chart_source_metric_series;
 pub mod viz_saved_charts;
 
+pub mod pal_object_index;
 pub mod qry_saved_document_queries;
 pub mod qry_saved_queries;
 
 pub mod sch_schema_snapshots;
+
+pub mod snp_snippets;
 
 /// Returns a `filter_map` adapter for the rows of a list query that keeps
 /// readable rows and logs the ones that fail to read.

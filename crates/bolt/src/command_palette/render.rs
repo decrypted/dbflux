@@ -46,7 +46,7 @@ where
                 #[expect(
                     clippy::indexing_slicing,
                     reason = "`palette_idx` is a `FilteredItem` index; the three \
-                              construction sites of `FilteredItem` (`filter_items`, \
+                              construction sites of `FilteredItem` (`filter_with_texts`, \
                               `open_with_items` and `toggle`) each pair the index \
                               with `.enumerate()` over `self.items`, so \
                               `palette_idx` stays below `self.items.len()`"
@@ -85,7 +85,7 @@ where
                     #[expect(
                         clippy::indexing_slicing,
                         reason = "`palette_idx` is a `FilteredItem` index; the three \
-                                  construction sites of `FilteredItem` (`filter_items`, \
+                                  construction sites of `FilteredItem` (`filter_with_texts`, \
                                   `open_with_items` and `toggle`) each pair the index \
                                   with `.enumerate()` over `self.items`, so \
                                   `palette_idx` stays below `self.items.len()`"
@@ -113,7 +113,9 @@ where
         let handle = cx.entity().downgrade();
         let overlay = div()
             .id("command-palette-overlay")
+            .debug_selector(|| "command-palette-overlay".to_string())
             .absolute()
+            .inset_0()
             .flex()
             .justify_center()
             .items_start()

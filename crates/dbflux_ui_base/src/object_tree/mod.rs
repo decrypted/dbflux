@@ -30,9 +30,12 @@
 //! strings.
 
 mod coordinator;
+mod folder;
 
 #[cfg(test)]
 pub(crate) mod test_support;
+
+pub use folder::{FolderObjects, folder_objects, is_current_database};
 
 pub use coordinator::{
     ObjectTreeCoordinator, ObjectTreeEvent, ObjectTreeInstallKey, ObjectTreeOutcome,
@@ -258,6 +261,45 @@ pub fn project_profile_tree(state: &AppStateEntity, profile_id: Uuid) -> Option<
         profile_id,
         &profile_view(state, profile_id, connected),
     ))
+}
+
+/// The one database a profile limits its listing to: Show all databases is
+/// off, the connection names a database, and `listed` contains it. `None`
+/// lists every database, so a configured name the server spells
+/// differently never hides them all.
+pub fn only_shown_database<'a>(
+    profile: &dbflux_core::ConnectionProfile,
+    mut listed: impl Iterator<Item = &'a str>,
+) -> Option<String> {
+    if profile.show_all_databases {
+        return None;
+    }
+
+    let configured = profile
+        .config
+        .database()
+        .filter(|name| !name.trim().is_empty())?;
+
+    listed.any(|name| name == configured).then_some(configured)
+}
+
+/// Whether a relational profile shows the objects of its one projected
+/// database directly under the profile, with no database row, so they are
+/// opened without naming a database.
+pub fn shows_one_unnamed_database(
+    state: &AppStateEntity,
+    profile_id: Uuid,
+    snapshot: &dbflux_core::SchemaSnapshot,
+    strategy: dbflux_core::SchemaLoadingStrategy,
+    root: &ObjectTreeNode,
+) -> bool {
+    snapshot.database_layout() == dbflux_core::DatabaseLayout::Schemas
+        && snapshot.databases().is_empty()
+        && state
+            .get_database_list(profile_id)
+            .is_none_or(|list| list.is_empty())
+        && strategy != dbflux_core::SchemaLoadingStrategy::LazyPerDatabase
+        && root.children.len() == 1
 }
 
 /// Projects the shared hierarchy node for one explicit, already-known

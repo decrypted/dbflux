@@ -27,7 +27,7 @@ use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
 use dbflux_storage::repositories::viz_saved_chart_series::SavedChartSeriesRepository;
 use dbflux_storage::repositories::viz_saved_charts::SavedChartsRepository;
-use dbflux_storage::{DocumentQueryRepo, SavedQueryRepo};
+use dbflux_storage::{DocumentQueryRepo, SavedQueryRepo, SnippetRepo};
 
 #[cfg(feature = "mcp")]
 use dbflux_mcp::{
@@ -110,6 +110,8 @@ pub struct AppState {
     general_settings: GeneralSettings,
     update_settings: crate::updates::UpdateSettings,
     update_check: crate::updates::UpdateCheckState,
+    #[cfg(feature = "telemetry")]
+    telemetry: Option<crate::telemetry::TelemetryScheduler>,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, EditableGlobalHook>,
@@ -164,11 +166,120 @@ pub struct AppState {
     pub saved_query_repo: Arc<SavedQueryRepo>,
     /// Repository for `qry_saved_document_queries`.
     pub document_query_repo: Arc<DocumentQueryRepo>,
+    /// Repository for `snp_snippets`.
+    pub snippet_repo: Arc<SnippetRepo>,
     /// Repository for `sch_schema_snapshots` and its child tables.
     pub schema_snapshot_repo: Arc<SchemaSnapshotRepo>,
+    /// Repository for `pal_object_index`.
+    pub palette_object_index_repo: Arc<dbflux_storage::PaletteObjectIndexRepo>,
+    /// Profiles deleted or pointed at another server since the palette last
+    /// asked: their stored palette objects no longer apply. The palette
+    /// deletes them off the UI thread, after the writes it queued before.
+    palette_profiles_to_forget: Vec<Uuid>,
+    /// Profiles pointed elsewhere while connected: the open connection still
+    /// reaches the old server, so what the palette stores until the
+    /// reconnect is forgotten again then.
+    palette_forget_on_connect: HashSet<Uuid>,
+}
+
+/// Whether two versions of a profile reach the same databases: the same
+/// driver, connection settings and values filled in at connect time, through
+/// the same tunnel, proxy, access method and auth profile.
+fn same_server(before: &ConnectionProfile, after: &ConnectionProfile) -> bool {
+    fn reach(profile: &ConnectionProfile) -> Option<serde_json::Value> {
+        serde_json::to_value((
+            profile.driver_id(),
+            &profile.config,
+            &profile.value_refs,
+            &profile.access_kind,
+            profile.proxy_profile_id,
+            profile.auth_profile_id,
+        ))
+        .ok()
+    }
+
+    reach(before) == reach(after)
 }
 
 impl AppState {
+    /// Explicit foreground initialization only; constructor/startup neither
+    /// reads endpoint configuration nor constructs a blocking HTTP client.
+    #[cfg(feature = "telemetry")]
+    pub fn initialize_telemetry(
+        &mut self,
+        config: crate::telemetry::TelemetryConfig,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.initialize_telemetry_inner(config, crate::telemetry::BuildIdentity::compiled(), now)
+    }
+
+    /// Test-only seam: the same initialization with a caller-supplied identity,
+    /// so a composition test can drive a scheduler that admits a fixture RC
+    /// build (`BuildIdentity::compiled()` rejects dev versions, which would
+    /// leave every delivery permanently `Skipped(UnsupportedBuild)`). Production
+    /// and telemetry-off builds do not contain this method.
+    #[cfg(all(feature = "telemetry", any(test, feature = "test-support")))]
+    pub fn initialize_telemetry_with_identity(
+        &mut self,
+        config: crate::telemetry::TelemetryConfig,
+        identity: Result<crate::telemetry::BuildIdentity, crate::telemetry::TelemetryError>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.initialize_telemetry_inner(config, identity, now)
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn initialize_telemetry_inner(
+        &mut self,
+        config: crate::telemetry::TelemetryConfig,
+        identity: Result<crate::telemetry::BuildIdentity, crate::telemetry::TelemetryError>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        if self.telemetry.is_none() {
+            self.telemetry = Some(crate::telemetry::TelemetryScheduler::new(
+                self.storage_runtime.telemetry(),
+                config,
+                identity,
+                Arc::new(self.audit_service.clone()),
+                {
+                    let audit = self.audit_service.clone();
+                    let degraded = self.audit_degraded;
+                    Arc::new(move || !degraded && audit.is_enabled())
+                },
+                now,
+            )?);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry(&self) -> Option<&crate::telemetry::TelemetryScheduler> {
+        self.telemetry.as_ref()
+    }
+
+    /// Capture the source before starting work; failures never fail the user's operation.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_usage_source(
+        &mut self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<dbflux_core::observability::usage::UsageSource> {
+        if self.audit_degraded || !self.audit_service.is_enabled() {
+            return None;
+        }
+        match self.telemetry.as_mut()?.usage_source(now) {
+            Ok(source) => source,
+            Err(error) => {
+                log::error!("{error}");
+                None
+            }
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_mut(&mut self) -> Option<&mut crate::telemetry::TelemetryScheduler> {
+        self.telemetry.as_mut()
+    }
+
     /// Writes a profile's secret-kind field values to the OS keyring under
     /// per-field references. The matching SQLite rows store only the reference.
     ///
@@ -768,6 +879,10 @@ impl AppState {
             profile.read_only_flag = saved.read_only_flag;
         }
 
+        if self.palette_forget_on_connect.remove(&profile.id) {
+            self.palette_profiles_to_forget.push(profile.id);
+        }
+
         self.facade.connections.apply_connect_profile(
             profile,
             connection,
@@ -1016,6 +1131,23 @@ impl AppState {
             .prepare_fetch_table_details(profile_id, database, schema, table)
     }
 
+    /// Prepares a fenced fetch of one table's details that ignores the cache,
+    /// for checking the table against the database as it is now. Execute it
+    /// off the UI thread, then write the result through
+    /// [`AppState::apply_fetched_table_details`], which rejects it when the
+    /// session or the table's cache changed in between.
+    pub fn prepare_refetch_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<FencedTableDetailsParams, TableDetailsPrepareError> {
+        self.facade
+            .connections
+            .prepare_refetch_table_details(profile_id, database, schema, table)
+    }
+
     /// Invalidates one table's cached details and dependents and fences its older requests.
     pub fn invalidate_table_details(
         &mut self,
@@ -1027,6 +1159,11 @@ impl AppState {
         self.facade
             .connections
             .invalidate_table_details(profile_id, database, schema, table)
+    }
+
+    /// Drops every cached table's details and dependents of one connection.
+    pub fn clear_table_details(&mut self, profile_id: Uuid) -> bool {
+        self.facade.connections.clear_table_details(profile_id)
     }
 
     /// Prepares a session-fenced table-details fetch for the shared object
@@ -1042,6 +1179,17 @@ impl AppState {
         self.facade
             .connections
             .prepare_fetch_table_details_fenced(profile_id, database, schema, table)
+    }
+
+    /// Whether a failed fenced table-details fetch answered for the session,
+    /// connection and cache that are current now.
+    pub fn is_table_details_failure_current(
+        &self,
+        failure: &dbflux_core::FencedTableDetailsFailure,
+    ) -> bool {
+        self.facade
+            .connections
+            .is_table_details_failure_current(failure)
     }
 
     pub fn apply_fetched_table_details(
@@ -1316,12 +1464,25 @@ impl AppState {
             log::error!("Failed to delete profile from storage: {}", e);
         }
 
+        self.palette_profiles_to_forget.push(removed.id);
+
         Some(removed)
     }
 
     pub fn update_profile(&mut self, profile: ConnectionProfile) {
         let profile_name = profile.name.clone();
         let profile_id = profile.id.to_string();
+        if self
+            .profiles()
+            .iter()
+            .find(|known| known.id == profile.id)
+            .is_some_and(|known| !same_server(known, &profile))
+        {
+            self.palette_profiles_to_forget.push(profile.id);
+            if self.connections().contains_key(&profile.id) {
+                self.palette_forget_on_connect.insert(profile.id);
+            }
+        }
         self.facade.connections.clear_connect_failure(profile.id);
         self.remembered_connection_passwords.remove(&profile.id);
 
@@ -1353,6 +1514,12 @@ impl AppState {
         // was disabled or the call path skipped that step, the edit would
         // not survive a restart.
         self.save_profiles();
+    }
+
+    /// The profiles whose stored palette objects no longer apply, since the
+    /// last call.
+    pub fn take_palette_profiles_to_forget(&mut self) -> Vec<Uuid> {
+        std::mem::take(&mut self.palette_profiles_to_forget)
     }
 
     pub fn save_profiles(&self) {
@@ -2407,6 +2574,65 @@ impl AppState {
         &self.audit_service
     }
 
+    /// The saved telemetry level, or `None` when the optional telemetry
+    /// module is unavailable. UI surfaces use the `TelemetryLevel` re-export
+    /// and must not depend on the protocol crate.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_level(&self) -> Option<crate::telemetry::TelemetryLevel> {
+        self.telemetry
+            .as_ref()
+            .map(|scheduler| scheduler.state().level())
+    }
+
+    /// Persists the telemetry level on the storage owner, in the foreground.
+    /// Leaving Basic cancels a queued Basic delivery and Off also cancels a
+    /// queued ping; it never resets the installation identity.
+    #[cfg(feature = "telemetry")]
+    pub fn set_telemetry_level(
+        &mut self,
+        level: crate::telemetry::TelemetryLevel,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.telemetry_mut()
+            .ok_or(crate::telemetry::TelemetryError::Storage)?
+            .set_level(level, now)
+    }
+
+    /// Rotates the installation identity immediately, in the foreground.
+    /// Cancels old-identity pending work; acknowledged build history survives.
+    #[cfg(feature = "telemetry")]
+    pub fn reset_telemetry_install_id(
+        &mut self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::telemetry::TelemetryError> {
+        self.telemetry_mut()
+            .ok_or(crate::telemetry::TelemetryError::Storage)?
+            .reset(now)
+    }
+
+    /// The installation identifier for display, masked to its first and last
+    /// four hex characters (`a3f9…71c2`). `None` when telemetry is unavailable.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_install_id_masked(&self) -> Option<String> {
+        let id = self
+            .telemetry
+            .as_ref()?
+            .state()
+            .install_id()
+            .simple()
+            .to_string();
+        Some(format!("{}…{}", &id[..4], &id[id.len() - 4..]))
+    }
+
+    /// Whether a delivery endpoint is configured: `None` when telemetry is
+    /// unavailable, `Some(false)` means delivery is honestly unavailable.
+    #[cfg(feature = "telemetry")]
+    pub fn telemetry_delivery_configured(&self) -> Option<bool> {
+        self.telemetry
+            .as_ref()
+            .map(crate::telemetry::TelemetryScheduler::endpoint_configured)
+    }
+
     /// Wires the tracing bridge's shared atomics into the audit service so that
     /// `set_log_capture_min_level` can update the bridge threshold at runtime
     /// and `dropped_log_event_count` can report the drop counter.
@@ -3280,6 +3506,9 @@ mod tests {
     };
     use dbflux_driver_ipc::IpcDriver;
 
+    #[cfg(feature = "telemetry")]
+    mod telemetry;
+
     #[test]
     fn profile_session_generation_absent_profile_is_none() {
         let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
@@ -4066,6 +4295,65 @@ mod tests {
             .expect("profile present");
         state.remove_profile(removed_index);
         assert_eq!(state.connect_failure(removed_id), None);
+    }
+
+    #[test]
+    fn the_palette_forgets_a_removed_profile_or_one_pointed_at_another_server() {
+        let renamed = ConnectionProfile::new("renamed", DbConfig::default_postgres());
+        let moved = ConnectionProfile::new("moved", DbConfig::default_mysql());
+        let removed = ConnectionProfile::new("removed", DbConfig::default_postgres());
+        let (moved_id, removed_id) = (moved.id, removed.id);
+        let mut state = test_state_with_profiles(
+            HashMap::new(),
+            vec![renamed.clone(), moved.clone(), removed.clone()],
+        );
+
+        let mut renamed_again = renamed;
+        renamed_again.name = "renamed again".to_string();
+        state.update_profile(renamed_again);
+        assert!(
+            state.take_palette_profiles_to_forget().is_empty(),
+            "the same server keeps its objects"
+        );
+
+        let mut moved_again = moved;
+        if let DbConfig::MySQL { host, .. } = &mut moved_again.config {
+            *host = "other.example".to_string();
+        }
+        state.update_profile(moved_again);
+        let removed_index = state
+            .profiles()
+            .iter()
+            .position(|profile| profile.id == removed_id)
+            .expect("profile present");
+        state.remove_profile(removed_index);
+
+        assert_eq!(
+            state.take_palette_profiles_to_forget(),
+            vec![moved_id, removed_id]
+        );
+        assert!(state.take_palette_profiles_to_forget().is_empty());
+    }
+
+    #[test]
+    fn the_palette_forgets_a_profile_reached_through_another_tunnel() {
+        let tunneled = ConnectionProfile::new("tunneled", DbConfig::default_postgres());
+        let tunneled_id = tunneled.id;
+        let mut state = test_state_with_profiles(HashMap::new(), vec![tunneled.clone()]);
+
+        let mut through_ssh = tunneled;
+        through_ssh.access_kind = Some(dbflux_core::access::AccessKind::Ssh {
+            ssh_tunnel_profile_id: Uuid::new_v4(),
+        });
+        state.update_profile(through_ssh.clone());
+        assert_eq!(state.take_palette_profiles_to_forget(), vec![tunneled_id]);
+
+        let mut through_proxy = through_ssh;
+        through_proxy.access_kind = Some(dbflux_core::access::AccessKind::Proxy {
+            proxy_profile_id: Uuid::new_v4(),
+        });
+        state.update_profile(through_proxy);
+        assert_eq!(state.take_palette_profiles_to_forget(), vec![tunneled_id]);
     }
 
     /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain

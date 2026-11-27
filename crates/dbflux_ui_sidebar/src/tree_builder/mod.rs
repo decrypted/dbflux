@@ -833,13 +833,9 @@ impl Sidebar {
                 dbflux_ui_base::object_tree::project_profile_tree(state, profile_id)
                     .filter(|root| !root.children.is_empty())
             {
-                let implicit_flat = layout == DatabaseLayout::Schemas
-                    && schema.databases().is_empty()
-                    && state
-                        .get_database_list(profile_id)
-                        .is_none_or(|list| list.is_empty())
-                    && strategy != SchemaLoadingStrategy::LazyPerDatabase
-                    && projected.children.len() == 1;
+                let implicit_flat = dbflux_ui_base::object_tree::shows_one_unnamed_database(
+                    state, profile_id, schema, strategy, &projected,
+                );
                 if implicit_flat {
                     #[expect(
                         clippy::indexing_slicing,
@@ -2362,30 +2358,22 @@ fn listed_databases(
     items: Vec<TreeItem>,
     profile: &dbflux_core::ConnectionProfile,
 ) -> Vec<TreeItem> {
-    if profile.show_all_databases {
-        return items;
-    }
+    let database_name = |item: &TreeItem| match item.id.as_ref().parse::<SchemaNodeId>() {
+        Ok(SchemaNodeId::Database { name, .. }) => Some(name),
+        _ => None,
+    };
 
-    let Some(configured) = profile
-        .config
-        .database()
-        .filter(|name| !name.trim().is_empty())
+    let names: Vec<String> = items.iter().filter_map(database_name).collect();
+    let Some(configured) =
+        dbflux_ui_base::object_tree::only_shown_database(profile, names.iter().map(String::as_str))
     else {
         return items;
     };
 
-    let is_configured = |item: &TreeItem| {
-        matches!(
-            item.id.as_ref().parse::<SchemaNodeId>(),
-            Ok(SchemaNodeId::Database { name, .. }) if name == configured
-        )
-    };
-
-    if !items.iter().any(is_configured) {
-        return items;
-    }
-
-    items.into_iter().filter(is_configured).collect()
+    items
+        .into_iter()
+        .filter(|item| database_name(item).as_deref() == Some(configured.as_str()))
+        .collect()
 }
 
 /// Whether the profile's database filter hides `database`: Show all databases
@@ -2397,17 +2385,14 @@ fn hides_database(
     listed: Option<&[dbflux_core::DatabaseInfo]>,
     database: &str,
 ) -> bool {
-    if profile.show_all_databases {
-        return false;
-    }
-
-    profile
-        .config
-        .database()
-        .filter(|configured| !configured.trim().is_empty() && configured != database)
-        .is_some_and(|configured| {
-            listed.is_some_and(|list| list.iter().any(|entry| entry.name == configured))
+    listed
+        .and_then(|list| {
+            dbflux_ui_base::object_tree::only_shown_database(
+                profile,
+                list.iter().map(|entry| entry.name.as_str()),
+            )
         })
+        .is_some_and(|configured| configured != database)
 }
 
 /// Build the per-database `TreeItem` nodes for a named-database connection.
@@ -2441,10 +2426,7 @@ fn build_named_db_children(
         else {
             continue;
         };
-        let is_current = schema
-            .databases()
-            .iter()
-            .any(|db| db.name == *db_name && db.is_current);
+        let is_current = dbflux_ui_base::object_tree::is_current_database(schema, db_name);
         let is_pending = state.is_operation_pending(profile_id, Some(db_name));
         let is_active_db = connected.active_database.as_deref() == Some(db_name.as_str());
 

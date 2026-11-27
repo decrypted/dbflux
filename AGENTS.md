@@ -73,6 +73,68 @@ which uses the system library when a `freetype2.pc` of at least the required
 version is present and otherwise compiles its vendored sources, so a missing
 development package costs build time rather than breaking the build.
 
+## Design Before Visual Changes
+
+Every visual change is designed and approved before it is implemented. This
+covers new screens, documents, dialogs and wizard steps, new or moved
+controls, layout changes, and new states (empty, loading, error) that the
+user sees.
+
+1. Draw the change as artboards under `design/<slug>/`, one dark and one light
+   folder, following the `design/redesign-islands-*` naming and the Bolt
+   Byzantium app system in `design/redesign-design-system/`. Use the real
+   labels from the code and the locale files, and show every state the change
+   adds. Agents use the gentle-design skill and its `gentle_design` tool.
+2. Get the maintainer's explicit approval of those artboards. Do not write
+   production UI code before it.
+3. Implement from the approved artboard, and name it in the pull request so
+   reviewers can compare the result with it.
+
+Every artboard must look like the rest of the app and follow the design
+system. A design that invents its own chrome, components or colors is rejected
+even when its content is right.
+
+- Start from a copy of the existing artboard that shows the same surface (for
+  example `design/redesign-islands-every-pane-floats-on-the-desk-*/03-isl-editor.html`
+  for the editor and its result panel), and change only what the feature adds.
+  Keep the window chrome, rail, sidebar, tabs, toolbars, result panel and
+  status bar as they are, except for controls and layout that the approved
+  artboard moves or changes.
+- Build every new element from a component that already exists in
+  `design/redesign-design-system/` (`04-ds-app.html`, `06-ds-states.html`),
+  with its markup, tokens and cut. Use the Bolt Byzantium accent; do not
+  introduce new colors, fonts or control shapes. When nothing fits, say so and
+  justify the new element when asking for approval.
+- Place the feature where the app already puts similar things (a result view
+  next to Grid / JSON / Chart, an inspector like the row inspector, an item in
+  an existing menu) before creating a new document, window or header.
+
+Compare with screenshots at two points, side by side, and fix every
+difference you did not intend before moving on:
+
+1. Before asking for approval: render each new artboard, dark and light, with
+   a headless browser and compare it with a render of the existing artboard it
+   started from and with the design system pages. Report what changed and
+   which elements are new.
+2. Before reporting an implementation as done: take screenshots of the running
+   app through UI automation (see below) and compare them with the approved
+   artboards. Report every remaining difference.
+
+Screenshots are working evidence only; keep them in a temporary directory and
+never commit them.
+
+Two kinds of change skip the artboard and the approval:
+
+- A defect fix that does not alter what the user sees.
+- A small addition that follows a pattern the design already has, such as one
+  more entry in an existing context menu or submenu, or one more option in an
+  existing dropdown. Implement it directly. When an existing artboard shows that
+  surface, update it in the same change so the design stays current; that
+  update needs no approval.
+
+Anything beyond that, such as a new section, control or layout, is designed
+first. When in doubt, design it first.
+
 ## Verifying UI Changes with UI Automation
 
 A build with the `ui-automation` feature exposes every DBFlux window to a local

@@ -21,7 +21,7 @@ use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
 use dbflux_storage::repositories::viz_saved_chart_series::SavedChartSeriesRepository;
 use dbflux_storage::repositories::viz_saved_charts::SavedChartsRepository;
-use dbflux_storage::{DocumentQueryRepo, SavedQueryRepo};
+use dbflux_storage::{DocumentQueryRepo, PaletteObjectIndexRepo, SavedQueryRepo, SnippetRepo};
 
 #[cfg(feature = "mcp")]
 use dbflux_mcp::{
@@ -214,7 +214,13 @@ impl AppState {
         }
 
         let secret_provider_registry = Self::build_secret_provider_registry(services.clone());
-        let auth_provider_registry = Self::build_auth_provider_registry(services, audit_emitter);
+        // An in-memory runtime is a test runtime: it must not reflect the host's
+        // `~/.aws` profiles into the app state, or results depend on the machine.
+        let auth_provider_registry = if storage_runtime.temp_root().is_some() {
+            AuthProviderRegistry::new()
+        } else {
+            Self::build_auth_provider_registry(services, audit_emitter)
+        };
 
         let facade = Self::build_session_facade(
             drivers,
@@ -240,7 +246,9 @@ impl AppState {
             dashboard_panels_repo,
             saved_query_repo,
             document_query_repo,
+            snippet_repo,
             schema_snapshot_repo,
+            palette_object_index_repo,
         ) = Self::build_viz_repositories(&storage_runtime)?;
 
         let update_settings = crate::updates::load_update_settings(&storage_runtime);
@@ -251,6 +259,8 @@ impl AppState {
             general_settings,
             update_settings,
             update_check: crate::updates::UpdateCheckState::default(),
+            #[cfg(feature = "telemetry")]
+            telemetry: None,
             driver_overrides,
             driver_settings,
             hook_definitions,
@@ -280,7 +290,11 @@ impl AppState {
             dashboard_panels_repo,
             saved_query_repo,
             document_query_repo,
+            snippet_repo,
             schema_snapshot_repo,
+            palette_object_index_repo,
+            palette_profiles_to_forget: Vec::new(),
+            palette_forget_on_connect: Default::default(),
         };
 
         Self::run_post_construction_bootstraps(&mut state);
@@ -464,7 +478,9 @@ impl AppState {
             Arc<DashboardPanelsRepository>,
             Arc<SavedQueryRepo>,
             Arc<DocumentQueryRepo>,
+            Arc<SnippetRepo>,
             Arc<SchemaSnapshotRepo>,
+            Arc<PaletteObjectIndexRepo>,
         ),
         dbflux_storage::error::StorageError,
     > {
@@ -478,7 +494,13 @@ impl AppState {
         let dashboard_panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&viz_conn)));
         let saved_query_repo = Arc::new(SavedQueryRepo::new(Arc::clone(&viz_conn)));
         let document_query_repo = Arc::new(DocumentQueryRepo::new(Arc::clone(&viz_conn)));
+        let snippet_repo = Arc::new(SnippetRepo::new(Arc::clone(&viz_conn)));
         let schema_snapshot_repo = Arc::new(SchemaSnapshotRepo::new(Arc::clone(&viz_conn)));
+        // Its own connection, so the other repositories never wait on a
+        // background palette index write.
+        let palette_object_index_repo = Arc::new(PaletteObjectIndexRepo::new(
+            storage_runtime.viz_connection()?,
+        ));
 
         Ok((
             saved_charts_repo,
@@ -488,7 +510,9 @@ impl AppState {
             dashboard_panels_repo,
             saved_query_repo,
             document_query_repo,
+            snippet_repo,
             schema_snapshot_repo,
+            palette_object_index_repo,
         ))
     }
 
@@ -527,6 +551,23 @@ impl AppState {
         }
 
         state.hydrate_and_migrate_auth_secrets();
+
+        let profile_ids: Vec<String> = state
+            .profiles()
+            .iter()
+            .map(|profile| profile.id.to_string())
+            .collect();
+        // No profiles can also mean they failed to load; keep the index then.
+        if !profile_ids.is_empty()
+            && let Err(e) = state
+                .palette_object_index_repo
+                .retain_profiles(&profile_ids)
+        {
+            log::warn!(
+                "Failed to sweep the palette index of deleted profiles: {}",
+                e
+            );
+        }
     }
 
     /// Re-hydrates secret-kind auth profile fields from the OS keyring and

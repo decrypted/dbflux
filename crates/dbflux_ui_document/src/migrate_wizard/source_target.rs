@@ -445,9 +445,13 @@ fn checked_tables_in_database(model: &TreeModel, source_database: &str) -> Vec<T
 /// empty — needs no driver work). A schema request consults the explicit
 /// per-database projection because its node may live outside the root
 /// enumeration; every other request consults the root projection.
+///
+/// A request pending only in the background (the palette's) is asked for
+/// again, which joins it: its failure then settles as an outcome and shows
+/// the `Retry` row instead of leaving the branch loading.
 fn shared_request_wanted(state: &AppStateEntity, key: &ObjectTreeRequestKey) -> bool {
     if state.object_tree_is_pending(key) {
-        return false;
+        return state.object_tree_is_pending_in_background(key);
     }
     if matches!(
         state.object_tree_outcome(key),
@@ -1784,6 +1788,7 @@ pub(crate) mod shared_coordinator_tests {
     use dbflux_ui_base::app_state_entity::AppStateEntity;
     use dbflux_ui_base::object_tree::{
         ObjectTreeEvent, ObjectTreeOutcome, ObjectTreeRejection, ObjectTreeRequestKey,
+        ObjectTreeRequestStatus,
     };
 
     pub(crate) const DRIVER_KEY: &str = "builtin:migrate-picker-test-driver";
@@ -2458,6 +2463,86 @@ pub(crate) mod shared_coordinator_tests {
         assert!(
             phase.read_with(cx, |phase, _| flat_row_ids(phase).contains(&loose_row)),
             "the retried load's table must appear in the source tree"
+        );
+    }
+
+    #[gpui::test]
+    fn expanding_a_database_the_palette_loads_in_the_background_shows_its_failure(
+        cx: &mut TestAppContext,
+    ) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = PickerFakeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+        for name in ["app", "other"] {
+            fake.databases
+                .lock()
+                .expect("databases")
+                .push(DatabaseInfo {
+                    name: name.into(),
+                    is_current: name == "app",
+                });
+        }
+        fake.set_schema(
+            "app",
+            db_schema("app", vec![test_table(Some("public"), "users")]),
+        );
+        fake.set_schema("other", db_schema("other", vec![test_table(None, "loose")]));
+        fake.fail_schema_once("other");
+        connect_profile(&state, cx, profile_id, fake.clone(), None);
+
+        let phase = cx.update(|cx| {
+            cx.new(|cx| {
+                SourceTargetPhase::new(
+                    state.clone(),
+                    profile_id,
+                    Some("app".to_string()),
+                    Vec::new(),
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+
+        // The palette asks for the other database in the background, and the
+        // user expands it in the wizard before that load settles.
+        let key = schema_request_key(profile_id, "other");
+        state.update(cx, |state, cx| {
+            assert_eq!(
+                state.object_tree_request_in_background(key.clone(), cx),
+                ObjectTreeRequestStatus::Dispatched,
+            );
+        });
+        let other_node_id =
+            object_tree_node_id(&dbflux_ui_base::object_tree::ObjectTreeKey::Database {
+                profile_id,
+                database: "other".to_string(),
+            });
+        phase.update(cx, |phase, cx| {
+            phase.source.tree.select_by_id(&other_node_id);
+            phase.activate_current(TreeSide::Source, cx);
+        });
+        assert!(
+            !state.read_with(cx, |state, _| state
+                .object_tree_is_pending_in_background(&key)),
+            "the wizard joined the background load"
+        );
+        cx.run_until_parked();
+
+        assert_eq!(
+            fake.schema_calls(),
+            vec!["app".to_string(), "other".to_string()],
+            "the wizard shares the palette's attempt"
+        );
+        assert!(matches!(
+            state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+            Some(ObjectTreeOutcome::Failed(_)),
+        ));
+        let retry_row = format!("{other_node_id}::__retry");
+        assert!(
+            phase.read_with(cx, |phase, _| flat_row_ids(phase)
+                .iter()
+                .any(|id| id.as_ref() == retry_row)),
+            "the failed branch shows its Retry row instead of loading forever"
         );
     }
 

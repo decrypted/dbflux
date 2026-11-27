@@ -1570,7 +1570,7 @@ impl<M: InputModeKind> TextElement<M> {
 
     /// Lay out the statement gutter: which rows the statement under the
     /// cursor spans, where its bar goes, and a prepainted run marker on the
-    /// first visible row of every statement.
+    /// visible row of every statement's first code.
     fn layout_statement_gutter(
         &self,
         origin_x: Pixels,
@@ -1597,10 +1597,13 @@ impl<M: InputModeKind> TextElement<M> {
                 });
 
             let start_rows: Vec<(usize, Range<usize>)> = statements
-                .ranges
+                .statements
                 .iter()
-                .filter(|range| range.start <= text_len)
-                .map(|range| (state.text.offset_to_point(range.start).row, range.clone()))
+                .filter(|statement| statement.marker <= text_len)
+                .map(|statement| {
+                    let row = state.text.offset_to_point(statement.marker).row;
+                    (row, statement.range.clone())
+                })
                 .collect();
 
             (statements, active_rows, start_rows, state.mode.is_folding())

@@ -15,8 +15,8 @@ use gpui::{
 /// the app (`Ctrl C`, `Delete`).
 ///
 /// Row actions the data table binds come from its GPUI bindings; the ones
-/// dispatched through the app keymap (inspect row, view value) come from the
-/// Results layer.
+/// dispatched through the app keymap (inspect row, view value, copy as JSON)
+/// come from the Results layer.
 pub(super) fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> {
     if let Some(keystroke) = context_menu_keystroke(action, cx) {
         let label = chord_display_parts(&key_chord_from_gpui(&keystroke)).join(" ");
@@ -28,6 +28,7 @@ pub(super) fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<Sha
         ContextMenuAction::InspectRow => Command::ToggleRowInspector,
         ContextMenuAction::ViewValue => Command::ToggleValuePanel,
         ContextMenuAction::FindSimilarRows => Command::FindSimilarRows,
+        ContextMenuAction::CopyAsJson => Command::CopySelectionAsJson,
         _ => return None,
     };
 
@@ -116,6 +117,22 @@ impl DataGridPanel {
 
 #[cfg(test)]
 mod tests {
+    /// Copy as JSON shows its Results-layer shortcut on the menu row, so the
+    /// label cannot drop off silently if the binding or the lookup changes.
+    #[gpui::test]
+    fn copy_as_json_shows_its_shortcut(cx: &mut gpui::TestAppContext) {
+        use dbflux_components::components::data_table::ContextMenuAction;
+
+        let shortcut = cx.update(|cx| super::action_shortcut(ContextMenuAction::CopyAsJson, cx));
+
+        assert!(
+            shortcut
+                .as_ref()
+                .is_some_and(|label| label.to_lowercase().contains('c')),
+            "{shortcut:?}"
+        );
+    }
+
     /// The cascade must never be clipped by the element that mounts it. Bolt
     /// draws each open level as its own sibling panel, so no parent panel can
     /// clip a flyout; the overlay that mounts the cascade must not clip

@@ -5128,6 +5128,7 @@ settings:
       toggle_value_panel: Toggle value panel
       toggle_row_inspector: Toggle row inspector
       find_similar_rows: Find similar rows
+      copy_selection_as_json: "Copy selection as JSON"
       results_set_null: Set cell to NULL
       results_set_default: "Set cell to column default"
       results_toggle_expression: "Toggle literal / expression editor"

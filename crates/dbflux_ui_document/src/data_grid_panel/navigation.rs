@@ -922,6 +922,18 @@ impl DataGridPanel {
                 self.handle_copy(window, cx);
                 true
             }
+            // The document view's menu has no Copy as JSON, and its tree does
+            // not drive the grid selection the copy reads.
+            Command::CopySelectionAsJson
+                if self.view_config.mode != crate::DataViewMode::Document =>
+            {
+                self.copy_selection_with_format(
+                    dbflux_export::ExportFormat::JsonPretty,
+                    window,
+                    cx,
+                );
+                true
+            }
             Command::ResultsCopyAsMarkdown => {
                 self.copy_to_clipboard_with_format(
                     dbflux_export::ExportFormat::Markdown,

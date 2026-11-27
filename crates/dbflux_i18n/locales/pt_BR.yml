@@ -5121,6 +5121,7 @@ settings:
       toggle_value_panel: Alternar painel de valor
       toggle_row_inspector: Alternar inspetor de linha
       find_similar_rows: Encontrar linhas semelhantes
+      copy_selection_as_json: "Copiar a seleção como JSON"
       results_set_null: Definir célula como NULL
       results_set_default: "Definir a célula como o padrão da coluna"
       results_toggle_expression: "Alternar editor literal / expressão"

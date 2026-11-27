@@ -5128,6 +5128,7 @@ settings:
       toggle_value_panel: 切换值面板
       toggle_row_inspector: 切换行检查器
       find_similar_rows: 查找相似行
+      copy_selection_as_json: "将选区复制为 JSON"
       results_set_null: 将单元格设为 NULL
       results_set_default: "将单元格设为列默认值"
       results_toggle_expression: "切换字面量 / 表达式编辑器"

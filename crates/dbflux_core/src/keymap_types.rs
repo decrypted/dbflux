@@ -128,6 +128,8 @@ pub enum Command {
     ToggleRowInspector,
     /// Shows the rows nearest to the active row by its vector column.
     FindSimilarRows,
+    /// Copies the grid selection as JSON, as the context menu's Copy as JSON.
+    CopySelectionAsJson,
     ResultsSetNull,
     /// Sets the active cell to its column's default expression.
     ResultsSetDefault,
@@ -465,6 +467,7 @@ impl Command {
             Command::ToggleValuePanel => "Toggle value panel",
             Command::ToggleRowInspector => "Toggle row inspector",
             Command::FindSimilarRows => "Find similar rows",
+            Command::CopySelectionAsJson => "Copy selection as JSON",
             Command::ResultsSetNull => "Set cell to NULL",
             Command::ResultsSetDefault => "Set cell to column default",
             Command::ResultsToggleExpression => "Toggle literal / expression editor",
@@ -678,6 +681,7 @@ impl Command {
             Command::ToggleValuePanel => "toggle_value_panel",
             Command::ToggleRowInspector => "toggle_row_inspector",
             Command::FindSimilarRows => "find_similar_rows",
+            Command::CopySelectionAsJson => "copy_selection_as_json",
             Command::ResultsSetNull => "results_set_null",
             Command::ResultsSetDefault => "results_set_default",
             Command::ResultsToggleExpression => "results_toggle_expression",
@@ -908,6 +912,7 @@ impl Command {
             Command::ToggleValuePanel,
             Command::ToggleRowInspector,
             Command::FindSimilarRows,
+            Command::CopySelectionAsJson,
             Command::ResultsSetNull,
             Command::ResultsSetDefault,
             Command::ResultsToggleExpression,
@@ -1113,6 +1118,7 @@ impl Command {
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector
             | Command::FindSimilarRows
+            | Command::CopySelectionAsJson
             | Command::ResultsSetNull
             | Command::ResultsSetDefault
             | Command::ResultsToggleExpression

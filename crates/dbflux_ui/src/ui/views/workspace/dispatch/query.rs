@@ -36,6 +36,24 @@ impl Workspace {
                 });
                 Some(true)
             }
+            Command::FormatQuery => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::FormatQuery, window, cx);
+                });
+                Some(true)
+            }
+            Command::InsertSnippet => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::InsertSnippet, window, cx);
+                });
+                Some(true)
+            }
+            Command::GoToQueryError => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::GoToQueryError, window, cx);
+                });
+                Some(true)
+            }
             Command::ExportResults => {
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(Command::ExportResults, window, cx);
@@ -118,6 +136,11 @@ impl Workspace {
                 Some(true)
             }
 
+            Command::ResultsCopyAsMarkdown => Some(
+                self.tab_manager
+                    .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
+            ),
+
             Command::ResultsAddRow
             | Command::ResultsCopyRow
             | Command::ResultsCopyCell
@@ -127,6 +150,7 @@ impl Workspace {
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector
             | Command::FindSimilarRows
+            | Command::ResultsSetDefault
             | Command::ToggleConsole => {
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(cmd, window, cx);
@@ -135,7 +159,10 @@ impl Workspace {
             }
 
             // Row operations - handled via GPUI actions in DataTable
-            Command::ResultsDeleteRow | Command::ResultsDuplicateRow | Command::ResultsSetNull => {
+            Command::ResultsDeleteRow
+            | Command::ResultsDuplicateRow
+            | Command::ResultsSetNull
+            | Command::ResultsToggleExpression => {
                 log::debug!(
                     "Row operation {:?} handled via GPUI actions in Results context",
                     cmd

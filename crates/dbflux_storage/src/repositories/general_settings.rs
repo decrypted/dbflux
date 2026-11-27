@@ -4,7 +4,8 @@
 //! replacing the JSON blob previously stored in app_settings.
 
 use log::info;
-use rusqlite::{Connection, params};
+use rusqlite::types::ValueRef;
+use rusqlite::{Connection, Row, params};
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
@@ -43,7 +44,9 @@ impl GeneralSettingsRepository {
                        ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                        grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                        table_alias_completion, table_alias_use_as,
-                       grid_fk_labels, grid_review_before_save, grid_header_click_sorts,
+                       grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
+                       accent_dark, accent_light, mcp_approval_notifications, grid_header_click_sorts,
+                       grid_review_before_save,
                        updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
@@ -88,9 +91,14 @@ impl GeneralSettingsRepository {
                 table_alias_completion: row.get(30)?,
                 table_alias_use_as: row.get(31)?,
                 grid_fk_labels: row.get(32)?,
-                grid_review_before_save: row.get(33)?,
-                grid_header_click_sorts: row.get(34)?,
-                updated_at: row.get(35)?,
+                scrollbar_visibility: row.get(33)?,
+                workspace_inspector_width_px: read_inspector_width(row, 34)?,
+                accent_dark: row.get(35)?,
+                accent_light: row.get(36)?,
+                mcp_approval_notifications: row.get(37)?,
+                grid_header_click_sorts: row.get(38)?,
+                grid_review_before_save: row.get(39)?,
+                updated_at: row.get(40)?,
             })
         });
 
@@ -122,9 +130,11 @@ impl GeneralSettingsRepository {
                     ui_font_family, ui_font_size, editor_font_family, editor_font_size,
                     grid_font_family, grid_font_size, toast_auto_dismiss_secs,
                     table_alias_completion, table_alias_use_as,
-                    grid_fk_labels, grid_review_before_save, grid_header_click_sorts,
-                    updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, datetime('now'))
+                    grid_fk_labels, scrollbar_visibility, workspace_inspector_width_px,
+                    accent_dark, accent_light, mcp_approval_notifications, grid_header_click_sorts,
+                    grid_review_before_save,
+                       updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -158,8 +168,13 @@ impl GeneralSettingsRepository {
                     table_alias_completion = excluded.table_alias_completion,
                     table_alias_use_as = excluded.table_alias_use_as,
                     grid_fk_labels = excluded.grid_fk_labels,
-                    grid_review_before_save = excluded.grid_review_before_save,
+                    scrollbar_visibility = excluded.scrollbar_visibility,
+                    workspace_inspector_width_px = excluded.workspace_inspector_width_px,
+                    accent_dark = excluded.accent_dark,
+                    accent_light = excluded.accent_light,
+                    mcp_approval_notifications = excluded.mcp_approval_notifications,
                     grid_header_click_sorts = excluded.grid_header_click_sorts,
+                    grid_review_before_save = excluded.grid_review_before_save,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -195,8 +210,13 @@ impl GeneralSettingsRepository {
                     settings.table_alias_completion,
                     settings.table_alias_use_as,
                     settings.grid_fk_labels,
-                    settings.grid_review_before_save,
+                    settings.scrollbar_visibility,
+                    settings.workspace_inspector_width_px,
+                    settings.accent_dark,
+                    settings.accent_light,
+                    settings.mcp_approval_notifications,
                     settings.grid_header_click_sorts,
+                    settings.grid_review_before_save,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -207,6 +227,23 @@ impl GeneralSettingsRepository {
         info!("Upserted general settings");
         Ok(())
     }
+}
+
+/// Reads the inspector width without failing the whole row.
+///
+/// SQLite stores any type in a column, and a value written by hand or by an
+/// older build can be text or a blob. Only the width falls back in that case;
+/// the rest of the row still loads.
+fn read_inspector_width(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<f64>> {
+    Ok(match row.get_ref(index)? {
+        ValueRef::Null => None,
+        ValueRef::Integer(value) => Some(value as f64),
+        ValueRef::Real(value) => Some(value),
+        ValueRef::Text(bytes) => std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|text| text.trim().parse::<f64>().ok()),
+        ValueRef::Blob(_) => None,
+    })
 }
 
 /// DTO for general_settings table.
@@ -272,10 +309,24 @@ pub struct GeneralSettingsDto {
     /// Whether foreign-key grid cells resolve to the referenced row's label:
     /// 1 on, 0 off.
     pub grid_fk_labels: i32,
-    /// Whether Save shows the statements it runs first: 1 on, 0 off.
-    pub grid_review_before_save: i32,
+    /// Serialized `ScrollbarVisibility` value: `"while_scrolling"`,
+    /// `"on_hover"` or `"always"`. Unknown values fall back to
+    /// `"while_scrolling"` at the loader layer.
+    pub scrollbar_visibility: String,
+    /// Width in pixels the row inspector was last resized to, or `None` to
+    /// open it at its default width.
+    pub workspace_inspector_width_px: Option<f64>,
+    /// The `#RRGGBB` accent picked for the Dark palette; `None` keeps the
+    /// palette's own accent.
+    pub accent_dark: Option<String>,
+    /// The `#RRGGBB` accent picked for the Light palette.
+    pub accent_light: Option<String>,
+    /// Whether a new pending MCP approval raises a notification (1) or not (0).
+    pub mcp_approval_notifications: i32,
     /// 1 when a column header click sorts instead of selecting the column.
     pub grid_header_click_sorts: i32,
+    /// Whether Save shows the statements it runs first: 1 on, 0 off.
+    pub grid_review_before_save: i32,
     pub updated_at: String,
 }
 
@@ -296,6 +347,32 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
         path
+    }
+
+    #[test]
+    fn a_non_numeric_inspector_width_only_drops_the_width() {
+        let path = temp_db("width_text");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+        conn.execute(
+            "UPDATE cfg_general_settings SET theme = 'light', ui_font_size = 15.0, \
+             workspace_inspector_width_px = 'wide' WHERE id = 1",
+            [],
+        )
+        .expect("store text in the width column");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let fetched = repo
+            .get()
+            .expect("a text width must not fail the row read")
+            .expect("the row exists");
+        assert_eq!(fetched.workspace_inspector_width_px, None);
+        assert_eq!(fetched.theme, "light", "other settings still load");
+        assert_eq!(fetched.ui_font_size, 15.0);
     }
 
     #[test]
@@ -343,8 +420,13 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
-            grid_review_before_save: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 0,
+            grid_review_before_save: 0,
             updated_at: String::new(),
         };
 
@@ -407,8 +489,13 @@ mod tests {
                 table_alias_completion: 1,
                 table_alias_use_as: 0,
                 grid_fk_labels: 0,
-                grid_review_before_save: 0,
+                scrollbar_visibility: "while_scrolling".to_string(),
+                workspace_inspector_width_px: None,
+                accent_dark: None,
+                accent_light: None,
+                mcp_approval_notifications: 1,
                 grid_header_click_sorts: 0,
+                grid_review_before_save: 0,
                 updated_at: String::new(),
             };
 
@@ -491,8 +578,13 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
-            grid_review_before_save: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 0,
+            grid_review_before_save: 0,
             updated_at: String::new(),
         };
 
@@ -597,8 +689,13 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
-            grid_review_before_save: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 0,
+            grid_review_before_save: 0,
             updated_at: String::new(),
         };
 
@@ -655,8 +752,13 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
-            grid_review_before_save: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 0,
+            grid_review_before_save: 0,
             updated_at: String::new(),
         };
 
@@ -745,8 +847,13 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
-            grid_review_before_save: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 0,
+            grid_review_before_save: 0,
             updated_at: String::new(),
         };
 
@@ -825,8 +932,13 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 1,
-            grid_review_before_save: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 0,
+            grid_review_before_save: 0,
             updated_at: String::new(),
         };
 
@@ -834,14 +946,24 @@ mod tests {
 
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.grid_fk_labels, 1);
+        assert_eq!(fetched.scrollbar_visibility, "while_scrolling");
+
+        repo.upsert(&GeneralSettingsDto {
+            scrollbar_visibility: "always".to_string(),
+            ..dto
+        })
+        .expect("should upsert the scrollbar visibility");
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.scrollbar_visibility, "always");
+        assert_eq!(fetched.grid_fk_labels, 1);
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");
     }
 
     #[test]
-    fn grid_review_before_save_round_trips_through_upsert() {
-        let path = temp_db("grid_review_before_save_roundtrip");
+    fn accent_colors_default_to_null_and_round_trip_per_theme() {
+        let path = temp_db("accent_colors");
         let conn = open_database(&path).expect("should open");
         MigrationRegistry::new()
             .run_all(&conn)
@@ -850,51 +972,35 @@ mod tests {
         #[allow(clippy::arc_with_non_send_sync)]
         let repo = GeneralSettingsRepository::new(Arc::new(conn));
 
-        let dto = GeneralSettingsDto {
-            id: 1,
-            theme: "dark".to_string(),
-            restore_session_on_startup: 1,
-            reopen_last_connections: 0,
-            default_focus_on_startup: "sidebar".to_string(),
-            max_history_entries: 1000,
-            auto_save_interval_ms: 2000,
-            default_refresh_policy: "manual".to_string(),
-            default_refresh_interval_secs: 5,
-            max_concurrent_background_tasks: 8,
-            auto_refresh_pause_on_error: 1,
-            auto_refresh_only_if_visible: 0,
-            confirm_dangerous_queries: 1,
-            dangerous_requires_where: 1,
-            dangerous_requires_preview: 0,
-            style: "default".to_string(),
-            schema_snapshot_retention: 10,
-            object_preview_size_limit_mib: 10,
-            language: String::new(),
-            key_value_size_limit_mib: 10,
-            vim_mode: 0,
-            editor_row_limit: 10_000,
-            vim_leader: "space".to_string(),
-            ui_font_family: None,
-            ui_font_size: 13.0,
-            editor_font_family: None,
-            editor_font_size: 13.0,
-            grid_font_family: None,
-            grid_font_size: 12.5,
-            toast_auto_dismiss_secs: 8,
-            table_alias_completion: 1,
-            table_alias_use_as: 0,
-            grid_fk_labels: 0,
-            grid_review_before_save: 1,
-            grid_header_click_sorts: 0,
-            updated_at: String::new(),
-        };
+        let seeded = repo.get().expect("should get").expect("the row is seeded");
+        assert_eq!(seeded.accent_dark, None);
+        assert_eq!(seeded.accent_light, None);
+        assert_eq!(seeded.mcp_approval_notifications, 1);
 
-        repo.upsert(&dto).expect("should upsert");
+        repo.upsert(&GeneralSettingsDto {
+            mcp_approval_notifications: 0,
+            ..seeded.clone()
+        })
+        .expect("should upsert the notification toggle");
+        let toggled = repo.get().expect("should get").expect("should exist");
+        assert_eq!(toggled.mcp_approval_notifications, 0);
 
+        repo.upsert(&GeneralSettingsDto {
+            accent_dark: Some("#2F7D6D".to_string()),
+            ..seeded.clone()
+        })
+        .expect("should upsert the dark accent");
         let fetched = repo.get().expect("should get").expect("should exist");
-        assert_eq!(fetched.grid_review_before_save, 1);
-        assert_eq!(fetched.grid_fk_labels, 0);
-        assert_eq!(fetched.grid_header_click_sorts, 0, "a column of its own");
+        assert_eq!(fetched.accent_dark.as_deref(), Some("#2F7D6D"));
+        assert_eq!(fetched.accent_light, None, "Light keeps the palette accent");
+
+        repo.upsert(&GeneralSettingsDto {
+            accent_dark: None,
+            ..fetched
+        })
+        .expect("should clear the dark accent");
+        let cleared = repo.get().expect("should get").expect("should exist");
+        assert_eq!(cleared.accent_dark, None, "Reset stores NULL");
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");
@@ -945,8 +1051,13 @@ mod tests {
             table_alias_completion: 1,
             table_alias_use_as: 0,
             grid_fk_labels: 0,
-            grid_review_before_save: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
             grid_header_click_sorts: 1,
+            grid_review_before_save: 0,
             updated_at: String::new(),
         };
 
@@ -954,7 +1065,71 @@ mod tests {
 
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.grid_header_click_sorts, 1);
-        assert_eq!(fetched.grid_review_before_save, 0, "a column of its own");
+
+        drop(repo);
+        std::fs::remove_file(&path).expect("remove the test database");
+    }
+
+    #[test]
+    fn grid_review_before_save_round_trips_through_upsert() {
+        let path = temp_db("grid_review_before_save_roundtrip");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: String::new(),
+            key_value_size_limit_mib: 10,
+            vim_mode: 0,
+            editor_row_limit: 10_000,
+            vim_leader: "space".to_string(),
+            ui_font_family: None,
+            ui_font_size: 13.0,
+            editor_font_family: None,
+            editor_font_size: 13.0,
+            grid_font_family: None,
+            grid_font_size: 12.5,
+            toast_auto_dismiss_secs: 8,
+            table_alias_completion: 1,
+            table_alias_use_as: 0,
+            grid_fk_labels: 0,
+            scrollbar_visibility: "while_scrolling".to_string(),
+            workspace_inspector_width_px: None,
+            accent_dark: None,
+            accent_light: None,
+            mcp_approval_notifications: 1,
+            grid_header_click_sorts: 0,
+            grid_review_before_save: 1,
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.grid_review_before_save, 1);
+        assert_eq!(fetched.grid_fk_labels, 0);
 
         drop(repo);
         std::fs::remove_file(&path).expect("remove the test database");

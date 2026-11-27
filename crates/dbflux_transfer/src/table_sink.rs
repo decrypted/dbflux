@@ -138,7 +138,7 @@ impl TableSink {
     /// `DriverLimits::max_bulk_insert_rows` interpreted as "0 = unlimited" —
     /// treating it as a literal zero-row cap would silently bulk-insert
     /// nothing.
-    fn max_bulk_insert_rows(metadata: &DriverMetadata) -> Option<usize> {
+    pub(crate) fn max_bulk_insert_rows(metadata: &DriverMetadata) -> Option<usize> {
         let cap = metadata
             .limits
             .as_ref()
@@ -214,7 +214,7 @@ impl TableSink {
                     name: name.clone(),
                     value: value.clone(),
                     type_name: column_types.get(index).cloned().flatten(),
-                    is_expression: false,
+                    expression: None,
                 })
                 .collect();
 
@@ -401,6 +401,7 @@ mod tests {
             type_name: Some("text".to_string()),
             nullable: !is_pk,
             is_primary_key: is_pk,
+            kind: dbflux_core::ColumnKind::Unknown,
         }
     }
 
@@ -1306,6 +1307,7 @@ mod tests {
             type_name: Some("TEXT); DROP TABLE users; --".to_string()),
             nullable: true,
             is_primary_key: false,
+            kind: dbflux_core::ColumnKind::Unknown,
         };
 
         let result = sink.begin(&[malicious_column], TableMappingMode::Create);

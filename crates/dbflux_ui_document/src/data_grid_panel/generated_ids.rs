@@ -6,11 +6,11 @@ use std::collections::HashMap;
 
 use dbflux_components::components::data_table::selection::CellCoord;
 use dbflux_components::components::data_table::{ContextMenuAction, GeneratedIdOffer};
-use dbflux_components::icons::AppIcon;
 use dbflux_core::{ColumnInfo, GeneratedIdKind, looks_like_id_column};
 use gpui::{App, Context};
 
-use super::{ContextMenuItem, DataGridPanel, DataSource, TableContextMenu};
+use super::context_menu::SetValueEntry;
+use super::{DataGridPanel, DataSource};
 
 impl DataGridPanel {
     /// The identifier kinds each result column can store as text, keyed by
@@ -56,36 +56,27 @@ impl DataGridPanel {
             .collect()
     }
 
-    /// One "Generate …" entry per identifier kind the cell under the menu
-    /// can take.
-    pub(super) fn generate_id_items(
-        &self,
-        menu: &TableContextMenu,
-        cx: &App,
-    ) -> Vec<ContextMenuItem> {
-        if menu.is_document_view {
-            return Vec::new();
-        }
+    /// One Set value entry per identifier kind column `col` can take.
+    pub(super) fn generate_id_entries(&self, col: usize, cx: &App) -> Vec<SetValueEntry> {
         let Some(table_state) = &self.grid_table.table_state else {
             return Vec::new();
         };
 
         table_state
             .read(cx)
-            .generated_id_kinds(menu.col)
+            .generated_id_kinds(col)
             .iter()
-            .map(|&kind| ContextMenuItem {
+            .map(|&kind| SetValueEntry {
                 label: dbflux_i18n::t!(
                     "document.data.context_menu.item.generate_id",
                     kind = kind.label()
                 )
                 .into(),
-                action: Some(ContextMenuAction::GenerateId(kind)),
-                icon: Some(AppIcon::KeyRound),
-                is_separator: false,
-                is_danger: false,
                 detail: None,
+                action: ContextMenuAction::GenerateId(kind),
                 disabled: false,
+                header: None,
+                is_expression: false,
             })
             .collect()
     }

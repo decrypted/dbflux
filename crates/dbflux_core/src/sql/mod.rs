@@ -1,14 +1,9 @@
-pub(crate) mod cell_expression;
 pub(crate) mod code_generation;
 pub(crate) mod dialect;
 pub(crate) mod generation;
 pub(crate) mod query_builder;
 mod transaction_control;
 
-pub use cell_expression::{
-    CellExpressionColumn, CellExpressionError, CellExpressionVocabulary,
-    cell_expression_suggestions, validate_cell_expression,
-};
 pub use code_generation::{
     AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
     CodeGenCapabilities, CodeGenerator, CreateIndexRequest, CreateTypeRequest, DdlRejection,
@@ -19,8 +14,8 @@ pub use code_generation::{
     validate_ddl_fragment,
 };
 pub use dialect::{
-    DefaultSqlDialect, MutationTargetAlias, PlaceholderStyle, SqlDialect,
-    quote_double_quoted_identifier,
+    DefaultSqlDialect, MutationTargetAlias, PlaceholderStyle, SqlDialect, TypeFamily,
+    quote_double_quoted_identifier, type_family,
 };
 pub use generation::{
     SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlValueMode, generate_create_table,

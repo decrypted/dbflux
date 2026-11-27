@@ -204,9 +204,13 @@ impl dbflux_core::Connection for StubBrowseConnection {
     fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
         dbflux_core::SchemaLoadingStrategy::SingleDatabase
     }
+
+    #[expect(
+        clippy::unimplemented,
+        reason = "test-only stub connection: raw browse does not call the dialect"
+    )]
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
-        // Read when the grid builds a table, for its cell expressions.
-        &dbflux_core::DefaultSqlDialect
+        unimplemented!("StubBrowseConnection::dialect is not reached by a raw browse")
     }
 
     fn ping(&self) -> Result<(), dbflux_core::DbError> {

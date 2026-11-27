@@ -2452,6 +2452,20 @@ impl Window {
 pub struct DispatchEventResult {
     pub propagate: bool,
     pub default_prevented: bool,
+    /// For a platform file drag moving over the window ([`FileDropEvent::Entered`] and
+    /// [`FileDropEvent::Pending`]): whether an element under the pointer would take a drop of the
+    /// dragged data. `None` for every other event, and when there is no drag to ask about.
+    pub external_drop_accepted: Option<bool>,
+}
+
+/// Asks the drop listeners under the pointer whether they would take the active drag, without
+/// dropping it. Dispatched through the mouse listeners, so it reaches the same elements, in the
+/// same order, as the mouse-up that completes a drop.
+pub(crate) struct DropAcceptanceProbe {
+    pub(crate) drag_type: TypeId,
+    pub(crate) value: Arc<dyn Any>,
+    /// Set by the first listener of `drag_type` under the pointer, like the one that takes a drop.
+    pub(crate) accepted: Cell<Option<bool>>,
 }
 
 /// Indicates which region of the window is visible. Content falling outside of this mask will not be
@@ -2611,6 +2625,23 @@ impl Window {
         }
     }
 
+    /// Schedule a frame without discarding cached views.
+    ///
+    /// [`Self::refresh`] renders every cached view again. This only marks the
+    /// window dirty, so the frame costs what the pending notifications cost:
+    /// a cached view that was not notified replays its previous output.
+    pub fn request_frame(&mut self) {
+        if self.invalidator.not_drawing() {
+            self.invalidator.set_dirty(true);
+        }
+    }
+
+    /// Whether the window has been invalidated since it last drew, so that GPUI
+    /// will draw another frame without any further invalidation.
+    pub fn frame_pending(&self) -> bool {
+        self.invalidator.is_dirty()
+    }
+
     /// Observe completed rendered frames and paint a final tooling overlay.
     ///
     /// The window stores a weak reference. Retain `observer` for as long as it
@@ -2647,6 +2678,31 @@ impl Window {
         let Some(node_id) = self.rendered_frame.observed.accessibility_id(id) else {
             return false;
         };
+        // Composite controls may redirect semantic focus to an inner editor.
+        // Honor their standard AccessKit Focus handler before using the frame's
+        // own focus handle, just as a screen reader does.
+        #[cfg(not(target_family = "wasm"))]
+        if self
+            .a11y
+            .action_listeners
+            .get(&node_id)
+            .is_some_and(|listeners| {
+                listeners
+                    .iter()
+                    .any(|(action, _)| *action == accesskit::Action::Focus)
+            })
+        {
+            self.handle_a11y_action(
+                accesskit::ActionRequest {
+                    action: accesskit::Action::Focus,
+                    target_tree: accesskit::TreeId::ROOT,
+                    target_node: node_id,
+                    data: None,
+                },
+                cx,
+            );
+            return true;
+        }
         let Some(focus_id) = self.a11y.focus_ids.get(&node_id).copied() else {
             return false;
         };
@@ -3778,6 +3834,7 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        let draw_started = Instant::now();
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
@@ -3920,6 +3977,7 @@ impl Window {
         }
         self.needs_present.set(true);
 
+        let draw_duration = draw_started.elapsed();
         #[cfg(feature = "profiler")]
         {
             self.window_profiler
@@ -3928,6 +3986,15 @@ impl Window {
                 .window_profiler
                 .end_draw(frame_dirty.dirty_at, frame_dirty.invalidations);
             self.debug_frame_overlay.record_frame(draw_duration);
+        }
+        if self.rendered_frame.observed.is_enabled() {
+            let frame_observers = crate::frame_observer::live_observers(&mut self.frame_observers);
+            if !frame_observers.is_empty() {
+                let frame = self.rendered_frame.observed.drawn(draw_duration);
+                for observer in &frame_observers {
+                    observer.frame_drawn(&frame);
+                }
+            }
         }
 
         // Exit the scope to obtain the arena-clear token this draw owes; the
@@ -4029,9 +4096,14 @@ impl Window {
 
         let mut frame_observers = crate::frame_observer::live_observers(&mut self.frame_observers);
         self.next_frame.observed.begin(!frame_observers.is_empty());
+        self.next_frame.observed.set_window_refresh(self.refreshing);
+        let observation_started = Instant::now();
         for observer in &frame_observers {
             observer.frame_started(self);
         }
+        self.next_frame
+            .observed
+            .add_observation(observation_started.elapsed());
 
         self.a11y.sync_active_flag(!frame_observers.is_empty());
         let platform_a11y_active_at_start = self.a11y.platform_is_active();
@@ -4111,21 +4183,33 @@ impl Window {
                 scale_factor: self.scale_factor,
                 tab_stop_count: self.next_frame.tab_stops.tab_stop_count(),
             };
-            Some(self.a11y.end_frame(frame_info))
+            let finish_started = Instant::now();
+            let tree_update = self.a11y.end_frame(frame_info);
+            // Without a platform adapter the tree is finished only for observers.
+            if !platform_a11y_active_at_start {
+                self.next_frame
+                    .observed
+                    .add_observation(finish_started.elapsed());
+            }
+            Some(tree_update)
         } else {
             None
         };
+        let observation_started = Instant::now();
         if let Some(tree_update) = tree_update.as_ref()
             && !frame_observers.is_empty()
         {
-            let frame = self.next_frame.observed.finish(tree_update.clone());
+            let frame = Arc::new(self.next_frame.observed.finish(tree_update.clone()));
             for observer in &frame_observers {
-                observer.accessibility_updated(&frame);
+                observer.accessibility_frame(&frame);
             }
         }
         for observer in &frame_observers {
             observer.paint_started();
         }
+        self.next_frame
+            .observed
+            .add_observation(observation_started.elapsed());
 
         // Now actually paint the elements.
         #[cfg(feature = "profiler")]
@@ -4157,12 +4241,16 @@ impl Window {
                 paint: Instant::now().duration_since(paint_start),
             });
 
+        let observation_started = Instant::now();
         for observer in &frame_observers {
             observer.paint_overlay(self, cx);
         }
         for observer in &frame_observers {
             observer.frame_finished();
         }
+        self.next_frame
+            .observed
+            .add_observation(observation_started.elapsed());
 
         if platform_a11y_active_at_start
             && self.a11y.platform_is_active()
@@ -6142,6 +6230,7 @@ impl Window {
             return DispatchEventResult {
                 propagate: true,
                 default_prevented: false,
+                external_drop_accepted: None,
             };
         }
         #[cfg(feature = "profiler")]
@@ -6175,6 +6264,10 @@ impl Window {
         cx.propagate_event = true;
         // Handlers may set this to true by calling `prevent_default`.
         self.default_prevented = false;
+        let is_file_drop_motion = matches!(
+            &event,
+            PlatformInput::FileDrop(FileDropEvent::Entered { .. } | FileDropEvent::Pending { .. })
+        );
 
         let event = match event {
             // Track the mouse position with our own state, since accessing the platform
@@ -6322,10 +6415,50 @@ impl Window {
         #[cfg(feature = "profiler")]
         self.window_profiler.end_input(caused_invalidation);
 
+        let propagate = cx.propagate_event;
+        let external_drop_accepted = if is_file_drop_motion {
+            self.probe_drop_acceptance(cx)
+        } else {
+            None
+        };
         DispatchEventResult {
-            propagate: cx.propagate_event,
+            propagate,
             default_prevented: self.default_prevented,
+            external_drop_accepted,
         }
+    }
+
+    /// Whether a drop of the active drag at the pointer would be taken, or `None` without a drag.
+    fn probe_drop_acceptance(&mut self, cx: &mut App) -> Option<bool> {
+        let drag = cx.active_drag.as_ref()?;
+        let probe = DropAcceptanceProbe {
+            drag_type: drag.value.as_ref().type_id(),
+            value: drag.value.clone(),
+            accepted: Cell::new(None),
+        };
+        let propagate = cx.propagate_event;
+        cx.propagate_event = true;
+        self.dispatch_mouse_event(&probe, cx);
+        cx.propagate_event = propagate;
+        Some(probe.accepted.get().unwrap_or(false))
+    }
+
+    /// Register a listener for [`DropAcceptanceProbe`]s on this node for the next frame.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub(crate) fn on_drop_acceptance_probe(
+        &mut self,
+        mut listener: impl FnMut(&DropAcceptanceProbe, DispatchPhase, &mut Window, &mut App) + 'static,
+    ) {
+        self.invalidator.debug_assert_paint();
+
+        self.next_frame.mouse_listeners.push(Some(Box::new(
+            move |event: &dyn Any, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
+                if let Some(probe) = event.downcast_ref() {
+                    listener(probe, phase, window, cx)
+                }
+            },
+        )));
     }
 
     fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {

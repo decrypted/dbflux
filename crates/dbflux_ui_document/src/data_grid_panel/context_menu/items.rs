@@ -89,6 +89,7 @@ pub(super) fn build_context_menu_items(
         return items;
     }
 
+    // The column name needs no row under the cursor, only the column.
     let mut items = vec![
         ContextMenuItem {
             label: dbflux_i18n::t!("document.data.context_menu.item.copy").into(),
@@ -112,6 +113,24 @@ pub(super) fn build_context_menu_items(
             label: dbflux_i18n::t!("document.data.context_menu.item.copy_as_json").into(),
             action: Some(ContextMenuAction::CopyAsJson),
             icon: Some(AppIcon::Braces),
+            is_separator: false,
+            is_danger: false,
+            detail: None,
+            disabled: false,
+        },
+        ContextMenuItem {
+            label: dbflux_i18n::t!("document.data.context_menu.item.copy_as_markdown").into(),
+            action: Some(ContextMenuAction::CopyAsMarkdown),
+            icon: Some(AppIcon::Table),
+            is_separator: false,
+            is_danger: false,
+            detail: None,
+            disabled: false,
+        },
+        ContextMenuItem {
+            label: dbflux_i18n::t!("document.data.context_menu.item.copy_column_name").into(),
+            action: Some(ContextMenuAction::CopyColumnName),
+            icon: Some(AppIcon::Copy),
             is_separator: false,
             is_danger: false,
             detail: None,

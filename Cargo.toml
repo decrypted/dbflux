@@ -8,7 +8,10 @@ members = [
     "crates/dbflux_ui_windows",
     "crates/dbflux_ui_sidebar",
     "crates/dbflux_components",
+    "crates/bolt",
+    "crates/bolt_keys",
     "crates/dbflux_core",
+    "crates/dbflux_telemetry",
     "crates/dbflux_lua",
     "crates/dbflux_js",
     "crates/dbflux_ipc",
@@ -44,6 +47,7 @@ members = [
     "crates/dbflux_approval",
     "crates/dbflux_audit",
     "crates/dbflux_storage",
+    "crates/dbflux_diagram",
     "crates/dbflux_schema_viz",
     "crates/dbflux_driver_influxdb",
     "crates/dbflux_portability",
@@ -59,13 +63,22 @@ members = [
 default-members = ["crates/dbflux"]
 # The website is not a crate. Excluding it keeps cargo from descending into it
 # when resolving paths or packaging.
-exclude = ["web"]
+exclude = [
+    "web",
+    # Patched in through [patch.crates-io] by path, not members: excluded so
+    # that `cargo metadata --manifest-path vendor/<crate>/Cargo.toml` works on
+    # its own (Nix importCargoLock and fetchCargoVendor locate git crates that
+    # way, and fail on a package that "believes it is in a workspace").
+    "vendor/gpui-component",
+    "vendor/gpui-pre",
+    "vendor/gpui-pre-linux",
+]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.88"
-version = "0.10.0-dev.0"
+version = "0.12.0-dev.0"
 authors = ["Ignacio Perez <ignacio@feuer.me>"]
 description = "A fast, keyboard-first database client"
 repository = "https://github.com/0xErwin1/dbflux"
@@ -76,6 +89,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 dbflux = { path = "crates/dbflux" }
 dbflux_core = { path = "crates/dbflux_core" }
+dbflux_telemetry = { path = "crates/dbflux_telemetry" }
 dbflux_lua = { path = "crates/dbflux_lua" }
 dbflux_js = { path = "crates/dbflux_js" }
 dbflux_test_support = { path = "crates/dbflux_test_support" }
@@ -108,6 +122,7 @@ dbflux_policy = { path = "crates/dbflux_policy" }
 dbflux_approval = { path = "crates/dbflux_approval" }
 dbflux_audit = { path = "crates/dbflux_audit" }
 dbflux_storage = { path = "crates/dbflux_storage" }
+dbflux_diagram = { path = "crates/dbflux_diagram" }
 dbflux_schema_viz = { path = "crates/dbflux_schema_viz" }
 dbflux_driver_influxdb = { path = "crates/dbflux_driver_influxdb" }
 dbflux_portability = { path = "crates/dbflux_portability" }
@@ -115,6 +130,8 @@ dbflux_driver_s3 = { path = "crates/dbflux_driver_s3" }
 dbflux_driver_aws_secrets = { path = "crates/dbflux_driver_aws_secrets" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
+bolt = { path = "crates/bolt" }
+bolt_keys = { path = "crates/bolt_keys" }
 dbflux_ui_base = { path = "crates/dbflux_ui_base" }
 dbflux_ui_document = { path = "crates/dbflux_ui_document" }
 dbflux_ui_windows = { path = "crates/dbflux_ui_windows" }
@@ -127,6 +144,8 @@ mysql = "28"
 petgraph = "0.7"
 
 gpui = { package = "gpui-pre", version = "=0.3.9" }
+# The same crate under the name gpui-mcp's `gpui-pre` backend expects; keep both in step.
+gpui_pre = { package = "gpui-pre", version = "=0.3.9" }
 gpui-component = { version = "=0.7.3", features = ["tree-sitter"] }
 gpui-pre-platform = { version = "=0.3.9", default-features = false, features = ["font-kit", "wayland", "x11"] }
 gpui-mcp = { path = "vendor/gpui-mcp/crates/gpui-mcp" }
@@ -143,6 +162,9 @@ tree-sitter-lua = "0.4.1"
 tree-sitter-python = "0.23.6"
 tree-sitter-bash = "0.23.3"
 tree-sitter-json = "0.24.8"
+# Bundled by bolt behind its opt-in `syntax-xml` and `syntax-html` features.
+tree-sitter-xml = "0.7.0"
+tree-sitter-html = "0.23.2"
 core-text = ">=21.0.0, <21.1.0"
 smallvec = "1.13.2"
 rfd = "0.17"
@@ -216,12 +238,12 @@ parquet = { version = "59.3", default-features = false, features = [
 ] }
 arrow-array = "59.3"
 arrow-schema = "59.3"
-# Spreadsheet reading. `zip` matches calamine's own zip dependency, so format
-# detection adds no second copy; `rust_xlsxwriter` writes xls values into a new
-# xlsx and builds test fixtures.
-calamine = "0.36"
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
-rust_xlsxwriter = "0.99"
+# Spreadsheet reading. `zip` matches calamine's and `rust_xlsxwriter`'s own zip
+# dependency, so format detection and xlsx writing add no second copy;
+# `rust_xlsxwriter` writes xls values into a new xlsx and builds test fixtures.
+calamine = "0.37"
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
+rust_xlsxwriter = "0.102"
 bytes = "1"
 snap = "1"
 lz4_flex = "0.14"
@@ -273,6 +295,10 @@ debug = "line-tables-only"
 # large reduction in target/ size and link-time memory.
 [profile.dev.package."*"]
 debug = false
+
+# xcap 0.9.10 linux/impl_window.rs:92 subtracts i16 window coordinates and wraps for windows on hidden Hyprland workspaces; the wrapped value is correct.
+[profile.dev.package.xcap]
+overflow-checks = false
 
 # Release build profile tuned for binary size and runtime speed.
 # `panic` is intentionally left at the default `unwind`: switching to `abort` is a

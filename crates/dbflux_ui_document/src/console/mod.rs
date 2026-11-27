@@ -15,6 +15,7 @@ mod format;
 
 use crate::code::{ExecutionSessionBinding, QueryCompletionProvider};
 use crate::completion_support::{
+    apply_completion_menu_width, follow_ui_font_size,
     frameless_single_line_completion_editor_sized, new_single_line_completion_state,
 };
 use dbflux_app::keymap::{Command, ContextId};
@@ -31,7 +32,8 @@ use dbflux_core::observability::{
 };
 use dbflux_core::{
     Connection, DangerousQueryKind, DbError, ExecutionClassification, HistoryEntry,
-    NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult, classify_query_for_language,
+    NativeConsoleProfile, QueryRequest, QueryResult, ValidationResult,
+    classify_query_for_language_with_service,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -128,6 +130,7 @@ pub(crate) struct NativeConsole {
     session: Arc<ExecutionSessionBinding>,
     scroll: ScrollHandle,
     _subscription: Subscription,
+    _completion_menu_width_subscription: Subscription,
 }
 
 impl EventEmitter<NativeConsoleEvent> for NativeConsole {}
@@ -170,8 +173,10 @@ impl NativeConsole {
         let input = cx.new(|cx| {
             let mut state = new_single_line_completion_state(window, cx, placeholder);
             state.lsp_mut().completion_provider = completion_provider;
+            apply_completion_menu_width(&mut state, cx);
             state
         });
+        let completion_menu_width_sub = follow_ui_font_size(&input, cx);
 
         // Closing the host closes the session once any running command is
         // done; the binding serializes both.
@@ -217,6 +222,7 @@ impl NativeConsole {
             session: ExecutionSessionBinding::new(),
             scroll: ScrollHandle::new(),
             _subscription: subscription,
+            _completion_menu_width_subscription: completion_menu_width_sub,
         }
     }
 
@@ -408,8 +414,11 @@ impl NativeConsole {
         }
 
         let dangerous = language_service.detect_dangerous(&command);
-        let classification =
-            classify_query_for_language(&connection.metadata().query_language, &command);
+        let classification = classify_query_for_language_with_service(
+            &connection.metadata().query_language,
+            &command,
+            Some(language_service),
+        );
 
         let gate = console_gate(dangerous, classification, |kind| {
             let state = self.app_state.read(cx);
@@ -480,7 +489,11 @@ impl NativeConsole {
         let classification = self
             .resolve_connection(cx)
             .map(|connection| {
-                classify_query_for_language(&connection.metadata().query_language, &pending.command)
+                classify_query_for_language_with_service(
+                    &connection.metadata().query_language,
+                    &pending.command,
+                    Some(connection.language_service()),
+                )
             })
             .unwrap_or(pending.ceiling);
 

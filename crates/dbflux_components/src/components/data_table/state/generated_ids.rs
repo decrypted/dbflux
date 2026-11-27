@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use dbflux_core::GeneratedIdKind;
-use gpui::Context;
+use gpui::{Context, Window};
 
 use super::DataTableState;
 use crate::components::data_table::model::{CellValue, VisualRowSource};
@@ -44,6 +44,61 @@ impl DataTableState {
             Some(offer) if offer.in_editor => self.generated_id_kinds(col),
             _ => &[],
         }
+    }
+
+    /// The identifier kinds the list under the open text editor offers, and
+    /// the one it last put in the input. Empty in expression mode: an
+    /// identifier is a value, and that list holds the dialect's expressions.
+    pub fn editor_id_suggestions(&self) -> (&[GeneratedIdKind], Option<usize>) {
+        match self.editing_cell {
+            Some(coord) if self.cell_input.is_some() && !self.expression_mode => {
+                (self.editor_id_kinds(coord.col), self.suggestion_index)
+            }
+            _ => (&[], None),
+        }
+    }
+
+    /// Moves the identifier under the open text editor by `step` (wrapping)
+    /// and puts a new one of that kind in the input.
+    pub fn step_id_suggestion(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let (kinds, current) = self.editor_id_suggestions();
+        let count = kinds.len();
+        if count == 0 {
+            return;
+        }
+
+        let next = match current {
+            Some(index) => (index as isize + step).rem_euclid(count as isize) as usize,
+            None if step >= 0 => 0,
+            None => count - 1,
+        };
+        self.apply_id_suggestion(next, window, cx);
+    }
+
+    /// Puts a new identifier of the `index`th kind the open text editor
+    /// lists in its input. A commit over several cells then gives each cell
+    /// its own identifier instead of copying this one.
+    pub fn apply_id_suggestion(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.cell_input.clone() else {
+            return;
+        };
+        let Some(kind) = self.editor_id_suggestions().0.get(index).copied() else {
+            return;
+        };
+
+        let value = kind.generate();
+        self.generated_in_editor = Some((kind, value.clone()));
+        self.suggestion_index = Some(index);
+        input.update(cx, |input, cx| {
+            input.set_value(&value, window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
     }
 
     /// Writes a new identifier of `kind` into the cell at `coord`, or, when
@@ -112,6 +167,18 @@ impl DataTableState {
 
         targets.len()
     }
+
+    /// Whether the row the table shows at `visual_row` can be edited: a base
+    /// row of an editable table, or a pending insert.
+    pub(super) fn can_edit_row(&self, visual_row: usize) -> bool {
+        match self.edit_buffer.visual_row_source(visual_row) {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.is_editable && !self.edit_buffer.is_pending_delete(base_idx)
+            }
+            Some(VisualRowSource::Insert(_)) => self.is_insertable || self.is_editable,
+            None => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -130,7 +197,6 @@ mod tests {
         CellKind, CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
     };
     use crate::components::data_table::selection::CellCoord;
-    use crate::components::data_table::state::EditorSuggestion;
 
     struct Harness {
         _state: Entity<DataTableState>,
@@ -297,13 +363,13 @@ mod tests {
             state.update(cx, |state, cx| {
                 assert!(state.start_editing(CellCoord::new(0, 1), window, cx));
                 assert_eq!(
-                    state.editor_suggestions(1),
-                    [
-                        EditorSuggestion::GeneratedId(GeneratedIdKind::UuidV4),
-                        EditorSuggestion::GeneratedId(GeneratedIdKind::UuidV7),
-                    ]
+                    state.editor_id_suggestions(),
+                    (
+                        [GeneratedIdKind::UuidV4, GeneratedIdKind::UuidV7].as_slice(),
+                        None
+                    )
                 );
-                state.step_expression_suggestion(true, window, cx);
+                state.step_id_suggestion(1, window, cx);
                 state.cell_input().cloned().unwrap()
             })
         });

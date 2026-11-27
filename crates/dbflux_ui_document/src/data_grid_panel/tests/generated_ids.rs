@@ -16,7 +16,7 @@ fn column(name: &str, type_name: &str, is_primary_key: bool) -> ColumnMeta {
 /// note text)` with one row.
 fn tokens_grid(cx: &mut TestAppContext) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
     let driver = FakeDriver::new(dbflux_core::DbKind::SQLite);
-    let (panel, window) = super::cell_expressions::events_grid(cx, &driver);
+    let (panel, window) = super::events_grid::events_grid(cx, &driver);
 
     let result = QueryResult::table(
         vec![

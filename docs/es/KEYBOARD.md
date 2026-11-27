@@ -41,6 +41,9 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+A` / `Cmd+Shift+A`                   | Abrir el visor de auditoría                                       |
 | `Ctrl+b` / `Cmd+b`                               | Alternar sidebar                                                  |
 | `F11` / `Ctrl+Cmd+F`                             | Alternar pantalla completa                                        |
+| `Ctrl+=` / `Cmd+=`                               | Agrandar el texto de la interfaz, el editor y la tabla de datos (también `Ctrl+Shift+=` y `Ctrl++`) |
+| `Ctrl+-` / `Cmd+-`                               | Achicar el texto de la interfaz, el editor y la tabla de datos    |
+| `Ctrl+0` / `Cmd+0`                               | Restablecer el texto de la interfaz, el editor y la tabla de datos a los tamaños predeterminados |
 | `Ctrl+m`                                         | Abrir el menú contextual de la pestaña                            |
 | `` Ctrl+` ``                                     | Mostrar u ocultar la consola acoplada bajo la tabla, colección o navegador clave-valor activo, cuando su conexión tiene una; en una pestaña de consola, devolver el teclado a su campo |
 | `Ctrl+,` / `Cmd+,`                               | Abrir la configuración                                            |
@@ -102,6 +105,8 @@ Cuando el árbol recibe el foco sin ninguna fila seleccionada, se vuelve a selec
 | `Ctrl+s` / `Cmd+s`             | Guardar query                            |
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Guardar archivo como                     |
 | `Ctrl+/` / `Cmd+/`             | Alternar comentario de línea             |
+| `Ctrl+Shift+f` / `Cmd+Option+l` | Formatear la selección, o el statement bajo el cursor |
+| `Ctrl+Alt+j` / `Cmd+j` | Insertar snippet (abre el selector de snippets) |
 | `Shift+F10`                    | Abrir el menú de acciones del panel      |
 | `Enter`                        | Enfocar / ejecutar                       |
 
@@ -122,6 +127,19 @@ búsqueda, `Tab` / `Shift+Tab` alternan entre el campo de consulta y el de
 reemplazo mientras el campo de reemplazo está visible; si no, mueven el foco
 entre paneles, igual que fuera del editor.
 
+Con un menú de sugerencias abierto, `Tab` escribe la sugerencia resaltada en
+lugar de la palabra que se está completando, y cada `Tab` / `Shift+Tab` siguiente
+la reemplaza por la siguiente / anterior, volviendo al principio o al final del
+menú. Una vez que `Tab` insertó una sugerencia, las flechas también actualizan el
+texto. `Enter`, o escribir cualquier otro carácter, conserva la sugerencia
+insertada y cierra el menú; `Escape` restaura la palabra escrita. Todo el ciclo
+es un único paso de deshacer.
+
+Mientras se completa un snippet y no hay un menú de sugerencias abierto, `Tab` /
+`Shift+Tab` pasan al campo siguiente / anterior del snippet en lugar de indentar.
+`Tab` en el último campo, o `Escape`, termina el snippet. Con un menú de
+sugerencias abierto, `Tab` sigue recorriendo sus sugerencias.
+
 La barra de acciones del borde izquierdo del editor también es un menú. `Shift+F10` abre el menú de **acciones
 del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
 `Ctrl+k` mueve el foco a la barra de contexto de ejecución, donde `m` (o
@@ -129,8 +147,8 @@ del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
 controles de conexión, así que su barra de contexto solo contiene un botón
 **Acciones**, que `Ctrl+k` enfoca y que se pulsa con `Enter`, `m` o un clic. El
 menú lista Ejecutar (Cancelar mientras corre una query), Ejecutar en
-una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar y
-Gráfico, cada una con su atajo cuando lo tiene. Muévete con `j` / `k` y elige con
+una pestaña nueva, Guardar, Formatear, Ir al error de la consulta (habilitado
+mientras hay un error marcado), Historial de consultas, Explicar y Gráfico, cada una con su atajo cuando lo tiene. Muévete con `j` / `k` y elige con
 `Enter`, como en cualquier [menú contextual](#menú-contextual); `Escape` lo
 cierra. Mientras la consulta tiene resultados, el menú sigue con la cabecera de
 resultados: Actualizar y el intervalo de actualización automática, Pestaña de
@@ -410,6 +428,9 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `/`                                           | Enfocar búsqueda/filtro                    |
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
+| `e` | Editar el valor del secreto seleccionado en el documento de AWS Secrets: recupera antes el valor si no está cargado (la recuperación se audita cuando la auditoría está activa; con la auditoría desactivada, o si falla la escritura de auditoría, puede completarse sin registro) y luego abre el editor; solo cuando se puede editar (texto sin formato, no gestionado por otro servicio, sin eliminación programada, en un almacén que acepta escrituras) |
+| `b` | Revertir el secreto seleccionado a su versión anterior más reciente en el documento de AWS Secrets (pregunta antes; solo en un almacén con etiquetas de etapa, para un secreto que no gestiona otro servicio ni tiene la eliminación programada) |
+| `m` → Abrir en una pestaña | Abre el secreto seleccionado del documento de AWS Secrets en su propia pestaña (también con el botón de expandir del panel de detalles y la opción Abrir en una pestaña del menú de la fila). En esa pestaña, `e`, `b`, `x` y `F5` actúan sobre su único secreto como en el listado. Una pestaña cuya región difiere de la de la conexión, o cuyo secreto fue eliminado, no inicia lecturas ni escrituras y explica por qué (un guardado ya en curso no se cancela y aún puede llegar a la región anterior). Editar valor (`e`) en el listado abre esa pestaña con el editor activo y recupera antes el valor si no está cargado (auditado cuando la auditoría está activa). |
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
@@ -650,7 +671,8 @@ foco y no se está editando ninguna celda.
 | `d d` / `Delete` | Borrar la fila |
 | `a a` / `Shift+a Shift+a` | Agregar / duplicar una fila |
 | `Ctrl+n` | Poner la celda en NULL |
-| `Ctrl+Alt+e` / `Cmd+Alt+e` | Editar la celda como expresión SQL; con el editor abierto, alternar entre valor y expresión (`fx`) |
+| `Ctrl+Shift+0` | Poner la celda en el valor por defecto de la columna (prepara la expresión por defecto) |
+| `Ctrl+Shift+I` | Alternar el editor en línea entre literal y expresión SQL, o abrirlo como expresión |
 | `u` / `Ctrl+z` / `Cmd+z` | Deshacer |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer |
 | `e` | Expandir o contraer una columna anidada (grillas de documentos) |
@@ -855,6 +877,21 @@ Las teclas aparecen en el contexto Aprobaciones MCP de Settings > Keybindings.
 
 Las teclas aparecen en el contexto Migrate Wizard de Settings > Keybindings.
 
+## Asistente de importación
+
+En el paso de configuración, un cursor recorre las opciones que no toman foco por sí mismas: el desplegable Hoja de un libro importado (cuando tiene más de una hoja visible), el delimitador y la codificación CSV de un archivo importado y, luego, el modo de mapeo, la columna de destino y la columna de origen de cada tabla. `Tab` sigue llegando a los botones (**Use table**, **Apply mapping**, **Continue**).
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` | Mover el cursor a la opción siguiente / anterior |
+| `l` / `h` (o `Right` / `Left`) | En el delimitador o la codificación: elegir el siguiente / anterior y leer el archivo de nuevo |
+| `Enter` | En el delimitador o la codificación: elegir el siguiente. En la Hoja, un modo de mapeo, columna de destino o columna de origen: abrir su desplegable, que entonces usa `j` / `k` y `Enter` como en [Desplegables](#desplegables) |
+| `Escape` | En el campo de la tabla de destino o del texto NULL: salir del campo y devolver al diálogo las teclas anteriores. En un desplegable abierto: cerrar solo el desplegable y devolver las teclas al diálogo. En cualquier otro sitio: cerrar el asistente |
+
+En el paso de configuración de un script SQL, el cursor visita **Ante un error** y **Ejecutar en una sola transacción**: `l` / `h` y `Enter` en **Ante un error** eligen la otra opción, y `Enter` en la casilla de la transacción la alterna (se omite mientras "Continuar tras los errores" o una conexión sin transacciones la desactivan).
+
+Mientras un campo de texto o un desplegable abierto tiene el foco, estas teclas (incluido `Enter`) actúan sobre ese campo, no sobre el cursor. Aparecen en el contexto Import Wizard de Settings > Keybindings.
+
 ## Campos de texto
 
 | Teclas | Acción |
@@ -864,6 +901,9 @@ Las teclas aparecen en el contexto Migrate Wizard de Settings > Keybindings.
 | `Ctrl+Enter` / `Cmd+Enter` | Ejecutar la consulta |
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Ejecutar la consulta en una pestaña nueva |
 | `Ctrl+Shift+z` | Rehacer (Linux y Windows; macOS usa `Cmd+Shift+z`) |
+| `Ctrl+Insert` | Copiar la selección (Linux y Windows) |
+| `Shift+Insert` | Pegar (Linux y Windows) |
+| `Shift+Delete` | Cortar la selección, o borrar el carácter siguiente si no hay nada seleccionado (Linux y Windows). En un campo de contraseña borra la selección sin copiarla |
 
 Mientras escribes en un campo de texto fuera de un diálogo, como la búsqueda de
 la sidebar o la barra de contexto de ejecución, los atajos globales que llevan

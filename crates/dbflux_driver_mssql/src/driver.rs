@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::QueryGenerator;
@@ -30,6 +30,7 @@ use dbflux_core::{
     generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
     sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
+use dbflux_core::{decode_uri_component, split_uri_host_port, uri_host};
 use dbflux_ssh::{OpenedSshTunnel, SshTunnel};
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
 use tokio::net::TcpStream;
@@ -193,7 +194,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_case_expressions: true,
         supports_window_functions: true,
         supports_ctes: true,
-        supports_explain: false,
+        supports_explain: true,
+        supports_explain_analyze: false,
         max_query_parameters: 2100,
         max_order_by_columns: 0,
         max_group_by_columns: 0,
@@ -288,34 +290,40 @@ pub struct MssqlDialect;
 
 static MSSQL_DIALECT: MssqlDialect = MssqlDialect;
 
-/// Cell expressions for SQL Server. `LTRIM(RTRIM(..))` rather than `TRIM`,
-/// which needs SQL Server 2017.
-static MSSQL_CELL_EXPRESSIONS: dbflux_core::CellExpressionVocabulary =
-    dbflux_core::CellExpressionVocabulary {
-        timestamp: &[
-            "GETDATE()",
-            "CURRENT_TIMESTAMP",
-            "SYSDATETIME()",
-            "GETUTCDATE()",
-            "DATEADD(day, 1, GETDATE())",
-        ],
-        date: &["CAST(GETDATE() AS date)"],
-        time: &["CAST(GETDATE() AS time)"],
-        uuid: &["NEWID()"],
-        uuid_text: &["CAST(NEWID() AS char(36))"],
-        uuid_binary: &[],
-        text: &[
-            "CONCAT({col}, '')",
-            "UPPER({col})",
-            "LOWER({col})",
-            "LTRIM(RTRIM({col}))",
-        ],
-        supports_default: true,
-    };
-
 impl SqlDialect for MssqlDialect {
-    fn cell_expression_vocabulary(&self) -> Option<&'static dbflux_core::CellExpressionVocabulary> {
-        Some(&MSSQL_CELL_EXPRESSIONS)
+    fn type_value_expressions(&self, type_name: &str) -> Vec<&'static str> {
+        use dbflux_core::TypeFamily;
+
+        let lowered = type_name.trim().to_ascii_lowercase();
+
+        // `timestamp` is the read-only `rowversion` type, and `bit` is the
+        // boolean-like type; neither maps onto the generic families.
+        if lowered.starts_with("timestamp") || lowered.starts_with("rowversion") {
+            return Vec::new();
+        }
+
+        if lowered.starts_with("bit") {
+            return vec!["1", "0"];
+        }
+
+        // `SYSDATETIME()` carries no offset, so SQL Server would store it as UTC.
+        if lowered.starts_with("datetimeoffset") {
+            return vec!["SYSDATETIMEOFFSET()"];
+        }
+
+        match dbflux_core::type_family(type_name) {
+            Some(TypeFamily::Timestamp) => vec!["SYSDATETIME()", "GETDATE()"],
+            Some(TypeFamily::Date) => vec!["CAST(GETDATE() AS date)"],
+            Some(TypeFamily::Time) => vec!["CAST(GETDATE() AS time)"],
+            Some(TypeFamily::Uuid) => vec!["NEWID()"],
+            Some(TypeFamily::Numeric) => vec!["0"],
+            Some(TypeFamily::Text) => vec!["''"],
+            Some(TypeFamily::Boolean) | None => Vec::new(),
+        }
+    }
+
+    fn text_column_type(&self) -> &'static str {
+        "NVARCHAR(MAX)"
     }
 
     fn quote_identifier(&self, name: &str) -> String {
@@ -506,6 +514,67 @@ fn value_to_mssql_literal(value: &Value) -> String {
 pub struct MssqlCodeGenerator;
 
 static MSSQL_CODE_GENERATOR: MssqlCodeGenerator = MssqlCodeGenerator;
+
+/// The text values of a result's first column.
+fn first_column_text(result: QueryResult) -> Vec<String> {
+    result
+        .rows
+        .into_iter()
+        .filter_map(|row| match row.into_iter().next() {
+            Some(dbflux_core::Value::Text(name)) => Some(name),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The `IDENTITY` columns of a table, in column order.
+fn mssql_identity_columns_sql(schema: Option<&str>, table: &str) -> String {
+    mssql_column_lookup_sql(schema, table, "c.is_identity = 1")
+}
+
+/// The columns SQL Server computes and rejects explicit values for: computed
+/// columns, `rowversion` (`timestamp`) columns and the `GENERATED ALWAYS AS
+/// ROW START/END` period columns of a temporal table, in column order.
+/// `rowversion` is matched by its system type id (189), which an alias type
+/// over it shares. There is no join on `sys.types`: a CLR type such as
+/// `geography` has no row whose `user_type_id` equals its system type id, so
+/// a join would drop a computed column of that type.
+fn mssql_generated_columns_sql(schema: Option<&str>, table: &str) -> String {
+    mssql_column_lookup_sql(
+        schema,
+        table,
+        "(c.is_computed = 1 OR c.system_type_id = 189 OR c.generated_always_type <> 0)",
+    )
+}
+
+/// The names of the table's columns matching `predicate`. With a schema the
+/// table is found by name inside it; without one the object is resolved the
+/// way the server resolves an unqualified name, through `OBJECT_ID`, rather
+/// than assuming `SCHEMA_NAME()` (the default schema).
+fn mssql_column_lookup_sql(schema: Option<&str>, table: &str, predicate: &str) -> String {
+    match schema {
+        Some(schema) => format!(
+            "SELECT c.name FROM sys.columns c \
+             JOIN sys.tables t ON t.object_id = c.object_id \
+             JOIN sys.schemas s ON s.schema_id = t.schema_id \
+             WHERE {predicate} AND s.name = N'{}' AND t.name = N'{}' \
+             ORDER BY c.column_id",
+            MSSQL_DIALECT.escape_string(schema),
+            MSSQL_DIALECT.escape_string(table)
+        ),
+        None => format!(
+            "SELECT c.name FROM sys.columns c \
+             WHERE {predicate} AND c.object_id = OBJECT_ID(N'{}') \
+             ORDER BY c.column_id",
+            MSSQL_DIALECT.escape_string(&MSSQL_DIALECT.quote_identifier(table))
+        ),
+    }
+}
+
+/// A script that inserts explicit values into an `IDENTITY` column must turn
+/// `IDENTITY_INSERT` on for the table first, so the generator wraps it.
+static MSSQL_QUERY_GENERATOR: SqlMutationGenerator =
+    SqlMutationGenerator::new(&MSSQL_DIALECT).set_identity_insert_for_identity();
 
 impl MssqlCodeGenerator {
     fn quote(&self, name: &str) -> String {
@@ -807,7 +876,7 @@ impl DbDriver for MssqlDriver {
         };
 
         let db_part = if !database.is_empty() {
-            format!("/{}", database)
+            format!("/{}", urlencoding::encode(database))
         } else {
             String::new()
         };
@@ -823,7 +892,11 @@ impl DbDriver for MssqlDriver {
 
         Some(format!(
             "sqlserver://{}{}:{}{}{}",
-            credentials, host, port, db_part, query_part
+            credentials,
+            uri_host(host),
+            port,
+            db_part,
+            query_part
         ))
     }
 
@@ -869,21 +942,12 @@ impl DbDriver for MssqlDriver {
             Some((db, q)) => (db, q),
             None => (after_host, ""),
         };
-        values.insert("database".to_string(), database.to_string());
+        values.insert("database".to_string(), decode_uri_component(database));
 
-        // Split host_port into host[\instance][:port]. SSMS-style
-        // `host\instance` plus an optional `:port` suffix.
-        let (host_and_instance, port_str) = match host_port.rfind(':') {
-            Some(colon) => (&host_port[..colon], &host_port[colon + 1..]),
-            None => (host_port, "1433"),
-        };
-        let (host, instance) = match host_and_instance.find('\\') {
-            Some(bs) => (&host_and_instance[..bs], &host_and_instance[bs + 1..]),
-            None => (host_and_instance, ""),
-        };
+        let (host, instance, port) = split_mssql_host_port(host_port);
         values.insert("host".to_string(), host.to_string());
-        values.insert("port".to_string(), port_str.to_string());
-        if !instance.is_empty() {
+        values.insert("port".to_string(), port.unwrap_or("1433").to_string());
+        if let Some(instance) = instance.filter(|instance| !instance.is_empty()) {
             values.insert("instance".to_string(), instance.to_string());
         }
 
@@ -1085,7 +1149,71 @@ async fn establish_tiberius(config: Config) -> Result<TiberiusClient, tiberius::
     // one is. Using it unconditionally keeps the two paths in one place.
     let tcp = TcpStream::connect_named(&config).await?;
     tcp.set_nodelay(true)?;
+    enable_tcp_keepalive(&tcp)?;
     Client::connect(config, tcp.compat_write()).await
+}
+
+/// How long a session may sit idle before the OS starts probing the peer.
+///
+/// NAT gateways, firewalls and load balancers commonly drop TCP flows that
+/// stay silent for a few minutes. A dropped flow is only noticed on the next
+/// write, which then fails with a broken pipe. Probing well inside that window
+/// keeps the flow alive.
+const TCP_KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
+
+fn enable_tcp_keepalive(tcp: &TcpStream) -> std::io::Result<()> {
+    let keepalive = socket2::TcpKeepalive::new().with_time(TCP_KEEPALIVE_IDLE);
+    socket2::SockRef::from(tcp).set_tcp_keepalive(&keepalive)
+}
+
+/// Whether an error means the session's socket is gone, so the client can
+/// never be used again and the session has to be re-established.
+fn is_transport_lost(error: &tiberius::error::Error) -> bool {
+    use std::io::ErrorKind;
+
+    match error {
+        tiberius::error::Error::Io { kind, .. } => matches!(
+            kind,
+            ErrorKind::BrokenPipe
+                | ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::NotConnected
+                | ErrorKind::UnexpectedEof
+                | ErrorKind::TimedOut
+        ),
+        tiberius::error::Error::Server(token) => is_kill_code(token.code()),
+        _ => false,
+    }
+}
+
+/// Failure raised inside a [`MssqlConnection::with_client`] closure.
+///
+/// Tiberius errors stay unconverted until `with_client` has checked whether
+/// they mean the transport is gone.
+enum ClientError {
+    Tiberius(tiberius::error::Error),
+    Db(DbError),
+}
+
+impl From<tiberius::error::Error> for ClientError {
+    fn from(error: tiberius::error::Error) -> Self {
+        Self::Tiberius(error)
+    }
+}
+
+impl From<DbError> for ClientError {
+    fn from(error: DbError) -> Self {
+        Self::Db(error)
+    }
+}
+
+impl From<ClientError> for DbError {
+    fn from(error: ClientError) -> Self {
+        match error {
+            ClientError::Tiberius(error) => format_mssql_query_error(&error),
+            ClientError::Db(error) => error,
+        }
+    }
 }
 
 /// Fetch the server-side session id (`@@SPID`) and the actual session
@@ -1186,6 +1314,7 @@ impl MssqlDriver {
             spid: Arc::new(AtomicI32::new(spid)),
             reconnect_config: Arc::new(reconnect_config),
             poisoned: Arc::new(AtomicBool::new(false)),
+            recovery: Mutex::new(()),
         }))
     }
 
@@ -1361,6 +1490,7 @@ fn build_mssql_connection(
         spid: Arc::new(AtomicI32::new(session.spid)),
         reconnect_config: Arc::new(session.reconnect_config),
         poisoned: Arc::new(AtomicBool::new(false)),
+        recovery: Mutex::new(()),
     }
 }
 
@@ -1389,6 +1519,12 @@ pub struct MssqlConnection {
     spid: Arc<AtomicI32>,
     reconnect_config: Arc<tiberius::Config>,
     poisoned: Arc<AtomicBool>,
+
+    // Serializes session recovery so two callers that both observed
+    // `poisoned` cannot each reconnect and drop the session the other just
+    // restored. Lock order: `recovery`, then `current_database` (briefly),
+    // then `inner`.
+    recovery: Mutex<()>,
 }
 
 struct MssqlCancelHandle {
@@ -1469,9 +1605,15 @@ impl QueryCancelHandle for MssqlCancelHandle {
 }
 
 impl MssqlConnection {
+    /// Run `f` against the session's client.
+    ///
+    /// When `f` fails because the socket is gone, the dead client is dropped
+    /// and the connection is marked `poisoned`, so the next call that goes
+    /// through `cleanup_after_cancel` opens a new session. Nothing is retried
+    /// here: `f` may have been a write the server already received.
     fn with_client<F, R>(&self, f: F) -> Result<R, DbError>
     where
-        F: FnOnce(&Runtime, &mut TiberiusClient) -> Result<R, DbError>,
+        F: FnOnce(&Runtime, &mut TiberiusClient) -> Result<R, ClientError>,
     {
         let mut guard = match self.inner.lock() {
             Ok(g) => g,
@@ -1483,7 +1625,123 @@ impl MssqlConnection {
             DbError::ConnectionFailed("SQL Server connection has been closed".to_string().into())
         })?;
 
-        f(&inner.runtime, client)
+        match f(&inner.runtime, client) {
+            Ok(value) => Ok(value),
+            Err(ClientError::Db(error)) => Err(error),
+            Err(ClientError::Tiberius(error)) => {
+                if is_transport_lost(&error) {
+                    log::warn!(
+                        "[QUERY] SQL Server session transport lost; the next use opens a new session and any open transaction, temp table or SET option is gone: {}",
+                        error
+                    );
+                    inner.client = None;
+                    self.poisoned.store(true, Ordering::SeqCst);
+                }
+                Err(format_mssql_query_error(&error))
+            }
+        }
+    }
+
+    /// Capture the estimated plan of one statement with `SHOWPLAN_XML`.
+    ///
+    /// `SHOWPLAN_XML` is session state, so ON, the statement and OFF run in a
+    /// single `block_on` while this method holds the `inner` lock. No other
+    /// request can interleave on the shared client, and OFF is issued on every
+    /// path by `capture_showplan`. When OFF cannot be confirmed the client is
+    /// dropped and the connection poisoned, so the next use opens a fresh
+    /// session instead of returning plans where rows were expected.
+    fn run_showplan(&self, statement: &str) -> Result<Vec<String>, DbError> {
+        self.recover_session()?;
+
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poison_err) => poison_err.into_inner(),
+        };
+        let inner = &mut *guard;
+        // The client is taken out of the shared slot for the ON..OFF window and
+        // only put back once OFF succeeded. If anything unwinds in between, the
+        // client is dropped with the stack and the guard marks the connection
+        // poisoned, so a poisoned mutex can never hand out a client that is
+        // still in plan mode.
+        let mut client = inner.client.take().ok_or_else(|| {
+            DbError::ConnectionFailed("SQL Server connection has been closed".to_string().into())
+        })?;
+        let mut unwind_guard = crate::plan::RestoreGuard::new(|| {
+            self.poisoned.store(true, Ordering::SeqCst);
+        });
+
+        let mut session = ShowplanClient {
+            client: &mut client,
+            transport_lost: false,
+        };
+        let run = inner
+            .runtime
+            .block_on(crate::plan::capture_showplan(&mut session, statement));
+        let transport_lost = session.transport_lost;
+
+        if run.restore.is_ok() && !transport_lost {
+            inner.client = Some(client);
+            unwind_guard.disarm();
+        } else {
+            self.poisoned.store(true, Ordering::SeqCst);
+            unwind_guard.disarm();
+        }
+        drop(guard);
+
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(DbError::Cancelled);
+        }
+
+        match run.restore {
+            Err(restore_error) => {
+                if let Err(plan_error) = &run.plan {
+                    log::warn!("[PLAN] Plan request failed before SHOWPLAN reset: {plan_error}");
+                }
+                log::error!(
+                    "[PLAN] SET SHOWPLAN_XML OFF failed, dropping the session: {restore_error}"
+                );
+                Err(DbError::query_failed(format!(
+                    "SET SHOWPLAN_XML OFF failed, so the connection was reset: {restore_error}"
+                )))
+            }
+            Ok(()) => run.plan,
+        }
+    }
+
+    /// Re-establish the session if a cancel or a lost transport left it dead.
+    fn recover_session(&self) -> Result<(), DbError> {
+        if self.poisoned.load(Ordering::SeqCst) {
+            self.cleanup_after_cancel()?;
+        }
+        Ok(())
+    }
+
+    /// Run a read-only metadata lookup, re-establishing a dropped session
+    /// and retrying the lookup once when the transport was lost under it.
+    ///
+    /// Only side-effect-free reads go through here; a user batch is never
+    /// replayed (see `with_client`).
+    fn read_metadata<R>(&self, read: impl Fn() -> Result<R, DbError>) -> Result<R, DbError> {
+        self.recover_session()?;
+
+        match read() {
+            Err(error)
+                if self.poisoned.load(Ordering::SeqCst)
+                    && !self.cancelled.load(Ordering::SeqCst) =>
+            {
+                log::info!(
+                    "[SCHEMA] Retrying metadata read on a new session after: {}",
+                    error
+                );
+                self.cleanup_after_cancel()?;
+                read()
+            }
+            result => result,
+        }
+    }
+
+    fn execute_metadata(&self, sql: &str) -> Result<QueryResult, DbError> {
+        self.read_metadata(|| self.execute_simple(sql))
     }
 
     fn execute_simple(&self, sql: &str) -> Result<QueryResult, DbError> {
@@ -1516,10 +1774,7 @@ impl MssqlConnection {
         // still surface.
         let collected = self.with_client(|runtime, client| {
             runtime.block_on(async move {
-                let mut stream = client
-                    .simple_query(sql_owned)
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?;
+                let mut stream = client.simple_query(sql_owned).await?;
 
                 let mut remaining = limit.map(|limit| limit as usize);
                 collect_result_sets(&mut stream, &mut remaining).await
@@ -1550,18 +1805,18 @@ impl MssqlConnection {
             runtime.block_on(async move {
                 let row = client
                     .simple_query("SELECT @@TRANCOUNT")
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?
+                    .await?
                     .into_row()
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?;
+                    .await?;
 
-                row.as_ref()
+                let count = row
+                    .as_ref()
                     .map(|row| row.try_get::<i32, _>(0))
-                    .transpose()
-                    .map_err(|e| format_mssql_query_error(&e))?
+                    .transpose()?
                     .flatten()
-                    .ok_or_else(|| DbError::query_failed("SELECT @@TRANCOUNT returned no value"))
+                    .ok_or_else(|| DbError::query_failed("SELECT @@TRANCOUNT returned no value"))?;
+
+                Ok(count)
             })
         })
     }
@@ -1590,11 +1845,9 @@ impl MssqlConnection {
             runtime.block_on(async move {
                 client
                     .simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?
+                    .await?
                     .into_results()
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?;
+                    .await?;
 
                 Ok(())
             })
@@ -1643,6 +1896,43 @@ impl MssqlConnection {
     }
 }
 
+/// Runs the batches of one SHOWPLAN capture on the locked client, noting a
+/// lost transport so the caller can drop the dead session.
+struct ShowplanClient<'client> {
+    client: &'client mut TiberiusClient,
+    transport_lost: bool,
+}
+
+impl crate::plan::ShowplanSession for ShowplanClient<'_> {
+    async fn batch(&mut self, sql: &str) -> Result<Vec<String>, DbError> {
+        let outcome = async {
+            let results = self
+                .client
+                .simple_query(sql.to_string())
+                .await?
+                .into_results()
+                .await?;
+            Ok::<_, tiberius::error::Error>(results)
+        }
+        .await;
+
+        match outcome {
+            Ok(results) => Ok(results
+                .iter()
+                .filter_map(|set| set.first())
+                .filter_map(|row| match tiberius_value_to_value(row, 0) {
+                    Value::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect()),
+            Err(error) => {
+                self.transport_lost |= is_transport_lost(&error);
+                Err(format_mssql_query_error(&error))
+            }
+        }
+    }
+}
+
 /// One collected result set. `truncated` is set only when the shared row
 /// budget ran out while this set was streaming and at least one of its rows
 /// was discarded.
@@ -1672,16 +1962,12 @@ struct CollectedSet {
 async fn collect_result_sets(
     stream: &mut tiberius::QueryStream<'_>,
     remaining: &mut Option<usize>,
-) -> Result<Vec<CollectedSet>, DbError> {
+) -> Result<Vec<CollectedSet>, ClientError> {
     use futures_util::TryStreamExt;
 
     let mut sets: Vec<CollectedSet> = Vec::new();
 
-    while let Some(item) = stream
-        .try_next()
-        .await
-        .map_err(|e| format_mssql_query_error(&e))?
-    {
+    while let Some(item) = stream.try_next().await? {
         if let Some(metadata) = item.as_metadata() {
             let columns = metadata
                 .columns()
@@ -1770,10 +2056,7 @@ fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
 ///
 /// Factored out of `execute_simple` so it can be unit-tested without a live
 /// SQL Server.
-fn build_multi_result(
-    mut collected: Vec<CollectedSet>,
-    total_time: std::time::Duration,
-) -> QueryResult {
+fn build_multi_result(mut collected: Vec<CollectedSet>, total_time: Duration) -> QueryResult {
     let Some(primary) = collected.pop() else {
         return QueryResult::table(Vec::new(), Vec::new(), None, total_time);
     };
@@ -1956,6 +2239,7 @@ impl Connection for MssqlConnection {
     }
 
     fn ping(&self) -> Result<(), DbError> {
+        self.recover_session()?;
         self.execute_simple("SELECT 1").map(|_| ())
     }
 
@@ -2092,15 +2376,22 @@ impl Connection for MssqlConnection {
     }
 
     fn cleanup_after_cancel(&self) -> Result<(), DbError> {
-        // Only reconnect if a previous `cancel()` poisoned the connection.
-        // For ordinary errors (no KILL involved) the existing client is still
-        // usable and this is a no-op.
+        let _recovery = self
+            .recovery
+            .lock()
+            .unwrap_or_else(|poison_err| poison_err.into_inner());
+
+        // Only reconnect if a previous `cancel()` or a lost transport (see
+        // `with_client`) poisoned the connection. For ordinary errors the
+        // existing client is still usable and this is a no-op. Checked under
+        // the recovery lock, so a caller that waited on another recovery
+        // finds the session already restored and does not reconnect again.
         if !self.poisoned.load(Ordering::SeqCst) {
             self.cancelled.store(false, Ordering::SeqCst);
             return Ok(());
         }
 
-        log::info!("[CLEANUP] Reconnecting SQL Server connection after KILL");
+        log::info!("[CLEANUP] Reconnecting SQL Server connection after KILL or lost transport");
 
         let config = (*self.reconnect_config).clone();
         let active_database = self
@@ -2109,7 +2400,17 @@ impl Connection for MssqlConnection {
             .ok()
             .and_then(|guard| guard.clone());
 
-        let new_session: Result<(TiberiusClient, i32, Option<String>), tiberius::error::Error> = {
+        // The new session starts in whatever the login defaults to. The
+        // previously active database is restored on the new client before it
+        // is published, so no other caller can take the client and run an
+        // unqualified statement on the wrong database. If `USE [db]` fails
+        // the client is dropped, `poisoned` stays true and the next call
+        // retries recovery.
+        let restore_statement = active_database
+            .as_ref()
+            .map(|db| format!("USE [{}]", db.replace(']', "]]")));
+
+        let new_session: Result<(i32, Option<String>), DbError> = {
             let mut guard = match self.inner.lock() {
                 Ok(g) => g,
                 Err(poison_err) => poison_err.into_inner(),
@@ -2119,42 +2420,44 @@ impl Connection for MssqlConnection {
             // promptly; tiberius does not always tear down on KILL alone.
             guard.client = None;
 
-            guard.runtime.block_on(async move {
-                let mut client = establish_tiberius(config).await?;
-                let (spid, database) = capture_session_info(&mut client).await?;
-                Ok((client, spid, database))
+            let session = guard.runtime.block_on(async move {
+                let mut client = establish_tiberius(config).await.map_err(|e| {
+                    log::error!("[CLEANUP] Reconnect failed: {}", e);
+                    // Address fields aren't worth reconstructing here — the
+                    // message from tiberius is already host-aware via
+                    // Config::get_addr().
+                    format_mssql_connect_error(&e, "?", 0)
+                })?;
+                let (spid, database) = capture_session_info(&mut client)
+                    .await
+                    .map_err(|e| format_mssql_connect_error(&e, "?", 0))?;
+
+                if let Some(statement) = restore_statement {
+                    client
+                        .simple_query(statement)
+                        .await
+                        .map_err(|e| format_mssql_query_error(&e))?
+                        .into_results()
+                        .await
+                        .map_err(|e| format_mssql_query_error(&e))?;
+                }
+
+                Ok::<_, DbError>((client, spid, database))
+            });
+
+            session.map(|(client, spid, database)| {
+                guard.client = Some(client);
+                (spid, database)
             })
         };
 
-        let (new_client, new_spid, new_database) = new_session.map_err(|e| {
-            log::error!("[CLEANUP] Reconnect failed: {}", e);
-            // Address fields aren't worth reconstructing here — the message
-            // from tiberius is already host-aware via Config::get_addr().
-            format_mssql_connect_error(&e, "?", 0)
-        })?;
-
-        {
-            let mut guard = match self.inner.lock() {
-                Ok(g) => g,
-                Err(poison_err) => poison_err.into_inner(),
-            };
-            guard.client = Some(new_client);
-        }
+        let (new_spid, new_database) = new_session?;
 
         self.spid.store(new_spid, Ordering::SeqCst);
 
-        // The new session starts in whatever the login defaults to. If the
-        // user was previously on a specific database, restore that selection
-        // before clearing the poisoned flag — otherwise a failing `USE [db]`
-        // would leave the connection alive on the login's default database
-        // while callers (with `poisoned == false`) assume recovery succeeded
-        // on the requested one. With the clear deferred, a USE failure leaves
-        // `poisoned == true`, so the next `execute()` triggers another
-        // recovery attempt instead of silently running on the wrong DB.
-        if let Some(db) = active_database {
-            let escaped = db.replace(']', "]]");
-            self.execute_simple(&format!("USE [{}]", escaped))?;
-        } else if let Some(db) = new_database {
+        if active_database.is_none()
+            && let Some(db) = new_database
+        {
             // No previous selection to restore: the reconnect landed in the
             // login's default database, so track that actual database rather
             // than leaving the selection unknown.
@@ -2206,7 +2509,7 @@ impl Connection for MssqlConnection {
                    WHERE name NOT IN ('master','tempdb','model','msdb') \
                    ORDER BY name";
 
-        let result = self.execute_simple(sql)?;
+        let result = self.execute_metadata(sql)?;
         let current = self
             .current_database
             .lock()
@@ -2245,7 +2548,7 @@ impl Connection for MssqlConnection {
             qualified = qualified
         );
 
-        let table_rows = self.execute_simple(&tables_sql)?;
+        let table_rows = self.execute_metadata(&tables_sql)?;
         let mut tables = Vec::new();
 
         for row in table_rows.rows {
@@ -2283,7 +2586,7 @@ impl Connection for MssqlConnection {
             qualified = qualified
         );
 
-        let view_rows = self.execute_simple(&views_sql)?;
+        let view_rows = self.execute_metadata(&views_sql)?;
         let mut views = Vec::new();
 
         for row in view_rows.rows {
@@ -2326,10 +2629,14 @@ impl Connection for MssqlConnection {
             table
         );
 
-        let columns = self.fetch_columns(database, schema_name, table)?;
-        let indexes = self.fetch_indexes(database, schema_name, table)?;
-        let foreign_keys = self.fetch_foreign_keys(database, schema_name, table)?;
-        let constraints = self.fetch_constraints(database, schema_name, table)?;
+        let (columns, indexes, foreign_keys, constraints) = self.read_metadata(|| {
+            Ok((
+                self.fetch_columns(database, schema_name, table)?,
+                self.fetch_indexes(database, schema_name, table)?,
+                self.fetch_foreign_keys(database, schema_name, table)?,
+                self.fetch_constraints(database, schema_name, table)?,
+            ))
+        })?;
 
         Ok(TableInfo {
             name: table.to_string(),
@@ -2352,6 +2659,8 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
         table: &str,
     ) -> Result<Option<TableCreationMetadata>, DbError> {
+        self.recover_session()?;
+
         let schema_name = schema.unwrap_or("dbo");
         let escaped_db = database.replace(']', "]]");
         let qualified_db = format!("[{escaped_db}]");
@@ -2722,7 +3031,7 @@ impl Connection for MssqlConnection {
              JOIN {qualified_db}.sys.schemas s ON s.schema_id = v.schema_id \
              WHERE s.name = '{escaped_schema}' AND v.name = '{escaped_view}'",
         );
-        self.execute_simple(&sql)?;
+        self.execute_metadata(&sql)?;
 
         Ok(ViewInfo {
             name: view.to_string(),
@@ -2744,7 +3053,7 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<CustomTypeInfo>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        self.fetch_custom_types(database, schema_name)
+        self.read_metadata(|| self.fetch_custom_types(database, schema_name))
     }
 
     fn schema_indexes(
@@ -2753,7 +3062,7 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<SchemaIndexInfo>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        self.fetch_schema_indexes(database, schema_name)
+        self.read_metadata(|| self.fetch_schema_indexes(database, schema_name))
     }
 
     fn schema_foreign_keys(
@@ -2762,7 +3071,7 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        self.fetch_schema_foreign_keys(database, schema_name)
+        self.read_metadata(|| self.fetch_schema_foreign_keys(database, schema_name))
     }
 
     fn schema_routines(
@@ -2771,7 +3080,7 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<RoutineInfo>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        get_schema_routines(self, database, schema_name)
+        self.read_metadata(|| get_schema_routines(self, database, schema_name))
     }
 
     fn routine_definition(
@@ -2791,7 +3100,7 @@ impl Connection for MssqlConnection {
         })?;
 
         let sql = format!("SELECT OBJECT_DEFINITION({}) AS definition", object_id);
-        let rows = self.execute_simple(&sql)?;
+        let rows = self.execute_metadata(&sql)?;
 
         let definition = rows.rows.into_iter().next().and_then(|row| {
             row.into_iter().next().and_then(|v| match v {
@@ -2811,6 +3120,8 @@ impl Connection for MssqlConnection {
     }
 
     fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
+        self.recover_session()?;
+
         let mut current = self
             .current_database
             .lock()
@@ -2944,6 +3255,8 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
         table: &str,
     ) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+        self.recover_session()?;
+
         let sql = dependents_sql(database);
         let schema = schema.unwrap_or("dbo").to_string();
         let table = table.to_string();
@@ -2952,11 +3265,9 @@ impl Connection for MssqlConnection {
             runtime.block_on(async move {
                 let rows = client
                     .query(sql, &[&schema, &table])
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?
+                    .await?
                     .into_first_result()
-                    .await
-                    .map_err(|e| format_mssql_query_error(&e))?;
+                    .await?;
 
                 rows.iter()
                     .map(|row| {
@@ -2968,6 +3279,7 @@ impl Connection for MssqlConnection {
                         Ok((column(0)?, column(1)?, column(2)?))
                     })
                     .collect::<Result<Vec<_>, DbError>>()
+                    .map_err(ClientError::from)
             })
         })?;
 
@@ -3034,6 +3346,9 @@ impl Connection for MssqlConnection {
 
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
         let sql = mssql_update_row_sql(patch)?;
+
+        self.recover_session()?;
+
         log::debug!("[UPDATE] Executing: {}", sql);
 
         let result = self.execute_simple(&sql)?;
@@ -3042,6 +3357,9 @@ impl Connection for MssqlConnection {
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
         let sql = mssql_insert_row_sql(insert)?;
+
+        self.recover_session()?;
+
         log::debug!("[INSERT] Executing: {}", sql);
 
         let result = self.execute_simple(&sql)?;
@@ -3050,6 +3368,9 @@ impl Connection for MssqlConnection {
 
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
         let sql = mssql_delete_row_sql(delete)?;
+
+        self.recover_session()?;
+
         log::debug!("[DELETE] Executing: {}", sql);
 
         let result = self.execute_simple(&sql)?;
@@ -3102,20 +3423,11 @@ impl Connection for MssqlConnection {
 
     fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
         // SQL Server requires SET SHOWPLAN_XML to be the only statement in
-        // its batch, so we run three separate batches: turn it on, run the
-        // query (which compiles but does not execute, returning the plan
-        // as a single nvarchar(max) row), then turn it off. We unset
-        // SHOWPLAN even if the middle batch fails so the session state
-        // does not leak.
-
-        // Mirror `execute()`'s poison/cleanup pattern: a prior cancel may
-        // have left the underlying tiberius client dead. Without this an
-        // EXPLAIN issued after a cancel would hit a closed socket and
-        // surface a protocol-level error instead of triggering reconnect.
-        if self.poisoned.load(Ordering::SeqCst) {
-            self.cleanup_after_cancel()?;
-        }
-
+        // its batch. `run_showplan` issues ON, the query (which compiles but
+        // does not execute, returning the plan as one nvarchar(max) row) and
+        // OFF while holding the client lock, so no other request can
+        // interleave and make the query really run or the session keep
+        // returning plans.
         let query = match &request.query {
             Some(q) => q.clone(),
             None => format!(
@@ -3124,21 +3436,57 @@ impl Connection for MssqlConnection {
             ),
         };
 
-        self.execute_simple("SET SHOWPLAN_XML ON")?;
-        let plan_result = self.execute_simple(&query);
-        // If the cleanup batch fails, every subsequent query on this session
-        // keeps returning XML plan rows instead of real data (SHOWPLAN is
-        // session-scoped). Mark the connection poisoned so the next
-        // `execute()` rebuilds the tiberius client via `cleanup_after_cancel`,
-        // which starts a fresh session with SHOWPLAN off.
-        if let Err(off_err) = self.execute_simple("SET SHOWPLAN_XML OFF") {
-            log::error!(
-                "[EXPLAIN] SET SHOWPLAN_XML OFF failed, poisoning session: {}",
-                off_err
-            );
-            self.poisoned.store(true, Ordering::SeqCst);
+        let start = Instant::now();
+        let mut plans = self.run_showplan(&query)?;
+        let Some(primary) = plans.pop() else {
+            return Err(DbError::query_failed("SHOWPLAN_XML returned no plan"));
+        };
+
+        let column = ColumnMeta {
+            name: "Microsoft SQL Server 2005 XML Showplan".to_string(),
+            type_name: "NVarChar".to_string(),
+            kind: dbflux_core::ColumnKind::Text,
+            nullable: true,
+            is_primary_key: false,
+        };
+
+        let elapsed = start.elapsed();
+        let plan_set = |plan: String| {
+            QueryResult::table(
+                vec![column.clone()],
+                vec![vec![Value::Text(plan)]],
+                None,
+                elapsed,
+            )
+        };
+
+        // Same shape as a batch run through `execute`: the last set is the
+        // primary result and the earlier ones follow in `additional_results`.
+        let mut result = plan_set(primary);
+        for plan in plans {
+            result.push_additional_result(plan_set(plan));
         }
-        plan_result
+        Ok(result)
+    }
+
+    fn query_plan(
+        &self,
+        request: &dbflux_core::QueryPlanRequest,
+    ) -> Result<dbflux_core::QueryPlan, DbError> {
+        if request.mode == dbflux_core::QueryPlanMode::Analyze {
+            return Err(dbflux_core::analyze_unsupported());
+        }
+
+        let statement = crate::plan::plan_statement(&request.query)?;
+
+        match self.run_showplan(&statement) {
+            Ok(plans) => match plans.first() {
+                Some(raw) => crate::plan::parse_showplan_xml(raw),
+                None => Err(DbError::query_failed("SHOWPLAN_XML returned no plan")),
+            },
+            Err(error) if is_kill_error(&error) => Err(DbError::Cancelled),
+            Err(error) => Err(error),
+        }
     }
 
     fn dialect(&self) -> &dyn SqlDialect {
@@ -3150,8 +3498,21 @@ impl Connection for MssqlConnection {
     }
 
     fn query_generator(&self) -> Option<&dyn QueryGenerator> {
-        static GENERATOR: SqlMutationGenerator = SqlMutationGenerator::new(&MSSQL_DIALECT);
-        Some(&GENERATOR)
+        Some(&MSSQL_QUERY_GENERATOR)
+    }
+
+    fn identity_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mssql_identity_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
+    }
+
+    fn generated_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<String>, DbError> {
+        let result = self.execute(&QueryRequest::new(mssql_generated_columns_sql(
+            schema, table,
+        )))?;
+        Ok(first_column_text(result))
     }
 
     fn build_truncate_sql(&self, table: &str) -> Result<String, DbError> {
@@ -3881,8 +4242,16 @@ fn is_kill_error(err: &DbError) -> bool {
         | DbError::PermissionDenied(fe)
         | DbError::ObjectNotFound(fe)
         | DbError::ConnectionFailed(fe)
-        if matches!(fe.code.as_deref(), Some("596") | Some("233") | Some("6005"))
+        if fe
+            .code
+            .as_deref()
+            .and_then(|code| code.parse::<u32>().ok())
+            .is_some_and(is_kill_code)
     )
+}
+
+fn is_kill_code(code: u32) -> bool {
+    matches!(code, 596 | 233 | 6005)
 }
 
 // ---------------------------------------------------------------------------
@@ -4150,18 +4519,6 @@ fn skip_delimited(characters: &[char], start: usize, closing: char) -> usize {
 // We build the SQL directly rather than threading a new dialect hook
 // through `SqlQueryBuilder`, keeping the change local to this driver.
 
-/// The right-hand side of one assignment: its expression, or its value as an
-/// untyped literal, which is what these statements always wrote.
-fn mssql_assignment_sql(assignment: &dbflux_core::ColumnAssignment) -> Result<String, DbError> {
-    if assignment.sql_expression().is_none() {
-        return Ok(MSSQL_DIALECT.value_to_literal(&assignment.value));
-    }
-
-    assignment
-        .to_sql(&MSSQL_DIALECT)
-        .map_err(|error| DbError::QueryFailed(format!("Invalid SQL expression: {error}").into()))
-}
-
 /// The UPDATE `update_row` runs for `patch`, and the save preview shows.
 fn mssql_update_row_sql(patch: &RowPatch) -> Result<String, DbError> {
     if !patch.identity.is_valid() {
@@ -4216,8 +4573,8 @@ fn build_insert_with_output(insert: &RowInsert) -> Result<String, DbError> {
     let values = insert
         .assignments
         .iter()
-        .map(mssql_assignment_sql)
-        .collect::<Result<Vec<_>, _>>()?
+        .map(|a| MSSQL_DIALECT.assignment_to_sql(a))
+        .collect::<Vec<_>>()
         .join(", ");
 
     Ok(format!(
@@ -4232,13 +4589,13 @@ fn build_update_with_output(patch: &RowPatch) -> Result<String, DbError> {
         .changes
         .iter()
         .map(|change| {
-            Ok(format!(
+            format!(
                 "{} = {}",
                 MSSQL_DIALECT.quote_identifier(&change.name),
-                mssql_assignment_sql(change)?
-            ))
+                MSSQL_DIALECT.assignment_to_sql(change)
+            )
         })
-        .collect::<Result<Vec<_>, DbError>>()?
+        .collect::<Vec<_>>()
         .join(", ");
 
     let where_clause = identity_where_clause(&patch.identity)?;
@@ -4367,6 +4724,24 @@ struct UriQueryParams {
     application_name: Option<String>,
 }
 
+/// Splits an SSMS-style `host[\instance][:port]` authority into its host,
+/// instance and port. A bracketed IPv6 host is returned without brackets.
+fn split_mssql_host_port(host_port: &str) -> (&str, Option<&str>, Option<&str>) {
+    match host_port.split_once('\\') {
+        Some((host, instance_and_port)) => {
+            let (instance, port) = match instance_and_port.rsplit_once(':') {
+                Some((instance, port)) => (instance, Some(port)),
+                None => (instance_and_port, None),
+            };
+            (split_uri_host_port(host).0, Some(instance), port)
+        }
+        None => {
+            let (host, port) = split_uri_host_port(host_port);
+            (host, None, port)
+        }
+    }
+}
+
 fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Error> {
     let stripped = uri
         .strip_prefix("sqlserver://")
@@ -4390,25 +4765,17 @@ fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Err
         None => (query_part, ""),
     };
 
-    let (host_and_instance, explicit_port) = match host_port.rfind(':') {
-        Some(colon) => {
-            let port: u16 = host_port[colon + 1..].parse().map_err(|_| {
+    // The trailing `?instance=…` may also set the instance and wins if both
+    // are supplied (resolved by the caller).
+    let (host, instance_from_host, port) = split_mssql_host_port(host_port);
+    let explicit_port = port
+        .map(|port| {
+            port.parse::<u16>().map_err(|_| {
                 tiberius::error::Error::Conversion("invalid SQL Server URI port".into())
-            })?;
-            (&host_port[..colon], Some(port))
-        }
-        None => (host_port, None),
-    };
-
-    // SSMS-style `host\instance`. The trailing `?instance=…` may also set
-    // it and wins if both are supplied (resolved by the caller).
-    let (host, instance_from_host) = match host_and_instance.find('\\') {
-        Some(bs) => (
-            &host_and_instance[..bs],
-            Some(host_and_instance[bs + 1..].to_string()),
-        ),
-        None => (host_and_instance, None),
-    };
+            })
+        })
+        .transpose()?;
+    let instance_from_host = instance_from_host.map(str::to_string);
 
     Ok(ParsedMssqlUri {
         credentials,
@@ -5351,6 +5718,36 @@ fn dependents_from_rows(rows: Vec<(String, String, String)>) -> Vec<dbflux_core:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mssql_type_value_expressions() {
+        use dbflux_core::SqlDialect as _;
+
+        let dialect = &super::MSSQL_DIALECT;
+        assert_eq!(
+            dialect.type_value_expressions("datetime2(7)"),
+            vec!["SYSDATETIME()", "GETDATE()"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("datetimeoffset(7)"),
+            vec!["SYSDATETIMEOFFSET()"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("date"),
+            vec!["CAST(GETDATE() AS date)"]
+        );
+        assert_eq!(
+            dialect.type_value_expressions("uniqueidentifier"),
+            vec!["NEWID()"]
+        );
+        assert_eq!(dialect.type_value_expressions("bit"), vec!["1", "0"]);
+        assert_eq!(
+            dialect.type_value_expressions("timestamp"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(dialect.type_value_expressions("nvarchar(50)"), vec!["''"]);
+        assert_eq!(dialect.type_value_expressions("xml"), Vec::<&str>::new());
+    }
+
     use super::*;
     use dbflux_core::{DefaultSpec, OrderByColumn};
 
@@ -5578,6 +5975,33 @@ mod tests {
     }
 
     #[test]
+    fn insert_and_update_with_output_write_expressions_verbatim() {
+        let insert = RowInsert::with_typed_assignments(
+            "users".into(),
+            Some("dbo".into()),
+            vec![
+                ColumnAssignment::expression("id", "NEWID()"),
+                ColumnAssignment::new("name", Value::Text("alice".into())),
+            ],
+        );
+        assert_eq!(
+            build_insert_with_output(&insert).unwrap(),
+            "INSERT INTO [dbo].[users] ([id], [name]) OUTPUT INSERTED.* VALUES (NEWID(), N'alice')"
+        );
+
+        let patch = RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".into()], vec![Value::Int(7)]),
+            "users".into(),
+            Some("dbo".into()),
+            vec![ColumnAssignment::expression("deleted_at", "SYSDATETIME()")],
+        );
+        assert_eq!(
+            build_update_with_output(&patch).unwrap(),
+            "UPDATE [dbo].[users] SET [deleted_at] = SYSDATETIME() OUTPUT INSERTED.* WHERE [id] = 7"
+        );
+    }
+
+    #[test]
     fn update_with_output_emits_output_inserted_star() {
         let patch = RowPatch::new(
             RecordIdentity::composite(vec!["id".into()], vec![Value::Int(7)]),
@@ -5645,6 +6069,57 @@ mod tests {
         assert_eq!(loc.schema.as_deref(), Some("dbo"));
         assert_eq!(loc.table.as_deref(), Some("users"));
         assert_eq!(loc.column.as_deref(), Some("id"));
+    }
+
+    #[test]
+    fn transport_loss_is_recognized_only_for_dead_socket_errors() {
+        use std::io::ErrorKind;
+
+        let io = |kind: ErrorKind| tiberius::error::Error::Io {
+            kind,
+            message: kind.to_string(),
+        };
+
+        for kind in [
+            ErrorKind::BrokenPipe,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::NotConnected,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::TimedOut,
+        ] {
+            assert!(
+                is_transport_lost(&io(kind)),
+                "{kind:?} should mean a lost transport"
+            );
+        }
+
+        for error in [
+            io(ErrorKind::PermissionDenied),
+            io(ErrorKind::InvalidData),
+            tiberius::error::Error::Protocol("unexpected token".into()),
+            tiberius::error::Error::Conversion("bad value".into()),
+        ] {
+            assert!(
+                !is_transport_lost(&error),
+                "{error:?} should not mean a lost transport"
+            );
+        }
+    }
+
+    #[test]
+    fn kill_state_server_codes_mean_a_lost_session() {
+        // `TokenError` cannot be built outside tiberius, so the server-error
+        // arm of `is_transport_lost` is exercised through the shared code list.
+        for code in [596, 233, 6005] {
+            assert!(is_kill_code(code), "{code} should be a kill-state code");
+        }
+        for code in [547, 2627, 18456, 0] {
+            assert!(
+                !is_kill_code(code),
+                "{code} should not be a kill-state code"
+            );
+        }
     }
 
     #[test]
@@ -5817,6 +6292,34 @@ mod tests {
             parsed.get("password").map(String::as_str),
             Some("ws123456!")
         );
+    }
+
+    #[test]
+    fn parse_uri_handles_ipv6_hosts_encoded_databases_and_passwords() {
+        let driver = MssqlDriver;
+
+        let parsed = driver
+            .parse_uri("sqlserver://alice:p%40ss@[::1]:1433/my%20db")
+            .expect("IPv6 URI should parse");
+        assert_eq!(parsed.get("host").map(String::as_str), Some("::1"));
+        assert_eq!(parsed.get("port").map(String::as_str), Some("1433"));
+        assert_eq!(parsed.get("database").map(String::as_str), Some("my db"));
+        assert_eq!(parsed.get("user").map(String::as_str), Some("alice"));
+        assert_eq!(parsed.get("password").map(String::as_str), Some("p@ss"));
+
+        let without_port = driver
+            .parse_uri("sqlserver://[2001:db8::7]/app")
+            .expect("IPv6 URI without port should parse");
+        assert_eq!(
+            without_port.get("host").map(String::as_str),
+            Some("2001:db8::7")
+        );
+        assert_eq!(without_port.get("port").map(String::as_str), Some("1433"));
+
+        let mut values = parsed.clone();
+        values.remove("password");
+        let built = driver.build_uri(&values, "p@ss").expect("URI should build");
+        assert_eq!(built, "sqlserver://alice:p%40ss@[::1]:1433/my%20db");
     }
 
     #[test]
@@ -6000,6 +6503,20 @@ mod tests {
             parsed.get("instance").map(String::as_str),
             Some("MSSQLSERVER2019")
         );
+    }
+
+    #[test]
+    fn split_mssql_uri_unbrackets_ipv6_hosts() {
+        let parsed = super::split_mssql_uri("sqlserver://sa:pw@[::1]:1433/app").expect("parsed");
+        assert_eq!(parsed.host, "::1");
+        assert_eq!(parsed.explicit_port, Some(1433));
+        assert_eq!(parsed.instance_from_host, None);
+
+        let parsed =
+            super::split_mssql_uri("sqlserver://sa:pw@[::1]\\SQLEXPRESS:1500/").expect("parsed");
+        assert_eq!(parsed.host, "::1");
+        assert_eq!(parsed.explicit_port, Some(1500));
+        assert_eq!(parsed.instance_from_host.as_deref(), Some("SQLEXPRESS"));
     }
 
     #[test]
@@ -6401,6 +6918,90 @@ mod tests {
     }
 
     #[test]
+    fn mssql_untyped_columns_use_nvarchar_max() {
+        assert_eq!(MSSQL_DIALECT.text_column_type(), "NVARCHAR(MAX)");
+    }
+
+    #[test]
+    fn mssql_identity_columns_query_names_the_table_and_defaults_the_schema() {
+        let sql = super::mssql_identity_columns_sql(Some("dbo"), "it's");
+        assert!(
+            sql.contains("s.name = N'dbo' AND t.name = N'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("c.is_identity = 1"));
+        assert!(!sql.contains("OBJECT_ID"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_unqualified_lookups_resolve_the_object_id_of_the_quoted_name() {
+        let hostile = "we]ird'name";
+        for sql in [
+            super::mssql_identity_columns_sql(None, hostile),
+            super::mssql_generated_columns_sql(None, hostile),
+        ] {
+            assert!(
+                sql.contains("c.object_id = OBJECT_ID(N'[we]]ird''name]')"),
+                "{sql}"
+            );
+            assert!(!sql.contains("SCHEMA_NAME()"), "{sql}");
+            assert!(!sql.contains("sys.schemas"), "{sql}");
+            assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
+        }
+    }
+
+    #[test]
+    fn mssql_generated_columns_query_selects_computed_and_rowversion_columns() {
+        let sql = super::mssql_generated_columns_sql(Some("dbo"), "it's");
+        assert!(
+            sql.contains("s.name = N'dbo' AND t.name = N'it''s'"),
+            "{sql}"
+        );
+        assert!(sql.contains("c.is_computed = 1"), "{sql}");
+        assert!(sql.contains("c.system_type_id = 189"), "{sql}");
+        assert!(
+            !sql.contains("JOIN sys.types"),
+            "a computed column of a CLR type has no matching sys.types row: {sql}"
+        );
+        assert!(!sql.contains("is_identity"), "{sql}");
+        assert!(sql.ends_with("ORDER BY c.column_id"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_generated_columns_query_includes_temporal_period_columns() {
+        let sql = super::mssql_generated_columns_sql(Some("dbo"), "history");
+        assert!(sql.contains("c.generated_always_type <> 0"), "{sql}");
+    }
+
+    #[test]
+    fn mssql_script_wraps_identity_tables_in_identity_insert() {
+        use dbflux_core::QueryGenerator;
+
+        let identity = vec!["id".to_string()];
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_prologue(Some("dbo"), "users", &identity),
+            Some("SET IDENTITY_INSERT [dbo].[users] ON;".to_string())
+        );
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_epilogue(Some("dbo"), "users", &identity),
+            Some("SET IDENTITY_INSERT [dbo].[users] OFF;".to_string())
+        );
+        assert_eq!(
+            MSSQL_QUERY_GENERATOR.script_table_prologue(Some("dbo"), "users", &[]),
+            None
+        );
+
+        let columns = vec!["id".to_string()];
+        let owned_rows = [vec![dbflux_core::Value::Int(7)]];
+        let rows: Vec<&[dbflux_core::Value]> = owned_rows.iter().map(|r| r.as_slice()).collect();
+        let script = MSSQL_QUERY_GENERATOR
+            .generate_bulk_insert_for_script(Some("dbo"), "users", &columns, &[], &identity, &rows)
+            .unwrap()
+            .expect("mssql renders script inserts");
+        assert_eq!(script.text, "INSERT INTO [dbo].[users] ([id]) VALUES (7)");
+    }
+
+    #[test]
     fn mssql_generate_create_table_preserves_types_and_pk() {
         use dbflux_core::QueryGenerator;
 
@@ -6413,6 +7014,7 @@ mod tests {
                 type_name: Some("INT".to_string()),
                 nullable: false,
                 is_primary_key: true,
+                kind: dbflux_core::ColumnKind::Unknown,
             }],
             if_not_exists: false,
         };
@@ -7388,6 +7990,7 @@ mod query_safety_tests {
             spid: Arc::new(AtomicI32::new(0)),
             reconnect_config: Arc::new(tiberius::Config::new()),
             poisoned: Arc::new(AtomicBool::new(false)),
+            recovery: Mutex::new(()),
         }
     }
 
@@ -7576,7 +8179,9 @@ mod query_safety_tests {
                 let mut stream = runtime
                     .block_on(client.simple_query(sql))
                     .map_err(|e| DbError::query_failed(format!("batch dispatch failed: {e}")))?;
-                let outcome = runtime.block_on(collect_result_sets(&mut stream, &mut remaining));
+                let outcome = runtime
+                    .block_on(collect_result_sets(&mut stream, &mut remaining))
+                    .map_err(DbError::from);
 
                 match outcome {
                     Err(err) => {
@@ -7633,68 +8238,9 @@ mod query_safety_tests {
 }
 
 #[cfg(test)]
-mod cell_expression_tests {
+mod row_statement_tests {
     use super::*;
     use dbflux_core::{ColumnAssignment, RecordIdentity, RowPatch};
-
-    fn suggestions(column: &str, type_name: &str) -> Vec<String> {
-        MSSQL_DIALECT
-            .cell_expression_suggestions(column, type_name)
-            .expect("SQL Server offers cell expressions")
-    }
-
-    #[test]
-    fn cell_expressions_are_suggested_per_column_type() {
-        assert_eq!(
-            suggestions("created_at", "datetime2"),
-            [
-                "GETDATE()",
-                "CURRENT_TIMESTAMP",
-                "SYSDATETIME()",
-                "GETUTCDATE()",
-                "DATEADD(day, 1, GETDATE())",
-                "NULL",
-                "DEFAULT"
-            ]
-        );
-        assert_eq!(
-            suggestions("id", "uniqueidentifier"),
-            ["NEWID()", "NULL", "DEFAULT"]
-        );
-        assert_eq!(
-            suggestions("qty", "bigint"),
-            ["[qty] + 1", "[qty] - 1", "NULL", "DEFAULT"]
-        );
-        assert_eq!(
-            suggestions("name", "nvarchar(50)"),
-            [
-                "CONCAT([name], '')",
-                "UPPER([name])",
-                "LOWER([name])",
-                "LTRIM(RTRIM([name]))",
-                "NULL",
-                "DEFAULT"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_row_update_writes_an_expression_unquoted_and_its_text_as_a_literal() {
-        let patch = RowPatch::with_typed_changes(
-            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
-            "events".to_string(),
-            None,
-            vec![
-                ColumnAssignment::expression("seen_at", "GETDATE()", None),
-                ColumnAssignment::new("note", Value::Text("GETDATE()".to_string())),
-            ],
-        );
-
-        let sql = build_update_with_output(&patch).unwrap();
-
-        assert!(sql.contains("[seen_at] = GETDATE()"), "{sql}");
-        assert!(!sql.contains("[note] = GETDATE()"), "{sql}");
-    }
 
     #[test]
     fn the_previewed_statements_are_the_ones_the_row_mutations_run() {
@@ -7703,7 +8249,7 @@ mod cell_expression_tests {
             identity.clone(),
             "events".to_string(),
             None,
-            vec![ColumnAssignment::expression("seen_at", "GETDATE()", None)],
+            vec![ColumnAssignment::expression("seen_at", "GETDATE()")],
         );
         let delete = dbflux_core::RowDelete::new(identity, "events".to_string(), None);
 

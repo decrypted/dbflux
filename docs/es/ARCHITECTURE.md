@@ -322,7 +322,8 @@ crates/
         form_nav.rs         # FormGridNav<F> generic 2D grid navigation
         form_section.rs     # FormSection trait for keyboard navigation
         section_trait.rs    # SettingsSection trait
-        general.rs          # General settings (theme, safety toggles)
+        general.rs          # General settings (safety toggles, startup, refresh)
+        appearance_section.rs # Appearance page (theme, density, language, fonts)
         keybindings.rs      # Keybindings settings section
         auth_profiles_section.rs # Dynamic auth profile CRUD by provider form definition
         proxies.rs          # Proxy CRUD form with FormGridNav
@@ -583,10 +584,14 @@ crates/
       audit.rs              # AuditRepository with AuditEventDto
       *.rs                  # Other domain repositories
     src/legacy.rs           # JSON-to-SQLite import
+  dbflux_diagram/           # Domain-free diagram geometry (no GPUI)
+    src/layout/             # layered_left_right / compact_grid / radial over LayoutNode + LayoutEdge (edge weight)
+    src/routing.rs          # route_edge: axis-aligned edge routes between node rectangles
+    src/navigation/         # next_in_direction / spatial_order: keyboard selection between nodes
   dbflux_schema_viz/        # Schema visualization
     src/lib.rs              # Re-exports: graph, layout, dbml, sql modules, DbmlScope, SqlScope
     src/graph.rs            # SchemaGraph, TableNode, FkEdge
-    src/layout.rs           # Layout algorithms: LeftRight, Snowflake, Compact
+    src/layout.rs           # Table sizing + LeftRight, Snowflake, Compact, placed by dbflux_diagram
     src/dbml.rs             # DBML export (3 scopes: FocalTable, Subgraph, FullSchema)
     src/sql.rs              # SQL DDL export: CREATE TABLE + ALTER TABLE ADD CONSTRAINT (same 3 scopes)
   dbflux_test_support/       # Docker containers and fixtures for integration tests
@@ -960,9 +965,19 @@ consultas de documentos guardadas usan la migración
   `ConsoleDocument` (`console_document/`, `DocumentKey::Console`) la aloja en su
   propia pestaña, que se abre desde el menú de una base de datos en la barra
   lateral.
+- **Diagram canvas**: `crates/dbflux_diagram/` contiene la geometría sin dominio
+  (layouts en capas, en cuadrícula compacta y radial sobre nodos con tamaño y
+  aristas ponderadas, enrutado ortogonal de aristas, navegación espacial con el
+  teclado) y `crates/dbflux_components/src/diagram/` el lienzo GPUI construido
+  sobre ella (matemática de viewport para pan/zoom/ajuste, cuadrícula de puntos y
+  superficie transformada, aristas dibujadas con un grosor, tarjeta de nodo con
+  ranuras de encabezado/cuerpo/pie). El contenido de los nodos y los manejadores
+  de eventos los aporta el consumidor; hoy el consumidor es el diagrama de
+  esquema.
 - **Schema visualization**: `crates/dbflux_schema_viz/` provee `SchemaGraph`
   (nodos de tabla y aristas de clave foránea), algoritmos de layout (LeftRight,
-  Snowflake, Compact), exportación a DBML y
+  Snowflake, Compact) que dimensionan las tablas y delegan la colocación en
+  `dbflux_diagram`, exportación a DBML y
   exportación de DDL SQL. Se accede desde `SchemaVizDocument` en
   `crates/dbflux_ui_document/src/schema_viz/mod.rs`, con menús desplegables en
   la barra (Layout, Export), avisos toast, eventos de auditoría y carga
@@ -1310,7 +1325,7 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 
 ### Ventana de Settings
 
-- Settings se organiza en las siguientes secciones: General, Keybindings, Auth
+- Settings se organiza en las siguientes secciones: General, Appearance, Keybindings, Auth
   Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers, Audit y About. Las
   secciones de MCP (trusted clients, roles, policies) están gated bajo la
   feature `mcp`.
@@ -1658,7 +1673,10 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
   módulo (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`). La disponibilidad del
   file-dialog se sondea en runtime vía
   `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` (en
-  Linux: verifica `PATH` en busca de `xdg-desktop-portal`, `zenity`, `kdialog`);
+  Linux: el portal XDG cuenta solo si existe el archivo de servicio de sesión
+  D-Bus de `org.freedesktop.portal.Desktop` y un backend instalado declara
+  `org.freedesktop.impl.portal.FileChooser`; si no, busca `zenity` / `kdialog`
+  en `PATH`);
   cuando no hay backend disponible, los exports caen a `fallback_export_dir()`
   (`~/.local/share/dbflux/exports/`) con deconfliction vía `unique_path_in()`.
   También hay disponible un path de export por clipboard como target

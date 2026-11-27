@@ -132,6 +132,7 @@ fn cleanup_test_tables(conn: &dyn Connection) {
         "limit_test",
         "limit_xml_test",
         "explain_test",
+        "plan_test",
         "describe_test",
         "codegen_test",
         "cancel_test",
@@ -751,6 +752,245 @@ fn mssql_explain_returns_xml_plan() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_is_structured() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50))",
+        ))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "SELECT * FROM plan_test WHERE id = 1",
+        ))?;
+        assert_eq!(plan.raw_format, dbflux_core::PlanFormat::Xml);
+        assert!(plan.raw.contains("ShowPlanXML"));
+        assert_eq!(plan.roots.len(), 1);
+
+        let mut nodes = vec![&plan.roots[0]];
+        let mut seek = None;
+        while let Some(node) = nodes.pop() {
+            if node.relation.is_some() {
+                seek = Some(node);
+            }
+            nodes.extend(node.children.iter());
+        }
+        let seek = seek.expect("the plan reads plan_test");
+        assert_eq!(seek.relation.as_deref(), Some("dbo.plan_test"));
+        assert!(seek.index.is_some());
+        assert!(
+            seek.description.is_some(),
+            "the leaf scan node has a description"
+        );
+        assert!(seek.estimated_total_cost.is_some());
+
+        let multiple =
+            connection.query_plan(&dbflux_core::QueryPlanRequest::new("SELECT 1; SELECT 2"));
+        assert!(multiple.is_err());
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_of_a_delete_leaves_the_row() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50))",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO plan_test (id, name) VALUES (1, 'kept')",
+        ))?;
+
+        let plan =
+            connection.query_plan(&dbflux_core::QueryPlanRequest::new("DELETE FROM plan_test"))?;
+        assert!(!plan.roots.is_empty());
+
+        let remaining = connection.execute(&QueryRequest::new("SELECT COUNT(*) FROM plan_test"))?;
+        assert_eq!(remaining.rows[0][0], Value::Int(1));
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_failure_does_not_leave_the_session_in_plan_mode() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        let error = connection
+            .query_plan(&dbflux_core::QueryPlanRequest::new(
+                "SELECT * FROM table_that_does_not_exist",
+            ))
+            .expect_err("an unknown table has no plan");
+        assert!(!error.to_string().is_empty());
+
+        let normal = connection.execute(&QueryRequest::new("SELECT 1 AS one"))?;
+        assert_eq!(normal.columns[0].name, "one");
+        assert_eq!(normal.rows.len(), 1);
+        assert_eq!(normal.rows[0][0], Value::Int(1));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_refuses_statements_without_semicolons() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        for query in [
+            "SELECT 1 AS a\nSELECT 2 AS b",
+            "SELECT 1 AS a SELECT 2 AS b",
+        ] {
+            let error = connection
+                .query_plan(&dbflux_core::QueryPlanRequest::new(query))
+                .expect_err("two statements have no single plan");
+            assert!(
+                error
+                    .to_string()
+                    .contains("A query plan covers exactly one statement; the query has 2."),
+                "{error}"
+            );
+        }
+
+        for query in [
+            "WITH numbers AS (SELECT 1 AS a) SELECT a FROM numbers",
+            "IF 1 = 1 BEGIN SELECT 1 AS a END",
+        ] {
+            connection
+                .query_plan(&dbflux_core::QueryPlanRequest::new(query))
+                .map_err(|error| DbError::query_failed(format!("{query:?}: {error}")))?;
+        }
+
+        let normal = connection.execute(&QueryRequest::new("SELECT 1 AS one"))?;
+        assert_eq!(normal.rows[0][0], Value::Int(1));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_query_plan_keeps_the_terminator_a_merge_needs() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50));
+             CREATE TABLE plan_test_source (id INT PRIMARY KEY);
+             INSERT INTO plan_test VALUES (1, 'kept');
+             INSERT INTO plan_test_source VALUES (1)",
+        ))?;
+
+        let plan = connection.query_plan(&dbflux_core::QueryPlanRequest::new(
+            "MERGE dbo.plan_test AS t USING dbo.plan_test_source AS s ON t.id = s.id \
+             WHEN MATCHED THEN DELETE;",
+        ))?;
+        assert!(!plan.roots.is_empty());
+
+        let remaining = connection.execute(&QueryRequest::new("SELECT COUNT(*) FROM plan_test"))?;
+        assert_eq!(remaining.rows[0][0], Value::Int(1));
+
+        connection.execute(&QueryRequest::new("DROP TABLE plan_test_source"))?;
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_explain_never_interleaves_with_a_concurrent_plan() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50));
+             INSERT INTO plan_test VALUES (1, 'kept')",
+        ))?;
+
+        let shared: Arc<dyn Connection> = Arc::from(connection);
+        let planner = Arc::clone(&shared);
+        let planning = thread::spawn(move || -> Result<(), DbError> {
+            for _ in 0..150 {
+                planner.query_plan(&dbflux_core::QueryPlanRequest::new(
+                    "SELECT * FROM plan_test",
+                ))?;
+            }
+            Ok(())
+        });
+
+        let table_ref = TableRef::with_schema("dbo", "plan_test");
+        for _ in 0..150 {
+            shared.explain(
+                &ExplainRequest::new(table_ref.clone())
+                    .with_query("DELETE FROM plan_test WHERE id = 1"),
+            )?;
+        }
+        planning.join().expect("planner thread panicked")?;
+
+        let remaining = shared.execute(&QueryRequest::new("SELECT COUNT(*) FROM plan_test"))?;
+        assert_eq!(
+            remaining.rows[0][0],
+            Value::Int(1),
+            "an explained DELETE must never run"
+        );
+
+        cleanup_test_tables(&*shared);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_explain_keeps_the_plan_of_every_statement_in_a_batch() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE plan_test (id INT PRIMARY KEY, name NVARCHAR(50));
+             INSERT INTO plan_test VALUES (1, 'kept')",
+        ))?;
+
+        let table_ref = TableRef::with_schema("dbo", "plan_test");
+        let result = connection.explain(
+            &ExplainRequest::new(table_ref.clone())
+                .with_query("SELECT * FROM plan_test; DELETE FROM plan_test WHERE id = 1"),
+        )?;
+        // SQL Server returns one XML document per batch, holding the plan of
+        // every statement in it.
+        assert_eq!(result.result_set_count(), 1);
+        let Value::Text(xml) = &result.rows[0][0] else {
+            panic!("the plan is text");
+        };
+        assert_eq!(xml.matches("<StmtSimple").count(), 2, "{xml}");
+        assert!(xml.contains("DELETE"), "{xml}");
+
+        let single = connection.explain(&ExplainRequest::new(table_ref))?;
+        assert_eq!(single.result_set_count(), 1);
+
+        let remaining = connection.execute(&QueryRequest::new("SELECT COUNT(*) FROM plan_test"))?;
+        assert_eq!(remaining.rows[0][0], Value::Int(1), "nothing ran");
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Describe
 // ---------------------------------------------------------------------------
@@ -872,6 +1112,201 @@ fn mssql_cancel_query_kills_session_and_reconnects() -> Result<(), DbError> {
         let result = conn.execute(&QueryRequest::new("SELECT 1 AS one"))?;
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Int(1));
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Lost transport: the server or the network drops the session
+// ---------------------------------------------------------------------------
+
+/// Kill the session behind `connection` from a second, independent
+/// connection, so its socket is closed without the driver being told.
+fn kill_session_externally(connection: &dyn Connection, uri: String) -> Result<(), DbError> {
+    let spid = match single_value(connection, "SELECT CAST(@@SPID AS INT)")? {
+        Value::Int(spid) => spid,
+        other => panic!("@@SPID should be an integer, got {other:?}"),
+    };
+
+    let (killer, _) = connect_mssql(uri)?;
+    killer.execute(&QueryRequest::new(format!("KILL {spid}")))?;
+
+    // Give the server a moment to tear the killed session's socket down.
+    thread::sleep(Duration::from_millis(500));
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_table_details_recovers_after_the_session_is_dropped() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri.clone())?;
+        connection.execute(&QueryRequest::new(
+            "IF OBJECT_ID('dbo.lost_transport_details', 'U') IS NOT NULL \
+             DROP TABLE dbo.lost_transport_details; \
+             CREATE TABLE dbo.lost_transport_details (id INT PRIMARY KEY, name NVARCHAR(50))",
+        ))?;
+
+        kill_session_externally(connection.as_ref(), uri)?;
+
+        let details =
+            connection.table_details(TEST_DATABASE, Some("dbo"), "lost_transport_details")?;
+        let columns: Vec<String> = details
+            .columns
+            .unwrap_or_default()
+            .into_iter()
+            .map(|column| column.name)
+            .collect();
+        assert_eq!(columns, vec!["id".to_string(), "name".to_string()]);
+
+        // The recovered session is back on the database it was using.
+        assert_eq!(
+            single_value(connection.as_ref(), "SELECT DB_NAME()")?,
+            Value::Text(TEST_DATABASE.to_string())
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_first_statement_after_recovery_runs_in_the_active_database() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri.clone())?;
+        connection.execute(&QueryRequest::new(
+            "IF OBJECT_ID('dbo.lost_transport_unqualified', 'U') IS NOT NULL \
+             DROP TABLE dbo.lost_transport_unqualified; \
+             CREATE TABLE dbo.lost_transport_unqualified (id INT PRIMARY KEY)",
+        ))?;
+
+        kill_session_externally(connection.as_ref(), uri)?;
+
+        let failed = connection.execute(&QueryRequest::new("SELECT 1"));
+        assert!(
+            failed.is_err(),
+            "the dropped session should fail the first call"
+        );
+
+        // The session is published already on the active database, so an
+        // unqualified statement cannot land in the login's default database.
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO dbo.lost_transport_unqualified (id) VALUES (1)",
+        ))?;
+        assert_eq!(
+            single_value(
+                connection.as_ref(),
+                "SELECT COUNT(*) FROM dbo.lost_transport_unqualified"
+            )?,
+            Value::Int(1)
+        );
+        assert_eq!(
+            single_value(connection.as_ref(), "SELECT DB_NAME()")?,
+            Value::Text(TEST_DATABASE.to_string())
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_execute_surfaces_a_dropped_session_without_retrying_it() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri.clone())?;
+        connection.execute(&QueryRequest::new(
+            "IF OBJECT_ID('dbo.lost_transport_writes', 'U') IS NOT NULL \
+             DROP TABLE dbo.lost_transport_writes; \
+             CREATE TABLE dbo.lost_transport_writes (id INT PRIMARY KEY)",
+        ))?;
+
+        kill_session_externally(connection.as_ref(), uri)?;
+
+        let write = connection.execute(&QueryRequest::new(
+            "INSERT INTO dbo.lost_transport_writes (id) VALUES (1)",
+        ));
+        assert!(
+            write.is_err(),
+            "a write on a dropped session must fail instead of being replayed, got {write:?}"
+        );
+
+        // The next call reconnects on its own and finds the write was not run.
+        assert_eq!(
+            single_value(
+                connection.as_ref(),
+                "SELECT COUNT(*) FROM dbo.lost_transport_writes"
+            )?,
+            Value::Int(0)
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_row_edits_recover_after_a_failed_call_on_a_dropped_session() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri.clone())?;
+        connection.execute(&QueryRequest::new(
+            "IF OBJECT_ID('dbo.lost_transport_rows', 'U') IS NOT NULL \
+             DROP TABLE dbo.lost_transport_rows; \
+             CREATE TABLE dbo.lost_transport_rows (id INT PRIMARY KEY, name NVARCHAR(50))",
+        ))?;
+
+        kill_session_externally(connection.as_ref(), uri)?;
+
+        let failed = connection.execute(&QueryRequest::new("SELECT 1"));
+        assert!(
+            failed.is_err(),
+            "the dropped session should fail the first call"
+        );
+
+        let inserted = connection.insert_row(&RowInsert::new(
+            "lost_transport_rows".to_string(),
+            Some("dbo".to_string()),
+            vec!["id".to_string(), "name".to_string()],
+            vec![Value::Int(1), Value::Text("alice".to_string())],
+        ))?;
+        assert_eq!(inserted.affected_rows, 1);
+
+        // The recovered session is back on the database it was using.
+        assert_eq!(
+            single_value(connection.as_ref(), "SELECT DB_NAME()")?,
+            Value::Text(TEST_DATABASE.to_string())
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_browse_and_count_recover_after_a_failed_call_on_a_dropped_session() -> Result<(), DbError>
+{
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri.clone())?;
+        connection.execute(&QueryRequest::new(
+            "IF OBJECT_ID('dbo.lost_transport_browse', 'U') IS NOT NULL \
+             DROP TABLE dbo.lost_transport_browse; \
+             CREATE TABLE dbo.lost_transport_browse (id INT PRIMARY KEY); \
+             INSERT INTO dbo.lost_transport_browse (id) VALUES (1), (2)",
+        ))?;
+
+        kill_session_externally(connection.as_ref(), uri)?;
+
+        let failed = connection.execute(&QueryRequest::new("SELECT 1"));
+        assert!(
+            failed.is_err(),
+            "the dropped session should fail the first call"
+        );
+
+        let count = connection.count_table(&TableCountRequest::new(TableRef::with_schema(
+            "dbo",
+            "lost_transport_browse",
+        )))?;
+        assert_eq!(count, 2);
 
         Ok(())
     })
@@ -1534,6 +1969,111 @@ fn mssql_probe_write_privilege_sa_is_writable() -> Result<(), DbError> {
         assert_eq!(
             connection.probe_write_privilege(),
             dbflux_core::WritePrivilege::Writable
+        );
+
+        Ok(())
+    })
+}
+
+const TEMPORAL_TABLE_DDL: &str = "CREATE TABLE dbo.{name} (
+    id INT IDENTITY(1, 1) PRIMARY KEY,
+    label NVARCHAR(40) NOT NULL,
+    ValidFrom DATETIME2 GENERATED ALWAYS AS ROW START HIDDEN NOT NULL,
+    ValidTo DATETIME2 GENERATED ALWAYS AS ROW END HIDDEN NOT NULL,
+    PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo)
+) WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.{name}_history))";
+
+/// A populated system-versioned temporal table reports its period columns as
+/// generated and its `IDENTITY` column as identity, with and without a
+/// schema, and the exported `INSERT` (period columns omitted, wrapped in
+/// `IDENTITY_INSERT`) replays into an empty copy keeping the original ids.
+/// The test drives the driver's generator and metadata directly; the
+/// transfer writer lives in `dbflux_transfer`, which this crate does not
+/// depend on.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_temporal_table_export_script_replays_into_an_empty_copy() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        for name in ["temporal_src", "temporal_dst"] {
+            connection.execute(&QueryRequest::new(
+                TEMPORAL_TABLE_DDL.replace("{name}", name),
+            ))?;
+        }
+        connection.execute(&QueryRequest::new(
+            "SET IDENTITY_INSERT dbo.temporal_src ON;
+             INSERT INTO dbo.temporal_src (id, label) VALUES (10, N'first'), (25, N'second');
+             SET IDENTITY_INSERT dbo.temporal_src OFF;",
+        ))?;
+
+        let period_columns = vec!["ValidFrom".to_string(), "ValidTo".to_string()];
+        let identity_columns = vec!["id".to_string()];
+        assert_eq!(
+            connection.generated_columns(None, "temporal_src")?,
+            period_columns
+        );
+        assert_eq!(
+            connection.generated_columns(Some("dbo"), "temporal_src")?,
+            period_columns
+        );
+        assert_eq!(
+            connection.identity_columns(None, "temporal_src")?,
+            identity_columns
+        );
+        assert_eq!(
+            connection.identity_columns(Some("dbo"), "temporal_src")?,
+            identity_columns
+        );
+
+        let source_rows = connection.execute(&QueryRequest::new(
+            "SELECT id, label FROM dbo.temporal_src ORDER BY id",
+        ))?;
+        assert_eq!(source_rows.rows.len(), 2);
+
+        let generator = connection
+            .query_generator()
+            .ok_or_else(|| DbError::query_failed("SQL Server exposes a query generator"))?;
+        let columns = vec!["id".to_string(), "label".to_string()];
+        let column_types = vec![None, None];
+        let row_slices: Vec<&[Value]> = source_rows.rows.iter().map(Vec::as_slice).collect();
+
+        let insert = generator
+            .generate_bulk_insert_for_script(
+                Some("dbo"),
+                "temporal_dst",
+                &columns,
+                &column_types,
+                &identity_columns,
+                &row_slices,
+            )
+            .map_err(|error| DbError::query_failed(error.to_string()))?
+            .ok_or_else(|| DbError::query_failed("bulk insert is supported"))?;
+        let prologue = generator
+            .script_table_prologue(Some("dbo"), "temporal_dst", &identity_columns)
+            .ok_or_else(|| DbError::query_failed("identity prologue is generated"))?;
+        let epilogue = generator
+            .script_table_epilogue(Some("dbo"), "temporal_dst", &identity_columns)
+            .ok_or_else(|| DbError::query_failed("identity epilogue is generated"))?;
+
+        assert!(prologue.contains("IDENTITY_INSERT"), "{prologue}");
+        assert!(!insert.text.contains("ValidFrom"), "{}", insert.text);
+
+        connection.execute(&QueryRequest::new(format!(
+            "{prologue}\n{}\n{epilogue}",
+            insert.text
+        )))?;
+
+        let replayed = connection.execute(&QueryRequest::new(
+            "SELECT id, label FROM dbo.temporal_dst ORDER BY id",
+        ))?;
+        assert_eq!(replayed.rows, source_rows.rows);
+        assert_eq!(
+            replayed.rows,
+            vec![
+                vec![Value::Int(10), Value::Text("first".to_string())],
+                vec![Value::Int(25), Value::Text("second".to_string())],
+            ]
         );
 
         Ok(())

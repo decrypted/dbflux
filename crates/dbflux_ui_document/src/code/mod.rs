@@ -2,6 +2,7 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel};
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
+use crate::completion_support::{apply_completion_menu_width, follow_ui_font_size};
 use crate::history_panel::{
     HistoryPanel, HistoryPanelCallbacks, HistoryPanelClosed, HistoryQuerySelected,
 };
@@ -18,9 +19,6 @@ use dbflux_components::controls::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::ModalFocus;
-use dbflux_components::modals::schema_drift::{
-    ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
-};
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::observability::actions as audit_actions;
@@ -30,11 +28,10 @@ use dbflux_core::observability::{
 };
 use dbflux_core::{
     Connection, DangerousAction, DangerousQueryKind, DbError,
-    DiagnosticSeverity as CoreDiagnosticSeverity, DriftOutcome, DriverCapabilities,
+    DiagnosticSeverity as CoreDiagnosticSeverity, DriverCapabilities,
     EditorDiagnostic as CoreEditorDiagnostic, EditorLanguageProfile, ExecutionContext,
     ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
-    ReadOnlyEnforcement, RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget,
-    ValidationResult, check_schema_drift,
+    ReadOnlyEnforcement, RefreshPolicy, SchemaLoadingStrategy, TaskTarget, ValidationResult,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -72,19 +69,27 @@ mod execution_session;
 mod file_ops;
 mod file_persistence;
 mod focus;
+mod format;
 mod live_output;
 pub(crate) mod pane;
+mod plan_tab;
+mod query_error;
 mod render;
+mod results_split;
+mod snippet_insert;
+mod snippet_session;
 mod statements;
 mod vim;
 
 use code_actions::SqlCodeActionProvider;
-pub(crate) use completion::QueryCompletionProvider;
+pub(crate) use completion::{QueryCompletionProvider, SnippetOffers};
 pub(crate) use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 pub(crate) use vim::VimMode;
 
-pub(crate) use execution::evaluate_dangerous_with_effective_settings;
+pub(crate) use execution::{
+    confirmed_ceiling_for_dangerous, evaluate_dangerous_with_effective_settings,
+};
 
 /// A single result tab within the CodeDocument.
 ///
@@ -104,7 +109,7 @@ pub(super) struct ResultTab {
 }
 
 /// Internal layout of the document.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum SqlQueryLayout {
     #[default]
     Split,
@@ -397,6 +402,11 @@ pub(super) enum LanguageBinding {
 pub(super) struct EditorState {
     pub(super) input_state: Entity<GpuiEditorState>,
     pub(super) _input_subscriptions: Vec<Subscription>,
+    /// Tabstop session state, shared with the editor's Tab interceptor.
+    pub(super) snippet: snippet_session::SnippetHooks,
+    /// The snippets the last completion request offered, to recognise the
+    /// commit of one of them.
+    pub(super) snippet_offers: SnippetOffers,
     pub(super) original_content: String,
     pub(super) saved_query_id: Option<Uuid>,
     pub(super) current_editor_mode: String,
@@ -414,9 +424,9 @@ pub(super) struct EditorState {
     pub(super) is_dirty: bool,
     /// Buffer length at the previous `Change` event, to detect deletions.
     pub(super) last_change_length: usize,
-    /// Set while `toggle_comment` rewrites the buffer, so the Change handler
+    /// Set while a command (comment toggle, Format) rewrites the buffer, so the Change handler
     /// skips the completion-menu plumbing meant for a user's deletion.
-    pub(super) toggling_comment: bool,
+    pub(super) programmatic_edit: bool,
     /// Shared with the completion provider, which bumps it on every query.
     /// A deletion that did NOT bump it was ignored by the menu plumbing
     /// (cursor deleted back past the menu's trigger start) and would leave a
@@ -444,6 +454,9 @@ pub(super) struct EditorState {
     pub(super) gutter_style: Option<gpui_base::input::GutterStatementStyle>,
     /// Whether the installed gutter carries statements (false while hidden).
     pub(super) gutter_shown: bool,
+    /// The token the server named in the last failed run, shown as an error
+    /// diagnostic until the next edit or run.
+    pub(super) query_error: Option<query_error::QueryErrorMarker>,
 }
 
 /// Auto-save-to-disk machinery and saved-label UI feedback.
@@ -471,13 +484,6 @@ pub(super) struct RefreshState {
     pub(super) refresh_dropdown: Entity<Dropdown>,
     pub(super) _refresh_timer: Option<Task<()>>,
     pub(super) _refresh_subscriptions: Vec<Subscription>,
-}
-
-/// Schema-drift modal entity, its subscriptions, and the in-flight preflight flag.
-pub(super) struct DriftState {
-    pub(super) schema_drift_modal: Entity<ModalSchemaDrift>,
-    pub(super) _schema_drift_subscriptions: Vec<Subscription>,
-    pub(super) preflight_running: bool,
 }
 
 /// In-flight and historical query execution state.
@@ -508,6 +514,7 @@ pub(super) struct ResultOrigin {
     connection_id: Uuid,
     context: ExecutionSessionContext,
     exec_ctx: ExecutionContext,
+    language: QueryLanguage,
 }
 
 /// The result-tab collection and its selection cursor.
@@ -522,9 +529,6 @@ pub(super) struct ResultTabs {
 ///
 /// Each field is an individually-addressable typed slot. The drain order
 /// in `render` matches the declaration order here and must not be changed.
-/// `pending.drift_query` supports re-entrancy: the drift state machine may
-/// `.take()` the value and then re-store it within the same render pass when
-/// the modal has not yet been answered.
 #[derive(Default)]
 pub(super) struct PendingActions {
     result: Option<PendingQueryResult>,
@@ -533,7 +537,6 @@ pub(super) struct PendingActions {
     /// A result tab asked to load every row of its query.
     load_all_rows: Option<gpui::EntityId>,
     history_focus_restore: bool,
-    drift_query: Option<PendingDriftQuery>,
     source_input_values: Option<(String, String)>,
     chart_reexecute: bool,
     /// Window bounds emitted by the source `TimeRangePanel`. Taken by
@@ -543,6 +546,9 @@ pub(super) struct PendingActions {
     script_confirm: Option<PendingScriptConfirm>,
     routine_definition: Option<String>,
     error: Option<String>,
+    /// The error toast's "Go to error" was clicked; the next render moves
+    /// the cursor, because a toast callback has no window.
+    go_to_query_error: bool,
 }
 
 #[derive(Clone)]
@@ -585,11 +591,12 @@ pub struct CodeDocument {
     execution_session: Arc<ExecutionSessionBinding>,
     execution_session_context: Option<ExecutionSessionContext>,
     result_tabs: ResultTabs,
+    /// The Plan tab Explain opens beside the result tabs.
+    plan: plan_tab::PlanSlot,
 
-    // History modal, refresh timer, and schema drift modal.
+    // History modal and refresh timer.
     history: HistoryState,
     refresh: RefreshState,
-    drift: DriftState,
 
     // Layout/focus
     layout: SqlQueryLayout,
@@ -600,6 +607,8 @@ pub struct CodeDocument {
     script_confirm_focus: ModalFocus,
     /// Keyboard focus for the dangerous query confirmation.
     dangerous_query_focus: ModalFocus,
+    /// The Insert snippet picker, while it is open.
+    snippet_picker: Option<snippet_insert::OpenSnippetPicker>,
     context_bar_slot: ContextBarSlot,
     results_maximized: bool,
 
@@ -620,6 +629,8 @@ pub struct CodeDocument {
 
     /// Deferred action slots drained at the top of each render cycle.
     pending: PendingActions,
+    #[cfg(all(test, feature = "telemetry"))]
+    script_executor: Option<Arc<dyn dbflux_core::HookExecutor>>,
 
     /// Set when a save was started by the interrupted-close flow, so a write
     /// that lands also asks the workspace to close the tab.
@@ -635,10 +646,21 @@ pub struct CodeDocument {
 }
 
 struct PendingQueryResult {
+    #[cfg(feature = "telemetry")]
+    usage_ticket: Option<dbflux_core::observability::usage::UsageTicket>,
+    #[cfg(feature = "telemetry")]
+    usage_success: bool,
+    #[cfg(feature = "telemetry")]
+    usage_cancel: dbflux_core::CancelToken,
+    #[cfg(feature = "telemetry")]
+    usage_session_generation: Option<u64>,
     task_id: dbflux_core::TaskId,
     exec_id: Uuid,
     query: String,
     result: Result<QueryResult, DbError>,
+    /// Where `query` starts in the buffer when it is exactly the buffer text
+    /// it came from, so a failure position can be marked on it.
+    sent_buffer_start: Option<usize>,
     /// Whether this execution is a script (vs a database query).
     /// Determines the audit event category and whether connection context is required.
     is_script: bool,
@@ -656,8 +678,17 @@ pub(super) struct ActiveQueryTask {
     uses_isolated_session: bool,
 }
 
+// Delayed confirmations must preserve the original trigger, not turn an
+// automatic execution into a user execution merely because it was approved.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExecutionOrigin {
+    User,
+    Automatic,
+}
+
 /// Pending dangerous query confirmation.
 struct PendingDangerousQuery {
+    origin: ExecutionOrigin,
     query: String,
     kind: DangerousQueryKind,
     in_new_tab: bool,
@@ -671,6 +702,7 @@ struct PendingDangerousQuery {
 /// one statement, and the driver advertises `MULTI_STATEMENT`, or when the
 /// statement under the cursor only opens or ends a transaction.
 struct PendingScriptConfirm {
+    origin: ExecutionOrigin,
     query: String,
     in_new_tab: bool,
     statement_count: usize,
@@ -689,29 +721,12 @@ struct CursorStatement {
     offers_script: bool,
 }
 
-/// Action resolved by the schema-drift modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DriftAction {
-    /// Waiting for user response — do not execute yet.
-    Pending,
-    /// No drift (or driver doesn't support parsing) — execute immediately and
-    /// apply transparent cache refreshes first.
-    ExecuteNow,
-    /// User chose "Continue with stale schema" — proceed without touching the cache.
-    ContinueStale,
-}
-
-/// A query paused by the schema-drift preflight or drift modal awaiting execution.
-struct PendingDriftQuery {
-    query: String,
-    in_new_tab: bool,
-    action: DriftAction,
-    /// Cache updates to apply before execution when action is `ExecuteNow` or
-    /// after "Refresh & re-run". Each entry is `(TableKey, TableInfo)`, where
-    /// `TableKey` is `(database, schema, table)`.
-    cache_updates: Vec<(dbflux_core::TableKey, dbflux_core::TableInfo)>,
-    read_only: ReadOnlyEnforcement,
-}
+/// The consent ticket a run carries to completion. Without the `telemetry`
+/// feature nothing is ever captured, so the type carries no data.
+#[cfg(feature = "telemetry")]
+type UsageTicket = dbflux_core::observability::usage::UsageTicket;
+#[cfg(not(feature = "telemetry"))]
+type UsageTicket = std::convert::Infallible;
 
 /// Record of a query execution.
 #[derive(Clone)]
@@ -821,11 +836,13 @@ impl CodeDocument {
                 .placeholder(placeholder);
             // The menu sizes itself to its longest item; allow database identifiers
             // more room than the component's 320 px default, while keeping a cap.
-            state.lsp_mut().completion_menu.max_width = px(640.);
+            apply_completion_menu_width(&mut state, cx);
             state
         });
+        let completion_menu_width_sub = follow_ui_font_size(&input_state, cx);
 
         let completion_query_generation = Rc::new(std::cell::Cell::new(0u64));
+        let snippet_offers = SnippetOffers::default();
         let supports_connection_context = editor_profile.supports_connection_context;
 
         let input_change_sub = cx.subscribe_in(
@@ -833,7 +850,9 @@ impl CodeDocument {
             window,
             |this, input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
+                    this.snippet_after_change(_window, cx);
                     this.finish_replace_once(_window, cx);
+                    this.clear_query_error(cx);
                     this.refresh_statements(cx);
                     let current_length = input.read(cx).text().len();
                     let previous_length =
@@ -841,7 +860,7 @@ impl CodeDocument {
                     // Consumed here, not cleared by the toggle itself: GPUI
                     // delivers `emit` after the outermost update finishes, so a
                     // toggle's Change arrives long after it returned.
-                    let toggled = std::mem::take(&mut this.editor.toggling_comment);
+                    let toggled = std::mem::take(&mut this.editor.programmatic_edit);
 
                     let generation = this.editor.completion_query_generation.get();
                     let provider_queried = generation != this.editor.last_completion_generation;
@@ -963,31 +982,6 @@ impl CodeDocument {
                 cx.notify();
             });
 
-        // Create schema drift modal and wire up action subscriptions.
-        let schema_drift_modal = cx.new(ModalSchemaDrift::new);
-
-        let drift_refresh_sub = cx.subscribe(
-            &schema_drift_modal,
-            |this, _, _event: &SchemaDriftRefresh, cx| {
-                this.on_schema_drift_refresh(cx);
-            },
-        );
-
-        let drift_continue_sub = cx.subscribe(
-            &schema_drift_modal,
-            |this, _, _event: &SchemaDriftContinue, cx| {
-                this.on_schema_drift_continue(cx);
-            },
-        );
-
-        let drift_dismissed_sub = cx.subscribe(
-            &schema_drift_modal,
-            |this, _, _event: &SchemaDriftDismissed, cx| {
-                this.pending.drift_query = None;
-                cx.notify();
-            },
-        );
-
         let runner = {
             let mut r = DocumentTaskRunner::new(app_state.clone());
             if let Some(pid) = connection_id {
@@ -1073,15 +1067,17 @@ impl CodeDocument {
             exec_ctx.schema = Some("public".to_string());
         }
 
-        let completion_provider: Rc<dyn CompletionProvider> =
-            Rc::new(QueryCompletionProvider::new(
+        let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
+            QueryCompletionProvider::new(
                 query_language.clone(),
                 app_state.clone(),
                 connection_id,
                 exec_ctx.database.clone(),
                 exec_ctx.schema.clone(),
                 completion_query_generation.clone(),
-            ));
+            )
+            .with_snippets(snippet_offers.clone()),
+        );
 
         let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
             app_state.clone(),
@@ -1089,11 +1085,21 @@ impl CodeDocument {
             exec_ctx.database.clone(),
         ));
 
-        input_state.update(cx, |state, _cx| {
+        let snippet = input_state.update(cx, |state, cx| {
             state.lsp_mut().completion_provider =
                 supports_connection_context.then_some(completion_provider.clone());
             state.lsp_mut().code_action_providers = vec![code_action_provider.clone()];
+            snippet_session::SnippetHooks::install(state, snippet_offers.clone(), cx)
         });
+        let snippet_caret_sub = cx.subscribe(
+            &input_state,
+            |this, _input, event: &gpui_base::input::InputPointerEvent, cx| match event {
+                gpui_base::input::InputPointerEvent::CaretPlaced => {
+                    this.snippet_after_caret_placed(cx);
+                }
+            },
+        );
+        let snippet_vim_sub = cx.observe_self(|this, cx| this.snippet_follow_vim_mode(cx));
 
         let (connection_dropdown, conn_sub) =
             Self::create_connection_dropdown(&app_state, &exec_ctx, window, cx);
@@ -1181,7 +1187,14 @@ impl CodeDocument {
             app_state,
             editor: EditorState {
                 input_state,
-                _input_subscriptions: vec![input_change_sub],
+                _input_subscriptions: vec![
+                    input_change_sub,
+                    completion_menu_width_sub,
+                    snippet_caret_sub,
+                    snippet_vim_sub,
+                ],
+                snippet,
+                snippet_offers,
                 original_content: String::new(),
                 saved_query_id: None,
                 current_editor_mode: editor_profile.editor_mode.clone(),
@@ -1192,7 +1205,7 @@ impl CodeDocument {
                 path: None,
                 is_dirty: false,
                 last_change_length: 0,
-                toggling_comment: false,
+                programmatic_edit: false,
                 completion_query_generation,
                 last_completion_generation: 0,
                 cached_effective_language: query_language.clone(),
@@ -1201,6 +1214,7 @@ impl CodeDocument {
                 statement_ranges: None,
                 gutter_style: None,
                 gutter_shown: false,
+                query_error: None,
             },
             source: SourceContext {
                 exec_ctx,
@@ -1242,6 +1256,7 @@ impl CodeDocument {
                 result_tab_counter: 0,
                 run_in_new_tab: false,
             },
+            plan: plan_tab::PlanSlot::default(),
             history: HistoryState {
                 history_panel,
                 _history_subscriptions: vec![query_selected_sub, history_closed_sub],
@@ -1251,6 +1266,7 @@ impl CodeDocument {
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
             script_confirm_focus: ModalFocus::new(cx),
+            snippet_picker: None,
             dangerous_query_focus: ModalFocus::new(cx),
             context_bar_slot: ContextBarSlot::Connection,
             results_maximized: false,
@@ -1262,15 +1278,6 @@ impl CodeDocument {
                 _refresh_subscriptions: vec![refresh_policy_sub],
             },
             is_active_tab: true,
-            drift: DriftState {
-                schema_drift_modal,
-                _schema_drift_subscriptions: vec![
-                    drift_refresh_sub,
-                    drift_continue_sub,
-                    drift_dismissed_sub,
-                ],
-                preflight_running: false,
-            },
             _pending_save: None,
             physical_writes: file_persistence::PhysicalWriteQueue::new(),
             session: SessionPersistence {
@@ -1282,6 +1289,8 @@ impl CodeDocument {
                 shutdown_flush_written: None,
             },
             pending: PendingActions::default(),
+            #[cfg(all(test, feature = "telemetry"))]
+            script_executor: None,
             close_after_save: false,
             close_flush_refused: false,
             vim,
@@ -1344,7 +1353,9 @@ impl CodeDocument {
     pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
         self.is_active_tab = active;
 
-        if active && let Some(grid) = self.active_result_grid() {
+        if active && self.plan_shown() {
+            self.restore_plan_inspector(cx);
+        } else if active && let Some(grid) = self.active_result_grid() {
             grid.update(cx, |grid, cx| grid.set_active_tab(true, cx));
         }
     }
@@ -1352,6 +1363,7 @@ impl CodeDocument {
     /// Drops every result grid's inspector state after the user dismissed the
     /// workspace rail, so no grid re-opens it on the next activation.
     pub fn mark_inspector_closed(&mut self, cx: &mut Context<Self>) {
+        self.mark_plan_inspector_closed(cx);
         for tab in &self.result_tabs.result_tabs {
             tab.grid
                 .update(cx, |grid, cx| grid.clear_inspector_state(cx));
@@ -1414,9 +1426,12 @@ impl CodeDocument {
     /// cannot reach the dirty-marking handler at all.
     pub fn set_content(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
         let sql_owned = sql.to_string();
-        self.editor
-            .input_state
-            .update(cx, |state, cx| state.set_value(&sql_owned, window, cx));
+        let snippet = self.editor.snippet.clone();
+        self.editor.input_state.update(cx, |state, cx| {
+            // Its anchors and undo group do not survive a replaced buffer.
+            snippet.end(state, cx);
+            state.set_value(&sql_owned, window, cx)
+        });
         self.editor.original_content = sql_owned;
         self.editor.is_dirty = false;
         self.refresh_editor_diagnostics(window, cx);
@@ -1937,6 +1952,11 @@ impl CodeDocument {
             }
         }
 
+        // The Insert snippet picker owns the keyboard while it is open.
+        if self.snippet_picker.is_some() && self.dispatch_to_snippet_picker(cmd, window, cx) {
+            return true;
+        }
+
         // While the history panel owns the keyboard, route commands to it first
         if self.history.history_panel.read(cx).owns_keyboard()
             && self.dispatch_to_history_panel(cmd, window, cx)
@@ -1951,8 +1971,32 @@ impl CodeDocument {
             return true;
         }
 
-        // When focused on results, delegate to active DataGridPanel
-        if self.focus_mode == SqlQueryFocus::Results
+        // The palette runs this with the query text focused, so it cannot
+        // wait for the results to own the keyboard.
+        if cmd == Command::ResultsCopyAsMarkdown {
+            return match self.active_result_grid() {
+                Some(grid) => grid.update(cx, |g, cx| g.dispatch_command(cmd, window, cx)),
+                None => false,
+            };
+        }
+
+        // The Plan tab takes the commands that mean something there; the
+        // rest go on to the document like any other.
+        if self.focus_mode == SqlQueryFocus::Results && self.plan_shown() {
+            if cmd == Command::FocusUp {
+                self.reveal_editor(cx);
+                self.focus_mode = SqlQueryFocus::Editor;
+                self.editor
+                    .input_state
+                    .update(cx, |state, cx| state.focus(window, cx));
+                cx.notify();
+                return true;
+            }
+
+            if self.dispatch_plan_command(cmd, window, cx) {
+                return true;
+            }
+        } else if self.focus_mode == SqlQueryFocus::Results
             && let Some(grid) = self.active_result_grid()
         {
             // Special handling for FocusUp to exit results
@@ -1993,6 +2037,9 @@ impl CodeDocument {
                 true
             }
             Command::ToggleComment => self.toggle_comment(window, cx),
+            Command::FormatQuery => self.format_query(window, cx),
+            Command::InsertSnippet => self.open_snippet_picker(window, cx),
+            Command::GoToQueryError => self.go_to_query_error(window, cx),
             Command::Cancel | Command::CancelQuery if self.runner.is_primary_active() => {
                 self.cancel_query(cx);
                 true
@@ -2005,11 +2052,12 @@ impl CodeDocument {
             }
 
             Command::FocusDown
-                if self.focus_mode == SqlQueryFocus::Editor
-                    && !self.result_tabs.result_tabs.is_empty() =>
+                if self.focus_mode == SqlQueryFocus::Editor && self.has_result_content() =>
             {
                 self.focus_mode = SqlQueryFocus::Results;
-                if let Some(grid) = self.active_result_grid() {
+                if self.plan_shown() {
+                    self.focus_plan(window, cx);
+                } else if let Some(grid) = self.active_result_grid() {
                     grid.update(cx, |g, cx| g.focus_active_view(window, cx));
                 }
                 cx.notify();

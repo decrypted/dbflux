@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::Duration;
 
+use dbflux_core::OffRuntimeDrop;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
@@ -105,6 +106,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_window_functions: true,
         supports_ctes: true,
         supports_explain: true,
+        supports_explain_analyze: false,
         max_query_parameters: 32767,
         max_order_by_columns: 0,
         max_group_by_columns: 0,
@@ -636,7 +638,7 @@ impl RedshiftDriver {
         let cancel_token = client.cancel_token();
 
         Ok(Box::new(RedshiftConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             ssh_tunnel: None,
             cancel_token,
             active_query: Arc::new(RwLock::new(None)),
@@ -668,7 +670,7 @@ impl RedshiftDriver {
         let cancel_token = client.cancel_token();
 
         Ok(Box::new(RedshiftConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             ssh_tunnel: None,
             cancel_token,
             active_query: Arc::new(RwLock::new(None)),
@@ -706,7 +708,7 @@ impl RedshiftDriver {
         let cancel_token = client.cancel_token();
 
         Ok(Box::new(RedshiftConnection {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(Mutex::new(OffRuntimeDrop::new(client))),
             ssh_tunnel: Some(tunnel),
             cancel_token,
             active_query: Arc::new(RwLock::new(None)),

@@ -64,6 +64,10 @@ pub enum FilterOperator {
 pub enum ContextMenuAction {
     /// Copy the selected cell value to clipboard.
     Copy,
+    /// Copy the selection as CSV, with a header row of its column names.
+    CopyAsCsv,
+    /// Copy the selection as JSON, one object per row keyed by column name.
+    CopyAsJson,
     /// Copy the selected cells, or the whole loaded result when one cell is
     /// selected, as a Markdown table.
     CopyAsMarkdown,

@@ -1793,6 +1793,8 @@ document:
       header: "%{column} · linha %{row}"
       item:
         copy: Copiar
+        copy_as_csv: "Copiar como CSV"
+        copy_as_json: "Copiar como JSON"
         copy_as_markdown: Copiar como Markdown
         copy_column_name: Copiar nome da coluna
         view_document: Ver documento

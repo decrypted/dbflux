@@ -613,6 +613,8 @@ fn cell_menu_header_node(
 pub(super) fn action_key(action: ContextMenuAction) -> Cow<'static, str> {
     match action {
         ContextMenuAction::Copy => Cow::Borrowed("copy"),
+        ContextMenuAction::CopyAsCsv => Cow::Borrowed("copy-as-csv"),
+        ContextMenuAction::CopyAsJson => Cow::Borrowed("copy-as-json"),
         ContextMenuAction::CopyAsMarkdown => Cow::Borrowed("copy-as-markdown"),
         ContextMenuAction::Paste => Cow::Borrowed("paste"),
         ContextMenuAction::Edit => Cow::Borrowed("edit"),
@@ -660,6 +662,8 @@ pub(super) fn action_key(action: ContextMenuAction) -> Cow<'static, str> {
 pub(super) fn action_from_key(key: &str) -> Option<ContextMenuAction> {
     match key {
         "copy" => Some(ContextMenuAction::Copy),
+        "copy-as-csv" => Some(ContextMenuAction::CopyAsCsv),
+        "copy-as-json" => Some(ContextMenuAction::CopyAsJson),
         "copy-as-markdown" => Some(ContextMenuAction::CopyAsMarkdown),
         "paste" => Some(ContextMenuAction::Paste),
         "edit" => Some(ContextMenuAction::Edit),

@@ -3,6 +3,7 @@ pub(crate) mod crud;
 pub(crate) mod document_aggregate;
 pub(crate) mod document_edit;
 pub(crate) mod document_schema;
+pub(crate) mod generated_id;
 pub(crate) mod key_value;
 pub(crate) mod value_decoder;
 
@@ -31,6 +32,9 @@ pub use document_schema::{
     CollectionSchemaRequest, CollectionSchemaSample, DocumentFeatures, FieldSchemaStats,
     FieldTypeShare, FieldValueSummary, NULL_TYPE_NAME, SampledField, SchemaSampleAccumulator,
     ValueShare,
+};
+pub use generated_id::{
+    GeneratedIdKind, KSUID_EPOCH, ksuid_at, ksuid_unix_secs, looks_like_id_column, ulid_at,
 };
 pub use key_value::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,

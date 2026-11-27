@@ -201,6 +201,9 @@ impl DataGridPanel {
             });
         }
 
+        // A new identifier is a value, written like the type values above.
+        entries.extend(self.generate_id_entries(col, cx));
+
         entries.push(SetValueEntry {
             label: dbflux_i18n::t!("document.data.context_menu.item.set_value_null").into(),
             detail: None,

@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use crate::controls::GpuiInput as Input;
+use crate::controls::{GpuiInput as Input, InputMoveDown, InputMoveUp, InputState};
 use crate::fonts;
 use crate::icons::AppIcon;
 use crate::primitives::Icon;
@@ -9,10 +9,10 @@ use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, Spacing};
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
-    Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement,
-    Pixels, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, canvas,
-    div, px, uniform_list,
+    Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
+    IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement, Pixels, Role, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
+    Styled, Window, anchored, canvas, deferred, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
@@ -1205,7 +1205,8 @@ impl DataTable {
                 let font_size = fonts::grid_font_size(cx);
                 let row_height = fonts::grid_row_height(cx);
                 let nested_icon = fonts::grid_px(cx, CollectionMetrics::NESTED_ICON);
-                let grid_colors = GridColors::of(cx.theme());
+                let theme = cx.theme();
+                let grid_colors = GridColors::of(theme);
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
                 let selection = state.selection();
@@ -1355,7 +1356,20 @@ impl DataTable {
                                     font_size,
                                 )
                             } else {
-                                Input::new(input).small().into_any_element()
+                                let width = state
+                                    .editing_cell()
+                                    .and_then(|coord| state.column_widths().get(coord.col).copied())
+                                    .unwrap_or(f32::from(GridMetrics::DEFAULT_COLUMN_WIDTH));
+                                let (kinds, highlight) = state.editor_id_suggestions();
+                                inline_text_editor(
+                                    &state_entity,
+                                    input,
+                                    kinds,
+                                    highlight,
+                                    px(width),
+                                    font_size,
+                                    theme,
+                                )
                             }
                         })
                     });
@@ -1400,6 +1414,121 @@ impl DataTable {
                 body.child(drag_autoscroll_listener(self.state.clone(), row_height))
             })
     }
+}
+
+/// The text editor an editing cell draws in literal mode: the input, with
+/// the identifiers the column can be given listed under it. The arrow keys
+/// step through them from the input.
+fn inline_text_editor(
+    state_entity: &Entity<DataTableState>,
+    input: &Entity<InputState>,
+    id_kinds: &[dbflux_core::GeneratedIdKind],
+    highlight: Option<usize>,
+    cell_width: Pixels,
+    font_size: Pixels,
+    theme: &gpui_component::theme::Theme,
+) -> AnyElement {
+    if id_kinds.is_empty() {
+        return Input::new(input).small().into_any_element();
+    }
+
+    let down = state_entity.clone();
+    let up = state_entity.clone();
+
+    div()
+        .relative()
+        .flex()
+        .items_center()
+        .size_full()
+        .capture_action(move |_: &InputMoveDown, window, cx| {
+            down.update(cx, |state, cx| state.step_id_suggestion(1, window, cx));
+            cx.stop_propagation();
+        })
+        .capture_action(move |_: &InputMoveUp, window, cx| {
+            up.update(cx, |state, cx| state.step_id_suggestion(-1, window, cx));
+            cx.stop_propagation();
+        })
+        .child(render_id_suggestions(
+            state_entity,
+            id_kinds,
+            highlight,
+            cell_width,
+            font_size,
+            theme,
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .child(Input::new(input).small()),
+        )
+        .into_any_element()
+}
+
+/// The identifiers a column can be given, under the inline editor. The
+/// arrow keys step through them from the editor and write a new one of the
+/// kind stepped to into it; a click does the same.
+fn render_id_suggestions(
+    state_entity: &Entity<DataTableState>,
+    id_kinds: &[dbflux_core::GeneratedIdKind],
+    highlight: Option<usize>,
+    min_width: Pixels,
+    font_size: Pixels,
+    theme: &gpui_component::theme::Theme,
+) -> AnyElement {
+    let rows = id_kinds
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| {
+            let state = state_entity.clone();
+            let highlighted = highlight == Some(index);
+
+            div()
+                .id(("cell-id-suggestion", index))
+                .role(Role::MenuItem)
+                .px(Spacing::SM)
+                .py(Spacing::XS)
+                .cursor_pointer()
+                .whitespace_nowrap()
+                .text_size(font_size)
+                .text_color(theme.foreground)
+                .when(highlighted, |d| d.bg(theme.accent))
+                .hover(|d| d.bg(theme.accent.opacity(0.5)))
+                // A press would move focus out of the input and close the
+                // editor before the click lands.
+                .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(move |_, window, cx| {
+                    state.update(cx, |state, cx| state.apply_id_suggestion(index, window, cx));
+                })
+                .child(dbflux_i18n::t!(
+                    "components.data_table.generated_id.generate",
+                    kind = kind.label()
+                ))
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+
+    let menu = div()
+        .id("cell-id-suggestions")
+        .min_w(min_width)
+        .py(Spacing::XS)
+        .bg(theme.popover)
+        .border_1()
+        .border_color(theme.border)
+        .shadow_lg()
+        .occlude()
+        .children(rows);
+
+    div()
+        .absolute()
+        .top_full()
+        .left_0()
+        .child(deferred(anchored().snap_to_window().child(menu)).with_priority(1))
+        .into_any_element()
 }
 
 /// The sort control at the right edge of a column header: the current

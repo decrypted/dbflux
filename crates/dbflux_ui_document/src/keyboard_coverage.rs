@@ -142,6 +142,16 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ContextId::Inspector,
     ],
     entries: &[
+        // The identifiers the inline editor lists for a column that takes
+        // one, listed before `cell-*`, which their ids also match. Down and
+        // Up in the editor step through them.
+        (
+            "cell-id-suggestion-*",
+            KeyboardPath::Command(Command::SelectNext),
+        ),
+        // The cell editor dialog's Generate buttons; the context menu
+        // carries the same entries.
+        ("cell-editor-generate-*", KeyboardPath::TabStop),
         ("cell-*", KeyboardPath::Command(Command::SelectNext)),
         // A row number selects its row: Home, then Shift+End, does the same.
         (

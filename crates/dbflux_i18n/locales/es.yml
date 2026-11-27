@@ -158,6 +158,8 @@ components:
     title: Valor
     wrap: Ajuste de línea
   data_table:
+    generated_id:
+      generate: "Generar %{kind}"
     record:
       empty: No hay filas que mostrar
       name_header: Nombre
@@ -1816,6 +1818,7 @@ document:
         paste: Pegar
         edit: Editar
         edit_in_modal: Editar en modal…
+        generate_id: "Generar %{kind}"
         set_default: Establecer valor predeterminado
         set_null: Establecer NULL
         set_value: "Establecer valor"
@@ -4501,6 +4504,7 @@ modals:
       no_metrics_filtered: Ninguna métrica coincide con el filtro.
     cancel: Cancelar
   cell_editor:
+    generate: "Generar %{kind}"
     title_column: "Editar %{column} (%{type_name})"
     title_json: Editar JSON
     title_text: Editar texto

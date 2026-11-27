@@ -625,6 +625,9 @@ pub(super) fn action_key(action: ContextMenuAction) -> Cow<'static, str> {
         ContextMenuAction::SetValueMenu => Cow::Borrowed("set-value-menu"),
         ContextMenuAction::SetTypeValue(index) => Cow::Owned(format!("set-type-value:{index}")),
         ContextMenuAction::SetExpression => Cow::Borrowed("set-expression"),
+        ContextMenuAction::GenerateId(kind) => {
+            Cow::Owned(format!("generate-id:{}", id_kind_key(kind)))
+        }
         ContextMenuAction::AddRow => Cow::Borrowed("add-row"),
         ContextMenuAction::DuplicateRow => Cow::Borrowed("duplicate-row"),
         ContextMenuAction::DeleteRow => Cow::Borrowed("delete-row"),
@@ -710,6 +713,13 @@ pub(super) fn action_from_key(key: &str) -> Option<ContextMenuAction> {
                 return payload.parse().ok().map(ContextMenuAction::SetTypeValue);
             }
 
+            if head == "generate-id" {
+                return dbflux_core::GeneratedIdKind::ALL
+                    .into_iter()
+                    .find(|kind| id_kind_key(*kind) == payload)
+                    .map(ContextMenuAction::GenerateId);
+            }
+
             // `filter-by-value:{op}` (the plain action key) and
             // `filter:{column}:{op}` (a row carrying its column) name the
             // same operator.
@@ -739,6 +749,10 @@ fn action_row_id(column: &str, action: ContextMenuAction) -> String {
         }
         other => action_key(other).into_owned(),
     }
+}
+
+fn id_kind_key(kind: dbflux_core::GeneratedIdKind) -> String {
+    format!("{kind:?}").to_lowercase()
 }
 
 fn direction_key(direction: dbflux_core::SortDirection) -> &'static str {

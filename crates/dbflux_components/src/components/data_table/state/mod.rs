@@ -23,7 +23,10 @@ use crate::fonts;
 use crate::tokens::GridMetrics;
 
 mod autoscroll;
+mod generated_ids;
 mod multi_edit;
+
+pub use generated_ids::GeneratedIdOffer;
 
 /// Grid face and glyph advances an auto-sized column width was estimated
 /// with. A change in any of them re-estimates the auto-sized columns.
@@ -247,6 +250,13 @@ pub struct DataTableState {
     /// asked while the grid is only drawn.
     suggestion_source: Option<SuggestionSource>,
 
+    /// The identifier kinds each column can take.
+    generated_id_offers: HashMap<usize, GeneratedIdOffer>,
+
+    /// The identifier the open editor was given from its list, so a commit
+    /// over several cells gives each its own instead of copying it.
+    generated_in_editor: Option<(dbflux_core::GeneratedIdKind, String)>,
+
     /// Document extras (column groups, presence bars, stepping into nested
     /// values). `None` for relational grids.
     document: Option<super::document::DocumentPresentation>,
@@ -318,6 +328,8 @@ impl DataTableState {
             enum_options: std::collections::HashMap::new(),
             expression_suggestions: std::collections::HashMap::new(),
             suggestion_source: None,
+            generated_id_offers: HashMap::new(),
+            generated_in_editor: None,
             document: None,
             header_annotations: Vec::new(),
             selection_totals: TotalsCache::default(),
@@ -492,6 +504,7 @@ impl DataTableState {
         self.edit_buffer.reset_for_base(self.model.row_count());
         self.enum_options.clear();
         self.expression_suggestions.clear();
+        self.generated_id_offers.clear();
 
         match swap {
             ModelSwap::KeepCursor => self.clamp_selection(),
@@ -1577,6 +1590,7 @@ impl DataTableState {
         }
 
         self.edit_targets.clear();
+        self.generated_in_editor = None;
 
         if self.document.is_some() && self.is_nested_cell(coord) {
             cx.emit(DataTableEvent::StepIntoRequested {
@@ -1989,6 +2003,15 @@ impl DataTableState {
                             super::model::CellValue::expression(value_str.trim()),
                         );
                     }
+                } else if let Some((kind, generated)) = self
+                    .generated_in_editor
+                    .take()
+                    .filter(|(_, generated)| *generated == value_str && self.edit_targets.len() > 1)
+                {
+                    // An identifier picked for several cells is generated
+                    // once per cell, never copied.
+                    let targets = std::mem::take(&mut self.edit_targets);
+                    self.stage_generated_ids(kind, &targets, Some(generated));
                 } else {
                     self.stage_edit_value(coord, super::model::CellValue::text(&value_str));
                 }
@@ -1997,6 +2020,7 @@ impl DataTableState {
             self.cell_input = None;
         }
         self.edit_targets.clear();
+        self.generated_in_editor = None;
 
         // The input and dropdown these watch are gone; they are re-subscribed
         // when the next edit starts.

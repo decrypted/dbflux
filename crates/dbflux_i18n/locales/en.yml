@@ -158,6 +158,8 @@ components:
     title: Value
     wrap: Wrap
   data_table:
+    generated_id:
+      generate: "Generate %{kind}"
     record:
       empty: No rows to show
       name_header: Name
@@ -1816,6 +1818,7 @@ document:
         paste: Paste
         edit: Edit
         edit_in_modal: Edit in modal…
+        generate_id: "Generate %{kind}"
         set_default: Set to default
         set_null: Set to NULL
         set_value: "Set value"
@@ -4501,6 +4504,7 @@ modals:
       no_metrics_filtered: No metrics match the filter.
     cancel: Cancel
   cell_editor:
+    generate: "Generate %{kind}"
     title_column: "Edit %{column} (%{type_name})"
     title_json: Edit JSON
     title_text: Edit Text

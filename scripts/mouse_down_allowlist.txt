@@ -32,6 +32,7 @@ crates/bolt/src/controls/button.rs:render: focus guard
 crates/bolt/src/controls/checkbox.rs:render: focus guard
 crates/bolt/src/modals/modal.rs:render: propagation guard
 crates/bolt/src/modals/modal.rs:render: outside-press dismiss
+crates/bolt/src/modals/modal.rs:resize_grip: resize grip
 crates/dbflux_ui/src/ui/dock/sidebar_dock.rs:render_grip: resize grip
 crates/bolt/src/command_palette/render.rs:render: propagation guard
 crates/bolt/src/command_palette/render.rs:render: outside-press dismiss

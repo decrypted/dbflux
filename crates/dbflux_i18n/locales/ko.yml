@@ -167,11 +167,16 @@ components:
     valid:
       one: "유효한 JSON · %{count}줄"
       many: "유효한 JSON · %{count}줄"
+    valid_xml:
+      one: "유효한 XML · %{count}줄"
+      many: "유효한 XML · %{count}줄"
     empty_error: 문서는 비어 있을 수 없습니다
     format: 서식
     compact: 압축
     cancel: 취소
     save: 저장
+    copy: 복사
+    copy_compact: 압축하여 복사
   json_report_preview:
     copy_raw: 원본 복사
     close: 닫기
@@ -4478,6 +4483,13 @@ modals:
     title_column: "%{column} 편집 (%{type_name})"
     title_json: JSON 편집
     title_text: 텍스트 편집
+    title_xml: XML 편집
+    maximize: 최대화
+    restore: 크기 복원
+    reset_size: 크기 초기화
+    invalid_warning: "더 이상 유효한 %{format}이(가) 아닙니다: %{error}. 일반 텍스트로 저장하려면 다시 저장하세요."
+    copied: 값을 클립보드에 복사했습니다
+    copied_compact: 압축된 값을 클립보드에 복사했습니다
   create_dashboard:
     name_label: 대시보드 이름
     title: 새 대시보드
@@ -5213,6 +5225,12 @@ settings:
       edit_value: 값 편집
       roll_back_version: "이전 버전으로 롤백"
       copy_preview: 미리보기 복사
+      copy_editor_text: 편집기 텍스트 복사
+      copy_editor_text_compact: 편집기 텍스트 압축하여 복사
+      format_editor_text: 편집기 텍스트 서식 지정
+      compact_editor_text: 편집기 텍스트 압축
+      toggle_dialog_maximized: 대화 상자 최대화 또는 복원
+      reset_dialog_size: 대화 상자 크기 초기화
       import_items: "가져오기…"
       import_from_client: "다른 클라이언트에서 가져오기…"
       reset_binding: "단축키 재설정"

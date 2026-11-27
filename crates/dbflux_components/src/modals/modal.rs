@@ -8,8 +8,8 @@
 
 pub use bolt::modals::modal::{
     AttachModalKeys, MODAL_BACKDROP_ID, MODAL_BODY_SELECTOR, MODAL_CLOSE_ID, MODAL_FOOTER_SELECTOR,
-    MODAL_KEY_CONTEXT, Modal, ModalFocus, ModalKey, ModalKeyHandler, ModalSeams, ModalVariant,
-    ScrollKey, on_modal_key,
+    MODAL_KEY_CONTEXT, MODAL_TITLE_BAR_ID, Modal, ModalFocus, ModalKey, ModalKeyHandler,
+    ModalSeams, ModalVariant, ResizeEdge, ScrollKey, on_modal_key,
 };
 
 use dbflux_core::keymap_types::{Command, ContextId};

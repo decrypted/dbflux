@@ -18,7 +18,10 @@ pub mod unsaved_changes;
 pub use active_query::{
     ActiveQueryOutcome, ActiveQueryRequest, ActiveQueryTrigger, ModalActiveQuery,
 };
-pub use cell_editor::{CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent};
+pub use cell_editor::{
+    CellEditorClosedEvent, CellEditorCopiedEvent, CellEditorModal, CellEditorSaveEvent,
+    EditorGeometry, install_editor_geometry_store,
+};
 pub use confirm::{ConfirmOutcome, ConfirmRequest, ModalConfirm};
 pub use delete_connection::{
     DeleteConnectionOutcome, DeleteConnectionRequest, ModalDeleteConnection,
@@ -31,7 +34,7 @@ pub use import_dashboard::{
     ImportDashboardCancelled, ImportDashboardConfirmed, ModalImportDashboard,
 };
 pub use json_report_preview::{JsonReportPreviewRequest, ModalJsonReportPreview};
-pub use modal::{MODAL_KEY_CONTEXT, Modal, ModalFocus, ModalVariant};
+pub use modal::{MODAL_KEY_CONTEXT, Modal, ModalFocus, ModalVariant, ResizeEdge};
 pub use mutation_confirm::{
     ModalMutationConfirm, ModalMutationConfirmHard, MutationConfirmHardRequest,
     MutationConfirmOutcome, MutationConfirmRequest,

@@ -47,7 +47,7 @@ use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors};
 pub use overflow::GridOverflow;
 pub use resize::{
     ColumnResize, ColumnResizeDrag, MIN_COLUMN_WIDTH, RESIZE_HANDLE_WIDTH, apply_column_resize,
-    clamp_column_width, column_resize_handle, track_column_resize,
+    clamp_column_width, column_resize_handle, column_resize_handle_with_fit, track_column_resize,
 };
 
 /// Coordinate of one cell in the grid, as the renderer addresses it.

@@ -1848,6 +1848,9 @@ document:
       order:
         title: Order
         remove: Remove ordering
+      column:
+        title: Column
+        fit_width: Fit width
       generate_sql:
         title: Generate SQL
       toolbar:
@@ -5133,6 +5136,7 @@ settings:
       results_set_default: "Set cell to column default"
       results_toggle_expression: "Toggle literal / expression editor"
       open_context_menu: Open context menu
+      open_column_menu: Open column menu
       open_pane_actions: Open pane actions
       menu_up: Menu up
       menu_down: Menu down

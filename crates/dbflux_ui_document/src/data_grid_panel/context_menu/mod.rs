@@ -32,6 +32,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::time::Instant;
 
+mod columns;
 mod explain;
 mod items;
 mod sections;
@@ -1831,6 +1832,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::FindSimilarRows => {
                 self.find_similar_rows_at(menu.row, menu.col, cx);
+            }
+            ContextMenuAction::FitColumnWidth => {
+                self.handle_column_menu_action(action, menu.col, cx);
             }
             ContextMenuAction::ChartThisQuery => {
                 let query = self.chart_host_current_query(cx);

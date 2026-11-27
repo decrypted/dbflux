@@ -124,6 +124,24 @@ fn build_column_header_menu(
         None,
     ));
 
+    // The Column section changes how the grid shows the column, never the
+    // query behind it.
+    let column_items = panel.column_menu_items(menu.col, cx);
+    if !column_items.is_empty() {
+        rows.push(MenuNode::separator());
+        rows.push(
+            MenuNode::header(dbflux_i18n::t!("document.data.context_menu.column.title"))
+                .icon(AppIcon::Columns),
+        );
+        for item in column_items {
+            rows.push(
+                MenuNode::row(item.label)
+                    .id(action_row_id(&column, item.action))
+                    .icon(item.icon),
+            );
+        }
+    }
+
     // The rows carry the element ids the keyboard-coverage registry names,
     // numbered across the menu's action rows like the old renderer numbered
     // them; separators and captions take no id.
@@ -646,6 +664,7 @@ pub(super) fn action_key(action: ContextMenuAction) -> Cow<'static, str> {
             dbflux_core::SortDirection::Descending => "order:desc",
         }),
         ContextMenuAction::RemoveOrdering => Cow::Borrowed("remove-ordering"),
+        ContextMenuAction::FitColumnWidth => Cow::Borrowed("fit-column-width"),
         ContextMenuAction::CopyColumnName => Cow::Borrowed("copy-column-name"),
         ContextMenuAction::InspectRow => Cow::Borrowed("inspect-row"),
         ContextMenuAction::ChartThisQuery => Cow::Borrowed("chart-this-query"),
@@ -693,6 +712,7 @@ pub(super) fn action_from_key(key: &str) -> Option<ContextMenuAction> {
             dbflux_core::SortDirection::Descending,
         )),
         "remove-ordering" => Some(ContextMenuAction::RemoveOrdering),
+        "fit-column-width" => Some(ContextMenuAction::FitColumnWidth),
         "copy-column-name" => Some(ContextMenuAction::CopyColumnName),
         "inspect-row" => Some(ContextMenuAction::InspectRow),
         "chart-this-query" => Some(ContextMenuAction::ChartThisQuery),

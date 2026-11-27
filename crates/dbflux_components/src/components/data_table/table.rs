@@ -26,8 +26,8 @@ use super::theme::{CELL_PADDING_X, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 // The row list and cell painter moved to `bolt::components::grid`; the old
 // in-file names are the re-exported Bolt API.
 use bolt::components::grid::{
-    ColumnResizeDrag, GridCellCoord, GridColors, GridHost, column_resize_handle, render_rows,
-    track_column_resize,
+    ColumnResizeDrag, GridCellCoord, GridColors, GridHost, column_resize_handle_with_fit,
+    render_rows, track_column_resize,
 };
 use dbflux_core::SortDirection;
 
@@ -912,13 +912,12 @@ impl DataTable {
                                 }),
                         )
                     })
-                    // Move and release are handled on the DataTable root div, so
-                    // the drag survives the cursor leaving the handle.
                     .child(column_resize_handle(
+                        state_entity.clone(),
+                        &resize_drag,
                         col_ix,
                         width,
-                        &resize_drag,
-                        ChromeColors::tint(theme).opacity(0.3),
+                        ChromeColors::tint(theme),
                     ))
             })
             .collect();
@@ -1152,10 +1151,11 @@ impl DataTable {
                     .child(name_line)
                     .when_some(presence_line, |cell, line| cell.child(line))
                     .child(column_resize_handle(
+                        self.state.clone(),
+                        &resize_drag,
                         col_ix,
                         width,
-                        &resize_drag,
-                        tint.opacity(0.3),
+                        tint,
                     ))
             })
             .collect::<Vec<_>>();
@@ -1432,6 +1432,28 @@ fn header_sort_control(
         })
         .child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
 }
+/// The strip at a header's right edge that resizes its column: Bolt's
+/// handle, whose press starts a drag the table root follows. A double-click
+/// fits the column to its header and its loaded values instead, as in a
+/// database IDE's grid.
+fn column_resize_handle(
+    state: Entity<DataTableState>,
+    resize_drag: &ColumnResizeDrag,
+    col_ix: usize,
+    width: f32,
+    tint: Hsla,
+) -> impl IntoElement {
+    column_resize_handle_with_fit(
+        col_ix,
+        width,
+        resize_drag,
+        tint.opacity(0.3),
+        move |col, _window, cx| {
+            state.update(cx, |state, cx| state.fit_column_width(col, cx));
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::model::TableModel;

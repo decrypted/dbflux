@@ -690,6 +690,7 @@ mod builder_usage;
 mod bulk_delete_outcome;
 mod close_completion;
 mod collection_views;
+mod column_menu;
 mod column_header_menu;
 mod copy_as_markdown;
 mod copy_selection;

@@ -35,6 +35,7 @@ use dbflux_components::tokens::{
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -341,6 +342,12 @@ impl Render for DataGridPanel {
             .when(self.pending_delete_confirm.is_some(), |d| {
                 d.child(self.render_delete_confirm_modal(&st.theme, cx))
             })
+            .when(self.pending_expression_confirm.is_some(), |d| {
+                d.child(self.render_expression_confirm_modal(cx))
+            })
+            .when(self.edit_guard.modal.read(cx).is_visible(), |d| {
+                d.child(self.edit_guard.modal.clone())
+            })
             .when(self.document_view.cell_editor.read(cx).is_visible(), |d| {
                 d.child(self.document_view.cell_editor.clone())
             })
@@ -408,12 +415,19 @@ impl DataGridPanel {
         }
 
         if std::mem::take(&mut self.pending.refresh) {
+            #[cfg(feature = "telemetry")]
+            let usage = self.take_queued_builder_usage(cx);
             if std::mem::take(&mut self.pending.refresh_keeps_edits) {
                 self.refresh_keeping_edits(window, cx);
             } else if !self.rerun_nearest_neighbors(cx) {
                 // An auto-refresh tick over similar rows reads them again;
                 // every other source reads its page.
-                self.refresh(window, cx);
+                self.refresh_with_origin(
+                    window,
+                    cx,
+                    #[cfg(feature = "telemetry")]
+                    usage,
+                );
             }
         }
 
@@ -1964,12 +1978,13 @@ impl DataGridPanel {
                         )
                         .disabled(!can_apply)
                         .on_click(move |_, _, cx| {
-                            panel_clone.update(cx, |p, cx| {
-                                // The returned bounds are intentionally discarded:
-                                // the parent CodeDocument's TimeRangeChanged
-                                // subscription drives re-execution.
-                                let _ = p.apply_custom_range(cx);
-                            });
+                            // The returned bounds are intentionally discarded:
+                            // the parent CodeDocument's TimeRangeChanged
+                            // subscription drives re-execution.
+                            let applied = panel_clone.update(cx, |p, cx| p.apply_custom_range(cx));
+                            if let Err(error) = applied {
+                                report_error(UserFacingError::new(ErrorKind::User, error), cx);
+                            }
                         }),
                     );
 
@@ -3779,6 +3794,9 @@ impl DataGridPanel {
                     self.rows_footer(row_count)
                 },
             ))
+            .when(self.limited_rows.loading_next, |d| {
+                d.child(Text::caption(crate::labels::loading_next_rows_label()))
+            })
             // A result with rows has no room for the notices in its body, so
             // the footer carries them, cut to the space it has.
             .when(!self.is_statement_without_result_set(), |d| {

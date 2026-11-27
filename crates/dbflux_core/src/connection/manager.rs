@@ -782,6 +782,9 @@ pub struct ConnectionManager {
     /// mutation since the boundary".
     slot_revisions: HashMap<(Uuid, String), u64>,
     table_details_revisions: HashMap<(Uuid, String, Option<String>, String), u64>,
+    /// Times each profile's table details were cleared whole. Added to every
+    /// table's own revision so a clear fences fetches of tables with no entry.
+    table_details_clear_epochs: HashMap<Uuid, u64>,
     view_refresh_revisions: HashMap<(Uuid, String, String), u64>,
     /// Message of the most recent failed connect attempt per profile. An
     /// entry exists only while the failure is the latest outcome: a new
@@ -806,6 +809,7 @@ impl ConnectionManager {
             invalidation_revisions: HashMap::new(),
             slot_revisions: HashMap::new(),
             table_details_revisions: HashMap::new(),
+            table_details_clear_epochs: HashMap::new(),
             view_refresh_revisions: HashMap::new(),
             connect_failures: HashMap::new(),
             session_passwords: HashMap::new(),
@@ -910,6 +914,7 @@ impl ConnectionManager {
         self.clear_profile_slot_revisions(id);
         self.table_details_revisions
             .retain(|(profile, ..), _| *profile != id);
+        self.table_details_clear_epochs.remove(&id);
         self.pending_operations
             .retain(|operation| operation.profile_id != id);
         self.connect_failures.remove(&id);
@@ -965,6 +970,7 @@ impl ConnectionManager {
         self.clear_profile_slot_revisions(profile_id);
         self.table_details_revisions
             .retain(|(profile, ..), _| *profile != profile_id);
+        self.table_details_clear_epochs.remove(&profile_id);
         self.pending_operations
             .retain(|operation| operation.profile_id != profile_id);
         self.session_passwords.remove(&profile_id);
@@ -1605,6 +1611,58 @@ impl ConnectionManager {
         })
     }
 
+    /// Prepare switching a live connection to another region.
+    ///
+    /// The driver rewrites the profile's config, the caller reconnects on the
+    /// background executor, and `apply_switch_region` installs the result in
+    /// place. A driver without the region hook and the region the connection
+    /// already reaches are both refused before anything reconnects.
+    pub fn prepare_switch_region(
+        &self,
+        profile_id: Uuid,
+        region: &str,
+        secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
+    ) -> Result<SwitchRegionParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let driver_id = connected.profile.driver_id();
+        let driver = self
+            .drivers
+            .get(&driver_id)
+            .cloned()
+            .ok_or_else(|| format!("Driver '{}' not available", driver_id))?;
+
+        let mut new_profile = connected.profile.clone();
+        new_profile.config = driver
+            .with_region(&new_profile.config, region)
+            .ok_or_else(|| {
+                format!(
+                    "Driver '{}' does not support region switching",
+                    driver.display_name()
+                )
+            })?;
+
+        if connected.connection.current_region().as_deref() == Some(region) {
+            return Err(format!("Already connected to region '{}'", region));
+        }
+
+        let original_profile = connected.profile.clone();
+
+        Ok(SwitchRegionParams {
+            profile_id,
+            region: region.to_string(),
+            new_profile,
+            original_profile,
+            driver,
+            secret_store: secret_store.clone(),
+            session_password: self.session_passwords.get(&profile_id).cloned(),
+            session_generation: self.current_session_generation(profile_id),
+        })
+    }
+
     /// Prepare a per-database connection without replacing the primary.
     /// Rejects only if a connection to this database already exists.
     pub fn prepare_database_connection(
@@ -1695,9 +1753,50 @@ impl ConnectionManager {
         connection: Arc<dyn Connection>,
         schema: Option<SchemaSnapshot>,
     ) {
+        self.install_reconnected_connection(profile_id, original_profile, connection, schema);
+    }
+
+    /// Applies a prepared region switch: the live connection of the profile is
+    /// replaced in place while the profile on record keeps the region it was
+    /// saved with.
+    ///
+    /// Returns `false` without installing anything when the profile's session
+    /// moved on while the switch reconnected: the profile disconnected, or a
+    /// reconnect or another switch replaced its connection. The prepared switch
+    /// belongs to a session that no longer exists, so installing it would
+    /// overwrite whatever the newer session reached; the caller must treat
+    /// `false` as "nothing happened".
+    pub fn apply_switch_region(
+        &mut self,
+        profile_id: Uuid,
+        original_profile: ConnectionProfile,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+        session_generation: u64,
+    ) -> bool {
+        if self.current_session_generation(profile_id) != session_generation
+            || !self.connections.contains_key(&profile_id)
+        {
+            return false;
+        }
+
+        self.install_reconnected_connection(profile_id, original_profile, connection, schema);
+        true
+    }
+
+    /// Installs a reconnected connection for a profile in place.
+    ///
+    /// Shared by the database and region switch paths.
+    fn install_reconnected_connection(
+        &mut self,
+        profile_id: Uuid,
+        original_profile: ConnectionProfile,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+    ) {
         // Keep per-database connections, proxy tunnel and the mutation policy
-        // resolved at connect time from the old entry: switching databases
-        // does not change who connected or how the profile is configured.
+        // resolved at connect time from the old entry: switching databases or
+        // regions does not change who connected or how the profile is configured.
         let (prev_db_connections, prev_proxy_tunnel, prev_mutation_policy, prev_read_only_reason) =
             self.connections
                 .get_mut(&profile_id)
@@ -1729,6 +1828,7 @@ impl ConnectionManager {
         self.clear_profile_slot_revisions(profile_id);
         self.table_details_revisions
             .retain(|(profile, ..), _| *profile != profile_id);
+        self.table_details_clear_epochs.remove(&profile_id);
         // Operations belong to the previous profile session; their late
         // completions must not block a replacement session's requests.
         self.pending_operations
@@ -1820,6 +1920,26 @@ impl ConnectionManager {
             table: table.to_string(),
             connection: connected.connection_for_database(database),
         })
+    }
+
+    /// Prepares a fenced fetch of one table's details that ignores the cache.
+    ///
+    /// [`Self::prepare_fetch_table_details_fenced`] refuses a populated key,
+    /// which is right for a first load and wrong for a check against the
+    /// database as it is now. This one never reads the cache and never
+    /// touches it: the caller applies the result through
+    /// [`Self::apply_fetched_table_details`], which rejects it when the
+    /// session, the connection or the table's cache was invalidated since.
+    /// A target database without a prepared connection fails instead of
+    /// falling back to the primary connection.
+    pub fn prepare_refetch_table_details(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<FencedTableDetailsParams, TableDetailsPrepareError> {
+        self.fenced_table_details_params(profile_id, database, schema, table)
     }
 
     pub fn prepare_fetch_collection_children(
@@ -2267,6 +2387,31 @@ impl ConnectionManager {
         true
     }
 
+    /// Drops every cached table's details and dependents for one connection,
+    /// fencing their older in-flight fetches. For the changes that name no
+    /// table: a schema refresh, or DDL whose target tables are unknown.
+    /// Returns `false` when the profile is not connected.
+    pub fn clear_table_details(&mut self, profile_id: Uuid) -> bool {
+        let Some(connected) = self.connections.get(&profile_id) else {
+            return false;
+        };
+        let keys: Vec<(String, Option<String>, String)> = connected
+            .table_details
+            .keys()
+            .chain(connected.dependents_cache.keys())
+            .cloned()
+            .collect();
+
+        *self
+            .table_details_clear_epochs
+            .entry(profile_id)
+            .or_default() += 1;
+        for (database, schema, table) in keys {
+            self.invalidate_table_details(profile_id, &database, schema.as_deref(), &table);
+        }
+        true
+    }
+
     /// Prepares a fenced table-details fetch for the shared object tree.
     /// Unlike the legacy [`ConnectionManager::prepare_fetch_table_details`],
     /// the request is bound to the session and to the connection resolved
@@ -2303,6 +2448,21 @@ impl ConnectionManager {
             return Err(TableDetailsPrepareError::AlreadyCached);
         }
 
+        self.fenced_table_details_params(profile_id, database, schema, table)
+    }
+
+    fn fenced_table_details_params(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<FencedTableDetailsParams, TableDetailsPrepareError> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or(TableDetailsPrepareError::ProfileDisconnected)?;
+
         let connection = connected
             .resolve_connection_for_execution(Some(database))
             .map_err(
@@ -2319,21 +2479,85 @@ impl ConnectionManager {
                 invalidation_revision: self.current_invalidation_revision(profile_id),
                 slot_revision: self.current_slot_revision(profile_id, database),
                 table_details_revision: Some(
-                    *self
-                        .table_details_revisions
-                        .get(&(
-                            profile_id,
-                            database.to_string(),
-                            schema.map(str::to_string),
-                            table.to_string(),
-                        ))
-                        .unwrap_or(&0),
+                    self.current_table_details_revision(profile_id, database, schema, table),
                 ),
             },
             database: database.to_string(),
             schema: schema.map(String::from),
             table: table.to_string(),
         })
+    }
+
+    /// The fence a table-details fetch captures: the table's own revision plus
+    /// the profile-wide clear count. Both only grow, so any invalidation of the
+    /// table or clear of the profile's details changes the sum, including for a
+    /// table that had no cache entry and so no revision of its own.
+    fn current_table_details_revision(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> u64 {
+        table_details_revision_of(
+            &self.table_details_revisions,
+            &self.table_details_clear_epochs,
+            profile_id,
+            database,
+            schema,
+            table,
+        )
+    }
+
+    /// Why a table-details fetch prepared with `session` can no longer be
+    /// trusted, or `None` while it is current. Prepare and apply resolve the
+    /// target the same way, so a result and an error answer are fenced alike.
+    fn table_details_fetch_staleness(
+        &self,
+        session: &FetchSession,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Option<StaleFetchReason> {
+        let profile_id = session.profile_id;
+        let Some(connected) = self.connections.get(&profile_id) else {
+            return Some(StaleFetchReason::ProfileDisconnected);
+        };
+        // After a slot removal or replacement the result must not fall back
+        // unsafely; the slot revision also fences same-connection
+        // remove/reinstall cycles for this target (per-database ABA).
+        let target_matches = match connected.resolve_connection_for_execution(Some(database)) {
+            Ok(current) => Arc::ptr_eq(&session.connection, &current),
+            Err(ConnectionResolutionError::PendingDatabaseConnection { .. }) => false,
+        };
+        if self.current_session_generation(profile_id) != session.generation
+            || !target_matches
+            || self.current_slot_revision(profile_id, database) != session.slot_revision
+        {
+            return Some(StaleFetchReason::ConnectionReplaced);
+        }
+        if self.current_invalidation_revision(profile_id) != session.invalidation_revision {
+            return Some(StaleFetchReason::RequestInvalidated);
+        }
+        if self.current_table_details_revision(profile_id, database, schema, table)
+            != session.table_details_revision.unwrap_or(0)
+        {
+            return Some(StaleFetchReason::RequestInvalidated);
+        }
+        None
+    }
+
+    /// Whether a failed fenced fetch answered for the session, connection and
+    /// table cache that are current now. A stale failure says nothing about
+    /// them and must not release a write.
+    pub fn is_table_details_failure_current(&self, failure: &FencedTableDetailsFailure) -> bool {
+        self.table_details_fetch_staleness(
+            &failure.session,
+            &failure.database,
+            failure.schema.as_deref(),
+            &failure.table,
+        )
+        .is_none()
     }
 
     /// Applies fetched table details and their dependents in a single
@@ -2344,56 +2568,17 @@ impl ConnectionManager {
         &mut self,
         fetched: FetchedTableDetails,
     ) -> ApplyFetchOutcome {
-        let profile_id = fetched.session.profile_id;
-        let Some(connected) = self.connections.get_mut(&profile_id) else {
+        if let Some(reason) = self.table_details_fetch_staleness(
+            &fetched.session,
+            &fetched.database,
+            fetched.schema.as_deref(),
+            &fetched.table,
+        ) {
+            return ApplyFetchOutcome::Rejected(reason);
+        }
+        let Some(connected) = self.connections.get_mut(&fetched.session.profile_id) else {
             return ApplyFetchOutcome::Rejected(StaleFetchReason::ProfileDisconnected);
         };
-        // Apply must resolve the target exactly like prepare: after a slot
-        // removal or replacement the result must not fall back unsafely. The
-        // slot revision additionally fences same-connection remove/reinstall
-        // cycles for this target (per-database ABA).
-        let target_matches =
-            match connected.resolve_connection_for_execution(Some(&fetched.database)) {
-                Ok(current) => Arc::ptr_eq(&fetched.session.connection, &current),
-                Err(ConnectionResolutionError::PendingDatabaseConnection { .. }) => false,
-            };
-        // Direct field reads: the shared helpers borrow all of `self`, which
-        // would conflict with the `connections` entry borrow above.
-        let slot_revision = self
-            .slot_revisions
-            .get(&(profile_id, fetched.database.clone()))
-            .copied()
-            .unwrap_or(0);
-        if self.session_generations.get(&profile_id).copied() != Some(fetched.session.generation)
-            || !target_matches
-            || slot_revision != fetched.session.slot_revision
-        {
-            return ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced);
-        }
-        if self
-            .invalidation_revisions
-            .get(&profile_id)
-            .copied()
-            .unwrap_or(0)
-            != fetched.session.invalidation_revision
-        {
-            return ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated);
-        }
-
-        if self
-            .table_details_revisions
-            .get(&(
-                profile_id,
-                fetched.database.clone(),
-                fetched.schema.clone(),
-                fetched.table.clone(),
-            ))
-            .copied()
-            .unwrap_or(0)
-            != fetched.session.table_details_revision.unwrap_or(0)
-        {
-            return ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated);
-        }
 
         let FetchedTableDetails {
             session: _,
@@ -2409,7 +2594,10 @@ impl ConnectionManager {
             table: table.clone(),
             details,
         });
-        connected.populate_dependents(database, schema, table, dependents);
+        // A failed dependents read is not an empty list: the cached ones stay.
+        if let Some(dependents) = dependents {
+            connected.populate_dependents(database, schema, table, dependents);
+        }
         ApplyFetchOutcome::Applied
     }
 
@@ -2636,6 +2824,7 @@ impl ConnectionManager {
         self.slot_revisions.clear();
         self.view_refresh_revisions.clear();
         self.table_details_revisions.clear();
+        self.table_details_clear_epochs.clear();
         info!(
             "Scheduling teardown for {} connections during shutdown",
             count
@@ -2694,7 +2883,7 @@ impl ConnectProfileParams {
             );
         }
 
-        let password = self.get_password();
+        let password = self.get_password()?;
 
         let mut profile = self.profile;
         let mut proxy_tunnel: Option<Box<dyn Any + Send + Sync>> = None;
@@ -2752,31 +2941,31 @@ impl ConnectProfileParams {
         })
     }
 
-    fn get_password(&self) -> Option<SecretString> {
+    /// A keyring read failure fails the connect: handing the driver no
+    /// password would surface as a misleading authentication error, or reach
+    /// the database as another identity through a default credential chain.
+    fn get_password(&self) -> Result<Option<SecretString>, String> {
         if let Some(password) = &self.password_override {
-            return Some(password.clone());
+            return Ok(Some(password.clone()));
         }
+
+        let Some(secret_store) = self.secret_store.as_ref() else {
+            return Ok(None);
+        };
 
         if !self.profile.save_password {
-            return None;
+            return Ok(None);
         }
 
-        let store_arc = self.secret_store.as_ref()?;
-        let store = match store_arc.read() {
-            Ok(guard) => guard,
+        let read = match secret_store.read() {
+            Ok(store) => store.get(&self.profile.secret_ref()),
             Err(poison_err) => {
                 log::warn!("Secret store RwLock poisoned during password retrieval, recovering...");
-                poison_err.into_inner()
+                poison_err.into_inner().get(&self.profile.secret_ref())
             }
         };
 
-        match store.get(&self.profile.secret_ref()) {
-            Ok(pwd) => pwd,
-            Err(e) => {
-                error!("Failed to get password: {:?}", e);
-                None
-            }
-        }
+        crate::keyring_password_for_connect(&self.profile, self.driver.requires_password(), read)
     }
 }
 
@@ -2796,6 +2985,85 @@ pub struct ConnectProfileResult {
 /// pipeline's field convention in `pipeline::resolve`.
 const PASSWORD_VALUE_REF: &str = "password";
 
+/// Resolves the password for a reconnect that replaces a live connection in
+/// place (a database or region switch).
+///
+/// The connect pipeline resolves a `password` value ref (literal, env,
+/// dotenv or secret file) before the driver sees the profile, so a profile connected that way may
+/// have no stored keyring password. Resolve those refs again here instead
+/// of silently connecting without a password. Refs that need a provider or
+/// auth context cannot be resolved on this path and fail explicitly rather
+/// than falling back to the stored password, and so does a keyring read
+/// failure: connecting without the password could reach the database as a
+/// different identity through the default credential chain. `destination` names where the
+/// reconnect goes (for example `database 'analytics'`), for the error
+/// messages.
+fn resolve_switch_password(
+    profile: &ConnectionProfile,
+    destination: &str,
+    session_password: Option<&SecretString>,
+    secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
+) -> Result<Option<SecretString>, String> {
+    match profile.value_refs.get(PASSWORD_VALUE_REF) {
+        None => {
+            if let Some(password) = session_password {
+                return Ok(Some(password.clone()));
+            }
+
+            get_stored_password(profile, secret_store)
+                .map_err(|error| format!("Failed to resolve password for {destination}: {error}"))
+        }
+        Some(ValueRef::Literal { value }) => Ok(Some(SecretString::from(value.clone()))),
+        Some(ValueRef::Env { key }) => CompositeValueResolver::resolve_env_ref(key)
+            .map(|value| Some(SecretString::from(value)))
+            .map_err(|error| format!("Failed to resolve password for {destination}: {error}")),
+        Some(ValueRef::Dotenv { path, key }) => {
+            CompositeValueResolver::resolve_dotenv_ref(path, key)
+                .map(|value| Some(SecretString::from(value)))
+                .map_err(|error| format!("Failed to resolve password for {destination}: {error}"))
+        }
+        Some(ValueRef::File { path, json_key }) => {
+            CompositeValueResolver::resolve_file_ref(path, json_key.as_deref())
+                .map(|value| Some(SecretString::from(value)))
+                .map_err(|error| format!("Failed to resolve password for {destination}: {error}"))
+        }
+        Some(_) => Err(format!(
+            "Password for profile '{}' comes from a provider or auth reference, which \
+             cannot be resolved while switching to {destination}.",
+            profile.name
+        )),
+    }
+}
+
+/// The password stored in the keyring for `profile`, if it saves one. A keyring
+/// read failure is an error, not an absence: a switch that cannot prove who it
+/// reconnects as must fail instead of handing the driver an empty password and
+/// letting the default credential chain answer.
+fn get_stored_password(
+    profile: &ConnectionProfile,
+    secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
+) -> Result<Option<SecretString>, String> {
+    if !profile.save_password {
+        return Ok(None);
+    }
+
+    let store = match secret_store.read() {
+        Ok(guard) => guard,
+        Err(poison_err) => {
+            log::warn!("Secret store RwLock poisoned during password retrieval, recovering...");
+            poison_err.into_inner()
+        }
+    };
+
+    match store.get(&profile.secret_ref()) {
+        Ok(pwd) => Ok(pwd),
+        Err(e) => {
+            error!("Failed to get password: {:?}", e);
+            Err(e.to_string())
+        }
+    }
+}
+
 pub struct SwitchDatabaseParams {
     pub profile_id: Uuid,
     pub database: String,
@@ -2811,7 +3079,12 @@ impl SwitchDatabaseParams {
     pub fn execute(self) -> Result<SwitchDatabaseResult, String> {
         info!("Switching to database: {}", self.database);
 
-        let password = self.resolve_password()?;
+        let password = resolve_switch_password(
+            &self.original_profile,
+            &format!("database '{}'", self.database),
+            self.session_password.as_ref(),
+            &self.secret_store,
+        )?;
 
         let connection = self
             .driver
@@ -2841,66 +3114,6 @@ impl SwitchDatabaseParams {
             schema,
         })
     }
-
-    /// Resolves the password for the switched connection.
-    ///
-    /// The connect pipeline resolves a `password` value ref (literal, env or
-    /// dotenv) before the driver sees the profile, so a profile connected that way may
-    /// have no stored keyring password. Resolve those refs again here instead
-    /// of silently connecting without a password. Refs that need a provider or
-    /// auth context cannot be resolved on this path and fail explicitly rather
-    /// than falling back to the stored password.
-    fn resolve_password(&self) -> Result<Option<SecretString>, String> {
-        match self.original_profile.value_refs.get(PASSWORD_VALUE_REF) {
-            None => Ok(self
-                .session_password
-                .clone()
-                .or_else(|| self.get_password())),
-            Some(ValueRef::Literal { value }) => Ok(Some(SecretString::from(value.clone()))),
-            Some(ValueRef::Env { key }) => CompositeValueResolver::resolve_env_ref(key)
-                .map(|value| Some(SecretString::from(value)))
-                .map_err(|error| self.password_resolution_error(error)),
-            Some(ValueRef::Dotenv { path, key }) => {
-                CompositeValueResolver::resolve_dotenv_ref(path, key)
-                    .map(|value| Some(SecretString::from(value)))
-                    .map_err(|error| self.password_resolution_error(error))
-            }
-            Some(_) => Err(format!(
-                "Password for profile '{}' comes from a provider or auth reference, which \
-                 cannot be resolved while switching to database '{}'.",
-                self.original_profile.name, self.database
-            )),
-        }
-    }
-
-    fn password_resolution_error(&self, error: DbError) -> String {
-        format!(
-            "Failed to resolve password for database '{}': {}",
-            self.database, error
-        )
-    }
-
-    fn get_password(&self) -> Option<SecretString> {
-        if !self.original_profile.save_password {
-            return None;
-        }
-
-        let store = match self.secret_store.read() {
-            Ok(guard) => guard,
-            Err(poison_err) => {
-                log::warn!("Secret store RwLock poisoned during password retrieval, recovering...");
-                poison_err.into_inner()
-            }
-        };
-
-        match store.get(&self.original_profile.secret_ref()) {
-            Ok(pwd) => pwd,
-            Err(e) => {
-                error!("Failed to get password: {:?}", e);
-                None
-            }
-        }
-    }
 }
 
 pub struct SwitchDatabaseResult {
@@ -2908,6 +3121,75 @@ pub struct SwitchDatabaseResult {
     pub original_profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
     pub schema: Option<SchemaSnapshot>,
+}
+
+/// A prepared region switch: the driver has already rewritten the config, so
+/// `execute` only has to reconnect and the caller applies the result with
+/// `ConnectionManager::apply_switch_region`.
+pub struct SwitchRegionParams {
+    pub profile_id: Uuid,
+    pub region: String,
+    pub new_profile: ConnectionProfile,
+    pub original_profile: ConnectionProfile,
+    pub driver: Arc<dyn DbDriver>,
+    pub secret_store: Arc<RwLock<Box<dyn SecretStore>>>,
+    /// Password supplied when the profile connected, preferred over the keyring.
+    pub session_password: Option<SecretString>,
+    /// The profile's session generation at prepare time. `apply_switch_region`
+    /// refuses to install the result when the generation no longer matches.
+    pub session_generation: u64,
+}
+
+impl SwitchRegionParams {
+    pub fn execute(self) -> Result<SwitchRegionResult, String> {
+        info!("Switching to region: {}", self.region);
+
+        let password = resolve_switch_password(
+            &self.original_profile,
+            &format!("region '{}'", self.region),
+            self.session_password.as_ref(),
+            &self.secret_store,
+        )?;
+
+        let connection = self
+            .driver
+            .connect_with_password(&self.new_profile, password.as_ref())
+            .map_err(|e| format!("Failed to connect to region '{}': {:?}", self.region, e))?;
+
+        let schema = match connection.schema() {
+            Ok(s) => {
+                info!(
+                    "Switched to region {}: {} schemas, {} tables",
+                    self.region,
+                    s.schemas().len(),
+                    s.schemas().iter().map(|s| s.tables.len()).sum::<usize>()
+                );
+                Some(s)
+            }
+            Err(e) => {
+                error!("Failed to fetch schema for region {}: {:?}", self.region, e);
+                None
+            }
+        };
+
+        Ok(SwitchRegionResult {
+            profile_id: self.profile_id,
+            original_profile: self.original_profile,
+            connection: connection.into(),
+            schema,
+            session_generation: self.session_generation,
+        })
+    }
+}
+
+pub struct SwitchRegionResult {
+    pub profile_id: Uuid,
+    pub original_profile: ConnectionProfile,
+    pub connection: Arc<dyn Connection>,
+    pub schema: Option<SchemaSnapshot>,
+    /// The session generation the switch was prepared against, for
+    /// `ConnectionManager::apply_switch_region` to fence on.
+    pub session_generation: u64,
 }
 
 pub struct FetchDatabaseSchemaParams {
@@ -3240,6 +3522,26 @@ impl RefreshViewsParams {
     }
 }
 
+fn table_details_revision_of(
+    revisions: &HashMap<(Uuid, String, Option<String>, String), u64>,
+    clear_epochs: &HashMap<Uuid, u64>,
+    profile_id: Uuid,
+    database: &str,
+    schema: Option<&str>,
+    table: &str,
+) -> u64 {
+    let own = revisions
+        .get(&(
+            profile_id,
+            database.to_string(),
+            schema.map(str::to_string),
+            table.to_string(),
+        ))
+        .copied()
+        .unwrap_or(0);
+    own + clear_epochs.get(&profile_id).copied().unwrap_or(0)
+}
+
 #[derive(Clone)]
 pub struct FetchSession {
     profile_id: Uuid,
@@ -3338,16 +3640,19 @@ pub enum PrepareFetchError {
 }
 
 /// Why preparing a fenced table-details fetch failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TableDetailsPrepareError {
     /// The profile is no longer connected.
+    #[error("Profile not connected")]
     ProfileDisconnected,
     /// Details for the target table are already cached.
+    #[error("Table details are already cached")]
     AlreadyCached,
     /// The target database has no prepared connection and the driver's
     /// strategy cannot relabel another connection's content. Prepare the
     /// missing per-database connection (see
     /// [`ConnectionManager::prepare_database_connection`]) and retry.
+    #[error("No prepared connection for database '{database}'")]
     PendingDatabaseConnection { database: String },
 }
 
@@ -3381,16 +3686,34 @@ impl FencedTableDetailsParams {
     }
 
     pub fn execute(self) -> Result<FetchedTableDetails, DbError> {
-        let details = self.session.connection.table_details(
+        self.execute_fenced().map_err(|failure| failure.error)
+    }
+
+    /// Like [`Self::execute`], but a failure keeps the fence it was prepared
+    /// with, so the caller can tell a current answer from a stale one through
+    /// [`ConnectionManager::is_table_details_failure_current`].
+    pub fn execute_fenced(self) -> Result<FetchedTableDetails, FencedTableDetailsFailure> {
+        let details = match self.session.connection.table_details(
             &self.database,
             self.schema.as_deref(),
             &self.table,
-        )?;
+        ) {
+            Ok(details) => details,
+            Err(error) => {
+                return Err(FencedTableDetailsFailure {
+                    session: self.session,
+                    database: self.database,
+                    schema: self.schema,
+                    table: self.table,
+                    error,
+                });
+            }
+        };
         let dependents = self
             .session
             .connection
             .fetch_dependents(&self.database, self.schema.as_deref(), &self.table)
-            .unwrap_or_default();
+            .ok();
 
         Ok(FetchedTableDetails {
             session: self.session,
@@ -3403,6 +3726,15 @@ impl FencedTableDetailsParams {
     }
 }
 
+/// A failed fenced table-details fetch with the fence it was prepared under.
+pub struct FencedTableDetailsFailure {
+    session: FetchSession,
+    database: String,
+    schema: Option<String>,
+    table: String,
+    pub error: DbError,
+}
+
 /// Table details and dependents fetched for a captured session, awaiting
 /// fenced application through `ConnectionManager::apply_fetched_table_details`.
 pub struct FetchedTableDetails {
@@ -3411,7 +3743,9 @@ pub struct FetchedTableDetails {
     schema: Option<String>,
     table: String,
     pub details: TableInfo,
-    pub dependents: Vec<RelationRef>,
+    /// `None` when the dependents read failed: they are not applied, so the
+    /// cached ones are not replaced by an empty list.
+    pub dependents: Option<Vec<RelationRef>>,
 }
 
 impl FetchedTableDetails {
@@ -5806,6 +6140,264 @@ mod tests {
     }
 
     #[test]
+    fn table_refetch_prepare_ignores_a_populated_cache() {
+        let primary =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main");
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let first = manager
+            .prepare_fetch_table_details_fenced(profile.id, "main", None, "users")
+            .expect("first load prepares")
+            .execute()
+            .expect("first fetch");
+        assert_eq!(
+            manager.apply_fetched_table_details(first),
+            ApplyFetchOutcome::Applied
+        );
+
+        assert_eq!(
+            manager
+                .prepare_fetch_table_details_fenced(profile.id, "main", None, "users")
+                .err(),
+            Some(TableDetailsPrepareError::AlreadyCached),
+            "the cached key is refused by the ordinary prepare"
+        );
+
+        let params = manager
+            .prepare_refetch_table_details(profile.id, "main", None, "users")
+            .expect("a refetch prepares for a cached key");
+        assert_eq!(params.table(), "users");
+        assert!(
+            manager
+                .get_table_details(profile.id, "main", None, "users")
+                .is_some(),
+            "preparing a refetch leaves the cache alone"
+        );
+
+        let disconnected =
+            manager.prepare_refetch_table_details(Uuid::new_v4(), "main", None, "users");
+        assert_eq!(
+            disconnected.err(),
+            Some(TableDetailsPrepareError::ProfileDisconnected)
+        );
+    }
+
+    #[test]
+    fn table_refetch_prepare_fails_for_a_database_without_a_prepared_connection() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let (manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        let error = manager
+            .prepare_refetch_table_details(profile.id, "analytics", None, "users")
+            .err();
+        assert_eq!(
+            error,
+            Some(TableDetailsPrepareError::PendingDatabaseConnection {
+                database: "analytics".to_string()
+            }),
+            "the primary connection must not answer for another database"
+        );
+    }
+
+    #[test]
+    fn a_refetch_whose_dependents_read_failed_keeps_the_cached_dependents() {
+        let primary = TableDetailsBoundConnection::new(
+            SchemaLoadingStrategy::SingleDatabase,
+            "dependents-fail",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+        let cached = vec![RelationRef {
+            kind: RelationKind::View,
+            qualified_name: "main.users_view".to_string(),
+        }];
+        manager.set_dependents(
+            profile.id,
+            "main".to_string(),
+            None,
+            "users".to_string(),
+            cached,
+        );
+
+        let fetched = manager
+            .prepare_refetch_table_details(profile.id, "main", None, "users")
+            .expect("prepares")
+            .execute()
+            .expect("the details read succeeds");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched),
+            ApplyFetchOutcome::Applied
+        );
+
+        assert!(
+            manager
+                .get_table_details(profile.id, "main", None, "users")
+                .is_some(),
+            "the details were refreshed"
+        );
+        let dependents = manager
+            .connections
+            .get(&profile.id)
+            .expect("connected")
+            .dependents("main", None, "users");
+        assert_eq!(dependents.len(), 1, "the cached dependents were kept");
+        assert_eq!(dependents[0].qualified_name, "main.users_view");
+    }
+
+    #[test]
+    fn a_failed_refetch_is_current_only_for_the_session_it_was_prepared_in() {
+        let first = TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main");
+        let (mut manager, profile) = new_manager_with_connection(first);
+        let params = manager
+            .prepare_refetch_table_details(profile.id, "main", None, "users")
+            .expect("prepares");
+        let failure = FencedTableDetailsFailure {
+            session: params.session.clone(),
+            database: "main".to_string(),
+            schema: None,
+            table: "users".to_string(),
+            error: DbError::NotSupported("x".to_string()),
+        };
+        assert!(manager.is_table_details_failure_current(&failure));
+
+        connect_profile(
+            &mut manager,
+            &profile,
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main"),
+        );
+        assert!(!manager.is_table_details_failure_current(&failure));
+    }
+
+    #[test]
+    fn a_refetch_in_flight_is_rejected_after_the_profiles_details_are_cleared() {
+        let primary =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main");
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        // "orders" has no cache entry and so no revision of its own.
+        let in_flight = manager
+            .prepare_refetch_table_details(profile.id, "main", None, "orders")
+            .expect("prepares")
+            .execute()
+            .expect("fetches");
+        assert!(manager.clear_table_details(profile.id));
+
+        assert_eq!(
+            manager.apply_fetched_table_details(in_flight),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated)
+        );
+        assert!(
+            manager
+                .get_table_details(profile.id, "main", None, "orders")
+                .is_none(),
+            "a rejected result never reaches the cache"
+        );
+
+        let after_clear = manager
+            .prepare_refetch_table_details(profile.id, "main", None, "orders")
+            .expect("prepares")
+            .execute()
+            .expect("fetches");
+        assert_eq!(
+            manager.apply_fetched_table_details(after_clear),
+            ApplyFetchOutcome::Applied,
+            "a fetch prepared after the clear is current"
+        );
+    }
+
+    #[test]
+    fn a_refetch_in_flight_is_rejected_after_its_table_is_invalidated_or_the_connection_replaced() {
+        let first = TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main");
+        let (mut manager, profile) = new_manager_with_connection(first);
+
+        let before_invalidation = manager
+            .prepare_refetch_table_details(profile.id, "main", None, "users")
+            .expect("prepares")
+            .execute()
+            .expect("fetches");
+        assert!(manager.invalidate_table_details(profile.id, "main", None, "users"));
+        assert_eq!(
+            manager.apply_fetched_table_details(before_invalidation),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated)
+        );
+
+        let before_replacement = manager
+            .prepare_refetch_table_details(profile.id, "main", None, "users")
+            .expect("prepares")
+            .execute()
+            .expect("fetches");
+        connect_profile(
+            &mut manager,
+            &profile,
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main"),
+        );
+        assert!(matches!(
+            manager.apply_fetched_table_details(before_replacement),
+            ApplyFetchOutcome::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn clearing_table_details_drops_details_and_dependents_of_that_connection_only() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let details = |name: &str| TableInfo {
+            name: name.to_string(),
+            schema: None,
+            columns: Some(Vec::new()),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+            pseudo_columns: Box::default(),
+        };
+        for table in ["users", "orders"] {
+            manager.set_table_details(
+                profile.id,
+                "app".to_string(),
+                None,
+                table.to_string(),
+                details(table),
+            );
+            manager.set_dependents(
+                profile.id,
+                "app".to_string(),
+                None,
+                table.to_string(),
+                vec![],
+            );
+        }
+
+        assert!(manager.clear_table_details(profile.id));
+
+        for table in ["users", "orders"] {
+            assert!(
+                manager
+                    .get_table_details(profile.id, "app", None, table)
+                    .is_none(),
+                "{table} details must be gone"
+            );
+        }
+        assert!(
+            manager
+                .prepare_fetch_table_details(profile.id, "app", None, "users")
+                .is_ok(),
+            "a cleared table is fetched again"
+        );
+        assert!(!manager.clear_table_details(Uuid::new_v4()));
+    }
+
+    #[test]
     fn session_fetch_prepare_requires_connected_profile() {
         let manager = ConnectionManager::new(HashMap::new());
         let profile_id = Uuid::new_v4();
@@ -6294,6 +6886,9 @@ mod tests {
             _schema: Option<&str>,
             table: &str,
         ) -> Result<Vec<RelationRef>, DbError> {
+            if self.bound_database == "dependents-fail" {
+                return Err(DbError::connection_failed("dependents read failed"));
+            }
             Ok(vec![RelationRef {
                 kind: RelationKind::View,
                 qualified_name: format!("{}.{}", self.bound_database, table),
@@ -6327,6 +6922,21 @@ mod tests {
             (
                 Arc::new(Self {
                     metadata: postgres_metadata("test-pg-switch"),
+                    form: &TEST_FORM,
+                    passwords: passwords.clone(),
+                }),
+                passwords,
+            )
+        }
+
+        /// A recording driver that authenticates with a password.
+        fn recording_with_password() -> (Arc<Self>, RecordedConnects) {
+            let passwords = Arc::new(Mutex::new(Vec::new()));
+            let mut metadata = postgres_metadata("test-pg-switch");
+            metadata.capabilities |= DriverCapabilities::AUTHENTICATION;
+            (
+                Arc::new(Self {
+                    metadata,
                     form: &TEST_FORM,
                     passwords: passwords.clone(),
                 }),
@@ -6477,6 +7087,34 @@ mod tests {
         Arc::new(RwLock::new(Box::new(FixedSecretStore(
             KEYRING_PASSWORD_VALUE,
         ))))
+    }
+
+    /// A keyring that fails every read, for proving a switch refuses to
+    /// reconnect when it cannot prove who it connects as.
+    struct FailingSecretStore;
+
+    impl SecretStore for FailingSecretStore {
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn get(&self, _secret_ref: &str) -> Result<Option<SecretString>, DbError> {
+            Err(DbError::ValueResolutionFailed(
+                "keyring is locked".to_string(),
+            ))
+        }
+
+        fn set(&self, _secret_ref: &str, _value: &SecretString) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn delete(&self, _secret_ref: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    fn failing_secret_store() -> Arc<RwLock<Box<dyn SecretStore>>> {
+        Arc::new(RwLock::new(Box::new(FailingSecretStore)))
     }
 
     /// Connects a profile (with an optional `password` value ref) against the
@@ -6728,6 +7366,66 @@ mod tests {
     }
 
     #[test]
+    fn switch_database_file_password_reads_the_file() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("db-password");
+        std::fs::write(&path, "from-secret-file\n").expect("write secret file");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("restrict secret file");
+        }
+
+        let (manager, profile, recorded) =
+            switch_manager_with(Some(ValueRef::file(path.to_string_lossy(), None)), false);
+
+        let params = manager
+            .prepare_database_connection(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare database connection should succeed");
+
+        params
+            .execute()
+            .expect("switch should resolve the password from the secret file");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![(
+                "analytics".to_string(),
+                Some("from-secret-file".to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn switch_database_missing_secret_file_fails_without_keyring_fallback() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("absent");
+        let path_text = path.to_string_lossy().into_owned();
+
+        let (manager, profile, recorded) =
+            switch_manager_with_password_ref(Some(ValueRef::file(path_text.clone(), None)));
+
+        let params = manager
+            .prepare_switch_database(profile.id, "analytics", &fixed_secret_store())
+            .expect("prepare switch should succeed");
+
+        let Err(error) = params.execute() else {
+            panic!("a missing secret file must fail instead of using the keyring password");
+        };
+
+        assert!(
+            error.contains(&format!("Secret file '{path_text}' does not exist")),
+            "unexpected error: {error}"
+        );
+        assert!(
+            recorded_connect_calls(&recorded).is_empty(),
+            "driver must not be called when the password cannot be resolved"
+        );
+    }
+
+    #[test]
     fn switch_database_provider_password_ref_fails_without_keyring_fallback() {
         let (manager, profile, recorded) =
             switch_manager_with_password_ref(Some(ValueRef::secret("stub", "db-pass", None)));
@@ -6770,6 +7468,469 @@ mod tests {
                 "analytics".to_string(),
                 Some(KEYRING_PASSWORD_VALUE.to_string())
             )]
+        );
+    }
+
+    #[test]
+    fn a_failed_keyring_read_fails_the_database_switch_instead_of_connecting_without_a_password() {
+        let (manager, profile, recorded) = switch_manager_with(None, true);
+
+        let params = manager
+            .prepare_database_connection(profile.id, "analytics", &failing_secret_store())
+            .expect("prepare database connection should succeed");
+
+        let Err(error) = params.execute() else {
+            panic!("a keyring read failure must fail the switch, not connect without a password");
+        };
+
+        assert!(
+            error.contains("Failed to resolve password for database 'analytics'"),
+            "unexpected error: {error}"
+        );
+        assert!(error.contains("keyring is locked"), "{error}");
+        assert!(
+            recorded_connect_calls(&recorded).is_empty(),
+            "the driver must not be asked to connect without the password"
+        );
+    }
+
+    // --- Region switch ---
+
+    /// A connection bound to one cloud region, so region-switch tests can
+    /// assert which region the driver actually connected to.
+    struct RegionBoundConnection {
+        metadata: DriverMetadata,
+        region: String,
+    }
+
+    impl RegionBoundConnection {
+        fn new(region: &str) -> Self {
+            Self {
+                metadata: postgres_metadata("test-region-switch"),
+                region: region.to_string(),
+            }
+        }
+
+        fn boxed(region: &str) -> Box<Self> {
+            Box::new(Self::new(region))
+        }
+
+        fn arc(region: &str) -> Arc<Self> {
+            Arc::new(Self::new(region))
+        }
+    }
+
+    impl Connection for RegionBoundConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &crate::QueryRequest) -> Result<crate::QueryResult, DbError> {
+            Err(DbError::NotSupported("test connection".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::DynamoDB
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::LazyPerDatabase
+        }
+
+        fn dialect(&self) -> &dyn crate::SqlDialect {
+            &crate::DefaultSqlDialect
+        }
+
+        fn current_region(&self) -> Option<String> {
+            Some(self.region.clone())
+        }
+    }
+
+    /// A driver whose configs carry a region (`DbConfig::DynamoDB`) and that
+    /// implements `with_region`, so region-switch tests exercise the real
+    /// manager rules end to end.
+    struct RegionSwitchDriver {
+        metadata: DriverMetadata,
+        form: &'static DriverFormDef,
+        /// `(bound region, password)` pairs received by
+        /// `connect_with_secrets`, so the region path can assert what the
+        /// driver actually received.
+        passwords: RecordedConnects,
+    }
+
+    impl RegionSwitchDriver {
+        fn recording() -> (Arc<Self>, RecordedConnects) {
+            let passwords = Arc::new(Mutex::new(Vec::new()));
+            (
+                Arc::new(Self {
+                    metadata: postgres_metadata("test-region-switch"),
+                    form: &TEST_FORM,
+                    passwords: passwords.clone(),
+                }),
+                passwords,
+            )
+        }
+    }
+
+    impl DbDriver for RegionSwitchDriver {
+        fn kind(&self) -> DbKind {
+            DbKind::DynamoDB
+        }
+
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn form_definition(&self) -> &DriverFormDef {
+            self.form
+        }
+
+        fn driver_key(&self) -> crate::DriverKey {
+            "builtin:test-region-switch".to_string()
+        }
+
+        fn build_config(&self, _values: &FormValues) -> Result<DbConfig, DbError> {
+            Ok(DbConfig::default_dynamodb())
+        }
+
+        fn extract_values(&self, _config: &DbConfig) -> FormValues {
+            FormValues::new()
+        }
+
+        fn connect_with_secrets(
+            &self,
+            profile: &ConnectionProfile,
+            password: Option<&SecretString>,
+            _ssh_secret: Option<&SecretString>,
+        ) -> Result<Box<dyn Connection>, DbError> {
+            let region = match &profile.config {
+                DbConfig::DynamoDB { region, .. } => region.clone(),
+                _ => "unknown".to_string(),
+            };
+            self.passwords
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((
+                    region.clone(),
+                    password.map(|secret| secret.expose_secret().to_string()),
+                ));
+            Ok(RegionBoundConnection::boxed(&region))
+        }
+
+        fn test_connection(&self, _profile: &ConnectionProfile) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn with_region(&self, config: &DbConfig, region: &str) -> Option<DbConfig> {
+            match config {
+                DbConfig::DynamoDB {
+                    profile,
+                    endpoint,
+                    table,
+                    ..
+                } => Some(DbConfig::DynamoDB {
+                    region: region.to_string(),
+                    profile: profile.clone(),
+                    endpoint: endpoint.clone(),
+                    table: table.clone(),
+                }),
+                _ => None,
+            }
+        }
+    }
+
+    /// Connects a region-carrying profile against the region-switch driver
+    /// and returns the connection record, mirroring
+    /// `switch_manager_with` for the database path.
+    fn region_switch_manager(
+        save_password: bool,
+    ) -> (ConnectionManager, ConnectionProfile, RecordedConnects) {
+        let mut profile = ConnectionProfile::new("aws", DbConfig::default_dynamodb());
+        profile.save_password = save_password;
+
+        let (driver, recorded) = RegionSwitchDriver::recording();
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.drivers.insert("dynamodb".to_string(), driver);
+
+        connect_profile_with_schema(
+            &mut manager,
+            &profile,
+            RegionBoundConnection::arc("us-east-1"),
+            None,
+        );
+
+        (manager, profile, recorded)
+    }
+
+    #[test]
+    fn prepare_switch_region_refuses_a_driver_without_the_region_hook() {
+        let (manager, profile, _recorded) = switch_manager_with_password_ref(None);
+
+        let Err(error) =
+            manager.prepare_switch_region(profile.id, "eu-west-1", &noop_secret_store())
+        else {
+            panic!("a driver without with_region must refuse a region switch");
+        };
+
+        assert!(error.contains("TestPG"), "unexpected error: {error}");
+        assert!(error.contains("does not support region switching"));
+    }
+
+    #[test]
+    fn prepare_switch_region_refuses_the_region_already_in_use() {
+        let (manager, profile, _recorded) = region_switch_manager(true);
+
+        let Err(error) =
+            manager.prepare_switch_region(profile.id, "us-east-1", &noop_secret_store())
+        else {
+            panic!("the region the connection already reaches must be refused");
+        };
+
+        assert!(error.contains("us-east-1"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn a_failed_keyring_read_fails_the_region_switch_instead_of_connecting_without_a_password() {
+        let (manager, profile, recorded) = region_switch_manager(true);
+
+        let params = manager
+            .prepare_switch_region(profile.id, "eu-west-1", &failing_secret_store())
+            .expect("prepare switch should succeed");
+
+        let Err(error) = params.execute() else {
+            panic!("a keyring read failure must fail the switch, not connect without a password");
+        };
+
+        assert!(
+            error.contains("Failed to resolve password for region 'eu-west-1'"),
+            "unexpected error: {error}"
+        );
+        assert!(error.contains("keyring is locked"), "{error}");
+        assert!(
+            recorded_connect_calls(&recorded).is_empty(),
+            "the driver must not be asked to connect without the password"
+        );
+    }
+
+    #[test]
+    fn switch_region_params_carry_the_rewritten_config_and_keep_the_credential_source() {
+        let (manager, profile, recorded) = region_switch_manager(true);
+
+        let params = manager
+            .prepare_switch_region(profile.id, "eu-west-1", &fixed_secret_store())
+            .expect("prepare switch should succeed");
+
+        let DbConfig::DynamoDB {
+            region,
+            profile: aws_profile,
+            endpoint,
+            table,
+        } = &params.new_profile.config
+        else {
+            panic!("region switch must keep the config shape");
+        };
+        assert_eq!(region, "eu-west-1");
+        assert!(aws_profile.is_none() && endpoint.is_none() && table.is_none());
+        assert_eq!(params.region, "eu-west-1");
+
+        let result = params
+            .execute()
+            .expect("execute should use the stored keyring password");
+
+        assert_eq!(
+            recorded_connect_calls(&recorded),
+            vec![(
+                "eu-west-1".to_string(),
+                Some(KEYRING_PASSWORD_VALUE.to_string())
+            )]
+        );
+        assert_eq!(result.profile_id, profile.id);
+        let DbConfig::DynamoDB { region, .. } = &result.original_profile.config else {
+            panic!("the original profile must keep its config shape");
+        };
+        assert_eq!(region, "us-east-1");
+    }
+
+    #[test]
+    fn apply_switch_region_refuses_a_switch_prepared_before_the_connection_was_replaced() {
+        let (mut manager, profile, _recorded) = region_switch_manager(true);
+        let profile_id = profile.id;
+
+        // The switch is prepared against the connection as it is now ...
+        let stale = manager
+            .prepare_switch_region(profile_id, "eu-west-1", &noop_secret_store())
+            .expect("prepare the stale switch should succeed");
+
+        // ... and the connection is replaced while it reconnects.
+        let replacement = manager
+            .prepare_switch_region(profile_id, "ap-south-1", &noop_secret_store())
+            .expect("prepare the replacement switch")
+            .execute()
+            .expect("execute the replacement");
+        assert!(manager.apply_switch_region(
+            profile_id,
+            replacement.original_profile,
+            replacement.connection,
+            replacement.schema,
+            replacement.session_generation,
+        ));
+
+        let stale_result = stale.execute().expect("the stale reconnect still succeeds");
+        assert!(
+            !manager.apply_switch_region(
+                profile_id,
+                stale_result.original_profile,
+                stale_result.connection,
+                stale_result.schema,
+                stale_result.session_generation,
+            ),
+            "a switch prepared before the connection was replaced must be refused"
+        );
+
+        let connected = manager
+            .connections
+            .get(&profile_id)
+            .expect("the profile stays connected");
+        assert_eq!(
+            connected.connection.current_region().as_deref(),
+            Some("ap-south-1"),
+            "the refused switch must not replace the newer connection"
+        );
+    }
+
+    #[test]
+    fn apply_switch_region_refuses_a_switch_for_a_disconnected_profile() {
+        let (mut manager, profile, _recorded) = region_switch_manager(true);
+        let profile_id = profile.id;
+
+        let params = manager
+            .prepare_switch_region(profile_id, "eu-west-1", &noop_secret_store())
+            .expect("prepare switch should succeed");
+
+        let _teardown = manager.disconnect(profile_id);
+
+        let result = params.execute().expect("the reconnect still succeeds");
+        assert!(
+            !manager.apply_switch_region(
+                profile_id,
+                result.original_profile,
+                result.connection,
+                result.schema,
+                result.session_generation,
+            ),
+            "a switch for a disconnected profile must be refused"
+        );
+        assert!(
+            !manager.connections.contains_key(&profile_id),
+            "a refused switch must not reconnect the profile"
+        );
+    }
+
+    #[test]
+    fn apply_switch_region_replaces_the_connection_and_fences_the_previous_session() {
+        let mut profile = ConnectionProfile::new("aws", DbConfig::default_dynamodb());
+        profile.read_only_flag = true;
+        profile.save_password = true;
+        let profile_id = profile.id;
+
+        let (driver, _recorded) = RegionSwitchDriver::recording();
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.drivers.insert("dynamodb".to_string(), driver);
+        manager.add_connection(
+            profile.clone(),
+            RegionBoundConnection::arc("us-east-1"),
+            None,
+            None,
+            false,
+            WritePrivilege::Writable,
+        );
+
+        let policy = |manager: &ConnectionManager| {
+            let connected = manager
+                .connections
+                .get(&profile_id)
+                .expect("profile is connected");
+            (connected.mutation_policy, connected.read_only_reason)
+        };
+        assert_eq!(
+            policy(&manager),
+            (
+                MutationPolicy::ReadOnly,
+                Some(ReadOnlyReason::ProfileSetting)
+            ),
+            "connecting a read-only profile resolves to ReadOnly"
+        );
+        let generation_before = manager
+            .session_generations
+            .get(&profile_id)
+            .copied()
+            .expect("connecting assigns a session generation");
+
+        let params = manager
+            .prepare_switch_region(profile_id, "eu-west-1", &noop_secret_store())
+            .expect("prepare switch should succeed");
+        let result = params.execute().expect("execute should succeed");
+
+        assert!(manager.apply_switch_region(
+            profile_id,
+            result.original_profile,
+            result.connection,
+            result.schema,
+            result.session_generation,
+        ));
+
+        assert_eq!(
+            policy(&manager),
+            (
+                MutationPolicy::ReadOnly,
+                Some(ReadOnlyReason::ProfileSetting)
+            ),
+            "switching regions keeps the profile read-only"
+        );
+        let connected = manager
+            .connections
+            .get(&profile_id)
+            .expect("profile stays connected");
+        assert_eq!(
+            connected.profile.id, profile_id,
+            "the stored profile is the original one"
+        );
+        let DbConfig::DynamoDB { region, .. } = &connected.profile.config else {
+            panic!("the stored profile must keep its config shape");
+        };
+        assert_eq!(
+            region, "us-east-1",
+            "the profile on record keeps its saved region"
+        );
+        assert_eq!(
+            connected.connection.current_region().as_deref(),
+            Some("eu-west-1"),
+            "the live connection now reaches the requested region"
+        );
+        let generation_after = manager
+            .session_generations
+            .get(&profile_id)
+            .copied()
+            .expect("switching regions assigns a session generation");
+        assert!(
+            generation_after > generation_before,
+            "switching regions must hand out a fresh session generation"
         );
     }
 
@@ -6931,6 +8092,98 @@ mod tests {
         let calls = recorded_connect_calls(&recorded);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1.as_deref(), Some(KEYRING_PASSWORD_VALUE));
+    }
+
+    #[test]
+    fn connect_fails_with_the_keyring_error_when_the_saved_password_cannot_be_read() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording_with_password();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(failing_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: None,
+        };
+        let error = match params.execute(None) {
+            Ok(_) => panic!("a locked keyring must fail the connect"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.starts_with(
+                "Could not read the password from the system keyring (it may be locked): "
+            ),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("keyring is locked"),
+            "unexpected error: {error}"
+        );
+        assert!(recorded_connect_calls(&recorded).is_empty());
+    }
+
+    #[test]
+    fn connect_for_a_driver_without_a_password_ignores_a_failing_keyring() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(failing_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: None,
+        };
+        params.execute(None).expect("connect should succeed");
+
+        let calls = recorded_connect_calls(&recorded);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, None);
+    }
+
+    #[test]
+    fn connect_with_a_provided_password_does_not_read_a_failing_keyring() {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(failing_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: Some(SecretString::from(PROMPTED_PASSWORD_VALUE)),
+        };
+        params.execute(None).expect("connect should succeed");
+
+        let calls = recorded_connect_calls(&recorded);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1.as_deref(), Some(PROMPTED_PASSWORD_VALUE));
+    }
+
+    #[test]
+    fn connect_without_a_saved_password_does_not_read_a_failing_keyring() {
+        let mut profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        profile.save_password = false;
+        let (driver, recorded) = PerDatabaseSwitchDriver::recording();
+
+        let params = ConnectProfileParams {
+            profile,
+            driver,
+            secret_store: Some(failing_secret_store()),
+            ssh_secret: None,
+            proxy: None,
+            password_override: None,
+        };
+        params.execute(None).expect("connect should succeed");
+
+        let calls = recorded_connect_calls(&recorded);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, None);
     }
 
     #[test]

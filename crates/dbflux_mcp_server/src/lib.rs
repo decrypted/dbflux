@@ -1,3 +1,4 @@
+pub mod approvals_watch;
 pub mod connection_cache;
 mod error_messages;
 pub mod governance;
@@ -5,6 +6,8 @@ mod handlers;
 mod helper;
 pub mod server;
 pub mod state;
+#[cfg(feature = "telemetry")]
+mod telemetry_usage;
 pub mod tools;
 
 use std::path::PathBuf;

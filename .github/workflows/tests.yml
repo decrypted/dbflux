@@ -106,14 +106,24 @@ jobs:
 
   # Fail-open gate: `always()` stops a failed `changes` job from skipping this
   # required check, and an unset output means "run the checks", not skip them.
-  # On a confirmed docs-only change the job skips deliberately and reports
-  # "Success", which satisfies the required "Deterministic Tests" context.
+  # On a confirmed docs-only change the matrix skips deliberately, and
+  # deterministic-tests-result reports "Success" for the required
+  # "Deterministic Tests" context.
+  #
+  # The suite runs as parallel shards: one job built and ran all ~14k tests
+  # plus the doctests, and a cold cache pushed it past its timeout. Each
+  # nextest shard builds from the same main cache and runs a stable hash
+  # partition of the tests; the doctests get a shard of their own.
   deterministic-tests:
-    name: Deterministic Tests
+    name: Deterministic Tests (${{ matrix.shard }})
     needs: changes
     if: always() && needs.changes.outputs.rust != 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/4', '2/4', '3/4', '4/4', doctests]
 
     steps:
       - name: Checkout repository
@@ -159,7 +169,21 @@ jobs:
           # Pull requests and releases still restore from main.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # A pull request whose Cargo.lock differs from main restores main's cache
+      # by prefix, which can carry an unfinished DuckDB source tree; see the
+      # same step in the cross-platform job for why it is dropped.
+      - name: Drop unfinished DuckDB source trees
+        shell: bash
+        run: |
+          for tree in target/duckdb-sources/*/; do
+            if [ -d "$tree" ] && [ ! -f "$tree.complete" ]; then
+              echo "removing unfinished $tree"
+              rm -rf "$tree"
+            fi
+          done
+
       - name: Install cargo-nextest
+        if: matrix.shard != 'doctests'
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2
         with:
           tool: cargo-nextest@0.9.133
@@ -167,13 +191,37 @@ jobs:
       # `cargo test` runs one test binary at a time, so the whole suite waited
       # on the slowest one (dbflux_ui_document, 145 s). nextest schedules the
       # tests of every binary in one pool. It does not run doctests, which get
-      # the next step, and --no-fail-fast reports every failing test instead of
-      # stopping at the first failing binary.
+      # their own shard, and --no-fail-fast reports every failing test instead
+      # of stopping at the first failing binary. A hash partition keeps a test
+      # in the same shard across runs.
       - name: Run deterministic workspace tests
-        run: cargo nextest run --workspace --locked --no-fail-fast --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
+        if: matrix.shard != 'doctests'
+        run: cargo nextest run --workspace --locked --no-fail-fast --partition "hash:${{ matrix.shard }}" --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
 
       - name: Run doctests
+        if: matrix.shard == 'doctests'
         run: cargo test --doc --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,duckdb,aws"
+
+  # Aggregate gate, like driver-live-integration-result below: "Deterministic
+  # Tests" is a required status check, and the matrix above reports one
+  # context per shard instead. A skipped matrix counts as a pass: it skips
+  # only on a confirmed docs-only change.
+  deterministic-tests-result:
+    name: Deterministic Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: deterministic-tests
+    if: always()
+
+    steps:
+      - name: Check matrix result
+        env:
+          RESULT: ${{ needs.deterministic-tests.result }}
+        run: |
+          if [ "$RESULT" != "success" ] && [ "$RESULT" != "skipped" ]; then
+            echo "::error::Deterministic tests did not pass in every shard (result: $RESULT)."
+            exit 1
+          fi
 
   # Same fail-open rationale as deterministic-tests above.
   #
@@ -495,6 +543,22 @@ jobs:
       - name: Check vendored UI-automation server
         if: needs.changes.outputs.rust != 'false'
         run: cargo check -p gpui-mcp-server --locked
+
+      # libduckdb-sys unpacks its bundled sources into target/duckdb-sources/<key>
+      # and marks a finished tree with `.complete`. A cache restored from an
+      # older key can carry that directory without the marker, and the build
+      # script then fails renaming its fresh tree onto it (DirectoryNotEmpty).
+      # A tree without the marker is unusable by definition, so drop it.
+      - name: Drop unfinished DuckDB source trees
+        if: needs.changes.outputs.rust != 'false'
+        shell: bash
+        run: |
+          for tree in target/duckdb-sources/*/; do
+            if [ -d "$tree" ] && [ ! -f "$tree.complete" ]; then
+              echo "removing unfinished $tree"
+              rm -rf "$tree"
+            fi
+          done
 
       # The DuckDB driver links a bundled C++ engine and relies on its file lock
       # and on native paths, which `cargo check` compiles but never exercises.

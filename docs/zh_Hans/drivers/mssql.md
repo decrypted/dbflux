@@ -14,6 +14,7 @@ Microsoft SQL Server 关系型数据库。
 ## 功能
 
 - 面向 SQL Server / Azure SQL 的关系型驱动程序，支持 SQL 查询执行与 Schema 发现。
+- 结构化查询计划（`Connection::query_plan`）：预估计划来自 `SET SHOWPLAN_XML`，因此语句只会被编译而不会运行，并以带有成本、行数预估、索引使用情况和警告的算子树形式返回。`SHOWPLAN_XML` 是会话状态，所以会在持有连接期间开启和关闭，无法切换回去的会话会被替换。
 - 原生控制台（`NATIVE_CONSOLE`）：表会停靠一个控制台，数据库在侧边栏中的菜单也可以在单独的标签页中打开一个控制台；它通过 `Connection::execute` 一次运行一行 SQL 语句，并使用编辑器的校验、危险查询确认、审计记录和查询历史。该驱动会执行 `QueryRequest::limit`（`REQUEST_ROW_LIMIT`），因此控制台命令会带上编辑器的行数上限。
 - 通过 SQL Server 登录账户（用户名 + 密码）认证；URI 模式接受 ADO、JDBC 以及 `sqlserver://user:pass@host:port/db` 形式的连接串。
 - 把 `Application Name` 上报为 `dbflux/<version>`，除非连接串或 URI 已设置了该值 —— 此时始终以用户提供的值为准；`sqlserver://`/`mssql://` URL 方案可用 `applicationname` 查询参数来设置它。
@@ -60,6 +61,23 @@ Microsoft SQL Server 关系型数据库。
 - 取消之后，`cleanup_after_cancel()` 会重建主 tiberius 客户端、捕获新的 SPID，并重新发出之前的 `USE [db]`，使下一条查询仍在同一个数据库中运行。从界面的角度看，连接始终是连着的，只是底层的会话 ID 变了。
 - 在被杀掉的会话上抛出的错误（错误码 596 / 233 / 6005）会被翻译成 `DbError::Cancelled`，因此界面显示的是「查询已取消」，而不是传输层的失败。
 - 在现代 SQL Server 上，会话所有者无需 `ALTER ANY CONNECTION` 权限即可 `KILL` 自己的 SPID。在较旧或受限制的登录上，`KILL` 本身可能因权限错误而失败；驱动程序会把该错误呈现给用户。
+
+### 断开的会话
+
+- 每个会话的 socket 都启用了 TCP keepalive（空闲 60 秒后发送第一个探测），
+  这样会切断静默连接的 NAT 网关、防火墙和负载均衡器也会保持会话打开。
+- 如果服务器或网络仍然切断了会话，下一次调用会以 I/O 错误失败（broken pipe、
+  connection reset 或意外的文件结束）。驱动会丢弃已失效的客户端，并像取消之后
+  一样把连接标记为需要重连。
+- 元数据读取（数据库、表、视图、表和视图详情、schema 类型、索引、外键和例程）
+  会打开新会话、恢复当前数据库并重试一次，因此空闲一段时间后打开表无需手动重连。
+- 行编辑（insert、update、delete）、浏览、计数以及行和依赖查询会在执行前先打开新
+  会话，因此在之前的调用检测到会话断开之后无需手动重连即可使用。如果尚未有调用检测到，
+  第一次操作会失败且不会被重放；失败的写入永远不会被重放。恢复过程
+  是串行的，并发调用方共用同一个新会话，而不会互相替换。表示会话已被终止的服务器
+  错误（596、233、6005）与 socket 断开按相同方式处理。
+- 查询批次永远不会重试，因为服务器可能已经执行了它。会显示它的错误，下一次查询
+  或 ping 会打开新会话。
 
 ### Schema 发现
 
@@ -163,3 +181,4 @@ Microsoft SQL Server 关系型数据库。
 - SQL Server 在 `sys.objects.type` 分类中没有 `Window` 函数类型；该驱动程序从不产生 `RoutineKind::Window`。
 - 数据传输引擎的迁移路径没有参照完整性开关（未设置 `DriverCapabilities::DISABLE_FK_CHECKS`；`Connection::set_referential_integrity` 返回 `NotSupported`）。SQL Server 是通过 `ALTER TABLE ... NOCHECK CONSTRAINT` 按表禁用外键检查的，这与引擎的单一全局开关不匹配；按表的变体可作为未来的扩展方向。
 - 没有由数据库强制的只读模式：需要该模式的请求会被拒绝，因此 MCP `execute_script` 会把分类为 `Read` 或 `Metadata` 的脚本按写入处理，SQL Server 连接上也无法使用编辑器自动刷新。
+- 暂不支持分析查询计划（实际行数与耗时）；只提供来自 `SHOWPLAN_XML` 的预估计划。

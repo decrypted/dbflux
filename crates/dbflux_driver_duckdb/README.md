@@ -48,6 +48,11 @@ Embedded analytical database, with optional DuckLake catalogs.
 - Each editor tab, grid mutation, and MCP call runs in its own session (a
   separate DuckDB connection to the shared instance), so a transaction left
   open in the editor does not capture other requests.
+- A connection joining an existing instance restores the catalog and schema
+  active after startup SQL and any DuckLake attach. Execution sessions attempt
+  the same restoration before following the root connection's active catalog.
+  Restoration is best effort: detaching that catalog later does not prevent
+  cloning.
 - Table views (`TableViewFeatures`): a table's Columns view reads
   `duckdb_columns()` and `pragma_storage_info` for each column's compression,
   min and max from segment statistics, nulls, row groups and rows. The Data
@@ -56,6 +61,8 @@ Embedded analytical database, with optional DuckLake catalogs.
   1 000 000 rows** fills in nulls, approximate distinct counts
   (`approx_count_distinct`) and ranges on request, and is recorded in the
   audit log. See [Columns and Partitions](../../docs/TABLE_VIEWS.md).
+- Structured query plan (`Connection::query_plan`): runs `EXPLAIN (FORMAT JSON)` on exactly one statement, without `ANALYZE` unless an analyzed plan is requested, so the statement is not executed, and maps the physical plan tree (operator, table, estimated cardinality, other attributes) into the driver-agnostic plan model. DuckDB reports no costs. A query with several statements, or an empty one, is refused before anything is sent.
+- Analyzed plans (`QueryPlanRequest::analyzed`, `supports_explain_analyze`): runs `EXPLAIN (ANALYZE, FORMAT JSON)` and maps each operator's `timing` and `intermediate_rows`, plus the planning and execution time of the query. DuckDB reports the time spent in the operator alone, so the plan keeps an inclusive total per operator and the node's self time is that time. Only a statement the shared classifier marks `Read` or `Metadata` is accepted, a write is refused before anything is sent, and DuckDB's own parser must accept it as a `SELECT`; it runs in a `READ ONLY` transaction that is rolled back.
 
 ## Limitations
 

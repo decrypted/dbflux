@@ -100,6 +100,119 @@ se ejecuta tal cual.
   <img src="../images/editor/multi-statement-light.webp" alt="Una pestaña de query que ejecutó tres sentencias como script, con una pestaña de resultado por sentencia">
 </picture>
 
+## Autocompletado
+
+En un editor SQL cada sugerencia dice qué es: una palabra a la derecha de la
+fila indica **tabla**, **vista**, **esquema**, **columna**, **alias**,
+**palabra clave** o **cte**. Un nombre de la cláusula `WITH` de la propia query
+dice **cte**, aunque una tabla o vista tenga el mismo nombre. La etiqueta se
+dibuja con el color que tiene el mismo token en el editor: tablas, vistas y CTE
+con el color de tipo, esquemas con el de espacio de nombres, columnas con el de
+campo, y alias y palabras clave con los suyos. La fila resaltada conserva sus
+colores de acento.
+
+El menú crece hasta caber su fila más larga, palabra incluida, hasta un ancho
+que sigue el tamaño de fuente de la interfaz, también en los editores que ya
+estaban abiertos. Los editores de MongoDB, Redis y Lua colorean sus sugerencias
+igual (métodos, funciones, clases y operadores con el color del mismo token en
+su editor), sin palabra de tipo. Una sugerencia de cualquier otro tipo conserva
+el estilo plano.
+
+## Snippets
+
+Un snippet es una plantilla de texto que insertas en el editor de queries. Tiene
+un nombre, un prefijo, un cuerpo y el lenguaje de query al que pertenece, y solo
+aparece en los editores de ese lenguaje. DBFlux incluye seis snippets de SQL;
+puedes editarlos o borrarlos, y añadir los tuyos en
+[Settings → Snippets](SETTINGS.md#snippets).
+
+### Insertar un snippet
+
+- **Por prefijo.** Escribe el prefijo (por ejemplo `sel`) y el snippet aparece en
+  el menú de autocompletado con la palabra de tipo **snippet**. Al elegirlo, como
+  con cualquier sugerencia, el prefijo se sustituye por el texto del snippet.
+- **Desde el selector.** `Ctrl+Alt+J` (`Cmd+J` en macOS), o **Insert snippet** en
+  la paleta de comandos, abre una lista filtrable con los snippets del lenguaje
+  del editor. Escribe para filtrar, muévete con las flechas y pulsa `Enter` para
+  insertar el snippet resaltado o `Escape` para cerrar la lista. El snippet
+  sustituye la selección, o se inserta en el cursor.
+
+### Marcadores
+
+| Sintaxis | Significado |
+|---|---|
+| `$1`, `$2`… | Un campo que visita el cursor, en orden numérico. |
+| `${1:default}` | Un campo que empieza con `default` seleccionado, así que escribir lo sustituye. |
+| `$0` | Dónde termina el cursor. Si el cuerpo no tiene `$0`, el final del texto. |
+
+Repetir un número refleja el campo: cada `$1` (o `${1:…}`) muestra lo que
+escribes en el primero. `\$`, `\}` y `\\` insertan un `$`, un `}` y un `\`
+literales. Los marcadores anidados, las variables (`$NAME`) y las opciones
+(`${1|a,b|}`) no están soportados; Settings rechaza un cuerpo que los use y
+señala la línea y la columna.
+
+Tras la inserción, el cursor va al primer campo, con su texto por defecto
+seleccionado. `Tab` pasa al campo siguiente y `Shift+Tab` al anterior. Mientras
+el menú de autocompletado está abierto, `Tab` sigue recorriendo las sugerencias
+(ver [Autocompletado](#autocompletado)); sin menú abierto, `Tab` y `Shift+Tab`
+se mueven entre campos. Los campos empiezan a funcionar cuando se confirma una
+sugerencia, no durante la vista previa de `Tab`.
+
+La sesión termina cuando llegas al último campo (`$0`), pulsas `Escape`, mueves
+el cursor fuera de los campos, editas el texto fuera de ellos, deshaces la
+inserción o sales del modo Insert de Vim.
+
+### Snippets integrados
+
+| Prefijo | Nombre |
+|---|---|
+| `sel` | Select rows |
+| `ins` | Insert a row |
+| `upd` | Update rows |
+| `del` | Delete rows |
+| `cte` | Common table expression |
+| `cnt` | Count rows |
+
+Son snippets normales: edítalos o bórralos en Settings. Un snippet integrado que
+borras sigue borrado.
+
+## Formatear
+
+- `Ctrl+Shift+F` (`Cmd+Option+L` en macOS) — **Formatear consulta**.
+
+Formatear también es el botón Formatear de la barra de herramientas, una entrada
+del menú de acciones del panel y un comando de la paleta de comandos. Con una
+selección, reformatea el texto seleccionado. Sin selección, reformatea el
+statement bajo el cursor, con los mismos límites que **Ejecutar query**, así que
+un buffer con un solo statement se formatea entero. Para formatear todos los
+statements, selecciona todo (`Ctrl+A`, o `Cmd+A` en macOS) primero. Las palabras clave pasan a
+mayúsculas y cada cláusula se sangra con dos espacios.
+
+Formatear está disponible en conexiones SQL cuyo servicio de lenguaje puede
+formatear: PostgreSQL, MySQL/MariaDB, SQLite, SQL Server y los demás drivers SQL
+incluidos. Los documentos de script y los demás lenguajes de consulta mantienen
+el botón deshabilitado. En las conexiones que la ofrecen, la code action **Format statement** (`Ctrl+.` /
+`Cmd+.`) sigue haciendo el mismo cambio para el statement bajo el cursor.
+
+## Errores de query
+
+Cuando una query falla y la base de datos indica dónde, el editor subraya como
+error el token que rechazó, y la notificación del error ofrece **Ir al error**
+junto a **Copiar error**. La misma acción es **Ir al error de la consulta** en
+el menú de acciones del panel y en la paleta de comandos, y solo está habilitada
+mientras exista una marca. No tiene atajo de teclado por defecto. Nada se mueve
+solo: el cursor y el foco se quedan donde estaban hasta que la invocas, y
+entonces el cursor aterriza en el token marcado del editor.
+
+La marca se coloca en el statement que se ejecutó, ya sea el statement bajo el
+cursor, todo el buffer o la selección, y en un script está en el statement que
+falló. Desaparece con tu primera edición y cuando vuelves a ejecutar. No hay
+marca cuando la base de datos no da una posición, cuando el texto enviado difiere
+del texto del editor (las macros de tiempo se sustituyen antes de enviar la
+query) o cuando cambiaste el editor mientras la query se ejecutaba. PostgreSQL,
+Redshift y SQLite informan posiciones; los demás drivers muestran el error sin
+marca. La marca aparece solo mientras el texto enviado siga coincidiendo con el del editor, así que una edición antes de que vuelva el error, o un cambio del texto antes de enviarlo, no deja marca. La posición nunca forma parte del texto de la notificación.
+
 ## Confirmación de queries peligrosas
 
 DBFlux detecta operaciones peligrosas entre lenguajes — `DELETE`/`DROP`/

@@ -104,6 +104,8 @@ When the tree gains focus with no row selected, the row selected last is selecte
 | `Ctrl+s` / `Cmd+s` | Save query |
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Save file as |
 | `Ctrl+/` / `Cmd+/` | Toggle line comment |
+| `Ctrl+Shift+f` / `Cmd+Option+l` | Format the selection, or the statement under the cursor |
+| `Ctrl+Alt+j` / `Cmd+j` | Insert snippet (opens the snippet picker) |
 | `Shift+F10` | Open the pane actions menu |
 | `Enter` | Focus / execute |
 
@@ -129,13 +131,19 @@ a suggestion, the arrow keys also update the text. `Enter`, or typing any other
 character, keeps the inserted suggestion and closes the menu; `Escape` restores
 the word you typed. The whole cycle is one undo step.
 
+While a snippet is being filled in and no completion menu is open, `Tab` /
+`Shift+Tab` move to the next / previous snippet field instead of indenting.
+`Tab` on the last field, or `Escape`, ends the snippet. With a completion menu
+open, `Tab` keeps cycling its suggestions.
+
 The action strip on the editor's left edge is also a menu. `Shift+F10` opens the **pane actions** menu
 from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
 the execution context bar, where `m` (or `Shift+F10`) opens it too. A script
 editor (Lua, Python, Bash) has no connection controls, so its context bar holds
 only an **Actions** button, which `Ctrl+k` focuses and `Enter`, `m` or a click
-presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, Format, Query
-history, Explain and Chart, each with its shortcut when it has one. Move with
+presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, Format, Go to
+query error (enabled while a failed query's error is marked), Query history,
+Explain and Chart, each with its shortcut when it has one. Move with
 `j` / `k` and choose with `Enter`, as in any [context menu](#context-menu);
 `Escape` closes it. While the query has results, the menu goes on with the
 results header: Refresh and the auto-refresh interval, Next and Previous result
@@ -402,6 +410,9 @@ A read-only delete does not change the clipboard.
 | `/` | Focus search/filter |
 | `x` | Delete row |
 | `r` | Rename / edit |
+| `e` | Edit the value of the selected secret in the AWS Secrets document: retrieves the value first when it is not loaded (the retrieval is audited when auditing is on; with auditing off, or when the audit write fails, it can succeed without a record), then opens the editor; only when it can be edited (plaintext, not managed by another service, not scheduled for deletion, in a store that accepts writes) |
+| `b` | Roll the selected secret back to its most recent earlier version in the AWS Secrets document (asks first; only in a store with staging labels, for a secret not managed by another service and not scheduled for deletion) |
+| `m` → Open in tab | Open the selected secret of the AWS Secrets document in its own tab (also the expand button of the details pane and the row menu's Open in tab). In that tab `e`, `b`, `x` and `F5` act on its one secret as they do in the listing. A tab whose region differs from the connection's, or whose secret was deleted, starts no read or write and says why (a save already in flight is not cancelled and may still land on the previous region). Edit value (`e`) in the listing opens that tab with the editor active, retrieving the value first when it is not loaded (audited when auditing is on). |
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
@@ -630,6 +641,8 @@ edited.
 | `d d` / `Delete` | Delete the row |
 | `a a` / `Shift+a Shift+a` | Add / duplicate a row |
 | `Ctrl+n` | Set the cell to NULL |
+| `Ctrl+Shift+0` | Set the cell to its column default (stages the default expression) |
+| `Ctrl+Shift+I` | Flip the inline editor between literal and SQL expression, or open it as an expression |
 | `u` / `Ctrl+z` / `Cmd+z` | Undo |
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo |
 | `e` | Expand or collapse a nested column (document grids) |
@@ -825,6 +838,21 @@ The keys are listed under the MCP Approvals context in Settings > Keybindings.
 
 The keys are listed under the Migrate Wizard context in Settings > Keybindings.
 
+## Import wizard
+
+On the configure step, a cursor walks the choices that take no focus of their own: the Sheet dropdown of an imported workbook (when it has more than one visible sheet), the CSV delimiter and encoding of an imported file, then each table's mapping mode, target column and source column. `Tab` still reaches the buttons (**Use table**, **Apply mapping**, **Continue**).
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` | Move the cursor to the next / previous choice |
+| `l` / `h` (or `Right` / `Left`) | On the delimiter or encoding: pick the next / previous one and read the file again |
+| `Enter` | On the delimiter or encoding: pick the next one. On the Sheet, a mapping mode, target column or source column: open its dropdown, which then takes `j` / `k` and `Enter` as in [Dropdowns](#dropdowns) |
+| `Escape` | In the target table or NULL text field: leave the field and give the keys above back to the dialog. On an open dropdown: close only the dropdown and give the keys back to the dialog. Anywhere else: close the wizard |
+
+On the configure step of a SQL script, the cursor visits **On error** and **Run in one transaction**: `l` / `h` and `Enter` on **On error** pick the other choice, and `Enter` on the transaction checkbox toggles it (it is skipped while "Continue after errors" or a connection without transactions turns it off).
+
+While a text field or an open dropdown has focus, these keys (including `Enter`) act on that field, not on the cursor. They are listed under the Import Wizard context in Settings > Keybindings.
+
 ## Text fields
 
 | Keys | Action |
@@ -834,6 +862,9 @@ The keys are listed under the Migrate Wizard context in Settings > Keybindings.
 | `Ctrl+Enter` / `Cmd+Enter` | Run the query |
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Run the query in a new tab |
 | `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
+| `Ctrl+Insert` | Copy the selection (Linux and Windows) |
+| `Shift+Insert` | Paste (Linux and Windows) |
+| `Shift+Delete` | Cut the selection, or delete the next character when nothing is selected (Linux and Windows). In a password field it deletes the selection without copying it |
 
 While you type in a text field outside a dialog, such as the sidebar search or
 the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd`, or

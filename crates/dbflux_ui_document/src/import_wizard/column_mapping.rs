@@ -145,6 +145,7 @@ mod tests {
             type_name: Some("text".to_string()),
             nullable: true,
             is_primary_key: false,
+            kind: dbflux_core::ColumnKind::Unknown,
         }
     }
 
@@ -157,6 +158,7 @@ mod tests {
             columns,
             row_count: 3,
             fk_order_index: 0,
+            options: Default::default(),
         }
     }
 

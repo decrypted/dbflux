@@ -13,6 +13,7 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 ## 주요 기능
 
 - SQL 쿼리 실행과 스키마 검색을 지원하는 SQL Server / Azure SQL 관계형 드라이버입니다.
+- 구조화된 쿼리 계획(`Connection::query_plan`): 예상 계획은 `SET SHOWPLAN_XML`에서 가져오므로 문은 컴파일만 되고 실행되지 않으며, 비용, 행 수 추정치, 인덱스 사용, 경고가 포함된 연산자 트리로 반환됩니다. `SHOWPLAN_XML`은 세션 상태이므로 연결을 점유하는 동안 켜고 끄며, 되돌릴 수 없는 세션은 교체됩니다.
 - 네이티브 콘솔(`NATIVE_CONSOLE`): 테이블에는 콘솔이 붙고, 사이드바의 데이터베이스 메뉴에서는 콘솔을 별도 탭으로 열 수 있습니다. 콘솔은 `Connection::execute`를 통해 SQL 문 한 줄씩 실행하며, 편집기의 검증, 위험 쿼리 확인, 감사 행, 쿼리 기록을 사용합니다. 이 드라이버는 `QueryRequest::limit`(`REQUEST_ROW_LIMIT`)을 적용하므로 콘솔 명령에도 편집기의 행 제한이 적용됩니다.
 - SQL Server 로그인(사용자 이름 + 비밀번호)을 통한 인증을 지원합니다. URI 모드에서는 ADO, JDBC, `sqlserver://user:pass@host:port/db` 형식의 연결 문자열을 받습니다.
 - 연결 문자열이나 URI가 이미 `Application Name`을 설정하고 있지 않는 한 `Application Name`을 `dbflux/<version>`으로 보고하며, 이미 설정되어 있다면 사용자가 지정한 값이 항상 우선합니다. 이를 위해 `sqlserver://`/`mssql://` URL 스킴은 `applicationname` 쿼리 파라미터를 받습니다.
@@ -62,6 +63,26 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 - 취소 후 `cleanup_after_cancel()`은 기본 tiberius 클라이언트를 다시 만들고 새 SPID를 캡처하며 이전의 `USE [db]`를 다시 실행하여 다음 쿼리가 동일한 데이터베이스에서 실행되도록 합니다. UI 관점에서는 연결이 유지되고 기반 세션 ID만 바뀝니다.
 - 죽은 세션에서 발생한 오류(코드 596 / 233 / 6005)는 `DbError::Cancelled`로 변환되어, UI가 전송 수준 실패 대신 "쿼리가 취소되었습니다"를 표시하도록 합니다.
 - 최신 SQL Server에서 세션 소유자는 `ALTER ANY CONNECTION` 권한 없이 자신의 SPID에 `KILL`을 실행할 수 있습니다. 오래되었거나 제한된 로그인에서는 KILL 자체가 권한 오류로 실패할 수 있으며, 드라이버는 이를 사용자에게 표시합니다.
+
+### 끊긴 세션
+
+- 각 세션의 소켓에는 TCP keepalive가 켜져 있습니다(60초 유휴 후 첫 probe).
+  유휴 연결을 끊는 NAT 게이트웨이, 방화벽, 로드 밸런서가 있어도 세션이 유지됩니다.
+- 그래도 서버나 네트워크가 세션을 끊으면 다음 호출이 I/O 오류(broken pipe,
+  connection reset, 예기치 않은 EOF)로 실패합니다. 드라이버는 죽은 클라이언트를
+  버리고, 취소 후와 같은 방식으로 연결을 재연결 대상으로 표시합니다.
+- 메타데이터 읽기(데이터베이스, 테이블, 뷰, 테이블과 뷰 상세, 스키마 타입,
+  인덱스, 외래 키, 루틴)는 새 세션을 열고 활성 데이터베이스를 복원한 뒤 한 번
+  재시도합니다. 따라서 한동안 유휴 상태였던 뒤에도 수동 재연결 없이 테이블을
+  열 수 있습니다.
+- 행 편집(insert, update, delete), 탐색, 카운트, 행 및 의존성 조회는 실행 전에
+  새 세션을 열기 때문에 이전 호출이 세션 끊김을 감지한 뒤에는 수동 재연결 없이
+  동작합니다. 아직 아무도 감지하지 못했다면 첫 번째 작업은 실패하며 다시
+  실행되지 않습니다. 실패한 쓰기는 절대 다시 실행되지 않습니다. 복구는 직렬화되므로 동시 호출자는 서로의
+  세션을 교체하지 않고 하나의 새 세션을 공유합니다. 종료된 세션을 알리는 서버
+  오류(596, 233, 6005)는 끊긴 소켓과 같은 방식으로 처리됩니다.
+- 쿼리 배치는 서버가 이미 실행했을 수 있으므로 절대 재시도하지 않습니다.
+  오류가 표시되고, 다음 쿼리나 ping이 새 세션을 엽니다.
 
 ### 스키마 검색
 
@@ -164,3 +185,4 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 - SQL Server에는 `sys.objects.type` 분류에 `Window` 함수 종류가 없으므로, 이 드라이버는 `RoutineKind::Window`를 절대 내보내지 않습니다.
 - 데이터 전송 엔진의 마이그레이션 경로에 대한 참조 무결성 토글이 없습니다(`DriverCapabilities::DISABLE_FK_CHECKS`가 설정되지 않음; `Connection::set_referential_integrity`는 `NotSupported`를 반환합니다). SQL Server는 `ALTER TABLE ... NOCHECK CONSTRAINT`로 테이블별로 FK 검사를 비활성화하는데, 이는 엔진의 단일 전역 토글에 맞지 않습니다. 테이블별 변형은 향후 추가 가능성이 있습니다.
 - 데이터베이스가 강제하는 읽기 전용 모드가 없습니다. 이를 요구하는 요청은 거부되므로 MCP `execute_script`는 `Read` 또는 `Metadata`로 분류된 스크립트를 쓰기로 처리하며, SQL Server 연결에서는 편집기 자동 새로 고침을 사용할 수 없습니다.
+- 분석된 쿼리 계획(실측 행 수와 시간)은 아직 지원되지 않으며, `SHOWPLAN_XML`의 예상 계획만 제공됩니다.

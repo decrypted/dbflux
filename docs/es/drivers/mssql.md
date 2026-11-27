@@ -16,6 +16,12 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
 
 - Driver relacional para SQL Server / Azure SQL con ejecución de queries SQL y
   descubrimiento de schema.
+- Planes de query estructurados (`Connection::query_plan`): el plan estimado
+  proviene de `SET SHOWPLAN_XML`, así que el statement se compila y nunca se
+  ejecuta, y se devuelve como un árbol de operadores con costos, estimaciones de
+  filas, uso de índices y advertencias. `SHOWPLAN_XML` es estado de la sesión,
+  por lo que se activa y desactiva mientras se retiene la conexión, y una sesión
+  que no puede revertirse se reemplaza.
 - Consola nativa (`NATIVE_CONSOLE`): las tablas acoplan una consola, y el menú
   de una base de datos en la barra lateral abre una en su propia pestaña, que
   ejecuta una línea de sentencia SQL a la vez mediante `Connection::execute`
@@ -150,6 +156,31 @@ Requiere el permiso `VIEW SERVER STATE`.
   moderno sin el permiso `ALTER ANY CONNECTION`. En logins más antiguos o
   restringidos, el propio KILL puede fallar con un error de permisos; el driver
   lo muestra al usuario.
+
+### Sesiones caídas
+
+- El socket de cada sesión tiene TCP keepalive activado (primer sondeo tras
+  60 segundos de inactividad), para que los gateways NAT, firewalls y
+  balanceadores que cortan conexiones silenciosas mantengan la sesión abierta.
+- Si aun así el servidor o la red cortan la sesión, la siguiente llamada
+  falla con un error de I/O (broken pipe, connection reset o fin de archivo
+  inesperado). El driver descarta el cliente muerto y marca la conexión para
+  reconectar, igual que tras una cancelación.
+- Las lecturas de metadatos (bases de datos, tablas, vistas, detalles de
+  tablas y vistas, tipos, índices, foreign keys y rutinas del schema) abren
+  una sesión nueva, restauran la base de datos activa y reintentan una vez,
+  así que abrir una tabla tras un rato inactivo funciona sin reconectar a mano.
+- Las ediciones de filas (insert, update, delete), la navegación, el conteo y
+  las consultas de filas y dependencias abren la sesión nueva antes de
+  ejecutarse, así que funcionan sin reconectar a mano una vez que una llamada
+  anterior detectó la caída. Si nada la detectó todavía, la primera operación
+  falla y no se repite; una escritura fallida nunca se repite. La recuperación está serializada, de modo
+  que los llamadores concurrentes comparten una sola sesión nueva en lugar de
+  reemplazarse entre sí. Un error del servidor que indica una sesión terminada
+  (596, 233, 6005) se trata igual que un socket caído.
+- Un batch de queries nunca se reintenta, porque el servidor puede haberlo
+  ejecutado ya. Se muestra su error, y la siguiente query o ping abre una
+  sesión nueva.
 
 ### Descubrimiento de schema
 
@@ -432,3 +463,4 @@ Requiere el permiso `VIEW SERVER STATE`.
   NOCHECK CONSTRAINT`, lo cual no encaja con el toggle global único del motor;
   una variante por tabla es una posible mejora futura.
 - Sin modo de solo lectura aplicado por la base de datos: las peticiones que lo requieren se rechazan, así que `execute_script` en MCP gobierna como escrituras los scripts clasificados `Read` o `Metadata`, y el auto-refresh del editor no está disponible en conexiones de SQL Server.
+- Los planes de query analizados (valores reales y tiempos) aún no están soportados; solo está disponible el plan estimado de `SHOWPLAN_XML`.

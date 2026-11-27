@@ -382,6 +382,35 @@ pub(crate) fn post_disconnect_hook_cancelled_task_label() -> String {
     dbflux_i18n::t!("sidebar.task.post_disconnect_hook_cancelled")
 }
 
+/// Translated failure for a profile marked "Connect on startup" whose
+/// password is not saved, e.g. `"'prod-db' was not connected on startup …"`.
+pub(crate) fn startup_needs_password_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.startup_needs_password", name = name)
+}
+
+/// Translated toast naming every "Connect on startup" profile left
+/// unconnected because its password is not saved. One name reads like
+/// [`startup_needs_password_label`].
+pub(crate) fn startup_needs_password_toast_label(names: &[String]) -> String {
+    match names {
+        [name] => startup_needs_password_label(name),
+        _ => {
+            let names = names
+                .iter()
+                .map(|name| format!("'{name}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            dbflux_i18n::t!("sidebar.toast.startup_needs_passwords", names = names)
+        }
+    }
+}
+
+/// Translated failure for a profile marked "Connect on startup" whose SSH
+/// tunnel needs a passphrase that is not saved.
+pub(crate) fn startup_needs_passphrase_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.startup_needs_passphrase", name = name)
+}
+
 /// Translated toast shown when a connect/disconnect request is rejected
 /// because an operation is already pending for the same profile.
 pub(crate) fn connection_already_pending_toast_label() -> String {

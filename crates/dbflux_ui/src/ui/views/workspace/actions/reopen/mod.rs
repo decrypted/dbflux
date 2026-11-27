@@ -35,6 +35,27 @@ impl Workspace {
             });
         }
     }
+
+    /// Starts the connections DBFlux opens at launch.
+    ///
+    /// With the global reopen setting on, the last session decides alone and
+    /// the per-profile "Connect on startup" flags are ignored: the connection
+    /// manager and the sidebar show them disabled then, so a greyed-out flag
+    /// must not connect anything.
+    pub(in crate::ui::views::workspace) fn connect_profiles_at_launch(
+        &mut self,
+        reopen_last_connections: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if reopen_last_connections {
+            self.reopen_last_connections(cx);
+            return;
+        }
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.connect_profiles_on_startup(cx);
+        });
+    }
 }
 
 /// The profiles to reconnect at startup: the saved set followed by the

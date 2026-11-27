@@ -191,6 +191,7 @@ impl MigrationRegistry {
         registry.register(mod_046_connection_profile_read_only::MigrationImpl);
         registry.register(mod_047_general_settings_grid_fk_labels::MigrationImpl);
         registry.register(mod_048_general_settings_scrollbar_visibility::MigrationImpl);
+        registry.register(mod_049_connection_profile_connect_on_startup::MigrationImpl);
         registry.register(mod_049_general_settings_inspector_width::MigrationImpl);
         registry.register(mod_050_cfg_telemetry::MigrationImpl);
         registry.register(mod_051_general_settings_accent_color::MigrationImpl);
@@ -434,6 +435,7 @@ mod mod_045_general_settings_table_alias;
 mod mod_046_connection_profile_read_only;
 mod mod_047_general_settings_grid_fk_labels;
 mod mod_048_general_settings_scrollbar_visibility;
+mod mod_049_connection_profile_connect_on_startup;
 mod mod_049_general_settings_inspector_width;
 mod mod_050_cfg_telemetry;
 mod mod_051_general_settings_accent_color;
@@ -1131,6 +1133,44 @@ mod tests {
     }
 
     #[test]
+    fn test_049_existing_profiles_do_not_connect_on_startup() {
+        let temp_dir = temp_dir("049_connection_profile_connect_on_startup");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let registry = MigrationRegistry::new();
+        registry.run_all(&conn).expect("create schema");
+        conn.execute_batch(
+            "ALTER TABLE cfg_connection_profiles DROP COLUMN connect_on_startup;
+             DELETE FROM sys_migrations WHERE name = '049_connection_profile_connect_on_startup';
+             INSERT INTO cfg_connection_profiles (id, name) VALUES ('legacy', 'Legacy');",
+        )
+        .expect("restore pre-049 schema with an existing profile");
+
+        registry.run_all(&conn).expect("upgrade profile schema");
+        let connect_on_startup: i64 = conn
+            .query_row(
+                "SELECT connect_on_startup FROM cfg_connection_profiles WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read the migrated flag");
+        assert_eq!(
+            connect_on_startup, 0,
+            "existing profiles must not start connecting on their own"
+        );
+
+        registry
+            .run_all(&conn)
+            .expect("rerun profile schema upgrade");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn test_migration_name_order_invariant() {
         let temp_dir = temp_dir("name_order");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1192,6 +1232,7 @@ mod tests {
             "046_connection_profile_read_only",
             "047_general_settings_grid_fk_labels",
             "048_general_settings_scrollbar_visibility",
+            "049_connection_profile_connect_on_startup",
             "049_general_settings_inspector_width",
             "050_cfg_telemetry",
             "051_general_settings_accent_color",

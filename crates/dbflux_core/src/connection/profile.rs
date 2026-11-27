@@ -1639,6 +1639,12 @@ pub struct ConnectionProfile {
     /// it lists only the database the connection is configured with.
     #[serde(default = "default_show_all_databases")]
     pub show_all_databases: bool,
+
+    /// Whether the app connects this profile when it starts, the same way a
+    /// click on the connection does. Settable in Connection Manager and from
+    /// the sidebar connection menu. Defaults to `false`.
+    #[serde(default)]
+    pub connect_on_startup: bool,
 }
 
 fn default_show_all_databases() -> bool {
@@ -1668,6 +1674,7 @@ impl ConnectionProfile {
             environment: None,
             navigator_view: NavigatorView::Advanced,
             show_all_databases: true,
+            connect_on_startup: false,
         }
     }
 
@@ -1695,6 +1702,7 @@ impl ConnectionProfile {
             environment: None,
             navigator_view: NavigatorView::Advanced,
             show_all_databases: true,
+            connect_on_startup: false,
             mcp_governance: None,
         }
     }
@@ -1726,6 +1734,7 @@ impl ConnectionProfile {
             environment: None,
             navigator_view: NavigatorView::Advanced,
             show_all_databases: true,
+            connect_on_startup: false,
         }
     }
 
@@ -1762,6 +1771,7 @@ impl ConnectionProfile {
             environment: None,
             navigator_view: NavigatorView::Advanced,
             show_all_databases: true,
+            connect_on_startup: false,
         }
     }
 

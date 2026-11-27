@@ -28,9 +28,19 @@ impl SettingsCoordinator {
                         AppIcon::Settings,
                     ),
                     (
+                        "appearance",
+                        dbflux_i18n::t!("settings.nav.appearance"),
+                        AppIcon::Eye,
+                    ),
+                    (
                         "keybindings",
                         dbflux_i18n::t!("settings.nav.keybindings"),
                         AppIcon::Keyboard,
+                    ),
+                    (
+                        "snippets",
+                        dbflux_i18n::t!("settings.nav.snippets"),
+                        AppIcon::Braces,
                     ),
                     (
                         "updates",
@@ -149,6 +159,7 @@ impl SettingsCoordinator {
     pub(super) fn section_for_tree_id(id: &str) -> Option<SettingsSectionId> {
         match id {
             "general" => Some(SettingsSectionId::General),
+            "appearance" => Some(SettingsSectionId::Appearance),
             "audit" => Some(SettingsSectionId::Audit),
             #[cfg(feature = "mcp")]
             "mcp-clients" => Some(SettingsSectionId::McpClients),
@@ -157,6 +168,7 @@ impl SettingsCoordinator {
             #[cfg(feature = "mcp")]
             "mcp-policies" => Some(SettingsSectionId::McpPolicies),
             "keybindings" => Some(SettingsSectionId::Keybindings),
+            "snippets" => Some(SettingsSectionId::Snippets),
             "updates" => Some(SettingsSectionId::Updates),
             "proxies" => Some(SettingsSectionId::Proxies),
             "ssh-tunnels" => Some(SettingsSectionId::SshTunnels),
@@ -172,6 +184,7 @@ impl SettingsCoordinator {
     pub(super) fn tree_id_for_section(section: SettingsSectionId) -> &'static str {
         match section {
             SettingsSectionId::General => "general",
+            SettingsSectionId::Appearance => "appearance",
             SettingsSectionId::Audit => "audit",
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpClients => "mcp-clients",
@@ -180,6 +193,7 @@ impl SettingsCoordinator {
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpPolicies => "mcp-policies",
             SettingsSectionId::Keybindings => "keybindings",
+            SettingsSectionId::Snippets => "snippets",
             SettingsSectionId::Updates => "updates",
             SettingsSectionId::Proxies => "proxies",
             SettingsSectionId::SshTunnels => "ssh-tunnels",
@@ -208,6 +222,10 @@ mod tests {
         assert_eq!(
             SettingsCoordinator::section_for_tree_id("general"),
             Some(SettingsSectionId::General)
+        );
+        assert_eq!(
+            SettingsCoordinator::section_for_tree_id("appearance"),
+            Some(SettingsSectionId::Appearance)
         );
         assert_eq!(
             SettingsCoordinator::section_for_tree_id("audit"),
@@ -250,8 +268,10 @@ mod tests {
         )]
         let mut sections = vec![
             SettingsSectionId::General,
+            SettingsSectionId::Appearance,
             SettingsSectionId::Audit,
             SettingsSectionId::Keybindings,
+            SettingsSectionId::Snippets,
             SettingsSectionId::Updates,
             SettingsSectionId::Proxies,
             SettingsSectionId::SshTunnels,
@@ -301,6 +321,50 @@ mod tests {
     }
 
     #[test]
+    fn appearance_is_listed_right_after_general() {
+        let tree = SettingsCoordinator::build_sidebar_tree("");
+        let ids: Vec<&str> = tree.rows().iter().map(|row| row.id.as_ref()).collect();
+        let general = ids.iter().position(|id| *id == "general").expect("general");
+
+        assert_eq!(ids[general + 1], "appearance");
+    }
+
+    #[test]
+    fn snippets_maps_to_its_tree_id_and_back() {
+        assert_eq!(
+            SettingsCoordinator::tree_id_for_section(SettingsSectionId::Snippets),
+            "snippets"
+        );
+        assert_eq!(
+            SettingsCoordinator::section_for_tree_id("snippets"),
+            Some(SettingsSectionId::Snippets)
+        );
+    }
+
+    #[test]
+    fn snippets_is_listed_right_after_keybindings() {
+        let tree = SettingsCoordinator::build_sidebar_tree("");
+        let ids: Vec<&str> = tree.rows().iter().map(|row| row.id.as_ref()).collect();
+        let keybindings = ids
+            .iter()
+            .position(|id| *id == "keybindings")
+            .expect("keybindings");
+
+        assert_eq!(ids[keybindings + 1], "snippets");
+    }
+
+    #[test]
+    fn searching_for_appearance_finds_the_page() {
+        let tree = SettingsCoordinator::build_sidebar_tree("appearance");
+
+        assert!(
+            tree.rows()
+                .iter()
+                .any(|row| row.id.as_ref() == "appearance")
+        );
+    }
+
+    #[test]
     fn search_is_case_insensitive_and_empty_query_keeps_everything() {
         let everything = SettingsCoordinator::build_sidebar_tree("");
         let upper = SettingsCoordinator::build_sidebar_tree("PROX");
@@ -330,7 +394,9 @@ mod tests {
     const NAV_CATALOG_KEYS: &[&str] = &[
         "settings.nav.general_group",
         "settings.nav.general",
+        "settings.nav.appearance",
         "settings.nav.keybindings",
+        "settings.nav.snippets",
         "settings.nav.updates",
         "settings.nav.audit",
         "settings.nav.about",

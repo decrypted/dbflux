@@ -1390,8 +1390,12 @@ impl McpConnectionFactory {
         // profile that routes through the pipeline (auth profile, access kind, value
         // refs) but stores its password in the OS keyring would otherwise connect
         // with no password at all. The GUI applies the same fallback.
-        let keyring_password =
-            DbFluxServer::resolve_profile_secrets(&self.state, &profile)?.password;
+        let keyring_password = DbFluxServer::resolve_profile_secrets(
+            &self.state,
+            &profile,
+            driver.requires_password(),
+        )?
+        .password;
         let pipeline_input = self.build_pipeline_input(profile).await?;
         let cancel = pipeline_input.cancel.clone();
         let (state_tx, state_rx) = dbflux_core::pipeline_state_channel();
@@ -1479,7 +1483,11 @@ impl McpConnectionFactory {
         driver: Arc<dyn dbflux_core::DbDriver>,
         profile: dbflux_core::ConnectionProfile,
     ) -> Result<Arc<CachedConnection>, String> {
-        let resolved_secrets = DbFluxServer::resolve_profile_secrets(&self.state, &profile)?;
+        let resolved_secrets = DbFluxServer::resolve_profile_secrets(
+            &self.state,
+            &profile,
+            driver.requires_password(),
+        )?;
         let password = resolved_secrets.password;
         let ssh_secret = resolved_secrets.ssh_secret;
         let connection_key_for_error = connection_key.clone();
@@ -1779,11 +1787,23 @@ impl DbFluxServer {
         F: FnOnce(Arc<dyn Connection>) -> Result<T, String> + Send + 'static,
         T: Send + 'static,
     {
+        #[cfg(feature = "telemetry")]
+        let evidence = crate::telemetry_usage::OPERATION
+            .try_with(Clone::clone)
+            .ok()
+            .flatten();
         tokio::task::spawn_blocking(move || {
-            let mut scope = dbflux_core::ExecutionSessionScope::new(connection)
-                .map_err(|error| error.to_string())?;
-            let result = f(scope.connection()).map_err(dbflux_core::DbError::query_failed);
-            scope.finish(result).map_err(|error| error.to_string())
+            let execute = || {
+                let mut scope = dbflux_core::ExecutionSessionScope::new(connection)
+                    .map_err(|error| error.to_string())?;
+                let result = f(scope.connection()).map_err(dbflux_core::DbError::query_failed);
+                scope.finish(result).map_err(|error| error.to_string())
+            };
+            // Propagate only this explicitly awaited operation, not arbitrary child tasks.
+            #[cfg(feature = "telemetry")]
+            return crate::telemetry_usage::OPERATION.sync_scope(evidence, execute);
+            #[cfg(not(feature = "telemetry"))]
+            execute()
         })
         .await
         .map_err(|e| format!("Blocking task failed: {}", e))?
@@ -1807,9 +1827,16 @@ impl DbFluxServer {
     fn resolve_profile_secrets(
         state: &ServerState,
         profile: &dbflux_core::ConnectionProfile,
+        driver_requires_password: bool,
     ) -> Result<ResolvedSecrets, String> {
         let password = if profile.save_password {
-            match state.secret_manager.get_password(profile) {
+            let stored = dbflux_core::keyring_password_for_connect(
+                profile,
+                driver_requires_password,
+                state.secret_manager.get_password(profile),
+            )
+            .map_err(|error| format!("Profile '{}': {error}", profile.name))?;
+            match stored {
                 Some(pw) => {
                     log::debug!(
                         "Resolved password from keyring for profile '{}' (id={})",
@@ -2207,9 +2234,11 @@ impl ServerHandler for DbFluxServer {
         let arguments = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
         let tool_call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
 
-        crate::governance::TOOL_CALL_ARGUMENTS
-            .scope(arguments, self.tool_router.call(tool_call))
-            .await
+        let call = crate::governance::TOOL_CALL_ARGUMENTS
+            .scope(arguments, self.tool_router.call(tool_call));
+        #[cfg(feature = "telemetry")]
+        let call = crate::telemetry_usage::scope_call(call);
+        call.await
     }
 
     fn get_info(&self) -> ServerInfo {
@@ -2224,14 +2253,18 @@ impl ServerHandler for DbFluxServer {
              All operations are subject to role-based access control and audit logging.\n\
              \n\
              Approvals: a policy can require a person to approve a call. Such a call does not \
-             run; it fails with error data code \"approval_required\" and a \"pending_id\". \
-             Then: (1) tell the user that pending execution <pending_id> is waiting for their \
-             approval in DBFlux (Workspace > Pending Approvals); (2) wait, and never call \
-             approve_execution or reject_execution, which are always denied to MCP clients; \
-             (3) check the status with get_pending_execution: while its status is \"pending\", \
-             it is still waiting, and status \"rejected\" carries the user's reason; (4) after \
-             the user approves it, repeat the identical call (same tool, same arguments) and \
-             it runs once. A rejected or expired call, or one \
+             run; it returns a normal (non-error) result whose structured content has code \
+             \"approval_required\", a \"pending_id\" and \"wait_tool\". Then: (1) tell the user \
+             that pending execution <pending_id> is waiting for their approval in DBFlux \
+             (Workspace > Pending Approvals); (2) never call approve_execution or \
+             reject_execution, which are always denied to MCP clients; (3) call \
+             wait_for_approval with the pending_id instead of polling get_pending_execution: it \
+             waits a bounded time (default 60 s, max 120 s) and returns status \"approved\", \
+             \"rejected\" (with the user's reason), \"expired\" or \"still_pending\"; on \
+             \"still_pending\" call it again (an agent that can run a background command may instead \
+             run the \"watch_command\" from the result: it prints one JSON line and exits when \
+             the request is decided); (4) when it is \"approved\", repeat the identical \
+             call (same tool, same arguments) and it runs once. A rejected or expired call, or one \
              repeated with different arguments, is queued again instead of running.",
         )
     }

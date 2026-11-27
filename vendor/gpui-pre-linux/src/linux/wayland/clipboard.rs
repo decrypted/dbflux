@@ -6,16 +6,17 @@ use std::{
 
 use calloop::{LoopHandle, PostAction};
 use filedescriptor::Pipe;
+use gpui_util::ResultExt as _;
 use strum::IntoEnumIterator;
 use wayland_client::{Connection, protocol::wl_data_offer::WlDataOffer};
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
+use crate::linux::file_uri_list::{
+    FileFormat, TEXT_MIME_TYPES, clipboard_item_from_files, file_clipboard_formats,
+};
 use crate::linux::platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout};
 use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
 
-/// Text mime types that we'll offer to other programs.
-pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
-    ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
 pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
 
 /// Text mime types that we'll accept from other programs.
@@ -93,6 +94,25 @@ impl<T: ReceiveData> DataOffer<T> {
                 None
             }
         }
+    }
+
+    fn read_utf8(&self, connection: &Connection, format: FileFormat) -> Option<String> {
+        let mime_type = format.mime();
+        if !self.has_mime_type(mime_type) {
+            return None;
+        }
+        String::from_utf8(self.read_bytes(connection, mime_type)?).log_err()
+    }
+
+    /// The files another application copied or cut, when it offers them in a file format.
+    fn read_files(&self, connection: &Connection) -> Option<ClipboardItem> {
+        let gnome = self.read_utf8(connection, FileFormat::GnomeCopiedFiles);
+        if let Some(item) = clipboard_item_from_files(gnome.as_deref(), None, None) {
+            return Some(item);
+        }
+        let uri_list = self.read_utf8(connection, FileFormat::UriList)?;
+        let kde_cut = self.read_utf8(connection, FileFormat::KdeCutSelection);
+        clipboard_item_from_files(None, Some(&uri_list), kde_cut.as_deref())
     }
 
     fn read_text(&self, connection: &Connection) -> Option<ClipboardItem> {
@@ -174,19 +194,31 @@ impl Clipboard {
         self.self_mime.clone()
     }
 
-    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
-        if let Some(text) = self.contents.as_ref().and_then(|contents| contents.text()) {
-            self.send_bytes(fd, text.as_bytes().to_owned());
+    pub fn item(&self) -> Option<&ClipboardItem> {
+        self.contents.as_ref()
+    }
+
+    pub fn primary_item(&self) -> Option<&ClipboardItem> {
+        self.primary_contents.as_ref()
+    }
+
+    pub fn send(&self, mime_type: String, fd: OwnedFd) {
+        if let Some(bytes) = self
+            .contents
+            .as_ref()
+            .and_then(|contents| bytes_for_mime_type(contents, &mime_type))
+        {
+            self.send_bytes(fd, bytes);
         }
     }
 
-    pub fn send_primary(&self, _mime_type: String, fd: OwnedFd) {
-        if let Some(text) = self
+    pub fn send_primary(&self, mime_type: String, fd: OwnedFd) {
+        if let Some(bytes) = self
             .primary_contents
             .as_ref()
-            .and_then(|contents| contents.text())
+            .and_then(|contents| bytes_for_mime_type(contents, &mime_type))
         {
-            self.send_bytes(fd, text.as_bytes().to_owned());
+            self.send_bytes(fd, bytes);
         }
     }
 
@@ -201,7 +233,8 @@ impl Clipboard {
         }
 
         let item = offer
-            .read_text(&self.connection)
+            .read_files(&self.connection)
+            .or_else(|| offer.read_text(&self.connection))
             .or_else(|| offer.read_image(&self.connection))?;
 
         self.cached_read = Some(item.clone());
@@ -219,7 +252,8 @@ impl Clipboard {
         }
 
         let item = offer
-            .read_text(&self.connection)
+            .read_files(&self.connection)
+            .or_else(|| offer.read_text(&self.connection))
             .or_else(|| offer.read_image(&self.connection))?;
 
         self.cached_primary_read = Some(item.clone());
@@ -227,31 +261,357 @@ impl Clipboard {
     }
 
     pub fn send_bytes(&self, fd: OwnedFd, bytes: Vec<u8>) {
+        send_bytes_on(&self.loop_handle, fd, bytes);
+    }
+}
+
+/// The mime types an item is offered under. Files are offered as text too, so applications
+/// that only paste text still get the paths.
+pub(crate) fn offered_mime_types(item: Option<&ClipboardItem>) -> Vec<&'static str> {
+    let mut mime_types = TEXT_MIME_TYPES.to_vec();
+    let formats = item
+        .and_then(|item| Some((item.file_paths()?, item.file_operation()?)))
+        .map(|(paths, operation)| file_clipboard_formats(&paths, operation))
+        .unwrap_or_default();
+    mime_types.extend(
+        formats
+            .into_iter()
+            .map(|(format, _)| format)
+            .filter(|format| *format != FileFormat::Text)
+            .map(FileFormat::mime),
+    );
+    mime_types
+}
+
+/// The bytes an item sends for a mime type it offered, or `None` when it has none for it.
+fn bytes_for_mime_type(item: &ClipboardItem, mime_type: &str) -> Option<Vec<u8>> {
+    if let Some((paths, operation)) = item.file_paths().zip(item.file_operation()) {
+        let requested = FileFormat::from_mime(mime_type)?;
+        let formats = file_clipboard_formats(&paths, operation);
+        if !formats.is_empty() {
+            return formats
+                .into_iter()
+                .find_map(|(format, bytes)| (format == requested).then_some(bytes));
+        }
+    }
+    item.text().map(String::into_bytes)
+}
+
+/// Writes `bytes` to `fd` and closes it, which the reader sees as the end of the data.
+///
+/// The write happens here, not on a later pass of the event loop: a drop target waits for the
+/// end of the data before it finishes, so every pass of delay is a pause the user feels. Only
+/// what the pipe cannot take yet is left to the loop.
+fn send_bytes_on(loop_handle: &LoopHandle<'static, ()>, fd: OwnedFd, bytes: Vec<u8>) {
+    let mut file = File::from(fd);
+    if let Err(err) = set_nonblocking(&file) {
+        log::warn!("failed to make a data pipe non-blocking: {err}");
+    }
+    let mut written = 0;
+    if write_available(&mut file, &bytes, &mut written) != WriteProgress::WouldBlock {
+        return;
+    }
+    loop_handle
+        .insert_source(
+            calloop::generic::Generic::new(file, calloop::Interest::WRITE, calloop::Mode::Level),
+            move |_, file, _| {
+                let file = unsafe { file.get_mut() };
+                Ok(
+                    if write_available(file, &bytes, &mut written) == WriteProgress::WouldBlock {
+                        PostAction::Continue
+                    } else {
+                        PostAction::Remove
+                    },
+                )
+            },
+        )
+        .log_err();
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteProgress {
+    /// Everything was written.
+    Complete,
+    /// The reader has not made room for the rest yet.
+    WouldBlock,
+    /// The reader went away, or the pipe broke.
+    Failed,
+}
+
+fn write_available(writer: &mut impl Write, bytes: &[u8], written: &mut usize) -> WriteProgress {
+    while *written < bytes.len() {
+        match writer.write(&bytes[*written..]) {
+            Ok(0) => return WriteProgress::Failed,
+            Ok(count) => *written += count,
+            Err(err) if err.kind() == ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == ErrorKind::WouldBlock => return WriteProgress::WouldBlock,
+            Err(_) => return WriteProgress::Failed,
+        }
+    }
+    WriteProgress::Complete
+}
+
+fn set_nonblocking(file: &File) -> std::io::Result<()> {
+    let fd = file.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::Read,
+        os::fd::{FromRawFd, OwnedFd},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use calloop::EventLoop;
+
+    use super::*;
+
+    #[test]
+    fn text_items_are_offered_and_sent_as_text_only() {
+        let item = ClipboardItem::new_string("hello".into());
+        assert_eq!(
+            offered_mime_types(Some(&item)),
+            ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"]
+        );
+        assert_eq!(offered_mime_types(None), offered_mime_types(Some(&item)));
+        for mime_type in ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"] {
+            assert_eq!(
+                bytes_for_mime_type(&item, mime_type),
+                Some(b"hello".to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn cut_files_are_offered_with_every_file_format() {
+        let item = ClipboardItem::new_files(
+            [std::path::PathBuf::from("/tmp/a b")],
+            gpui::FileOperation::Cut,
+        );
+        assert_eq!(
+            offered_mime_types(Some(&item)),
+            [
+                "text/plain;charset=utf-8",
+                "UTF8_STRING",
+                "text/plain",
+                "text/uri-list",
+                "x-special/gnome-copied-files",
+                "application/x-kde-cutselection",
+            ]
+        );
+        let sent = |mime_type| bytes_for_mime_type(&item, mime_type);
+        assert_eq!(sent("UTF8_STRING"), Some(b"/tmp/a b".to_vec()));
+        assert_eq!(
+            sent("text/uri-list"),
+            Some(b"file:///tmp/a%20b\r\n".to_vec())
+        );
+        assert_eq!(
+            sent("x-special/gnome-copied-files"),
+            Some(b"cut\nfile:///tmp/a%20b".to_vec())
+        );
+        assert_eq!(sent("application/x-kde-cutselection"), Some(b"1".to_vec()));
+        assert_eq!(sent("image/png"), None);
+    }
+
+    #[test]
+    fn copied_files_are_not_offered_as_a_kde_cut() {
+        let item = ClipboardItem::new_files(
+            [std::path::PathBuf::from("/tmp/a")],
+            gpui::FileOperation::Copy,
+        );
+        let offered = offered_mime_types(Some(&item));
+        assert!(offered.contains(&"x-special/gnome-copied-files"));
+        assert!(!offered.contains(&"application/x-kde-cutselection"));
+        assert_eq!(
+            bytes_for_mime_type(&item, "x-special/gnome-copied-files"),
+            Some(b"copy\nfile:///tmp/a".to_vec())
+        );
+        assert_eq!(
+            bytes_for_mime_type(&item, "application/x-kde-cutselection"),
+            None
+        );
+    }
+
+    #[test]
+    fn files_without_file_urls_fall_back_to_text() {
+        let item = ClipboardItem::new_files(
+            [std::path::PathBuf::from("relative")],
+            gpui::FileOperation::Copy,
+        );
+        assert_eq!(offered_mime_types(Some(&item)).len(), 3);
+        assert_eq!(
+            bytes_for_mime_type(&item, "text/plain"),
+            Some(b"relative".to_vec())
+        );
+    }
+
+    fn pipe() -> (File, OwnedFd) {
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+        unsafe { (File::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+    }
+
+    fn set_nonblocking(file: &File) {
+        unsafe {
+            let flags = libc::fcntl(file.as_raw_fd(), libc::F_GETFL);
+            assert_ne!(flags, -1);
+            assert_eq!(
+                libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn a_small_payload_is_written_and_the_pipe_closed_before_send_returns() {
+        let event_loop = EventLoop::<()>::try_new().expect("event loop");
+        let (mut reader, writer) = pipe();
+        set_nonblocking(&reader);
+
+        send_bytes_on(&event_loop.handle(), writer, b"file:///tmp/a\r\n".to_vec());
+
+        // No loop iteration ran, so only a synchronous write can have delivered the data, and
+        // only a closed write end lets the read reach end of file.
+        let mut received = Vec::new();
+        reader
+            .read_to_end(&mut received)
+            .expect("the data and the end of file are already there");
+        assert_eq!(received, b"file:///tmp/a\r\n");
+    }
+
+    #[test]
+    fn a_payload_larger_than_the_pipe_is_written_in_full_while_the_loop_runs() {
+        let mut event_loop = EventLoop::<()>::try_new().expect("event loop");
+        let (mut reader, writer) = pipe();
+        let payload: Vec<u8> = (0..1_000_000u32).map(|n| (n % 251) as u8).collect();
+
+        let reading = thread::spawn(move || {
+            let mut received = Vec::new();
+            reader.read_to_end(&mut received).expect("read the payload");
+            received
+        });
+        send_bytes_on(&event_loop.handle(), writer, payload.clone());
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !reading.is_finished() {
+            assert!(Instant::now() < deadline, "the payload was never finished");
+            event_loop
+                .dispatch(Some(Duration::from_millis(5)), &mut ())
+                .expect("dispatch");
+        }
+        assert_eq!(reading.join().expect("reader"), payload);
+    }
+
+    struct ChunkedWriter {
+        chunk: usize,
+        capacity: usize,
+        taken: Vec<u8>,
+        interrupt_first: bool,
+        error: Option<ErrorKind>,
+    }
+
+    impl Write for ChunkedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if std::mem::take(&mut self.interrupt_first) {
+                return Err(ErrorKind::Interrupted.into());
+            }
+            if let Some(kind) = self.error {
+                return Err(kind.into());
+            }
+            if self.taken.len() >= self.capacity {
+                return Err(ErrorKind::WouldBlock.into());
+            }
+            let count = bytes
+                .len()
+                .min(self.chunk)
+                .min(self.capacity - self.taken.len());
+            self.taken.extend_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn writer(chunk: usize, capacity: usize) -> ChunkedWriter {
+        ChunkedWriter {
+            chunk,
+            capacity,
+            taken: Vec::new(),
+            interrupt_first: false,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn writing_in_chunks_completes() {
+        let mut sink = writer(3, 100);
         let mut written = 0;
-        self.loop_handle
-            .insert_source(
-                calloop::generic::Generic::new(
-                    File::from(fd),
-                    calloop::Interest::WRITE,
-                    calloop::Mode::Level,
-                ),
-                move |_, file, _| {
-                    let file = unsafe { file.get_mut() };
-                    loop {
-                        match file.write(&bytes[written..]) {
-                            Ok(n) if written + n == bytes.len() => {
-                                written += n;
-                                break Ok(PostAction::Remove);
-                            }
-                            Ok(n) => written += n,
-                            Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                                break Ok(PostAction::Continue);
-                            }
-                            Err(_) => break Ok(PostAction::Remove),
-                        }
-                    }
-                },
-            )
-            .unwrap();
+        assert_eq!(
+            write_available(&mut sink, b"0123456789", &mut written),
+            WriteProgress::Complete
+        );
+        assert_eq!((sink.taken.as_slice(), written), (&b"0123456789"[..], 10));
+    }
+
+    #[test]
+    fn a_full_pipe_reports_how_far_it_got_and_resumes() {
+        let mut sink = writer(4, 6);
+        let mut written = 0;
+        assert_eq!(
+            write_available(&mut sink, b"0123456789", &mut written),
+            WriteProgress::WouldBlock
+        );
+        assert_eq!(written, 6);
+        sink.capacity = 100;
+        assert_eq!(
+            write_available(&mut sink, b"0123456789", &mut written),
+            WriteProgress::Complete
+        );
+        assert_eq!(sink.taken, b"0123456789");
+    }
+
+    #[test]
+    fn an_interrupted_write_is_retried() {
+        let mut sink = writer(100, 100);
+        sink.interrupt_first = true;
+        let mut written = 0;
+        assert_eq!(
+            write_available(&mut sink, b"abc", &mut written),
+            WriteProgress::Complete
+        );
+        assert_eq!(sink.taken, b"abc");
+    }
+
+    #[test]
+    fn a_broken_pipe_fails() {
+        let mut sink = writer(100, 100);
+        sink.error = Some(ErrorKind::BrokenPipe);
+        let mut written = 0;
+        assert_eq!(
+            write_available(&mut sink, b"abc", &mut written),
+            WriteProgress::Failed
+        );
+    }
+
+    #[test]
+    fn an_empty_payload_completes_without_writing() {
+        let mut sink = writer(100, 0);
+        let mut written = 0;
+        assert_eq!(
+            write_available(&mut sink, b"", &mut written),
+            WriteProgress::Complete
+        );
     }
 }

@@ -9,7 +9,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Label;
 use dbflux_components::primitives::{
     Badge, BadgeTone, Chamfer, FilePicker, Icon as AppIconElement, SegmentedControl, SegmentedItem,
-    Text, environment_label, focus_underline, status_diamond,
+    Text, environment_badge_tone, environment_label, focus_underline, status_diamond,
 };
 use dbflux_components::tokens::ChamferCut;
 #[cfg(feature = "mcp")]
@@ -367,7 +367,7 @@ impl ConnectionManagerWindow {
             Some(environment) => (
                 environment_label(environment),
                 environment.as_str(),
-                BadgeTone::for_environment(environment).text_color(theme),
+                environment_badge_tone(environment).text_color(theme),
             ),
             None => (
                 dbflux_i18n::t!("connection_manager.environment.none"),
@@ -1223,6 +1223,7 @@ impl ConnectionManagerWindow {
         let Some(actor_id) = selected_actor_id else {
             return div()
                 .flex_1()
+                .min_w_0()
                 .h_full()
                 .p(Spacing::SM)
                 .opacity(opacity)
@@ -1239,6 +1240,7 @@ impl ConnectionManagerWindow {
         let mut column = div()
             .id("connection-mcp-client-detail")
             .flex_1()
+            .min_w_0()
             .h_full()
             .track_scroll(&self.mcp_tab.conn_mcp_detail_scroll_handle)
             .overflow_y_scrollbar()

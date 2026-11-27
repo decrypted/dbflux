@@ -8,6 +8,7 @@ mod document_view;
 mod documents;
 mod edit_guard;
 mod export_all;
+pub(crate) mod export_options;
 mod expression_gate;
 mod facets;
 pub(crate) mod filter_bar;
@@ -776,6 +777,9 @@ struct ChromeState {
     export_menu_open: bool,
     /// Highlighted row of the export menu, an index into `export_menu_entries`.
     export_menu_selected: usize,
+    /// The export menu's Rows, Columns and CSV choices, read from the store
+    /// each time the menu opens.
+    export_options: export_options::ExportOptions,
     result_view_mode: ResultViewMode,
     /// When `true`, the result area shows the active row as a vertical
     /// name/value record instead of the grid.
@@ -1534,6 +1538,7 @@ impl DataGridPanel {
                 is_maximized: false,
                 export_menu_open: false,
                 export_menu_selected: 0,
+                export_options: export_options::ExportOptions::default(),
                 result_view_mode,
                 record_mode: false,
                 derived_json: None,

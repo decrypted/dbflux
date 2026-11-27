@@ -11,7 +11,7 @@
 //! incrementally instead of buffering the whole file — see its own docs.
 
 use crate::ExportError;
-use crate::csv::checked_field;
+use crate::csv::{CsvOptions, checked_field};
 use crate::encoding::EncodingWriter;
 use crate::json::row_to_json_object;
 use crate::options::{DateFormat, FormatOptions};
@@ -24,6 +24,7 @@ pub struct CsvStreamWriter<W: Write> {
     inner: ::csv::Writer<EncodingWriter<W>>,
     options: FormatOptions,
     column_names: Vec<String>,
+    include_header: bool,
 }
 
 impl<W: Write> CsvStreamWriter<W> {
@@ -41,13 +42,33 @@ impl<W: Write> CsvStreamWriter<W> {
             inner,
             options,
             column_names: Vec::new(),
+            include_header: true,
         }
     }
 
+    /// [`Self::with_options`] with the header row and delimiter of `csv`,
+    /// which the grid's export menu chooses.
+    pub fn with_csv_options(writer: W, options: FormatOptions, csv: CsvOptions) -> Self {
+        let mut stream = Self::with_options(
+            writer,
+            FormatOptions {
+                delimiter: csv.delimiter,
+                ..options
+            },
+        );
+        stream.include_header = csv.include_header;
+        stream
+    }
+
+    /// Writes the header row, or nothing when the options leave it out, so
+    /// callers keep one call shape either way.
     pub fn write_header(&mut self, columns: &[ColumnMeta]) -> Result<(), ExportError> {
+        self.column_names = columns.iter().map(|c| c.name.clone()).collect();
+        if !self.include_header {
+            return Ok(());
+        }
         let headers: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
         self.inner.write_record(&headers)?;
-        self.column_names = columns.iter().map(|c| c.name.clone()).collect();
         Ok(())
     }
 
@@ -262,6 +283,48 @@ mod tests {
         assert!(
             streamed.is_empty(),
             "NDJSON has no enclosing array, so a header-only file must be empty"
+        );
+    }
+
+    #[test]
+    fn csv_streaming_with_options_matches_single_shot_export() {
+        use crate::{CsvDelimiter, CsvOptions};
+
+        let cols = columns();
+        let all_rows = rows();
+        let options = CsvOptions {
+            include_header: false,
+            delimiter: CsvDelimiter::Semicolon,
+        };
+
+        let result = QueryResult::table(
+            cols.clone(),
+            all_rows.clone(),
+            None,
+            Duration::from_millis(1),
+        );
+        let mut single_shot = Vec::new();
+        CsvExporter
+            .export_with_options(&result, options, &mut single_shot)
+            .unwrap();
+
+        let mut streamed = Vec::new();
+        let mut writer = CsvStreamWriter::with_csv_options(
+            &mut streamed,
+            crate::FormatOptions::default(),
+            options,
+        );
+        writer.write_header(&cols).unwrap();
+        for row in &all_rows {
+            writer.write_row(row).unwrap();
+        }
+        writer.finish().unwrap();
+
+        assert_eq!(streamed, single_shot);
+        assert_eq!(
+            String::from_utf8(streamed).unwrap().lines().next(),
+            Some("1;Alice"),
+            "no header row, fields split by semicolons"
         );
     }
 

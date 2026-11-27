@@ -36,6 +36,12 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# `gpui_linux::select_vulkan_driver` selects the boot GPU's Vulkan driver before the loader
+# initialises. The crate already reaches this process through `gpui`; declaring it makes the
+# call reachable from `main`.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_linux = { package = "gpui-pre-linux", version = "=0.3.9" }
+
 # The build script embeds the icon and VERSIONINFO into dbflux.exe. gpui already
 # builds with embed-resource on Windows, so this widens an existing dependency
 # rather than adding one.
@@ -53,7 +59,8 @@ workspace = true
 optional = true
 
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "redshift", "clickhouse", "turso", "duckdb", "s3", "aws_secrets", "lua", "aws", "mcp"]
+telemetry = ["dbflux_app/telemetry", "dbflux_ui/telemetry"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "redshift", "clickhouse", "turso", "duckdb", "s3", "aws_secrets", "lua", "aws", "mcp", "telemetry"]
 # dbflux_ui is driver-agnostic, so driver features only drive dbflux_app (which
 # registers the drivers and relays to the MCP server). The binary does not need
 # to declare driver/runtime crates as direct optional deps — `dbflux_app/<feat>`

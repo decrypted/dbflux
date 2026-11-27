@@ -9,9 +9,12 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 
 | Sección                                             | Cubre                                                                        |
 | --------------------------------------------------- | ---------------------------------------------------------------------------- |
-| [General](#general)                                 | Comportamiento a nivel de app: theme, inicio, refresh, seguridad de queries. |
+| [General](#general)                                 | Comportamiento a nivel de app: inicio, refresh, seguridad de queries. |
+| [Apariencia](#apariencia) | Theme, color de acento, densidad, idioma, fuentes y barras de desplazamiento. |
+| [Actualizaciones y privacidad](#actualizaciones-y-privacidad) | Comprobaciones de actualizaciones, el changelog y los niveles de telemetría opcionales. |
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
 | [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
+| [Snippets](#snippets) | Plantillas que se insertan en el editor de queries por prefijo o desde el selector. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | Perfiles AWS SSO / shared-credentials.                                       |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels)       | Perfiles de proxy SOCKS5 / HTTP.                                             |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels)   | Perfiles reutilizables de túnel SSH.                                         |
@@ -31,7 +34,7 @@ Integration](MCP_AI_INTEGRATION.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/settings/general-dark.webp">
-  <img src="../images/settings/general-light.webp" alt="La ventana de Settings en la sección General, con los ajustes de apariencia, editor y arranque">
+  <img src="../images/settings/general-light.webp" alt="La ventana de Settings en la sección General, con los ajustes de editor y arranque">
 </picture>
 
 Guardar aplica los cambios al instante y los escribe en la base de datos de
@@ -41,69 +44,6 @@ plano, así que una base de datos lenta u ocupada nunca congela la ventana. El
 mensaje de éxito aparece cuando ya están en disco. Si la escritura falla, un
 error lo indica y los cambios siguen aplicados hasta que DBFlux se cierre;
 guarda de nuevo para conservarlos.
-
-### Apariencia
-
-| Setting      | Opciones                 | Default |
-| ------------ | ------------------------ | ------- |
-| **Theme**    | Follow system, Dark, Light | Dark  |
-| **Density**  | Default, Compact         | Default |
-| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
-| **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
-| **Fuente de la interfaz** | Predeterminada (Archivo) o cualquier fuente instalada | Predeterminada |
-| **Tamaño de fuente de la interfaz** | De 8 a 32 px, admite decimales | 13 |
-| **Fuente del editor** | Predeterminada (JetBrains Mono) o cualquier fuente instalada | Predeterminada |
-| **Tamaño de fuente del editor** | De 8 a 32 px, admite decimales | 13 |
-| **Fuente de la tabla de datos** | Igual que el editor o cualquier fuente instalada | Igual que el editor |
-| **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
-
-**Show scrollbars** decide cuándo aparecen las barras de desplazamiento de
-todas las ventanas: solo mientras el contenido se desplaza, mientras el puntero
-está sobre un área desplazable, o siempre. Se aplica a todas las ventanas
-abiertas en cuanto guardas.
-
-La barra horizontal de la cuadrícula de datos es la excepción: se muestra
-siempre, porque la mueve un desplazador aparte que nunca recibe eventos de la
-rueda y, de otro modo, quedaría oculta.
-
-Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
-guardas; no hace falta reiniciar. La fuente del editor también define el texto
-monoespaciado de la interfaz (metadatos, atajos de teclado, consola), y una
-fuente de interfaz personalizada también reemplaza la fuente expandida de las
-etiquetas de sección. Qué controla cada tamaño:
-
-- **Tamaño de fuente de la interfaz** escala todo el texto, las filas, los
-  controles y los íconos de la interfaz.
-- **Tamaño de fuente del editor** define el texto y la altura de línea del
-  editor de código, y el texto de la consola.
-- **Tamaño de fuente de la tabla de datos** define el texto de las celdas, la
-  altura de filas y encabezados, y el ancho automático de las columnas. Las
-  columnas que redimensionaste a mano conservan su ancho.
-
-`Ctrl+=` / `Cmd+=` y `Ctrl+-` / `Cmd+-` cambian los tres tamaños a la vez, 1 px
-cada uno, manteniendo sus proporciones, y `Ctrl+0` / `Cmd+0` restablece los
-valores predeterminados. Funcionan desde la ventana del espacio de trabajo,
-también están en la paleta de comandos y se pueden reasignar en
-[Keybindings](#keybindings). Un tamaño que ya está en 8 o 32 px se
-queda ahí mientras los demás siguen cambiando. Los nuevos tamaños se guardan
-como cualquier otra configuración, así que estos campos los muestran y se
-conservan al reiniciar.
-
-Las listas de fuentes tienen un campo de búsqueda, porque un sistema puede tener
-cientos de fuentes. Una fuente guardada que ya no está instalada sigue
-seleccionada, marcada como "(no instalada)", y DBFlux dibuja con la fuente
-predeterminada hasta que se vuelva a instalar; la tabla de datos recurre a la
-fuente del editor.
-
-La lista de idiomas se deriva de los catálogos de traducción incluidos con
-DBFlux: English aparece primero, seguido de los demás idiomas en un orden
-determinista y con sus nombres nativos. System sigue el locale del sistema
-operativo y recurre a English cuando ningún locale incluido coincide de forma no
-ambigua. Un cambio de idioma tiene efecto después de reiniciar DBFlux, por lo que
-el control muestra una nota permanente al respecto. Los catálogos parciales
-recurren a English para el texto general aún no traducido. Este release solo
-traduce la sección General; el resto de la UI se está convirtiendo crate por crate
-y permanece en English por ahora.
 
 ### Editor
 
@@ -158,6 +98,11 @@ Los avisos se apilan en la esquina superior derecha del área de documentos. Se
 muestran como máximo cuatro a la vez; los más antiguos se pliegan en una entrada
 *N más* que los expande o los descarta todos juntos.
 
+**Avisar cuando un agente MCP solicita aprobación** (activado de forma
+predeterminada, solo en builds con soporte MCP) muestra una notificación de
+escritorio cuando un agente MCP crea una aprobación pendiente, o un aviso dentro
+de la app cuando DBFlux tiene el foco.
+
 ### Seguridad de ejecución (confirmación de queries peligrosas)
 
 Estos tres settings gobiernan cómo DBFlux trata las queries riesgosas en
@@ -210,6 +155,188 @@ ejecuta sus comandos sin él en los demás.
 
 Ver [Data & Privacy](PRIVACY.md#ubicaciones-de-datos) para cómo se separan
 las bases de datos Nightly y stable.
+
+## Apariencia
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/settings/appearance-dark.webp">
+  <img src="../images/settings/appearance-light.webp" alt="La ventana de Settings en la sección Apariencia, con los ajustes de tema, densidad, idioma, fuentes y barras de desplazamiento">
+</picture>
+
+Theme, color de acento, densidad, idioma, fuentes y barras de desplazamiento. Guardar funciona como se describe en [General](#general): aplica los cambios al instante y los escribe en segundo plano.
+
+| Setting      | Opciones                 | Default |
+| ------------ | ------------------------ | ------- |
+| **Theme**    | Follow system, Dark, Light | Dark  |
+| **Color de acento** | Un color `#RRGGBB` para Dark y otro para Light | El de la paleta (`#702963`) |
+| **Density**  | Default, Compact         | Default |
+| **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
+| **Fuente de la interfaz** | Predeterminada (Archivo) o cualquier fuente instalada | Predeterminada |
+| **Tamaño de fuente de la interfaz** | De 8 a 32 px, admite decimales | 13 |
+| **Fuente del editor** | Predeterminada (JetBrains Mono) o cualquier fuente instalada | Predeterminada |
+| **Tamaño de fuente del editor** | De 8 a 32 px, admite decimales | 13 |
+| **Fuente de la tabla de datos** | Igual que el editor o cualquier fuente instalada | Igual que el editor |
+| **Tamaño de fuente de la tabla de datos** | De 8 a 32 px, admite decimales | 12.5 |
+| **Show scrollbars** | While scrolling, On hover, Always | While scrolling |
+
+**Color de acento** controla los botones primarios, las casillas marcadas, la
+barra de progreso, el cursor de texto, la selección, el anillo de foco y las
+filas seleccionadas (en la barra lateral y en la cuadrícula de datos), con sus
+tonos de hover, pressed y de texto. Cada paleta tiene su propio campo, con una
+muestra del color que aplica y un botón **Restablecer** (`R` sobre el campo) que
+devuelve el acento de la paleta; está deshabilitado mientras el campo ya lo
+contiene. Escribir el acento propio de la paleta cuenta como sin override. Lo que
+no sea `#RRGGBB` muestra «Usa un color como #RRGGBB.» bajo el campo, no se
+guarda y deja aplicado el acento que ya lo estaba (el personalizado guardado, o
+el de la paleta si no hay ninguno) hasta que el valor sea válido. El
+acento se aplica a todas las ventanas abiertas al guardar.
+
+Tu color es un punto de partida: DBFlux lo mueve hasta que se lee sobre el
+panel. Los rellenos (botones, casillas marcadas, barra de progreso, anillo de
+foco, cursor de texto y selección) se aclaran en Dark y se oscurecen en Light
+hasta alcanzar 3:1 contra el panel; el tono del texto hasta 4.5:1; y el texto de
+un botón primario pasa a casi negro cuando el blanco quedaría por debajo de 4.5:1
+sobre el relleno. El acento propio de la paleta se usa tal cual. Los colores de
+sintaxis, incluidas las keywords del editor y el árbol de esquemas, nunca siguen
+al acento.
+
+**Show scrollbars** decide cuándo aparecen las barras de desplazamiento de
+todas las ventanas: solo mientras el contenido se desplaza, mientras el puntero
+está sobre un área desplazable, o siempre. Se aplica a todas las ventanas
+abiertas en cuanto guardas.
+
+La barra horizontal de la cuadrícula de datos es la excepción: se muestra
+siempre, porque la mueve un desplazador aparte que nunca recibe eventos de la
+rueda y, de otro modo, quedaría oculta.
+
+Los cambios de fuente se aplican a todas las ventanas abiertas en cuanto
+guardas; no hace falta reiniciar. La fuente del editor también define el texto
+monoespaciado de la interfaz (metadatos, atajos de teclado, consola), y una
+fuente de interfaz personalizada también reemplaza la fuente expandida de las
+etiquetas de sección. Qué controla cada tamaño:
+
+- **Tamaño de fuente de la interfaz** escala todo el texto, las filas, los
+  controles y los íconos de la interfaz.
+- **Tamaño de fuente del editor** define el texto y la altura de línea del
+  editor de código, y el texto de la consola.
+- **Tamaño de fuente de la tabla de datos** define el texto de las celdas, la
+  altura de filas y encabezados, y el ancho automático de las columnas. Las
+  columnas que redimensionaste a mano conservan su ancho.
+
+`Ctrl+=` / `Cmd+=` y `Ctrl+-` / `Cmd+-` cambian los tres tamaños a la vez, 1 px
+cada uno, manteniendo sus proporciones, y `Ctrl+0` / `Cmd+0` restablece los
+valores predeterminados. Funcionan desde la ventana del espacio de trabajo,
+también están en la paleta de comandos y se pueden reasignar en
+[Keybindings](#keybindings). Un tamaño que ya está en 8 o 32 px se
+queda ahí mientras los demás siguen cambiando. Los nuevos tamaños se guardan
+como cualquier otra configuración, así que estos campos los muestran y se
+conservan al reiniciar.
+
+Las listas de fuentes tienen un campo de búsqueda, porque un sistema puede tener
+cientos de fuentes. Una fuente guardada que ya no está instalada sigue
+seleccionada, marcada como "(no instalada)", y DBFlux dibuja con la fuente
+predeterminada hasta que se vuelva a instalar; la tabla de datos recurre a la
+fuente del editor.
+
+La lista de idiomas se deriva de los catálogos de traducción incluidos con
+DBFlux: English aparece primero, seguido de los demás idiomas en un orden
+determinista y con sus nombres nativos. System sigue el locale del sistema
+operativo y recurre a English cuando ningún locale incluido coincide de forma no
+ambigua. Un cambio de idioma tiene efecto después de reiniciar DBFlux, por lo que
+el control muestra una nota permanente al respecto. Los catálogos parciales
+recurren a English para el texto general aún no traducido. Este release traduce,
+entre otras, las secciones General y Actualizaciones y privacidad; el resto de la
+UI se está convirtiendo crate por crate y permanece en English por ahora.
+
+---
+
+## Actualizaciones y privacidad
+
+Las preferencias de comprobación de actualizaciones y changelog, más los
+niveles de telemetría opcionales. Los cambios quedan en stages hasta que
+pulsas **Save** (Ctrl+S); **Reset to defaults** deja los valores por defecto
+en stages sin guardar.
+
+### Updates
+
+| Ajuste | Efecto |
+|--------|--------|
+| Check GitHub for a new release at startup | Ejecuta la comprobación de actualizaciones al iniciar la app. |
+| Show what is new after each update | Abre el changelog una vez, la primera vez que arranca una versión nueva. |
+| Check now | Ejecuta una comprobación inmediata. |
+| Open what is new / Show welcome again | Reabre los dos diálogos. |
+
+### Estadísticas de uso
+
+DBFlux tiene un módulo de telemetría opcional con tres niveles:
+
+- **Apagado** — no se envía nada: ni aviso, ni evento de actividad, ni informe
+  de uso. No se pone nada en cola.
+- **Mínimo** — un aviso por cada compilación publicada, más un evento de
+  actividad por semana: identificador aleatorio de instalación, versión, canal,
+  sistema operativo y arquitectura. Sin idioma del sistema, país ni recuentos
+  de uso.
+- **Básico** (preseleccionado en el diálogo de bienvenida) — el aviso de Mínimo,
+  más un informe semanal en lugar del evento de actividad. El informe añade
+  idioma del sistema (no el de la interfaz), país y recuentos acotados de
+  ejecuciones exitosas compatibles de
+  consultas, visual builder, aperturas de dashboards, scripts, operaciones MCP
+  e inspecciones de schema. Son recuentos de operaciones completas, incluidos
+  resultados exitosos con cero filas, no de filas ni de tiempos.
+
+No se pone nada en cola, no se envía nada y no se cuenta ningún uso hasta que
+confirmas el aviso de bienvenida con **Empezar**. Si habías desactivado el
+diálogo de bienvenida, se abre en cada arranque tras actualizar, siempre que las
+estadísticas de uso arranquen, hasta que confirmes; cerrarlo de otra forma, por
+ejemplo con Escape, no lo confirma.
+
+La app no envía país; envía el valor de relleno `ZZ`. Solo en los informes de
+Básico, el colector guarda el país aproximado que Cloudflare resuelve en su
+borde. El colector nunca guarda la dirección IP; Cloudflare y Fly.io conservan
+sus propios registros de peticiones.
+
+Las actualizaciones en segundo plano, fallos parciales, errores y cancelaciones
+no cuentan. Las aprobaciones del builder sin ejecución no cuentan, ni la
+creación, importación o restauración implícitas de dashboards. Los scripts
+requieren código de salida canónico 0 sin timeout ni ejecución detached; la
+inspección de schema requiere una carga nueva de metadatos completos, no
+reenfocar una pestaña existente.
+
+**MCP solo cuenta operaciones principales revisadas, compatibles y exitosas con
+un propietario de primer plano de una GUI existente, autenticada y en ejecución**,
+no todas las llamadas ni un servidor independiente sin ese propietario.
+`count_records`, `insert_record` y `list_scripts` se excluyen incluso si tienen
+éxito. `update_records` y `delete_records` requieren la finalización de la
+mutación principal con `QueryResult` tipado, no un `DocumentCrudResult` opaco
+exitoso; update/upsert/delete SQL tipados comprobados pueden contar con cero filas
+afectadas. Ayuda/protocolo, herramientas desconocidas, controles de aprobación y
+aprobaciones pendientes no cuentan. El permiso se adquiere después de Allow y
+antes del trabajo; el recuento llega tras completar el trabajo principal y
+registrar con éxito Audit de ejecución. Ver los límites completos en la política
+siguiente.
+
+Los eventos van a `https://telemetry.dbflux.dev`. Nunca se envían
+consultas, resultados, credenciales, rutas de archivos ni metadatos de
+conexión. Ver [Datos y privacidad](PRIVACY.md#telemetría-opcional) para la
+lista completa de lo que contiene un informe y los límites de cobertura.
+Básico debe estar activo y el aviso visible de bienvenida debe haberse confirmado
+antes de comenzar; fuentes no disponibles o Audit desactivado o
+degradado impiden contabilizar. Guardar Básico no garantiza un envío inmediato.
+Salir de Básico borra el informe Básico pendiente y los contadores, y Apagado
+también borra un aviso pendiente; un envío ya entregado a la red aún puede
+completarse. Confirmar la entrega conserva incrementos posteriores. Los UUID de instalación y entrega son
+seudónimos; no se envían identificadores de operaciones, consultas, clientes o
+personas, nombres de herramientas ni estadísticas por motor. El ID de instalación
+nunca rota por calendario; un reinicio conserva las compilaciones
+confirmadas y no envía vínculos entre IDs viejos y nuevos ni avisos de retirada.
+Las etiquetas legibles no alteran el almacenamiento, la copia, la exportación
+ni el envío del contenido sin procesar.
+
+| Control | Efecto |
+|---------|--------|
+| Nivel (Apagado / Mínimo / Básico) | El nivel en stages; Left y Right o un clic lo cambian, Save lo aplica. |
+| Id de instalación | Vista enmascarada del identificador seudónimo. **Reiniciar id** lo reemplaza de inmediato, cancela los envíos pendientes y conserva las compilaciones confirmadas. |
+| Informes | El último informe confirmado, leído del audit log duradero. **Ver el último informe** abre un visor de solo lectura sobre el contenido almacenado; **Abrir en auditoría** abre el visor de auditoría con la correlación del informe. |
 
 ---
 
@@ -299,6 +426,22 @@ tras el más corto para ver si sigue el más largo), y "captura texto escrito"
 cuando una letra sola se asigna donde se escribe texto, como un campo de texto o
 el editor de código fuera de los modos Normal y Visual de Vim.
 
+**Comandos sin atajo por defecto.** Settings lista los comandos que declaran un
+contexto propio y se distribuyen sin tecla en él, como **Copiar como Markdown**
+en Results, en ese contexto con **Sin atajo**. Un comando sin contexto propio,
+como **Ir al error de la consulta**, no aparece. Pulsa el lápiz para asignarle teclas, como en
+cualquier otra fila: el atajo funciona al instante, se comprueban sus conflictos
+y cuenta como modificado. Su flecha de restablecer, o **Quitar atajo**, lo
+devuelve a sin binding. Las versiones de DBFlux anteriores a esta función
+ignoran la fila guardada.
+
+Una tecla imprimible sola (letra, dígito, símbolo o Espacio) que asignes a un
+comando así, o a la que muevas un binding por defecto, se aplica en Results,
+Audit e Inspector solo mientras ningún campo de texto tiene el foco, así que la
+letra se sigue escribiendo en un filtro o un campo de búsqueda. Los acordes con
+Ctrl, Alt o Cmd, las teclas de función y las flechas mantienen la condición propia del atajo, y una condición de
+contexto que fijes tú se usa tal cual.
+
 **Restablecer.** Un binding modificado muestra una flecha que restablece sus
 teclas y su contexto por defecto (`r` sobre un binding seleccionado hace lo
 mismo, y `Delete` quita su atajo). **Restablecer predeterminados** en el pie
@@ -311,6 +454,39 @@ guardan tus modificaciones, en la tabla `cfg_keybinding_overrides` de
 `dbflux.db`, así que los bindings que no cambiaste siguen los valores por defecto
 de futuras versiones. Una modificación cuyo binding por defecto elimina una
 versión posterior se ignora.
+
+---
+
+## Snippets
+
+Esta sección gestiona las plantillas que insertas en el editor de queries, por
+prefijo o desde el selector de snippets (ver [Editor → Snippets](EDITOR.md#snippets)).
+Está en el grupo General, justo después de Keybindings (**Fragmentos** en la
+interfaz en español).
+
+La lista de la izquierda muestra cada snippet con su nombre, su prefijo, su
+lenguaje y una etiqueta **Integrado** en los que incluye DBFlux. **Nuevo
+fragmento** abre un formulario en blanco; al seleccionar una fila se abre ese
+snippet. Con el teclado, `j` / `k` recorren la lista, `n` empieza un snippet
+nuevo y `d` borra el abierto.
+
+| Campo | Descripción |
+|---|---|
+| **Nombre** | Cómo se llama el snippet en la lista y en el selector. Los nombres no tienen que ser únicos. |
+| **Prefijo** | Lo que escribes en el editor para ver el snippet en el menú de autocompletado. Único por lenguaje: dos snippets de SQL no pueden compartir prefijo. |
+| **Lenguaje** | El lenguaje de query de los editores donde aparece el snippet. Por ahora SQL es la única opción. |
+| **Cuerpo** | El texto que se inserta, con los marcadores `$1`, `${1:default}` y `$0`. Repetir un número refleja el campo. |
+
+**Guardar** (`Ctrl+S`; el botón dice **Actualizar** en un snippet existente)
+comprueba el formulario y muestra bajo el campo lo que falla: *El nombre es
+obligatorio*, *El prefijo es obligatorio*, *El cuerpo es obligatorio*, *Otro
+fragmento de SQL ya usa el prefijo sel*, o el error del marcador con su línea,
+su columna y el texto afectado (*Marcador sin cerrar en la línea 2, columna 6:
+${1:table*). No se guarda nada hasta que todos los campos son válidos.
+**Eliminar** pide confirmación antes.
+
+Los seis snippets de SQL integrados son filas normales: edítalos o bórralos como
+los tuyos. Un snippet integrado que borras sigue borrado.
 
 ---
 

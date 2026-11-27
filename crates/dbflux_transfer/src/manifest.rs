@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use dbflux_core::TransferColumn;
+use dbflux_export::FormatOptions;
 use serde::{Deserialize, Serialize};
 
 use crate::pipeline::TransferError;
@@ -53,6 +54,12 @@ pub struct ManifestTable {
     /// Export flow (no cross-table ordering constraint) this is simply the
     /// table's position in the export list.
     pub fk_order_index: usize,
+    /// How the file was written: delimiter, encoding, NULL text and date
+    /// format. Import reads the file back with the same options. Absent from
+    /// manifests written before these options existed and when everything is
+    /// the default.
+    #[serde(default, skip_serializing_if = "FormatOptions::is_default")]
+    pub options: FormatOptions,
 }
 
 /// Reads and parses `manifest.json` at `path`. Import (T20/R3) calls this
@@ -105,18 +112,46 @@ mod tests {
                         type_name: Some("int4".to_string()),
                         nullable: false,
                         is_primary_key: true,
+                        kind: dbflux_core::ColumnKind::Unknown,
                     },
                     TransferColumn {
                         name: "email".to_string(),
                         type_name: Some("text".to_string()),
                         nullable: true,
                         is_primary_key: false,
+                        kind: dbflux_core::ColumnKind::Unknown,
                     },
                 ],
                 row_count: 42,
                 fk_order_index: 0,
+                options: FormatOptions::default(),
             }],
         }
+    }
+
+    #[test]
+    fn a_column_written_before_kind_existed_deserializes_as_unknown() {
+        let column: TransferColumn = serde_json::from_str(
+            r#"{"name":"id","type_name":"int4","nullable":false,"is_primary_key":true}"#,
+        )
+        .expect("deserialize legacy column");
+
+        assert_eq!(column.kind, dbflux_core::ColumnKind::Unknown);
+    }
+
+    #[test]
+    fn a_column_kind_survives_the_json_round_trip() {
+        let mut manifest = sample_manifest();
+        manifest.tables[0].columns[0].kind = dbflux_core::ColumnKind::Integer;
+
+        let json = serde_json::to_string(&manifest).expect("serialize manifest");
+        let round_tripped: TransferManifest =
+            serde_json::from_str(&json).expect("deserialize manifest");
+
+        assert_eq!(
+            round_tripped.tables[0].columns[0].kind,
+            dbflux_core::ColumnKind::Integer
+        );
     }
 
     #[test]
@@ -217,5 +252,32 @@ mod tests {
 
         assert_eq!(parsed, manifest);
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn default_format_options_are_not_written_and_missing_options_read_as_default() {
+        let manifest = sample_manifest();
+        let json = serde_json::to_string_pretty(&manifest).unwrap();
+        assert!(!json.contains("options"), "{json}");
+
+        let parsed: TransferManifest = serde_json::from_str(&json).unwrap();
+        assert!(parsed.tables[0].options.is_default());
+    }
+
+    #[test]
+    fn non_default_format_options_round_trip_through_the_manifest() {
+        let mut manifest = sample_manifest();
+        manifest.tables[0].options = FormatOptions {
+            delimiter: dbflux_export::CsvDelimiter::Semicolon,
+            encoding: dbflux_export::TextEncoding::Windows1252,
+            null_text: "\\N".to_string(),
+            date_format: dbflux_export::DateFormat::Epoch,
+            ..FormatOptions::default()
+        };
+
+        let json = serde_json::to_string_pretty(&manifest).unwrap();
+        let parsed: TransferManifest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed, manifest);
     }
 }

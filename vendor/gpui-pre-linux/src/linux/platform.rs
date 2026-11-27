@@ -31,6 +31,9 @@ use gpui_util::{ResultExt as _, new_std_command};
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use xkbcommon::xkb::{self, Keycode, Keysym, State};
 
+use crate::linux::vulkan_driver::{
+    Environment, ProcessEnvironment, restore_child_environment_from,
+};
 use crate::linux::{
     Backend, DisplayConnection, HeadlessConnection, LinuxDispatcher, PriorityQueueCalloopReceiver,
     select_backend,
@@ -109,6 +112,12 @@ pub(crate) struct LinuxCommon {
     /// X11 uses this to handle events that a runnable's requests read into xcb's queue, where
     /// they would not wake the event loop.
     pub(crate) after_runnable: Option<Rc<dyn Fn()>>,
+    /// The system fonts, loaded on their own thread once the app asks for them.
+    ///
+    /// They used to be loaded by `CosmicTextSystem::new` here, which cost half a second before
+    /// the first window; see `odd/tasks/gpui-cold-start.md`, S3.
+    #[cfg(any(feature = "wayland", feature = "x11"))]
+    pub(crate) system_fonts: crate::linux::system_fonts::SystemFonts,
 }
 
 impl LinuxCommon {
@@ -123,7 +132,9 @@ impl LinuxCommon {
         let (power_sender, power_receiver) = calloop::channel::channel();
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
-        let text_system = Arc::new(crate::linux::CosmicTextSystem::new("IBM Plex Sans"));
+        let text_system = Arc::new(crate::linux::CosmicTextSystem::new_without_system_fonts(
+            "IBM Plex Sans",
+        ));
         #[cfg(not(any(feature = "wayland", feature = "x11")))]
         let text_system = Arc::new(gpui::NoopTextSystem::new());
 
@@ -149,6 +160,8 @@ impl LinuxCommon {
             power_sender,
             power_listener_started: false,
             after_runnable: None,
+            #[cfg(any(feature = "wayland", feature = "x11"))]
+            system_fonts: crate::linux::system_fonts::SystemFonts::default(),
         };
 
         (common, main_receiver, power_receiver)
@@ -560,6 +573,11 @@ impl Platform for LinuxPlatform {
         self.with_common(|common| common.text_system.clone())
     }
 
+    #[cfg(any(feature = "wayland", feature = "x11"))]
+    fn take_system_font_receiver(&self) -> Option<crate::linux::system_fonts::FontReceiver> {
+        self.with_common(|common| common.system_fonts.take())
+    }
+
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {
         self.connection.borrow().keyboard_layout()
     }
@@ -901,9 +919,7 @@ impl Platform for LinuxPlatform {
             .spawn(async move {
                 let mut command = new_std_command("xdg-open");
                 command.arg(path);
-                if let Some(environment) = environment {
-                    environment.apply_to(&mut command);
-                }
+                prepare_launcher(&mut command, environment.as_ref());
                 #[allow(
                     clippy::disallowed_methods,
                     reason = "running on a background thread, so blocking is fine"
@@ -1122,6 +1138,29 @@ impl Platform for LinuxPlatform {
     fn add_recent_document(&self, _path: &Path) {}
 }
 
+/// Prepares a desktop launcher (`xdg-open` and the other openers) to start a program for the
+/// user: it gets the session's graphical environment, and loses the Vulkan driver selection
+/// [`crate::select_vulkan_driver`] may have pinned this process to, so the program it starts runs
+/// on the GPU the user's own environment picks.
+fn prepare_launcher(
+    command: &mut std::process::Command,
+    environment: Option<&GraphicalEnvironment>,
+) {
+    prepare_launcher_from(&ProcessEnvironment, command, environment);
+}
+
+/// [`prepare_launcher`] for a given process environment.
+fn prepare_launcher_from(
+    process: &dyn Environment,
+    command: &mut std::process::Command,
+    environment: Option<&GraphicalEnvironment>,
+) {
+    if let Some(environment) = environment {
+        environment.apply_to(command);
+    }
+    restore_child_environment_from(process, command);
+}
+
 /// Opens `target` with the first of the desktop's launchers that succeeds. Returns whether one
 /// did.
 #[cfg(any(feature = "wayland", feature = "x11"))]
@@ -1131,7 +1170,7 @@ async fn run_open_commands(
     environment: &GraphicalEnvironment,
 ) -> bool {
     for mut command in open::commands(target) {
-        environment.apply_to(&mut command);
+        prepare_launcher(&mut command, Some(environment));
         if let Some(token) = activation_token {
             command.env("XDG_ACTIVATION_TOKEN", token);
         }
@@ -1702,6 +1741,48 @@ async fn await_idle_sleep_prevention(
 mod tests {
     use super::*;
     use gpui::{Point, px};
+
+    /// A process environment holding only the Vulkan selection marker.
+    struct MarkerEnvironment(Option<&'static str>);
+
+    impl Environment for MarkerEnvironment {
+        fn get(&self, name: &str) -> Option<String> {
+            (name == crate::SELECTION_VARIABLE)
+                .then_some(self.0)
+                .flatten()
+                .map(str::to_owned)
+        }
+    }
+
+    /// The variables a prepared launcher removes, sorted.
+    fn removed_by_launcher(marker: Option<&'static str>) -> Vec<String> {
+        let mut command = std::process::Command::new("xdg-open");
+        prepare_launcher_from(&MarkerEnvironment(marker), &mut command, None);
+        let mut removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        removed.sort();
+        removed
+    }
+
+    #[test]
+    fn a_launcher_drops_the_vulkan_driver_selection() {
+        assert_eq!(
+            removed_by_launcher(Some("*intel_icd*")),
+            vec![
+                crate::SELECTION_VARIABLE.to_owned(),
+                "VK_LOADER_DRIVERS_SELECT".to_owned()
+            ],
+            "open_with_system and the reveal fallback would otherwise pin the opened program to the boot GPU"
+        );
+    }
+
+    #[test]
+    fn a_launcher_keeps_the_environment_when_nothing_was_selected() {
+        assert!(removed_by_launcher(None).is_empty());
+    }
 
     #[cfg(any(feature = "wayland", feature = "x11"))]
     #[test]

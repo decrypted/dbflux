@@ -202,6 +202,12 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
         ("modal-close", KeyboardPath::Command(Command::Cancel)),
         ("drift-close", KeyboardPath::Command(Command::Cancel)),
         ("drift-reload", KeyboardPath::Command(Command::Execute)),
+        // The Columns chooser, opened from the column menu (`Shift+m`):
+        // Enter or Space toggles the highlighted row.
+        (
+            "column-chooser-*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
         ("export-menu.*", KeyboardPath::Command(Command::MenuSelect)),
         (
             "export-trigger",

@@ -711,6 +711,10 @@ impl DataGridPanel {
             return true;
         }
 
+        if self.column_chooser.is_some() {
+            return self.dispatch_column_chooser_command(cmd, window, cx);
+        }
+
         // Handle context menu commands when menu is open
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);

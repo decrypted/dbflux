@@ -179,6 +179,11 @@ pub struct GridHost<'a> {
     pub chevron_icon: IconSource,
     /// Icon drawn in the gutter of the reference row.
     pub reference_icon: IconSource,
+    /// The source columns the rows draw, in the order they draw them, for a
+    /// host that hides or reorders columns. `None` draws every column in the
+    /// source's order. Cell coordinates and widths stay source column
+    /// indices either way.
+    pub columns: Option<&'a [usize]>,
     /// A left press on a cell, before the release that completes a click,
     /// so the host can start a drag selection on it.
     pub on_cell_press: Option<GridCellMouseDown>,
@@ -292,6 +297,7 @@ pub fn render_rows(
     colors: &GridColors,
 ) -> Vec<AnyElement> {
     let mut editor = editor;
+    let drawn_columns = drawn_columns(source, host.columns);
 
     visible_range
         .map(|visual_ix| {
@@ -325,17 +331,9 @@ pub fn render_rows(
                 visual_ix + 1
             };
 
-            // The column facts the cells read, once per row render.
-            let group_children: Vec<bool> = (0..source.column_count())
-                .map(|col_ix| {
-                    source
-                        .column(col_ix)
-                        .is_some_and(|column| column.group_child)
-                })
-                .collect();
-
-            let cells: Vec<AnyElement> = (0..source.column_count())
-                .map(|col_ix| {
+            let cells: Vec<AnyElement> = drawn_columns
+                .iter()
+                .map(|&(col_ix, group_child)| {
                     let view = source.cell(visual_ix, col_ix).unwrap_or_else(|| {
                         CellView::new(
                             SharedString::default(),
@@ -367,7 +365,7 @@ pub fn render_rows(
 
                     let paint = cell_paint(
                         &view,
-                        group_children.get(col_ix).copied().unwrap_or(false),
+                        group_child,
                         is_pending_delete,
                         is_active,
                         colors,
@@ -568,6 +566,25 @@ pub fn render_rows(
                 .into_any_element()
         })
         .collect()
+}
+
+/// The source columns the rows draw, in drawing order, each with its group
+/// flag. Built once per render and only for the drawn columns: a flattened
+/// collection can hide hundreds of them, and a flag kept apart from its
+/// column index could be read by the wrong one.
+fn drawn_columns(source: &dyn RowSource, columns: Option<&[usize]>) -> Vec<(usize, bool)> {
+    let group_child = |col_ix: usize| {
+        (
+            col_ix,
+            source
+                .column(col_ix)
+                .is_some_and(|column| column.group_child),
+        )
+    };
+    match columns {
+        Some(columns) => columns.iter().copied().map(group_child).collect(),
+        None => (0..source.column_count()).map(group_child).collect(),
+    }
 }
 
 /// A drag only counts with the left button held: a move after the release

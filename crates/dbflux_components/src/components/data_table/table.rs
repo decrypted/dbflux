@@ -768,11 +768,12 @@ impl DataTable {
         let fk_cols = state.fk_columns().clone();
         let annotated = state.has_header_annotations();
         let header_height = state.header_height(cx);
+        let reorderable = state.columns_reorderable();
 
-        let header_cells: Vec<_> = model
-            .columns
+        let header_cells: Vec<_> = state
+            .visible_columns()
             .iter()
-            .enumerate()
+            .filter_map(|&col_ix| model.columns.get(col_ix).map(|spec| (col_ix, spec)))
             .map(|(col_ix, col_spec)| {
                 let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
                 let sort_direction = sort
@@ -795,8 +796,9 @@ impl DataTable {
 
                 let state_for_click = state_entity.clone();
 
-                div()
+                let header = div()
                     .id(("header-col", col_ix))
+                    .debug_selector(move || format!("header-col-{col_ix}"))
                     .relative()
                     .flex()
                     .flex_shrink_0()
@@ -809,7 +811,15 @@ impl DataTable {
                     .border_r_1()
                     .border_color(theme.border)
                     .hover(|s| s.bg(theme.table_hover))
-                    .cursor_pointer()
+                    .cursor_pointer();
+
+                let header = if reorderable {
+                    header_reorder(header, &state_entity, col_spec.title.clone(), col_ix, theme)
+                } else {
+                    header
+                };
+
+                header
                     .on_click(move |event: &ClickEvent, window, cx| {
                         state_for_click.update(cx, |state, cx| {
                             state.focus(window, cx);
@@ -1293,6 +1303,7 @@ impl DataTable {
                     braces_icon: AppIcon::Braces.into(),
                     chevron_icon: AppIcon::ChevronRight.into(),
                     reference_icon: AppIcon::Crosshair.into(),
+                    columns: Some(state.visible_columns()),
                     on_cell_press: Some({
                         let state = state_entity.clone();
                         Arc::new(
@@ -1402,6 +1413,77 @@ impl DataTable {
     }
 }
 
+/// What a header carries while it is dragged onto another header to move
+/// its column there.
+#[derive(Clone)]
+struct ColumnDrag {
+    /// The table the header belongs to, so a drop on another table's header
+    /// (another result tab, a split) does nothing.
+    table: gpui::EntityId,
+    col: usize,
+    title: SharedString,
+}
+
+/// The floating label a dragged header shows under the pointer.
+struct ColumnDragPreview {
+    title: SharedString,
+}
+
+impl gpui::Render for ColumnDragPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        div()
+            .px(CELL_PADDING_X)
+            .py(Spacing::XS)
+            .bg(theme.popover)
+            .border_1()
+            .border_color(ChromeColors::tint(theme))
+            .text_size(fonts::grid_font_size(cx))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(ChromeColors::strong(theme))
+            .child(self.title.clone())
+    }
+}
+
+/// Lets a header be dragged onto another header of the same table, which
+/// moves its column into that place, as in a database IDE's grid. A press
+/// without a drag stays a click, so selecting the column still works.
+fn header_reorder(
+    header: gpui::Stateful<gpui::Div>,
+    state: &Entity<DataTableState>,
+    title: Arc<str>,
+    col_ix: usize,
+    theme: &gpui_component::theme::Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let table = state.entity_id();
+    let drag = ColumnDrag {
+        table,
+        col: col_ix,
+        title: SharedString::from(title.to_string()),
+    };
+    let state_for_drop = state.clone();
+    let drop_tint = ChromeColors::tint(theme).opacity(0.25);
+
+    header
+        .on_drag(drag, |drag, _offset, _window, cx| {
+            gpui::AppContext::new(cx, |_| ColumnDragPreview {
+                title: drag.title.clone(),
+            })
+        })
+        .drag_over::<ColumnDrag>(move |style, drag, _window, _cx| {
+            if drag.table == table && drag.col != col_ix {
+                style.bg(drop_tint)
+            } else {
+                style
+            }
+        })
+        .on_drop(move |drag: &ColumnDrag, _window, cx| {
+            if drag.table == table {
+                state_for_drop.update(cx, |state, cx| state.move_column(drag.col, col_ix, cx));
+            }
+        })
+}
 /// The sort control at the right edge of a column header: the current
 /// direction, or a faint up/down arrow while the column is not sorted. A press
 /// cycles the sort and stops there, so it does not reach the header, whose
